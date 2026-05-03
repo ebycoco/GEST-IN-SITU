@@ -15,6 +15,7 @@ interface AuthState {
   isLoading: boolean;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
+  checkAuth: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -38,4 +39,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   logout: () => {
     set({ user: null });
   },
+  checkAuth: async () => {
+    // Session persistent logic can be added here
+    return null;
+  }
 }));

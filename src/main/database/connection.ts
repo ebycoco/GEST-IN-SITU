@@ -25,9 +25,7 @@ export async function initDatabase(): Promise<Database.Database> {
   const dbPath = getDbPath();
   log.info(`Database path: ${dbPath}`);
 
-  db = new Database(dbPath, {
-    verbose: process.env.NODE_ENV === 'development' ? (msg) => log.debug(`SQL: ${msg}`) : undefined
-  });
+  db = new Database(dbPath);
 
   // Performance optimizations for 200k+ rows
   db.pragma('journal_mode = WAL');

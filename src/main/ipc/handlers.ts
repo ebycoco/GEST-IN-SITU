@@ -1,12 +1,13 @@
-import { ipcMain, dialog, app } from 'electron';
+import { ipcMain, dialog, app, BrowserWindow } from 'electron';
 import * as queries from '../database/queries';
-import { getDbPath, getBackupDir } from '../database/connection';
-import { getDatabase } from '../database/connection';
-import { readFileSync } from 'fs';
+import { getDbPath } from '../database/connection';
+import { createReadStream } from 'fs';
 import { join } from 'path';
 import log from 'electron-log';
+import * as readline from 'readline';
+import { Worker } from 'worker_threads';
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // AUTH
   ipcMain.handle('auth:login', (_, login: string, password: string) => {
     try { return queries.authenticateUser(login, password); }
@@ -26,7 +27,7 @@ export function registerIpcHandlers(): void {
   // STATS
   ipcMain.handle('stats:get', () => queries.getStats());
 
-  // IMPORT
+  // IMPORT - File selection
   ipcMain.handle('import:selectFile', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
@@ -38,25 +39,105 @@ export function registerIpcHandlers(): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
-  ipcMain.handle('import:parseCSV', (_, filePath: string) => {
+  // IMPORT - Preview (only reads first 1000 rows + counts total)
+  ipcMain.handle('import:parseCSV', async (_, filePath: string) => {
     try {
-      const content = readFileSync(filePath, 'utf-8');
-      const lines = content.split(/\r?\n/).filter(l => l.trim());
-      if (lines.length === 0) return { rows: [], headers: [] };
-      const sep = lines[0].includes(';') ? ';' : ',';
-      const headers = lines[0].split(sep).map(h => h.trim().replace(/"/g, ''));
-      const rows = lines.slice(1).map(line => {
-        const cols = line.split(sep).map(c => c.trim().replace(/^"|"$/g, ''));
-        const row: Record<string, string> = {};
-        headers.forEach((h, i) => { row[h.toLowerCase().replace(/\s+/g, '_')] = cols[i] || ''; });
-        return row;
-      });
-      return { rows, headers, total: rows.length };
-    } catch (e) { log.error('CSV parse error', e); return { rows: [], headers: [], error: String(e) }; }
+      const rows: any[] = [];
+      let headers: string[] = [];
+      let total = 0;
+
+      const fileStream = createReadStream(filePath);
+      const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
+      let lineCount = 0;
+      let sep = ',';
+
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        if (lineCount === 0) {
+          sep = line.includes(';') ? ';' : ',';
+          headers = line.split(sep).map(h => h.trim().replace(/"/g, ''));
+        } else {
+          if (rows.length < 1000) {
+            const cols = line.split(sep).map(c => c.trim().replace(/^"|"$/g, ''));
+            const row: Record<string, string> = {};
+            headers.forEach((h, i) => {
+              row[h.toLowerCase().replace(/\s+/g, '_')] = cols[i] || '';
+            });
+            rows.push(row);
+          }
+        }
+        lineCount++;
+      }
+      total = lineCount > 0 ? lineCount - 1 : 0;
+
+      return { rows, headers, total };
+    } catch (e) {
+      log.error('File parse error', e);
+      return { rows: [], headers: [], error: String(e) };
+    }
   });
 
+  // IMPORT - Utilities
+  ipcMain.handle('import:clearTemp', () => queries.clearImportTemp());
   ipcMain.handle('import:executeBatch', (_, rows, agent) => queries.importBatch(rows, agent));
   ipcMain.handle('import:fusionner', () => queries.fusionnerImport());
+
+  // IMPORT - Process file using Worker Thread (NON-BLOCKING!)
+  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number) => {
+    return new Promise((resolve, reject) => {
+      // Resolve the path to better-sqlite3 native module
+      let sqlitePath: string;
+      try {
+        sqlitePath = require.resolve('better-sqlite3');
+      } catch {
+        sqlitePath = 'better-sqlite3';
+      }
+
+      // Path to our worker script
+      const workerPath = join(__dirname, 'workers', 'import-worker.js');
+
+      log.info(`Starting import worker: ${workerPath}`);
+      log.info(`SQLite path: ${sqlitePath}`);
+      log.info(`DB path: ${getDbPath()}`);
+      log.info(`File: ${filePath}, Total estimate: ${totalEstimate}`);
+
+      const worker = new Worker(workerPath, {
+        workerData: {
+          sqlitePath,
+          dbPath: getDbPath(),
+          filePath,
+          agent,
+          totalEstimate: totalEstimate || 220000
+        }
+      });
+
+      worker.on('message', (msg: any) => {
+        if (msg.type === 'progress') {
+          if (!mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('import:progress', msg.value);
+          }
+        } else if (msg.type === 'done') {
+          log.info('Import worker completed', msg.result);
+          resolve(msg.result);
+        } else if (msg.type === 'error') {
+          log.error('Import worker error', msg.error);
+          reject(new Error(msg.error));
+        }
+      });
+
+      worker.on('error', (err) => {
+        log.error('Worker thread error', err);
+        reject(err);
+      });
+
+      worker.on('exit', (code) => {
+        if (code !== 0) {
+          log.error(`Worker exited with code ${code}`);
+          reject(new Error(`Worker stopped with exit code ${code}`));
+        }
+      });
+    });
+  });
 
   // EXPORT
   ipcMain.handle('export:selectFolder', async () => {

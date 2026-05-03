@@ -23,7 +23,14 @@ const api = {
     selectFile: () => ipcRenderer.invoke('import:selectFile'),
     parseCSV: (path: string) => ipcRenderer.invoke('import:parseCSV', path),
     executeBatch: (rows: Record<string, string>[], agent: string) => ipcRenderer.invoke('import:executeBatch', rows, agent),
+    clearTemp: () => ipcRenderer.invoke('import:clearTemp'),
+    processFile: (path: string, agent: string, totalEstimate?: number) => ipcRenderer.invoke('import:processFile', path, agent, totalEstimate),
     fusionner: () => ipcRenderer.invoke('import:fusionner'),
+    onProgress: (callback: (p: number) => void) => {
+      const listener = (_: any, p: number) => callback(p);
+      ipcRenderer.on('import:progress', listener);
+      return () => ipcRenderer.removeListener('import:progress', listener);
+    }
   },
   // Export
   export: { selectFolder: () => ipcRenderer.invoke('export:selectFolder') },

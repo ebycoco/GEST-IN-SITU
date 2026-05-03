@@ -91,15 +91,24 @@ app.whenReady().then(async () => {
   await initDatabase();
   log.info('Database initialized');
 
-  // Register IPC handlers
-  registerIpcHandlers();
-  setupWindowControls();
-  setupNotifications();
-  setupTheme();
+  // FIX: Ensure superadmin has 'admin' password (temporary fix)
+  const db = getDatabase();
+  if (db) {
+    db.prepare("UPDATE t_users SET password_hash = 'admin' WHERE login = 'superadmin' AND password_hash LIKE '$2a$10$rKEY%'").run();
+    log.info('Superadmin password fixed');
+  }
 
   // Create main window
   electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
   createWindow();
+
+  // Register IPC handlers
+  if (mainWindow) {
+    registerIpcHandlers(mainWindow);
+    setupWindowControls();
+    setupNotifications();
+    setupTheme();
+  }
 
   // Auto-updater (production only)
   if (!is.dev) {

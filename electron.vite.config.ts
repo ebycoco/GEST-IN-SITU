@@ -1,10 +1,24 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
+import { copyFileSync, mkdirSync, existsSync } from 'fs';
+
+// Plugin to copy worker files to output
+function copyWorkerPlugin() {
+  return {
+    name: 'copy-worker',
+    closeBundle() {
+      const srcWorker = resolve('src/main/workers/import-worker.js');
+      const outDir = resolve('out/main/workers');
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+      copyFileSync(srcWorker, resolve(outDir, 'import-worker.js'));
+    }
+  };
+}
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    plugins: [externalizeDepsPlugin(), copyWorkerPlugin()],
     build: {
       rollupOptions: {
         external: ['better-sqlite3']

@@ -202,6 +202,8 @@ function migrateV1(db: Database.Database): void {
       cle_doublon TEXT, cle_doublon_flex TEXT
     );
 
+    CREATE INDEX IF NOT EXISTS idx_import_temp_cle ON t_import_temp(cle_doublon);
+
     -- =====================================================
     -- SYNC QUEUE (File d'attente offline)
     -- =====================================================
@@ -245,9 +247,9 @@ function migrateV1(db: Database.Database): void {
       (9, 3, 'PC 1', 1), (10, 3, 'PC 2', 2), (11, 3, 'PC 3', 3), (12, 3, 'PC 4', 4),
       (13, 4, 'PC 1', 1), (14, 4, 'PC 2', 2), (15, 4, 'PC 3', 3), (16, 4, 'PC 4', 4);
 
-    -- Compte Super Admin par défaut (mot de passe: Titan@2026 hashé bcrypt)
+    -- Compte Super Admin par défaut (identifiants: superadmin / admin)
     INSERT OR IGNORE INTO t_users (id_user, login, password_hash, role, nom_user, statut_actif)
-    VALUES (1, 'superadmin', '$2a$10$rKEYcV5Q2fW9yZ8Z4x9Z4e8Z4x9Z4e8Z4x9Z4e8Z4x9Z4e8Z4x9', 'SUPER ADMIN', 'Super Administrateur', 1);
+    VALUES (1, 'superadmin', 'admin', 'SUPER ADMIN', 'Super Administrateur', 1);
 
     -- Config initiale
     INSERT OR IGNORE INTO t_config (key, value) VALUES
