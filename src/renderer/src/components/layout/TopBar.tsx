@@ -31,12 +31,9 @@ export default function TopBar() {
         <button className="topbar-icon-btn" title="Paramètres" onClick={() => navigate('/profile')}>
           <Settings size={16} />
         </button>
-
-        <div className="window-controls">
-          <button className="window-btn minimize" onClick={() => window.api.window.minimize()} title="Réduire" />
-          <button className="window-btn maximize" onClick={() => window.api.window.maximize()} title="Agrandir" />
-          <button className="window-btn close" onClick={() => window.api.window.close()} title="Fermer" />
-        </div>
+        
+        {/* Espace réservé pour les boutons natifs de Windows (Window Controls Overlay) */}
+        <div style={{ width: 140, WebkitAppRegion: 'drag' as any }} />
       </div>
     </header>
   );

@@ -201,6 +201,74 @@ html, body, #root {
 }
 .btn-logout:hover { background: rgba(231,76,60,0.2); }
 
+/* --- SIDEBAR COLLAPSED STATE --- */
+.sidebar.collapsed {
+  width: 80px;
+  min-width: 80px;
+}
+
+.sidebar.collapsed .sidebar-text {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-header {
+  padding: 20px 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.sidebar.collapsed .sidebar-user {
+  padding: 16px 0;
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-section-label {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.sidebar.collapsed .nav-item {
+  padding: 10px 0;
+  justify-content: center;
+  margin: 2px auto;
+  width: 48px;
+}
+
+.sidebar.collapsed .sidebar-footer {
+  padding: 16px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.sidebar.collapsed .sync-indicator {
+  justify-content: center;
+}
+
+.sidebar.collapsed .btn-logout {
+  padding: 10px 0;
+  justify-content: center;
+  width: 48px;
+}
+
+.sidebar-toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+.sidebar-toggle-btn:hover {
+  background: var(--bg-card);
+  color: var(--text-primary);
+}
+
 /* --- MAIN CONTENT --- */
 .main-content {
   flex: 1; display: flex; flex-direction: column;

@@ -2,7 +2,8 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
-  FileText, UserCircle, LogOut, Shield, Wifi, WifiOff
+  FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -21,6 +22,7 @@ export default function Sidebar() {
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -38,13 +40,22 @@ export default function Sidebar() {
   const initials = user ? (user.nom_user || user.login).slice(0, 2).toUpperCase() : 'GI';
 
   return (
-    <aside className="sidebar">
-      <div className="sidebar-header">
-        <div className="sidebar-logo">GI</div>
-        <div>
-          <div className="sidebar-title">GEST-IN-SITU</div>
-          <div className="sidebar-subtitle">Cartes CMU</div>
+    <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
+      <div className="sidebar-header" style={{ display: 'flex', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div className="sidebar-logo">GI</div>
+          <div className="sidebar-text">
+            <div className="sidebar-title">GEST-IN-SITU</div>
+            <div className="sidebar-subtitle">Cartes CMU</div>
+          </div>
         </div>
+        <button 
+          className="sidebar-toggle-btn" 
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          title={isCollapsed ? "Ouvrir le menu" : "Réduire le menu"}
+        >
+          {isCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+        </button>
       </div>
 
       <div className="sidebar-user">
@@ -52,37 +63,39 @@ export default function Sidebar() {
           <div className="sidebar-avatar">{initials}</div>
           <div className="online-dot" />
         </div>
-        <div>
+        <div className="sidebar-text">
           <div className="sidebar-user-name">{user?.nom_user || user?.login}</div>
           <span className="sidebar-user-role">{user?.role}</span>
         </div>
       </div>
 
       <nav className="sidebar-nav">
-        <div className="sidebar-section-label">Navigation</div>
+        <div className="sidebar-section-label sidebar-text">Navigation</div>
         {navItems.map((item) => {
           if (item.roles && user && !item.roles.includes(user.role)) return null;
           const Icon = item.icon;
           return (
             <NavLink key={item.path} to={item.path} end={item.path === '/'}
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+              title={isCollapsed ? item.label : undefined}
+            >
               <Icon />
-              <span>{item.label}</span>
+              <span className="sidebar-text">{item.label}</span>
             </NavLink>
           );
         })}
       </nav>
 
       <div className="sidebar-footer">
-        <div className="sync-indicator" style={{ marginBottom: 12 }}>
+        <div className="sync-indicator" style={{ marginBottom: 12 }} title={isOnline ? 'En ligne' : 'Hors ligne'}>
           {isOnline ? <Wifi size={14} color="var(--accent-green)" /> : <WifiOff size={14} color="var(--accent-red)" />}
-          <span style={{ color: isOnline ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+          <span className="sidebar-text" style={{ color: isOnline ? 'var(--accent-green)' : 'var(--accent-red)' }}>
             {isOnline ? 'En ligne' : 'Hors ligne'}
           </span>
         </div>
-        <button className="btn-logout" onClick={handleLogout}>
+        <button className="btn-logout" onClick={handleLogout} title={isCollapsed ? "Déconnexion" : undefined}>
           <LogOut size={16} />
-          <span>Déconnexion</span>
+          <span className="sidebar-text">Déconnexion</span>
         </button>
       </div>
     </aside>
