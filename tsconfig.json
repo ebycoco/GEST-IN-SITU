@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/renderer/src/*"],
+      "@components/*": ["src/renderer/src/components/*"],
+      "@pages/*": ["src/renderer/src/pages/*"],
+      "@stores/*": ["src/renderer/src/stores/*"],
+      "@hooks/*": ["src/renderer/src/hooks/*"],
+      "@utils/*": ["src/renderer/src/utils/*"],
+      "@assets/*": ["src/renderer/src/assets/*"]
+    },
+    "outDir": "./out"
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "out", "dist"]
+}

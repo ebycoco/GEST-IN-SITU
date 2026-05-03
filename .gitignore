@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+build/
+.env
+.env.local
+*.accdb
+*.sqlite
+*.sqlite3
+*.db
+.DS_Store
+build-log.txt
