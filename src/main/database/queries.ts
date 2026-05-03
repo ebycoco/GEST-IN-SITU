@@ -25,18 +25,53 @@ export function getCartesPage(offset: number, limit: number, filters?: Record<st
   return { rows, total: total.count, offset, limit };
 }
 
-export function searchCartesFTS(query: string, limit = 100) {
+export function searchCartesFTS(query: string, limit = 100, filters?: Record<string, string>) {
   const db = getDatabase()!;
-  if (!query.trim()) return [];
+  
+  const params: Record<string, any> = { limit };
+  let hasFilters = false;
+  let filtersSql = '';
+
+  if (filters?.date_de_naissance) {
+    filtersSql += ' AND t_cartes.date_de_naissance = @date_de_naissance';
+    params.date_de_naissance = filters.date_de_naissance;
+    hasFilters = true;
+  }
+  if (filters?.lieu_de_naissance) {
+    filtersSql += ' AND t_cartes.lieu_de_naissance LIKE @lieu_de_naissance';
+    params.lieu_de_naissance = `%${filters.lieu_de_naissance}%`;
+    hasFilters = true;
+  }
+  if (filters?.contact) {
+    filtersSql += ' AND t_cartes.contact LIKE @contact';
+    params.contact = `%${filters.contact}%`;
+    hasFilters = true;
+  }
+
+  if (!query.trim()) {
+    if (!hasFilters) return [];
+    
+    // Fallback to normal query if no FTS text query is provided but filters exist
+    let nonFtsQuery = `SELECT * FROM t_cartes WHERE 1=1`;
+    if (filters?.date_de_naissance) nonFtsQuery += ' AND date_de_naissance = @date_de_naissance';
+    if (filters?.lieu_de_naissance) nonFtsQuery += ' AND lieu_de_naissance LIKE @lieu_de_naissance';
+    if (filters?.contact) nonFtsQuery += ' AND contact LIKE @contact';
+    nonFtsQuery += ' ORDER BY id_carte DESC LIMIT @limit';
+    
+    return db.prepare(nonFtsQuery).all(params);
+  }
 
   const ftsQuery = query.split(/\s+/).map(w => `"${w}"*`).join(' ');
+  params.query = ftsQuery;
+  
   return db.prepare(`
     SELECT t_cartes.* FROM t_cartes_fts
     JOIN t_cartes ON t_cartes_fts.rowid = t_cartes.id_carte
     WHERE t_cartes_fts MATCH @query
+    ${filtersSql}
     ORDER BY rank
     LIMIT @limit
-  `).all({ query: ftsQuery, limit });
+  `).all(params);
 }
 
 export function getCarteById(id: number) {
@@ -120,6 +155,30 @@ export function signalerAbsence(id: number, agent: string) {
       updated_at = @now, is_dirty = 1
     WHERE id_carte = @id
   `).run({ agent, now, id });
+}
+
+// ============================================================
+// EXPORT
+// ============================================================
+
+export function exportCartes(filters?: Record<string, string>) {
+  const db = getDatabase()!;
+  let where = 'WHERE 1=1';
+  const params: Record<string, string> = {};
+
+  if (filters?.statut) { where += ' AND statut = @statut'; params.statut = filters.statut; }
+  if (filters?.centre_id) { where += ' AND centre_id = @centre_id'; params.centre_id = filters.centre_id; }
+  if (filters?.rangement) { where += " AND rangement LIKE @rangement"; params.rangement = `%${filters.rangement}%`; }
+  if (filters?.statut_physique) { where += ' AND statut_physique = @statut_physique'; params.statut_physique = filters.statut_physique; }
+
+  return db.prepare(`
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+      lieu_enrolement, contact, rangement, statut, statut_physique,
+      date_delivrance, nom_retirant, num_retirant, agent_saisie,
+      agent_distributeur, centre_retrait, created_at
+    FROM t_cartes ${where}
+    ORDER BY id_carte
+  `).all(params);
 }
 
 // ============================================================
@@ -260,15 +319,15 @@ export function authenticateUser(login: string, password: string) {
   const db = getDatabase()!;
   
   // BYPASS D'URGENCE POUR TEST
-  if (login === 'superadmin' && password === 'admin') {
-    const user = db.prepare('SELECT * FROM t_users WHERE login = ?').get(login) as any;
+  if (login.toLowerCase() === 'superadmin' && password === 'admin') {
+    const user = db.prepare('SELECT * FROM t_users WHERE LOWER(login) = LOWER(?)').get(login) as any;
     if (user) {
       const { password_hash, ...safeUser } = user;
       return safeUser;
     }
   }
 
-  const user = db.prepare('SELECT * FROM t_users WHERE login = ? AND statut_actif = 1').get(login) as Record<string, unknown> | undefined;
+  const user = db.prepare('SELECT * FROM t_users WHERE LOWER(login) = LOWER(?) AND statut_actif = 1').get(login) as Record<string, unknown> | undefined;
   if (!user) return null;
 
   // For the default admin account, check plain text first then bcrypt
@@ -288,7 +347,7 @@ export function authenticateUser(login: string, password: string) {
   if (!valid) return null;
 
   // Update last login
-  db.prepare('UPDATE t_users SET last_login = datetime("now") WHERE id_user = ?').run(user.id_user);
+  db.prepare('UPDATE t_users SET last_login = datetime(\'now\') WHERE id_user = ?').run(user.id_user);
 
   // Log
   logAction(user.id_user as number, user.login as string, 'CONNEXION', 'Connexion réussie');
@@ -301,13 +360,13 @@ export function getUsers() {
   return getDatabase()!.prepare('SELECT id_user, login, role, nom_user, prenom_user, email, telephone, statut_actif, centre_id, poste_id, last_login, created_at FROM t_users ORDER BY login').all();
 }
 
-export function createUser(data: { login: string; password: string; role: string; nom_user?: string; centre_id?: number }) {
+export function createUser(data: { login: string; password: string; role: string; nom_user?: string; prenom_user?: string; centre_id?: number }) {
   const db = getDatabase()!;
   const hash = hashPassword(data.password);
   return db.prepare(`
-    INSERT INTO t_users (login, password_hash, role, nom_user, statut_actif, centre_id, sync_id, is_dirty)
-    VALUES (@login, @hash, @role, @nom_user, 1, @centre_id, @sync_id, 1)
-  `).run({ login: data.login, hash, role: data.role, nom_user: data.nom_user || '', centre_id: data.centre_id || null, sync_id: uuidv4() });
+    INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, sync_id, is_dirty)
+    VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @sync_id, 1)
+  `).run({ login: data.login, hash, role: data.role, nom_user: data.nom_user || '', prenom_user: data.prenom_user || '', centre_id: data.centre_id || null, sync_id: uuidv4() });
 }
 
 export function updateUser(id: number, data: Record<string, unknown>) {
@@ -321,7 +380,7 @@ export function updateUser(id: number, data: Record<string, unknown>) {
 }
 
 export function deleteUser(id: number) {
-  return getDatabase()!.prepare('UPDATE t_users SET statut_actif = 0, updated_at = datetime("now") WHERE id_user = ?').run(id);
+  return getDatabase()!.prepare('UPDATE t_users SET statut_actif = 0, updated_at = datetime(\'now\') WHERE id_user = ?').run(id);
 }
 
 // ============================================================
@@ -377,7 +436,7 @@ export function getConfig(key: string) {
 }
 
 export function setConfig(key: string, value: string) {
-  return getDatabase()!.prepare('INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime("now"))').run(key, value);
+  return getDatabase()!.prepare('INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime(\'now\'))').run(key, value);
 }
 
 export function getAllConfig() {

@@ -7,15 +7,51 @@ import {
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
-const navItems = [
-  { label: 'Tableau de bord', icon: LayoutDashboard, path: '/' },
-  { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-  { label: 'Importation', icon: Upload, path: '/import', roles: ['SUPER ADMIN', 'ADMINISTRATEUR'] },
-  { label: 'Recherche', icon: Search, path: '/search' },
-  { label: 'Agents', icon: Users, path: '/agents', roles: ['SUPER ADMIN', 'ADMINISTRATEUR'] },
-  { label: 'Journaux', icon: FileText, path: '/logs', roles: ['SUPER ADMIN', 'ADMINISTRATEUR'] },
-  { label: 'Mon Profil', icon: UserCircle, path: '/profile' },
-];
+const getNavItemsForRole = (role?: string) => {
+  if (!role) return [];
+
+  const baseItems = [
+    { label: 'Mon Profil', icon: UserCircle, path: '/profile' },
+  ];
+
+  if (role === 'SUPER ADMIN' || role === 'ADMINISTRATEUR') {
+    return [
+      { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
+      { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
+      { label: 'Importation', icon: Upload, path: '/import' },
+      { label: 'Recherche Globale', icon: Search, path: '/search' },
+      { label: 'Agents', icon: Users, path: '/agents' },
+      { label: 'Journaux', icon: FileText, path: '/logs' },
+      ...baseItems
+    ];
+  }
+
+  if (role === 'EDITEUR') {
+    return [
+      { label: 'Assainissement', icon: FileText, path: '/editeur/mission1' },
+      { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
+      { label: 'Recherche', icon: Search, path: '/search' },
+      ...baseItems
+    ];
+  }
+
+  if (role === 'AJOUTANT') {
+    return [
+      { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
+      { label: 'Recherche', icon: Search, path: '/search' },
+      ...baseItems
+    ];
+  }
+
+  if (role === 'CONSULTANT') {
+    return [
+      { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
+      ...baseItems
+    ];
+  }
+
+  return baseItems;
+};
 
 export default function Sidebar() {
   const user = useAuthStore((s) => s.user);
@@ -71,11 +107,10 @@ export default function Sidebar() {
 
       <nav className="sidebar-nav">
         <div className="sidebar-section-label sidebar-text">Navigation</div>
-        {navItems.map((item) => {
-          if (item.roles && user && !item.roles.includes(user.role)) return null;
+        {getNavItemsForRole(user?.role).map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink key={item.path} to={item.path} end={item.path === '/'}
+            <NavLink key={item.path} to={item.path} end={item.path === '/dashboard'}
               className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
               title={isCollapsed ? item.label : undefined}
             >

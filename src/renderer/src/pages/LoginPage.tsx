@@ -17,7 +17,7 @@ export default function LoginPage() {
       toast.error('Veuillez remplir tous les champs');
       return;
     }
-    const success = await doLogin(login.trim(), password);
+    const success = await doLogin(login.trim(), password.trim());
     if (success) {
       toast.success('Bienvenue dans GEST-IN-SITU !');
       navigate('/');

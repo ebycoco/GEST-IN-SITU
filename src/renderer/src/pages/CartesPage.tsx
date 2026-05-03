@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { FixedSizeList as List } from 'react-window';
-import { CreditCard, Filter, Plus, Truck, AlertTriangle, RefreshCw } from 'lucide-react';
+import { CreditCard, Filter, Plus, Truck, AlertTriangle, RefreshCw, Download } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface Carte {
@@ -17,6 +17,7 @@ export default function CartesPage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Carte | null>(null);
   const [showDelivery, setShowDelivery] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const LIMIT = 200;
 
   const loadCartes = useCallback(async (off = 0, flt = filters) => {
@@ -45,6 +46,27 @@ export default function CartesPage() {
     if (!value) delete newF[key];
     setFilters(newF);
     loadCartes(0, newF);
+  };
+
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const result = await window.api.export.csv(filters);
+      if (result.success) {
+        toast.success(`${result.count.toLocaleString('fr')} cartes exportées avec succès !`);
+      } else if (result.reason === 'cancelled') {
+        // User cancelled, do nothing
+      } else if (result.reason === 'no_data') {
+        toast.error('Aucune donnée à exporter avec ces filtres.');
+      } else {
+        toast.error(`Erreur d'export : ${result.reason}`);
+      }
+    } catch (e) {
+      toast.error('Erreur inattendue lors de l\'export.');
+      console.error(e);
+    } finally {
+      setExporting(false);
+    }
   };
 
   const Row = ({ index, style }: { index: number; style: React.CSSProperties }) => {
@@ -100,6 +122,9 @@ export default function CartesPage() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn btn-outline btn-sm" onClick={() => loadCartes(offset)}><RefreshCw size={14} /> Rafraîchir</button>
+          <button className="btn btn-outline btn-sm" onClick={handleExport} disabled={exporting}>
+            <Download size={14} /> {exporting ? 'Export en cours...' : 'Exporter CSV'}
+          </button>
           <button className="btn btn-primary btn-sm"><Plus size={14} /> Nouvelle carte</button>
         </div>
       </div>

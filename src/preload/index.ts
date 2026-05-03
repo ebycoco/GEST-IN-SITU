@@ -8,7 +8,7 @@ const api = {
   // Cartes
   cartes: {
     getPage: (offset: number, limit: number, filters?: Record<string, string>) => ipcRenderer.invoke('cartes:getPage', offset, limit, filters),
-    search: (query: string, limit?: number) => ipcRenderer.invoke('cartes:search', query, limit),
+    search: (query: string, limit?: number, filters?: Record<string, string>) => ipcRenderer.invoke('cartes:search', query, limit, filters),
     getById: (id: number) => ipcRenderer.invoke('cartes:getById', id),
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('cartes:create', data),
     update: (id: number, data: Record<string, unknown>) => ipcRenderer.invoke('cartes:update', id, data),
@@ -33,7 +33,9 @@ const api = {
     }
   },
   // Export
-  export: { selectFolder: () => ipcRenderer.invoke('export:selectFolder') },
+  export: {
+    csv: (filters?: Record<string, string>) => ipcRenderer.invoke('export:csv', filters),
+  },
   // Users
   users: {
     getAll: () => ipcRenderer.invoke('users:getAll'),

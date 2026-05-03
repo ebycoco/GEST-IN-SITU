@@ -16,7 +16,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // CARTES
   ipcMain.handle('cartes:getPage', (_, offset, limit, filters) => queries.getCartesPage(offset, limit, filters));
-  ipcMain.handle('cartes:search', (_, query, limit) => queries.searchCartesFTS(query, limit));
+  ipcMain.handle('cartes:search', (_, query, limit, filters) => queries.searchCartesFTS(query, limit, filters));
   ipcMain.handle('cartes:getById', (_, id) => queries.getCarteById(id));
   ipcMain.handle('cartes:create', (_, data) => queries.createCarte(data));
   ipcMain.handle('cartes:update', (_, id, data) => queries.updateCarte(id, data));
@@ -139,10 +139,40 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     });
   });
 
-  // EXPORT
-  ipcMain.handle('export:selectFolder', async () => {
-    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] });
-    return result.canceled ? null : result.filePaths[0];
+  // EXPORT - CSV with save dialog
+  ipcMain.handle('export:csv', async (_, filters?: Record<string, string>) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Exporter les cartes en CSV',
+      defaultPath: `cartes_export_${new Date().toISOString().slice(0, 10)}.csv`,
+      filters: [
+        { name: 'Fichier CSV', extensions: ['csv'] },
+        { name: 'Tous', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled || !result.filePath) return { success: false, reason: 'cancelled' };
+
+    try {
+      const rows = queries.exportCartes(filters) as Record<string, unknown>[];
+      if (rows.length === 0) return { success: false, reason: 'no_data' };
+
+      const headers = Object.keys(rows[0]);
+      const csvLines = [
+        headers.join(';'),
+        ...rows.map(r => headers.map(h => {
+          const val = String(r[h] ?? '').replace(/"/g, '""');
+          return `"${val}"`;
+        }).join(';'))
+      ];
+
+      const { writeFileSync } = await import('fs');
+      writeFileSync(result.filePath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
+
+      log.info(`Export CSV: ${rows.length} rows to ${result.filePath}`);
+      return { success: true, count: rows.length, path: result.filePath };
+    } catch (e) {
+      log.error('Export CSV error', e);
+      return { success: false, reason: String(e) };
+    }
   });
 
   // USERS

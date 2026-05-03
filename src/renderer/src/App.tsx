@@ -9,9 +9,12 @@ import SearchPage from './pages/SearchPage';
 import AgentsPage from './pages/AgentsPage';
 import LogsPage from './pages/LogsPage';
 import ProfilePage from './pages/ProfilePage';
+import RoleRedirect from './components/RoleRedirect';
+import ConsultantSearchPage from './pages/ConsultantSearchPage';
+import AjoutantSaisiePage from './pages/AjoutantSaisiePage';
+import EditeurMission1Page from './pages/EditeurMission1Page';
 import { useAuthStore } from './stores/authStore';
 import { useEffect } from 'react';
-
 function ProtectedRoute({ children, requiredRoles }: { children: JSX.Element; requiredRoles?: string[] }) {
   const user = useAuthStore(s => s.user);
   if (!user) return <LoginPage />;
@@ -34,8 +37,21 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           
           <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-            <Route index element={<DashboardPage />} />
-            <Route path="cartes" element={<CartesPage />} />
+            {/* Redirection dynamique par défaut */}
+            <Route index element={<RoleRedirect />} />
+            <Route path="dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><DashboardPage /></ProtectedRoute>} />
+            
+            {/* Routes Consultant */}
+            <Route path="consultant/recherche" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'CONSULTANT']}><ConsultantSearchPage /></ProtectedRoute>} />
+
+            {/* Routes Ajoutant */}
+            <Route path="ajoutant/saisie" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'AJOUTANT']}><AjoutantSaisiePage /></ProtectedRoute>} />
+
+            {/* Routes Editeur */}
+            <Route path="editeur/mission1" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'EDITEUR']}><EditeurMission1Page /></ProtectedRoute>} />
+
+            {/* Routes Transversales */}
+            <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'EDITEUR']}><CartesPage /></ProtectedRoute>} />
             <Route path="search" element={<SearchPage />} />
             <Route path="profile" element={<ProfilePage />} />
             
