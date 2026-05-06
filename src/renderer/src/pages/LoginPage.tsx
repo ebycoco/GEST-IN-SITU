@@ -20,7 +20,18 @@ export default function LoginPage() {
     const success = await doLogin(login.trim(), password.trim());
     if (success) {
       toast.success('Bienvenue dans GEST-IN-SITU !');
-      navigate('/');
+      
+      // Get the user role from the store state to navigate directly
+      const user = useAuthStore.getState().user;
+      if (user?.role === 'CONSULTANT') {
+        navigate('/consultant/recherche');
+      } else if (user?.role === 'AJOUTANT') {
+        navigate('/ajoutant/saisie');
+      } else if (user?.role === 'EDITEUR') {
+        navigate('/editeur/mission1');
+      } else {
+        navigate('/dashboard');
+      }
     } else {
       toast.error('Identifiants incorrects');
     }

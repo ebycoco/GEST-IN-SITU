@@ -5,8 +5,20 @@ import {
   Truck, 
   AlertTriangle, 
   BarChart3, 
-  Activity 
+  Activity,
+  Trash2,
+  Database,
+  ShieldAlert,
+  Globe,
+  Users,
+  Key,
+  RefreshCw,
+  Power,
+  ChevronRight,
+  Plus
 } from 'lucide-react';
+import { useAuthStore } from '../stores/authStore';
+import { toast } from 'react-hot-toast';
 
 interface Stats {
   total: number;
@@ -19,92 +31,710 @@ interface Stats {
   distribParCentre: { centre: string; count: number }[];
 }
 
+interface GlobalStats {
+  total_sites: number;
+  active_sites: number;
+  total_cartes: number;
+  total_agents: number;
+}
+
+interface SiteSummary {
+  id: number;
+  nom: string;
+  code_site: string;
+  is_active: number;
+  total_centres: number;
+  total_cartes: number;
+  admin_login: string;
+}
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
+  const [sites, setSites] = useState<SiteSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [resetPassModal, setResetPassModal] = useState<{ isOpen: boolean, site: SiteSummary | null, newPass: string }>({ isOpen: false, site: null, newPass: '' });
+  const [confirmStatusModal, setConfirmStatusModal] = useState<{ isOpen: boolean, site: SiteSummary | null }>({ isOpen: false, site: null });
+  const [newSite, setNewSite] = useState({
+    nom: '',
+    code: '',
+    max_centres: 4,
+    adminNom: '',
+    adminLogin: '',
+    adminPass: ''
+  });
+  const { user, activeSiteId } = useAuthStore();
+
+  const isGovernanceView = user?.role === 'SUPER ADMIN' && !activeSiteId;
 
   useEffect(() => {
-    loadStats();
-  }, []);
+    if (isGovernanceView) {
+      loadGlobalData();
+    } else {
+      loadStats();
+    }
+  }, [activeSiteId, isGovernanceView]);
+
+  const loadGlobalData = async () => {
+    try {
+      setLoading(true);
+      const [gStats, sList] = await Promise.all([
+        window.api.stats.getGlobal(),
+        window.api.hierarchy.getSitesSummary()
+      ]);
+      setGlobalStats(gStats);
+      setSites(sList);
+    } catch (e) {
+      console.error(e);
+      toast.error("Erreur lors du chargement des données globales.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadStats = async () => {
     try {
-      const data = await window.api.stats.get();
+      setLoading(true);
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      const data = await window.api.stats.get(siteIdToUse);
       setStats(data);
     } catch (e) { 
-      console.error("Erreur lors du chargement des stats:", e); 
+      console.error(e); 
     } finally { 
       setLoading(false); 
     }
   };
 
+  const handleCreateSite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      setLoading(true);
+      await window.api.hierarchy.createSite({
+        nom: newSite.nom,
+        code: newSite.code,
+        max_centres: newSite.max_centres,
+        admin: {
+          nom: newSite.adminNom,
+          login: newSite.adminLogin,
+          password_hash: newSite.adminPass
+        }
+      });
+      toast.success("Nouveau site déployé avec succès !");
+      setShowCreateModal(false);
+      setNewSite({ nom: '', code: '', max_centres: 4, adminNom: '', adminLogin: '', adminPass: '' });
+      loadGlobalData();
+    } catch (e: any) {
+      toast.error("Erreur : " + e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResetAdminPass = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetPassModal.site || !resetPassModal.newPass) return;
+    try {
+      setLoading(true);
+      await window.api.hierarchy.resetAdminPassword(resetPassModal.site.id, resetPassModal.newPass);
+      toast.success("Mot de passe réinitialisé avec succès.");
+      setResetPassModal({ isOpen: false, site: null, newPass: '' });
+    } catch (e) {
+      toast.error("Erreur lors de la réinitialisation.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleToggleSiteStatus = async () => {
+    if (!confirmStatusModal.site) return;
+    try {
+      setLoading(true);
+      const newStatus = confirmStatusModal.site.is_active ? 0 : 1;
+      await window.api.hierarchy.updateSite(confirmStatusModal.site.id, { is_active: newStatus });
+      toast.success(`Site ${confirmStatusModal.site.nom} mis à jour.`);
+      setConfirmStatusModal({ isOpen: false, site: null });
+      loadGlobalData();
+    } catch (e) {
+      toast.error("Erreur lors de la mise à jour.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearDatabase = async () => {
+    const confirmed = window.confirm("ATTENTION : Êtes-vous absolument sûr de vouloir VIDER TOUTES LES CARTES ? Cette action est irréversible.");
+    if (!confirmed) return;
+    try {
+      setLoading(true);
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      const result = await window.api.maintenance.clearDatabaseCartes(siteIdToUse);
+      if (result.success) {
+        toast.success(`${result.count} cartes supprimées.`);
+        loadStats();
+      }
+    } catch (e) {
+      toast.error("Erreur lors du vidage de la base.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (loading) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-      <div style={{ textAlign: 'center' }}>
-        <Activity size={40} color="var(--accent-primary)" style={{ animation: 'pulse 1.5s infinite' }} />
-        <p style={{ marginTop: 12, color: 'var(--text-muted)' }}>Chargement des statistiques...</p>
+    <div className="dashboard-premium animate-fade-in" style={{ padding: '0 24px' }}>
+      <div className="kpi-grid">
+        {[1,2,3,4].map(i => <div key={i} className="skeleton skeleton-kpi" style={{ height: 140, borderRadius: 16 }} />)}
       </div>
+      <div className="skeleton skeleton-chart" style={{ marginTop: 24, height: 400, borderRadius: 16 }} />
     </div>
   );
 
-  const s = stats || { 
-    total: 0, 
-    en_stock: 0, 
-    distribuees: 0, 
-    absentes: 0, 
-    doublons_stricts: 0, 
-    sans_num_secu: 0, 
-    distribParJour: [], 
-    distribParCentre: [] 
-  };
+  if (isGovernanceView) {
+    const gs = globalStats || { total_sites: 0, active_sites: 0, total_cartes: 0, total_agents: 0 };
+    return (
+      <div className="dashboard-premium animate-fade-in">
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+          <div className="premium-card premium-glass">
+            <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #6c63ff, #4834d4)' }}>
+              <Globe size={28} color="white" />
+            </div>
+            <div>
+              <div className="kpi-value-lg">{gs.total_sites}</div>
+              <div className="kpi-label-muted">Sites Déployés</div>
+            </div>
+          </div>
+          
+          <div className="premium-card premium-glass">
+            <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #27ae60, #2ecc71)' }}>
+              <Power size={28} color="white" />
+            </div>
+            <div>
+              <div className="kpi-value-lg">{gs.active_sites}</div>
+              <div className="kpi-label-muted">Sites Actifs</div>
+            </div>
+          </div>
+          
+          <div className="premium-card premium-glass">
+            <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #f39c12, #e67e22)' }}>
+              <CreditCard size={28} color="white" />
+            </div>
+            <div>
+              <div className="kpi-value-lg">{gs.total_cartes.toLocaleString('fr')}</div>
+              <div className="kpi-label-muted">Cartes Globales</div>
+            </div>
+          </div>
+          
+          <div className="premium-card premium-glass">
+            <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #3498db, #2980b9)' }}>
+              <Users size={28} color="white" />
+            </div>
+            <div>
+              <div className="kpi-value-lg">{gs.total_agents}</div>
+              <div className="kpi-label-muted">Agents Réseau</div>
+            </div>
+          </div>
+        </div>
 
+        <div className="premium-card premium-glass" style={{ padding: 0 }}>
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 24px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(108, 99, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(108, 99, 255, 0.2)' }}>
+                <Globe size={20} color="var(--accent-primary)" />
+              </div>
+              <div>
+                <span className="card-title" style={{ fontSize: 16, marginBottom: 2 }}>Gestion des Sites</span>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Gouvernance et déploiement de l'infrastructure</div>
+              </div>
+            </div>
+            <button 
+              className="btn-primary" 
+              style={{ 
+                padding: '10px 20px', 
+                borderRadius: 12, 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 8,
+                boxShadow: '0 4px 15px rgba(108, 99, 255, 0.3)',
+                fontWeight: 700
+              }}
+              onClick={() => setShowCreateModal(true)}
+            >
+              <Plus size={18} /> Nouveau Site
+            </button>
+          </div>
+          
+          <div className="card-body" style={{ padding: 0 }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ paddingLeft: 24 }}>Infrastructure / Site</th>
+                  <th>Administrateur</th>
+                  <th>Centres</th>
+                  <th>Total Cartes</th>
+                  <th>État / Statut</th>
+                  <th style={{ textAlign: 'right', paddingRight: 24, width: 220 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sites.map((site) => (
+                  <tr key={site.id}>
+                    <td style={{ paddingLeft: 24, paddingTop: 16, paddingBottom: 16 }}>
+                      <div style={{ fontWeight: 700, color: 'white', fontSize: 14 }}>{site.nom}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>{site.code_site || site.code}</div>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', border: '1px solid var(--border-subtle)' }}>
+                          {site.admin_login?.substring(0, 2).toUpperCase() || '??'}
+                        </div>
+                        <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                          {site.admin_login || <i style={{ color: 'var(--text-muted)', opacity: 0.5 }}>Non assigné</i>}
+                        </span>
+                      </div>
+                    </td>
+                    <td>
+                      <span style={{ padding: '4px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>
+                        {site.total_centres}
+                      </span>
+                    </td>
+                    <td style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>
+                      {site.total_cartes.toLocaleString('fr')}
+                    </td>
+                    <td>
+                      <span className={`badge ${site.is_active ? 'badge-success' : 'badge-danger'}`} style={{ padding: '4px 12px', borderRadius: 20, fontSize: 10, fontWeight: 700 }}>
+                        {site.is_active ? 'ACTIF' : 'SUSPENDU'}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right', paddingRight: 24, whiteSpace: 'nowrap' }}>
+                      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <button 
+                          title="Réinitialiser le mot de passe"
+                          onClick={() => setResetPassModal({ isOpen: true, site, newPass: '' })}
+                          style={{
+                            background: 'rgba(108, 99, 255, 0.15)',
+                            border: '1px solid rgba(108, 99, 255, 0.3)',
+                            color: '#a5a0ff',
+                            padding: '8px 14px',
+                            borderRadius: '10px',
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            cursor: 'pointer',
+                            fontSize: '12px', fontWeight: 700,
+                            transition: 'all 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => { 
+                            e.currentTarget.style.background = 'rgba(108, 99, 255, 0.25)'; 
+                            e.currentTarget.style.transform = 'translateY(-2px)'; 
+                            e.currentTarget.style.boxShadow = '0 4px 12px rgba(108, 99, 255, 0.2)'; 
+                          }}
+                          onMouseLeave={(e) => { 
+                            e.currentTarget.style.background = 'rgba(108, 99, 255, 0.15)'; 
+                            e.currentTarget.style.transform = 'translateY(0)'; 
+                            e.currentTarget.style.boxShadow = 'none'; 
+                          }}
+                        >
+                          <Key size={14} /> Mdp.
+                        </button>
+                        <button 
+                          title={site.is_active ? "Suspendre l'infrastructure" : "Activer l'infrastructure"}
+                          onClick={() => setConfirmStatusModal({ isOpen: true, site })}
+                          style={{
+                            background: site.is_active ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                            border: `1px solid ${site.is_active ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
+                            color: site.is_active ? '#fca5a5' : '#6ee7b7',
+                            padding: '8px 14px',
+                            borderRadius: '10px',
+                            display: 'flex', alignItems: 'center', gap: '8px',
+                            cursor: 'pointer',
+                            fontSize: '12px', fontWeight: 700,
+                            transition: 'all 0.2s ease'
+                          }}
+                          onMouseEnter={(e) => { 
+                            e.currentTarget.style.background = site.is_active ? 'rgba(239, 68, 68, 0.25)' : 'rgba(16, 185, 129, 0.25)'; 
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow = site.is_active ? '0 4px 12px rgba(239, 68, 68, 0.2)' : '0 4px 12px rgba(16, 185, 129, 0.2)';
+                          }}
+                          onMouseLeave={(e) => { 
+                            e.currentTarget.style.background = site.is_active ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)'; 
+                            e.currentTarget.style.transform = 'translateY(0)'; 
+                            e.currentTarget.style.boxShadow = 'none';
+                          }}
+                        >
+                          {site.is_active ? <Power size={14} /> : <RefreshCw size={14} />}
+                          {site.is_active ? "Suspendre" : "Activer"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {sites.length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
+                      Aucun site n'est encore déployé.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>      {/* Modal de création de site - Design Fidèle à la Capture */}
+      {showCreateModal && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div style={{
+            background: '#0f111a', 
+            border: '1px solid #1e2235',
+            width: '100%', maxWidth: 520, 
+            borderRadius: 28,
+            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)',
+            padding: '32px'
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 28 }}>
+              <div style={{ display: 'flex', gap: 16 }}>
+                <div style={{
+                  width: 48, height: 48, borderRadius: 14,
+                  background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)'
+                }}>
+                  <Plus size={24} color="white" />
+                </div>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'white', letterSpacing: '-0.01em' }}>Déploiement Nouveau Site</h3>
+                  <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#64748b' }}>Configurez les paramètres de la zone géographique</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowCreateModal(false)}
+                style={{ background: '#1e2235', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 8, borderRadius: 12 }}
+              >
+                <Plus size={20} style={{ transform: 'rotate(45deg)' }} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleCreateSite} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>NOM DE LA COMMUNE / VILLE</label>
+                <input 
+                  required type="text" placeholder="Ex: PLATEAU"
+                  style={{ 
+                    background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                    padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14
+                  }}
+                  value={newSite.nom}
+                  onChange={e => setNewSite({...newSite, nom: e.target.value})}
+                />
+              </div>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>CODE SYSTÈME (2-5 CAR.)</label>
+                  <input 
+                    required type="text" placeholder="Ex: PLT"
+                    style={{ 
+                      background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                      padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14, textTransform: 'uppercase'
+                    }}
+                    value={newSite.code}
+                    onChange={e => setNewSite({...newSite, code: e.target.value})}
+                  />
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>QUOTA DE CENTRES</label>
+                  <input 
+                    required type="number" min="1" max="10"
+                    style={{ 
+                      background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                      padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14
+                    }}
+                    value={newSite.max_centres}
+                    onChange={e => setNewSite({...newSite, max_centres: parseInt(e.target.value)})}
+                  />
+                </div>
+              </div>
+
+              {/* Configuration Administrateur Box */}
+              <div style={{ 
+                marginTop: 10, padding: '24px', background: 'rgba(30, 41, 59, 0.2)', 
+                borderRadius: 20, border: '1px dashed #334155', display: 'flex', flexDirection: 'column', gap: 16
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                  <ShieldAlert size={18} color="#6366f1" />
+                  <span style={{ fontSize: 12, fontWeight: 800, color: '#6366f1', letterSpacing: '0.05em' }}>
+                    CONFIGURATION ADMINISTRATEUR
+                  </span>
+                </div>
+                
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>NOM COMPLET DU RESPONSABLE</label>
+                  <input 
+                    required type="text" placeholder="Ex: Koffi Kouassi"
+                    style={{ 
+                      background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                      padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14
+                    }}
+                    value={newSite.adminNom || ''}
+                    onChange={e => setNewSite({...newSite, adminNom: e.target.value})}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>IDENTIFIANT (LOGIN)</label>
+                    <input 
+                      required type="text" placeholder="admin_plateau"
+                      style={{ 
+                        background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                        padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14
+                      }}
+                      value={newSite.adminLogin}
+                      onChange={e => setNewSite({...newSite, adminLogin: e.target.value})}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <label style={{ fontSize: 11, fontWeight: 700, color: '#475569', letterSpacing: '0.05em' }}>MOT DE PASSE INITIAL</label>
+                    <input 
+                      required type="password" placeholder="••••••••"
+                      style={{ 
+                        background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, 
+                        padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14
+                      }}
+                      value={newSite.adminPass}
+                      onChange={e => setNewSite({...newSite, adminPass: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer Buttons */}
+              <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+                <button 
+                  type="button" onClick={() => setShowCreateModal(false)}
+                  style={{ 
+                    flex: 1, padding: '16px', background: '#1e2235', 
+                    border: '1px solid #334155', borderRadius: 16, 
+                    color: 'white', fontWeight: 700, cursor: 'pointer', fontSize: 14
+                  }}
+                >
+                  Annuler
+                </button>
+                <button 
+                  type="submit" disabled={loading}
+                  style={{ 
+                    flex: 1.5, padding: '16px', 
+                    background: 'linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)',
+                    border: 'none', borderRadius: 16, 
+                    color: 'white', fontWeight: 800, cursor: 'pointer', fontSize: 14,
+                    boxShadow: '0 8px 20px rgba(79, 70, 229, 0.4)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10
+                  }}
+                >
+                  {loading ? (
+                    <RefreshCw size={20} className="animate-spin" />
+                  ) : (
+                    'DÉPLOYER LE SITE'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Reset Password */}
+      {resetPassModal.isOpen && resetPassModal.site && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div className="animate-slide-up" style={{
+            background: '#0f111a', border: '1px solid #1e2235',
+            width: '100%', maxWidth: 400, borderRadius: 24, padding: '32px',
+            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Key size={24} color="#818cf8" />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'white' }}>Nouveau Mot de Passe</h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#64748b' }}>Pour {resetPassModal.site.nom} ({resetPassModal.site.admin_login})</p>
+              </div>
+            </div>
+            
+            <form onSubmit={handleResetAdminPass} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <input 
+                autoFocus required type="password" placeholder="Saisir le nouveau mot de passe"
+                style={{ background: '#08090f', border: '1px solid #1e2235', borderRadius: 12, padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14 }}
+                value={resetPassModal.newPass}
+                onChange={e => setResetPassModal({...resetPassModal, newPass: e.target.value})}
+              />
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <button type="button" onClick={() => setResetPassModal({ isOpen: false, site: null, newPass: '' })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
+                <button type="submit" disabled={loading} style={{ flex: 1, padding: '14px', background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3)' }}>{loading ? '...' : 'Valider'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirm Status */}
+      {confirmStatusModal.isOpen && confirmStatusModal.site && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+        }}>
+          <div className="animate-slide-up" style={{
+            background: '#0f111a', border: '1px solid #1e2235',
+            width: '100%', maxWidth: 400, borderRadius: 24, padding: '32px',
+            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 14, background: confirmStatusModal.site.is_active ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <AlertTriangle size={24} color={confirmStatusModal.site.is_active ? "#ef4444" : "#10b981"} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: 'white' }}>Confirmation requise</h3>
+                <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#64748b' }}>Voulez-vous {confirmStatusModal.site.is_active ? 'suspendre' : 'activer'} ce site ?</p>
+              </div>
+            </div>
+            
+            <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
+              Le site <strong style={{ color: 'white' }}>{confirmStatusModal.site.nom}</strong> {confirmStatusModal.site.is_active ? "ne pourra plus se connecter et synchroniser ses données." : "sera à nouveau autorisé à se connecter et synchroniser."}
+            </p>
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button onClick={() => setConfirmStatusModal({ isOpen: false, site: null })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
+              <button onClick={handleToggleSiteStatus} disabled={loading} style={{ flex: 1, padding: '14px', background: confirmStatusModal.site.is_active ? '#ef4444' : '#10b981', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: confirmStatusModal.site.is_active ? '0 4px 15px rgba(239, 68, 68, 0.3)' : '0 4px 15px rgba(16, 185, 129, 0.3)' }}>{loading ? '...' : 'Confirmer'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+    );
+  }
+
+  // OPERATIONAL VIEW (Original)
+  const s = stats || { total: 0, en_stock: 0, distribuees: 0, absentes: 0, doublons_stricts: 0, sans_num_secu: 0, distribParJour: [], distribParCentre: [] };
+  
+  const distributionRate = s.total > 0 ? Math.round((s.distribuees / s.total) * 100) : 0;
+  
   const kpis = [
-    { label: 'Total Cartes', value: (s.total || 0).toLocaleString('fr'), icon: CreditCard, cls: 'kpi-1' },
-    { label: 'En Stock', value: (s.en_stock || 0).toLocaleString('fr'), icon: Package, cls: 'kpi-2' },
-    { label: 'Distribuées', value: (s.distribuees || 0).toLocaleString('fr'), icon: Truck, cls: 'kpi-3' },
-    { label: 'Absentes', value: (s.absentes || 0).toLocaleString('fr'), icon: AlertTriangle, cls: 'kpi-4' },
-    { label: 'Doublons', value: (s.doublons_stricts || 0).toLocaleString('fr'), icon: BarChart3, cls: 'kpi-5' },
+    { label: 'Total Cartes', value: (s.total || 0).toLocaleString('fr'), icon: CreditCard, color: '#3498db', gradient: 'linear-gradient(135deg, #3498db, #2980b9)' },
+    { label: 'En Stock', value: (s.en_stock || 0).toLocaleString('fr'), icon: Package, color: '#f39c12', gradient: 'linear-gradient(135deg, #f39c12, #e67e22)' },
+    { label: 'Distribuées', value: (s.distribuees || 0).toLocaleString('fr'), icon: Truck, color: '#27ae60', gradient: 'linear-gradient(135deg, #27ae60, #2ecc71)' },
+    { label: 'Absentes', value: (s.absentes || 0).toLocaleString('fr'), icon: AlertTriangle, color: '#e74c3c', gradient: 'linear-gradient(135deg, #e74c3c, #c0392b)' },
   ];
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      {/* KPI Row */}
-      <div className="kpi-grid">
+    <div className="dashboard-premium animate-fade-in">
+      
+      {/* Alertes & Anomalies (Affiché uniquement s'il y a des problèmes) */}
+      {(s.doublons_stricts > 0 || s.sans_num_secu > 0) && (
+        <div className="premium-card premium-glass" style={{ border: '1px solid rgba(231, 76, 60, 0.4)', background: 'rgba(231, 76, 60, 0.05)', padding: '16px 24px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <AlertTriangle size={32} color="var(--accent-red)" className="animate-pulse" />
+            <div style={{ flex: 1 }}>
+              <h3 style={{ color: 'var(--accent-red)', margin: 0, fontSize: 16 }}>Attention Requise : Anomalies Détectées</h3>
+              <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>Des incohérences de données nécessitent une vérification par l'administrateur.</p>
+            </div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              {s.doublons_stricts > 0 && (
+                <div className="badge-alert">
+                  Doublons Stricts : {s.doublons_stricts.toLocaleString('fr')}
+                </div>
+              )}
+              {s.sans_num_secu > 0 && (
+                <div className="badge-alert" style={{ background: 'rgba(243, 156, 18, 0.15)', borderColor: 'rgba(243, 156, 18, 0.3)', color: 'var(--accent-orange)' }}>
+                  Sans Num Sécu : {s.sans_num_secu.toLocaleString('fr')}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Taux de Distribution Main KPI */}
+      <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div>
+          <h2 style={{ fontSize: 20, color: 'var(--text-white)', marginBottom: 8, fontWeight: 700 }}>Progression de la Distribution</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Taux d'achèvement par rapport au total des cartes reçues sur ce site.</p>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div className="kpi-value-lg" style={{ color: distributionRate > 50 ? 'var(--accent-green)' : 'var(--accent-orange)' }}>
+            {distributionRate}%
+          </div>
+        </div>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0 }}>
+          <div className="progress-premium-container" style={{ margin: 0, height: 6, borderRadius: 0 }}>
+            <div className="progress-premium-fill" style={{ width: `${distributionRate}%`, background: distributionRate > 50 ? 'var(--accent-green)' : 'var(--accent-orange)' }} />
+          </div>
+        </div>
+      </div>
+
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
         {kpis.map((kpi, i) => {
           const Icon = kpi.icon;
           return (
-            <div key={i} className={`kpi-card ${kpi.cls}`} style={{ animationDelay: `${i * 80}ms` }}>
-              <div className="kpi-icon"><Icon size={24} /></div>
+            <div key={i} className="premium-card premium-glass">
+              <div className="kpi-premium-icon" style={{ background: kpi.gradient }}>
+                <Icon size={24} color="white" />
+              </div>
               <div>
-                <div className="kpi-value">{kpi.value}</div>
-                <div className="kpi-label">{kpi.label}</div>
+                <div className="kpi-value-lg">{kpi.value}</div>
+                <div className="kpi-label-muted">{kpi.label}</div>
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title"><Activity size={16} /> État du Système</span>
-        </div>
-        <div className="card-body">
-          <p style={{ color: 'var(--text-secondary)', marginBottom: 12 }}>
-            Les statistiques réelles sont maintenant extraites de votre base de données locale. 
-          </p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            <div className="card" style={{ padding: 16, background: 'rgba(255,255,255,0.03)' }}>
-              <h4 style={{ color: 'var(--accent-primary)', marginBottom: 8 }}>Base de données</h4>
-              <p style={{ fontSize: 13 }}>SQLite (Local) : Connecté</p>
-              <p style={{ fontSize: 13 }}>Mode : WAL (High Performance)</p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        <div className="premium-card premium-glass">
+          <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16, marginBottom: 16 }}>
+            <span style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Activity size={20} color="var(--accent-primary)" /> État du Système Local
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
+              <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Base de données</h4>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>Connecté (SQLite)</p>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Site : {activeSiteId || 'Non défini'}</p>
             </div>
-            <div className="card" style={{ padding: 16, background: 'rgba(255,255,255,0.03)' }}>
-              <h4 style={{ color: 'var(--accent-secondary)', marginBottom: 8 }}>Session</h4>
-              <p style={{ fontSize: 13 }}>Utilisateur : Super Administrateur</p>
-              <p style={{ fontSize: 13 }}>Rôle : SUPER ADMIN</p>
+            <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
+              <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Session Active</h4>
+              <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>{user?.login}</p>
+              <p style={{ fontSize: 12, color: 'var(--accent-secondary)' }}>{user?.role}</p>
             </div>
           </div>
         </div>
+
+        {user?.role === 'SUPER ADMIN' && activeSiteId && (
+          <div className="premium-card premium-glass" style={{ border: '1px solid rgba(239, 68, 68, 0.3)', background: 'rgba(239, 68, 68, 0.05)' }}>
+            <div style={{ borderBottom: '1px solid rgba(239, 68, 68, 0.1)', paddingBottom: 16, marginBottom: 16 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ShieldAlert size={20} /> Zone de Maintenance (Site Actif)
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <p style={{ fontSize: 14, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+                La réinitialisation supprimera <strong>définitivement</strong> toutes les cartes liées à ce site. Les centres et les agents seront conservés.
+              </p>
+              <button 
+                onClick={handleClearDatabase} 
+                className="btn-danger" 
+                style={{ padding: '12px 24px', alignSelf: 'flex-start', borderRadius: 12, fontWeight: 700, boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)' }}
+              >
+                <Trash2 size={18} /> PURGER LES CARTES DU SITE
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

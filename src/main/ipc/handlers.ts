@@ -15,17 +15,61 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // CARTES
-  ipcMain.handle('cartes:getPage', (_, offset, limit, filters) => queries.getCartesPage(offset, limit, filters));
-  ipcMain.handle('cartes:search', (_, query, limit, filters) => queries.searchCartesFTS(query, limit, filters));
-  ipcMain.handle('cartes:getById', (_, id) => queries.getCarteById(id));
-  ipcMain.handle('cartes:create', (_, data) => queries.createCarte(data));
-  ipcMain.handle('cartes:update', (_, id, data) => queries.updateCarte(id, data));
-  ipcMain.handle('cartes:delete', (_, id) => queries.deleteCarte(id));
-  ipcMain.handle('cartes:delivrer', (_, id, data) => queries.delivrerCarte(id, data));
-  ipcMain.handle('cartes:signalerAbsence', (_, id, agent) => queries.signalerAbsence(id, agent));
+  ipcMain.handle('cartes:getPage', async (_, offset, limit, filters) => {
+    try { return queries.getCartesPage(offset, limit, filters); }
+    catch (e) { log.error('IPC Error: cartes:getPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:search', async (_, query, limit, filters) => {
+    try { return queries.searchCartesFTS(query, limit, filters); }
+    catch (e) { log.error('IPC Error: cartes:search', e); throw e; }
+  });
+  ipcMain.handle('cartes:getById', async (_, id) => {
+    try { return queries.getCarteById(id); }
+    catch (e) { log.error('IPC Error: cartes:getById', e); throw e; }
+  });
+  ipcMain.handle('cartes:create', async (_, data) => {
+    try { return queries.createCarte(data); }
+    catch (e) { log.error('IPC Error: cartes:create', e); throw e; }
+  });
+  ipcMain.handle('cartes:update', async (_, id, data) => {
+    try { return queries.updateCarte(id, data); }
+    catch (e) { log.error('IPC Error: cartes:update', e); throw e; }
+  });
+  ipcMain.handle('cartes:delete', async (_, id) => {
+    try { return queries.deleteCarte(id); }
+    catch (e) { log.error('IPC Error: cartes:delete', e); throw e; }
+  });
+  ipcMain.handle('cartes:delivrer', async (_, id, data) => {
+    try { return queries.delivrerCarte(id, data); }
+    catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
+  });
+  ipcMain.handle('cartes:signalerAbsence', async (_, id, agent) => {
+    try { return queries.signalerAbsence(id, agent); }
+    catch (e) { log.error('IPC Error: cartes:signalerAbsence', e); throw e; }
+  });
+  ipcMain.handle('cartes:getAbsences', async (_, siteId?: number) => {
+    try { return queries.getAbsencesReportees(siteId); }
+    catch (e) { log.error('IPC Error: cartes:getAbsences', e); throw e; }
+  });
+  ipcMain.handle('cartes:resoudreAbsence', async (_, id, data) => {
+    try { return queries.resoudreAbsence(id, data); }
+    catch (e) { log.error('IPC Error: cartes:resoudreAbsence', e); throw e; }
+  });
+  ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number) => {
+    try { return queries.getInvalidDateRecords(siteId); }
+    catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
+  });
+  ipcMain.handle('cartes:updateDate', async (_, id, newDate) => {
+    try { return queries.updateDateDeNaissance(id, newDate); }
+    catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
+  });
 
   // STATS
-  ipcMain.handle('stats:get', () => queries.getStats());
+  ipcMain.handle('stats:get', (_, siteId) => queries.getStats(siteId));
+  ipcMain.handle('stats:getGlobal', async () => {
+    try { return queries.getGlobalStats(); }
+    catch (e) { log.error('IPC Error: stats:getGlobal', e); throw e; }
+  });
 
   // IMPORT - File selection
   ipcMain.handle('import:selectFile', async () => {
@@ -78,12 +122,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // IMPORT - Utilities
-  ipcMain.handle('import:clearTemp', () => queries.clearImportTemp());
-  ipcMain.handle('import:executeBatch', (_, rows, agent) => queries.importBatch(rows, agent));
-  ipcMain.handle('import:fusionner', () => queries.fusionnerImport());
+  ipcMain.handle('import:clearTemp', (_, siteId) => queries.clearImportTemp(siteId));
+  ipcMain.handle('import:executeBatch', (_, rows, agent, siteId) => queries.importBatch(rows, agent, siteId));
+  ipcMain.handle('import:fusionner', (_, agent, siteId) => queries.fusionnerImport(siteId));
 
   // IMPORT - Process file using Worker Thread (NON-BLOCKING!)
-  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number) => {
+  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number) => {
     return new Promise((resolve, reject) => {
       // Resolve the path to better-sqlite3 native module
       let sqlitePath: string;
@@ -107,6 +151,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           dbPath: getDbPath(),
           filePath,
           agent,
+          siteId,
           totalEstimate: totalEstimate || 220000
         }
       });
@@ -187,9 +232,50 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('logs:purge', () => queries.purgeLogs());
 
   // HIERARCHY
-  ipcMain.handle('hierarchy:getSites', () => queries.getSites());
-  ipcMain.handle('hierarchy:getCentres', (_, siteId) => queries.getCentres(siteId));
-  ipcMain.handle('hierarchy:getPostes', (_, centreId) => queries.getPostes(centreId));
+  ipcMain.handle('hierarchy:getSites', async () => {
+    try { return queries.getSites(); }
+    catch (e) { log.error('IPC Error: hierarchy:getSites', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:getSitesSummary', async () => {
+    try { return queries.getSitesSummary(); }
+    catch (e) { log.error('IPC Error: hierarchy:getSitesSummary', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:createSite', async (_, data) => {
+    try { return queries.createSite(data); }
+    catch (e) { log.error('IPC Error: hierarchy:createSite', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:updateSite', async (_, id, data) => {
+    try { return queries.updateSite(id, data); }
+    catch (e) { log.error('IPC Error: hierarchy:updateSite', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:deleteSite', async (_, id) => {
+    try { return queries.deleteSite(id); }
+    catch (e) { log.error('IPC Error: hierarchy:deleteSite', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:resetAdminPassword', async (_, siteId, pass) => {
+    try { return queries.resetSiteAdminPassword(siteId, pass); }
+    catch (e) { log.error('IPC Error: hierarchy:resetAdminPassword', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:verifyPassword', async (_, password) => {
+    try { return queries.verifySuperAdminPassword(password); }
+    catch (e) { log.error('IPC Error: hierarchy:verifyPassword', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:getCentres', async (_, siteId) => {
+    try { return queries.getCentres(siteId); }
+    catch (e) { log.error('IPC Error: hierarchy:getCentres', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:createCentre', async (_, data) => {
+    try { return queries.createCentre(data); }
+    catch (e) { log.error('IPC Error: hierarchy:createCentre', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:updateCentre', async (_, id, data) => {
+    try { return queries.updateCentre(id, data); }
+    catch (e) { log.error('IPC Error: hierarchy:updateCentre', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:getPostes', async (_, centreId) => {
+    try { return queries.getPostes(centreId); }
+    catch (e) { log.error('IPC Error: hierarchy:getPostes', e); throw e; }
+  });
 
   // CONFIG
   ipcMain.handle('config:get', (_, key) => queries.getConfig(key));
@@ -199,6 +285,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // APP INFO
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getDbPath', () => getDbPath());
+
+  // MAINTENANCE
+  ipcMain.handle('maintenance:clearAll', () => queries.clearDatabaseCartes());
+  ipcMain.handle('maintenance:clearDatabaseCartes', (_, siteId) => queries.clearDatabaseCartes(siteId));
+  ipcMain.handle('maintenance:fullReset', () => queries.fullSystemReset());
 
   log.info('All IPC handlers registered');
 }

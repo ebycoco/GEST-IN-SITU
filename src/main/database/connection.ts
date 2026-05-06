@@ -39,6 +39,12 @@ export async function initDatabase(): Promise<Database.Database> {
   // Run schema migrations
   runMigrations(db);
 
+  // Add Regexp support
+  db.function('regexp', (pattern: string, text: string) => {
+    const re = new RegExp(pattern);
+    return re.test(text) ? 1 : 0;
+  });
+
   log.info('Database ready with WAL mode and performance optimizations');
   return db;
 }

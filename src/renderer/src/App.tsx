@@ -9,10 +9,12 @@ import SearchPage from './pages/SearchPage';
 import AgentsPage from './pages/AgentsPage';
 import LogsPage from './pages/LogsPage';
 import ProfilePage from './pages/ProfilePage';
+import SitesPage from './pages/SitesPage';
 import RoleRedirect from './components/RoleRedirect';
 import ConsultantSearchPage from './pages/ConsultantSearchPage';
 import AjoutantSaisiePage from './pages/AjoutantSaisiePage';
 import EditeurMission1Page from './pages/EditeurMission1Page';
+import AdminQueuePage from './pages/AdminQueuePage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect } from 'react';
 function ProtectedRoute({ children, requiredRoles }: { children: JSX.Element; requiredRoles?: string[] }) {
@@ -31,7 +33,7 @@ export default function App() {
 
   return (
     <>
-      <Toaster position="top-right" toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
+      <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <HashRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -58,6 +60,8 @@ export default function App() {
             {/* Routes Admin */}
             <Route path="import" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><ImportPage /></ProtectedRoute>} />
             <Route path="agents" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><AgentsPage /></ProtectedRoute>} />
+            <Route path="sites" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><SitesPage /></ProtectedRoute>} />
+            <Route path="admin/queue" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><AdminQueuePage /></ProtectedRoute>} />
             <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><LogsPage /></ProtectedRoute>} />
           </Route>
         </Routes>

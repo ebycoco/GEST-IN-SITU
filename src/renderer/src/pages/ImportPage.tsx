@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Upload, FileSpreadsheet, CheckCircle, AlertCircle, Loader, Database } from 'lucide-react';
+import { 
+  Upload, FileSpreadsheet, CheckCircle, 
+  AlertCircle, Loader, Database, 
+  ArrowRight, ShieldAlert, FileText, 
+  ChevronRight, HardDrive, Zap
+} from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '../stores/authStore';
 
 export default function ImportPage() {
+  const { user, activeSiteId } = useAuthStore();
   const [file, setFile] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ rows: any[]; headers: string[]; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
@@ -35,18 +42,24 @@ export default function ImportPage() {
     setImporting(true);
     setProgress(0);
     
-    // Listen for progress
     const removeListener = window.api.import.onProgress((p: number) => {
       setProgress(p);
     });
     
     try {
-      await window.api.import.clearTemp();
-      const res = await window.api.import.processFile(file, 'SUPERADMIN', preview?.total);
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      if (!siteIdToUse) {
+        toast.error('Aucun site sélectionné');
+        setImporting(false);
+        return;
+      }
+
+      await window.api.import.clearTemp(siteIdToUse);
+      const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, siteIdToUse);
       setResult(res);
-      toast.success(`Importation terminée !`);
+      toast.success(`Migration terminée !`);
     } catch (e) {
-      toast.error(`Erreur d'importation: ${String(e)}`);
+      toast.error(`Échec de l'importation`);
     } finally {
       removeListener();
       setImporting(false);
@@ -55,100 +68,170 @@ export default function ImportPage() {
   };
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <Database size={20} color="var(--accent-primary)" />
-        <h2 style={{ fontSize: 18, fontWeight: 700 }}>Migration & Importation Massive</h2>
-      </div>
-
-      <div className="card">
-        <div className="card-header">
-          <span className="card-title"><FileSpreadsheet size={16} /> Source de données (Excel / CSV)</span>
+    <div className="page-content custom-scrollbar">
+      <div className="max-w-5xl mx-auto py-10 space-y-10">
+        
+        {/* Header */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 shadow-xl shadow-indigo-500/5">
+              <HardDrive size={28} />
+            </div>
+            <h1 className="text-3xl font-black text-white tracking-tight">Migration Massive</h1>
+          </div>
+          <p className="text-slate-400 font-medium ml-1">
+            Importez vos fichiers CSV/Excel dans le moteur Turbo-SQLite haute performance.
+          </p>
         </div>
-        <div className="card-body" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 20, padding: 40 }}>
-          <div style={{ width: 80, height: 80, borderRadius: 20, background: 'var(--bg-tertiary)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed var(--border-color)' }}>
-            <Upload size={32} color="var(--accent-primary)" />
+
+        {/* Upload Zone */}
+        <div className="premium-card p-10 border-white/5 bg-white/[0.01] flex flex-col items-center gap-8 text-center group">
+          <div className="relative">
+            <div className="absolute inset-0 bg-indigo-500/20 blur-3xl rounded-full scale-150 opacity-0 group-hover:opacity-100 transition-opacity" />
+            <div className="relative w-24 h-24 rounded-[2rem] bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 shadow-2xl transition-transform group-hover:scale-110">
+              <Upload size={40} />
+            </div>
           </div>
-          <div style={{ textAlign: 'center' }}>
-            <p style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Glissez votre fichier ici ou cliquez pour parcourir</p>
-            <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>Supporte .xlsx, .xls et .csv (séparateur virgule ou point-virgule)</p>
+
+          <div className="space-y-2">
+            <h3 className="text-xl font-black text-white">Sélectionnez votre source</h3>
+            <p className="text-slate-400 max-w-sm mx-auto">Supporte les formats .xlsx, .xls et .csv avec détection automatique de l'encodage.</p>
           </div>
-          <button className="btn btn-primary" onClick={handleSelectFile} disabled={importing}>
-            <FileSpreadsheet size={16} /> Choisir le fichier V1
+
+          <button className="premium-button py-4 px-10 group/btn" onClick={handleSelectFile} disabled={importing}>
+            <FileSpreadsheet size={20} className="mr-3" /> 
+            Choisir le fichier
+            <ChevronRight size={18} className="ml-2 opacity-0 group-hover/btn:translate-x-1 group-hover/btn:opacity-100 transition-all" />
           </button>
+
           {file && (
-            <div style={{ padding: '8px 16px', background: 'rgba(108,99,255,0.1)', borderRadius: 8, border: '1px solid var(--accent-primary)' }}>
-              <p style={{ fontSize: 13, color: 'var(--text-primary)' }}>📂 {file.split('\\').pop()}</p>
+            <div className="flex items-center gap-3 py-3 px-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 animate-slide-up">
+              <FileText size={18} />
+              <span className="text-sm font-black">{file.split('\\').pop()}</span>
             </div>
           )}
         </div>
-      </div>
 
-      {preview && !result && (
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Aperçu des données ({preview.total.toLocaleString('fr')} lignes au total)</span>
-            <button className="btn btn-success" onClick={handleImport} disabled={importing}>
-              {importing ? <Loader size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <CheckCircle size={14} />}
-              {importing ? 'Importation en cours...' : 'Lancer l\'importation Turbo'}
+        {/* Preview & Action */}
+        {preview && !result && (
+          <div className="premium-card overflow-hidden border-white/5 animate-slide-up">
+            <div className="p-6 border-b border-white/5 bg-white/[0.02] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+                  <Zap size={18} />
+                </div>
+                <h2 className="text-lg font-black text-white">Analyse du Fichier ({preview.total.toLocaleString('fr')} lignes)</h2>
+              </div>
+              <button 
+                className="premium-button bg-emerald-600 hover:bg-emerald-500 border-none shadow-lg shadow-emerald-600/20" 
+                onClick={handleImport} 
+                disabled={importing}
+              >
+                {importing ? <Loader size={18} className="mr-3 animate-spin" /> : <Zap size={18} className="mr-3" />}
+                {importing ? 'Migration en cours...' : 'Lancer le Moteur Turbo'}
+              </button>
+            </div>
+
+            <div className="p-6">
+              {importing && (
+                <div className="mb-10 p-8 rounded-2xl bg-white/[0.02] border border-white/10 space-y-4">
+                  <div className="flex justify-between items-end">
+                    <div>
+                      <p className="text-xs font-black text-indigo-400 uppercase tracking-widest mb-1">Status</p>
+                      <p className="text-sm font-bold text-white">Traitement haute performance des paquets...</p>
+                    </div>
+                    <span className="text-2xl font-black text-indigo-400">{progress}%</span>
+                  </div>
+                  <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
+                    <div className="h-full bg-gradient-to-r from-indigo-600 to-indigo-400 transition-all duration-300" style={{ width: `${progress}%` }} />
+                  </div>
+                </div>
+              )}
+
+              <div className="overflow-x-auto rounded-xl border border-white/5">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-white/[0.03] text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                      {preview.headers.slice(0, 8).map((h, i) => <th key={i} className="px-4 py-3">{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {preview.rows.slice(0, 5).map((row, i) => (
+                      <tr key={i} className="text-xs text-slate-400 hover:text-white transition-colors">
+                        {preview.headers.slice(0, 8).map((h, j) => {
+                          const key = h.toLowerCase().replace(/\s+/g, '_');
+                          return <td key={j} className="px-4 py-3 truncate max-w-[150px]">{row[key] || '—'}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Success Result */}
+        {result && (
+          <div className="premium-card p-10 border-emerald-500/20 bg-emerald-500/5 flex items-center gap-8 animate-slide-up">
+            <div className="w-20 h-20 rounded-full bg-emerald-500/10 flex items-center justify-center text-emerald-400 shadow-inner">
+              <CheckCircle size={40} />
+            </div>
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-2xl font-black text-white">Processus Terminé !</h3>
+                <p className="text-slate-400 mt-1 font-medium">L'indexation SQLite FTS5 a été mise à jour avec succès.</p>
+              </div>
+              <div className="flex gap-6">
+                <div className="space-y-1">
+                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Nouveaux</p>
+                  <p className="text-xl font-black text-white">{result.inserted.toLocaleString('fr')}</p>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Mis à jour</p>
+                  <p className="text-xl font-black text-white">{result.updated.toLocaleString('fr')}</p>
+                </div>
+              </div>
+              <button className="premium-button bg-white/5 border-white/5 text-slate-300" onClick={() => setResult(null)}>
+                Nouvelle Migration
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Critical Zone */}
+        {(user?.role === 'ADMINISTRATEUR' || (user?.role === 'SUPER ADMIN' && activeSiteId)) && (
+          <div className="premium-card p-8 border-rose-500/10 bg-rose-500/[0.02] flex items-center justify-between gap-10">
+            <div className="flex gap-6 items-center">
+              <div className="p-4 rounded-2xl bg-rose-500/10 text-rose-500">
+                <ShieldAlert size={32} />
+              </div>
+              <div className="space-y-1">
+                <h4 className="text-lg font-black text-white uppercase tracking-tight">Zone de Maintenance Critique</h4>
+                <p className="text-slate-500 text-sm font-medium">Purge définitive de l'inventaire des cartes pour ce site.</p>
+              </div>
+            </div>
+            <button 
+              className="px-8 py-4 bg-rose-600/10 hover:bg-rose-600 border border-rose-500/20 text-rose-500 hover:text-white font-black rounded-2xl transition-all"
+              onClick={async () => {
+                const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+                if (!siteIdToUse) return;
+                if (confirm('Voulez-vous vraiment VIDER TOUTE LA BASE ?')) {
+                  const pass = prompt('Saisissez "CONFIRMER" :');
+                  if (pass === 'CONFIRMER') {
+                    try {
+                      await window.api.maintenance.clearDatabaseCartes(siteIdToUse);
+                      toast.success('Données purgées');
+                    } catch (e) { toast.error('Échec'); }
+                  }
+                }
+              }}
+            >
+              VIDER LE SITE
             </button>
           </div>
-          <div className="card-body">
-            {importing && (
-              <div style={{ marginBottom: 20, padding: 20, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Traitement haute performance...</span>
-                  <span style={{ color: 'var(--accent-primary)', fontWeight: 700 }}>{progress}%</span>
-                </div>
-                <div className="progress-bar" style={{ height: 10 }}><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>Veuillez ne pas fermer l'application durant cette opération.</p>
-              </div>
-            )}
-            
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    {preview.headers.slice(0, 10).map((h, i) => <th key={i}>{h}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {preview.rows.slice(0, 10).map((row, i) => (
-                    <tr key={i}>
-                      {preview.headers.slice(0, 10).map((h, j) => {
-                        const key = h.toLowerCase().replace(/\s+/g, '_');
-                        return <td key={j}>{row[key] || '—'}</td>;
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 12, textAlign: 'center' }}>
-              Affichage des 10 premières lignes sur {preview.total.toLocaleString('fr')}.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {result && (
-        <div className="card" style={{ borderColor: 'var(--accent-green)', background: 'rgba(39,174,96,0.05)' }}>
-          <div className="card-body" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 30 }}>
-            <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(39,174,96,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <CheckCircle size={32} color="var(--accent-green)" />
-            </div>
-            <div>
-              <h3 style={{ fontSize: 20, fontWeight: 700, color: 'var(--text-white)' }}>Importation Réussie !</h3>
-              <p style={{ color: 'var(--text-secondary)', marginTop: 4 }}>
-                <span style={{ color: 'var(--accent-green)', fontWeight: 700 }}>{result.inserted.toLocaleString('fr')}</span> nouvelles cartes ont été ajoutées.
-                <br />
-                <span style={{ color: 'var(--accent-blue)', fontWeight: 700 }}>{result.updated.toLocaleString('fr')}</span> cartes existantes ont été mises à jour.
-              </p>
-              <button className="btn btn-outline btn-sm" style={{ marginTop: 16 }} onClick={() => setResult(null)}>Importer un autre fichier</button>
-            </div>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

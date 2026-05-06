@@ -15,17 +15,24 @@ const api = {
     delete: (id: number) => ipcRenderer.invoke('cartes:delete', id),
     delivrer: (id: number, data: Record<string, unknown>) => ipcRenderer.invoke('cartes:delivrer', id, data),
     signalerAbsence: (id: number, agent: string) => ipcRenderer.invoke('cartes:signalerAbsence', id, agent),
+    getAbsences: (siteId?: number) => ipcRenderer.invoke('cartes:getAbsences', siteId),
+    resoudreAbsence: (id: number, data: any) => ipcRenderer.invoke('cartes:resoudreAbsence', id, data),
+    getInvalidDates: (siteId?: number) => ipcRenderer.invoke('cartes:getInvalidDates', siteId),
+    updateDate: (id: number, newDate: string) => ipcRenderer.invoke('cartes:updateDate', id, newDate),
   },
   // Stats
-  stats: { get: () => ipcRenderer.invoke('stats:get') },
+  stats: { 
+    get: (siteId?: number) => ipcRenderer.invoke('stats:get', siteId),
+    getGlobal: () => ipcRenderer.invoke('stats:getGlobal'),
+  },
   // Import
   import: {
     selectFile: () => ipcRenderer.invoke('import:selectFile'),
     parseCSV: (path: string) => ipcRenderer.invoke('import:parseCSV', path),
-    executeBatch: (rows: Record<string, string>[], agent: string) => ipcRenderer.invoke('import:executeBatch', rows, agent),
-    clearTemp: () => ipcRenderer.invoke('import:clearTemp'),
-    processFile: (path: string, agent: string, totalEstimate?: number) => ipcRenderer.invoke('import:processFile', path, agent, totalEstimate),
-    fusionner: () => ipcRenderer.invoke('import:fusionner'),
+    executeBatch: (rows: Record<string, string>[], agent: string, siteId?: number) => ipcRenderer.invoke('import:executeBatch', rows, agent, siteId),
+    clearTemp: (siteId?: number) => ipcRenderer.invoke('import:clearTemp', siteId),
+    processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number) => ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId),
+    fusionner: (agent: string, siteId?: number) => ipcRenderer.invoke('import:fusionner', agent, siteId),
     onProgress: (callback: (p: number) => void) => {
       const listener = (_: any, p: number) => callback(p);
       ipcRenderer.on('import:progress', listener);
@@ -52,7 +59,15 @@ const api = {
   // Hierarchy
   hierarchy: {
     getSites: () => ipcRenderer.invoke('hierarchy:getSites'),
+    getSitesSummary: () => ipcRenderer.invoke('hierarchy:getSitesSummary'),
+    createSite: (data: any) => ipcRenderer.invoke('hierarchy:createSite', data),
+    updateSite: (id: number, data: any) => ipcRenderer.invoke('hierarchy:updateSite', id, data),
+    deleteSite: (id: number) => ipcRenderer.invoke('hierarchy:deleteSite', id),
+    resetAdminPassword: (siteId: number, pass: string) => ipcRenderer.invoke('hierarchy:resetAdminPassword', siteId, pass),
+    verifyPassword: (password: string) => ipcRenderer.invoke('hierarchy:verifyPassword', password),
     getCentres: (siteId?: number) => ipcRenderer.invoke('hierarchy:getCentres', siteId),
+    createCentre: (data: any) => ipcRenderer.invoke('hierarchy:createCentre', data),
+    updateCentre: (id: number, data: any) => ipcRenderer.invoke('hierarchy:updateCentre', id, data),
     getPostes: (centreId?: number) => ipcRenderer.invoke('hierarchy:getPostes', centreId),
   },
   // Config
@@ -81,6 +96,12 @@ const api = {
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getDbPath: () => ipcRenderer.invoke('app:getDbPath'),
+  },
+  // Maintenance
+  maintenance: {
+    clearAll: () => ipcRenderer.invoke('maintenance:clearAll'),
+    clearDatabaseCartes: (siteId?: number) => ipcRenderer.invoke('maintenance:clearDatabaseCartes', siteId),
+    fullReset: () => ipcRenderer.invoke('maintenance:fullReset'),
   },
 };
 

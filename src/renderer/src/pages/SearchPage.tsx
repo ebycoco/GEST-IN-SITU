@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, CreditCard } from 'lucide-react';
+import { useAuthStore } from '../stores/authStore';
 
 interface Carte { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; rangement: string; statut: string; }
 
 export default function SearchPage() {
+  const { user, activeSiteId } = useAuthStore();
   const [searchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
   const [query, setQuery] = useState(initialQuery);
@@ -21,7 +23,7 @@ export default function SearchPage() {
     if (initialQuery) {
       handleSearch(initialQuery);
     }
-  }, [initialQuery]);
+  }, [initialQuery, activeSiteId]);
 
   const handleSearch = async (q: string) => {
     if (!q.trim() && !dateNaissance && !lieuNaissance && !contact) { 
@@ -34,6 +36,9 @@ export default function SearchPage() {
       if (dateNaissance) filters.date_de_naissance = dateNaissance;
       if (lieuNaissance) filters.lieu_de_naissance = lieuNaissance;
       if (contact) filters.contact = contact;
+      
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      if (siteIdToUse) filters.site_id = siteIdToUse.toString();
 
       const data = await window.api.cartes.search(q, 100, filters);
       setResults(data);

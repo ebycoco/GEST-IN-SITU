@@ -1,45 +1,86 @@
 import { useState, useEffect } from 'react';
 import { FileText } from 'lucide-react';
+import { useAuthStore } from '../stores/authStore';
 
-interface Log { id_log: number; action_type: string; table_concernee: string; id_enregistrement: number; date_action: string; details: string; user: string; }
+interface Log { 
+  id_log: number; 
+  id_user: number;
+  login_user: string;
+  action: string; 
+  detail: string; 
+  date_heure: string; 
+}
 
 export default function LogsPage() {
   const [logs, setLogs] = useState<Log[]>([]);
+  const { user, activeSiteId } = useAuthStore();
+
+  const loadLogs = () => {
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    window.api.logs.get(0, 100, { siteId: siteIdToUse }).then((res: any) => {
+      if (res && res.rows) {
+        setLogs(res.rows);
+      }
+    });
+  };
 
   useEffect(() => {
-    window.api.logs.getRecent(100).then(setLogs);
-  }, []);
+    loadLogs();
+  }, [activeSiteId, user?.site_id]);
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, height: '100%' }}>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, height: '100%', padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <FileText size={20} color="var(--accent-primary)" />
-        <h2 style={{ fontSize: 18, fontWeight: 700 }}>Journaux d'Audit</h2>
+        <div style={{ padding: 12, background: 'var(--gradient-button)', borderRadius: 12, color: 'white' }}>
+          <FileText size={24} />
+        </div>
+        <div>
+          <h2 style={{ margin: 0 }}>Journaux d'Audit</h2>
+          <p style={{ margin: 0, color: 'var(--text-muted)' }}>Suivi des actions effectuées sur le système.</p>
+        </div>
       </div>
 
       <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div className="card-body" style={{ flex: 1, overflowY: 'auto', padding: 0 }}>
+        <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
           <table className="data-table">
             <thead>
-              <tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Table</th><th>ID Enreg.</th><th>Détails</th></tr>
+              <tr>
+                <th>Date & Heure</th>
+                <th>Utilisateur</th>
+                <th>Action</th>
+                <th>Détails</th>
+              </tr>
             </thead>
             <tbody>
-              {logs.map((l) => (
-                <tr key={l.id_log}>
-                  <td style={{ color: 'var(--text-muted)' }}>{new Date(l.date_action).toLocaleString()}</td>
-                  <td style={{ fontWeight: 600 }}>{l.user}</td>
-                  <td>
-                    <span className={`status-badge ${l.action_type === 'INSERT' ? 'distribue' : l.action_type === 'DELETE' ? 'annule' : 'stock'}`}>
-                      {l.action_type}
-                    </span>
-                  </td>
-                  <td>{l.table_concernee}</td>
-                  <td>{l.id_enregistrement}</td>
-                  <td style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>
-                    {l.details}
+              {logs.length === 0 ? (
+                <tr>
+                  <td colSpan={4} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                    Aucun journal d'activité trouvé.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                logs.map((l) => (
+                  <tr key={l.id_log}>
+                    <td style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                      {new Date(l.date_heure).toLocaleString('fr-FR')}
+                    </td>
+                    <td style={{ fontWeight: 600 }}>{l.login_user}</td>
+                    <td>
+                      <span className="badge" style={{ 
+                        background: 'var(--bg-card-hover)', 
+                        color: 'var(--text-color)',
+                        border: '1px solid var(--border-color)',
+                        fontSize: 11
+                      }}>
+                        {l.action}
+                      </span>
+                    </td>
+                    <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                      {l.detail}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
