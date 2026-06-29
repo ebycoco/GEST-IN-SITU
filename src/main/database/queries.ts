@@ -11,19 +11,26 @@ import type Database from 'better-sqlite3';
 export function getCartesPage(offset: number, limit: number, filters?: Record<string, string>) {
   const db = getDatabase()!;
   let where = 'WHERE 1=1';
-  const params: Record<string, string> = {};
+  const params: any = {};
 
   if (filters?.statut) { where += ' AND statut = @statut'; params.statut = filters.statut; }
-  if (filters?.site_id) { where += ' AND site_id = @site_id'; params.site_id = filters.site_id; }
-  if (filters?.centre_id) { where += ' AND centre_id = @centre_id'; params.centre_id = filters.centre_id; }
+  if (filters?.site_id) { where += ' AND site_id = @site_id'; params.site_id = Number(filters.site_id); }
+  if (filters?.centre_id) { where += ' AND centre_id = @centre_id'; params.centre_id = Number(filters.centre_id); }
   if (filters?.rangement) { where += " AND rangement LIKE @rangement"; params.rangement = `%${filters.rangement}%`; }
   if (filters?.statut_physique) { where += ' AND statut_physique = @statut_physique'; params.statut_physique = filters.statut_physique; }
+  
+  // Recherche globale (noms, prénoms, num_secu, contact)
+  if (filters?.q || filters?.search) {
+    const q = filters.q || filters.search;
+    where += ' AND (noms LIKE @q OR prenoms LIKE @q OR num_secu LIKE @q OR contact LIKE @q OR lieu_de_naissance LIKE @q OR rangement LIKE @q)';
+    params.q = `%${q}%`;
+  }
 
-  const total = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(params) as { count: number };
+  const totalResult = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(params) as { count: number };
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit, offset });
 
-  return { rows, total: total.count, offset, limit };
+  return { rows, total: totalResult.count, offset, limit };
 }
 
 export function searchCartesFTS(query: string, limit = 100, filters?: Record<string, string>) {
@@ -82,35 +89,48 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
   `).all(params);
 }
 
-export function getCarteById(id: number) {
-  return getDatabase()!.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id);
+export function getCarteById(id: number, currentUser?: { role: string; site_id?: number }) {
+  const db = getDatabase()!;
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    const row = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND site_id = ?').get(id, currentUser.site_id);
+    if (!row) throw new Error("Accès non autorisé aux données de ce site");
+    return row;
+  }
+  return db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id);
 }
 
-export function createCarte(data: Record<string, unknown>) {
+export function createCarte(data: Record<string, unknown>, siteIdToUse: number) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const syncId = uuidv4();
-  const cleDbl = `${(data.noms as string || '').toUpperCase()}|${(data.prenoms as string || '').toUpperCase()}|${data.date_de_naissance || ''}|${(data.lieu_de_naissance as string || '').toUpperCase()}|${(data.contact as string || '').toUpperCase()}`;
-  const cleFlex = `${(data.noms as string || '').toUpperCase()}|${(data.prenoms as string || '').toUpperCase()}|${data.date_de_naissance || ''}|${(data.contact as string || '').toUpperCase()}`;
+  
+  const noms = removeAccents(data.noms as string || '');
+  const prenoms = removeAccents(data.prenoms as string || '');
+  const ddn = data.date_de_naissance as string || '';
+  const lieuN = removeAccents(data.lieu_de_naissance as string || '');
+  const contact = normalizeContact(data.contact as string || '');
+
+  const cleDbl = `${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`;
+  const cleFlex = `${noms}|${prenoms}|${ddn}|${contact}`;
 
   const stmt = db.prepare(`
     INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
       lieu_enrolement, contact, rangement, statut, agent_saisie, centre_id, poste_id,
-      cle_doublon, cle_doublon_flex, sync_id, created_at, updated_at, is_dirty)
+      cle_doublon, cle_doublon_flex, sync_id, site_id, created_at, updated_at, is_dirty)
     VALUES (@noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @num_secu,
       @lieu_enrolement, @contact, @rangement, @statut, @agent_saisie, @centre_id, @poste_id,
-      @cle_doublon, @cle_doublon_flex, @sync_id, @created_at, @updated_at, 1)
+      @cle_doublon, @cle_doublon_flex, @sync_id, @site_id, @created_at, @updated_at, 1)
   `);
 
   const result = stmt.run({
-    noms: (data.noms as string || '').toUpperCase(),
-    prenoms: (data.prenoms as string || '').toUpperCase(),
-    date_de_naissance: data.date_de_naissance || null,
-    lieu_de_naissance: (data.lieu_de_naissance as string || '').toUpperCase(),
+    noms,
+    prenoms,
+    date_de_naissance: ddn || null,
+    lieu_de_naissance: lieuN,
     num_secu: data.num_secu || null,
-    lieu_enrolement: (data.lieu_enrolement as string || '').toUpperCase(),
-    contact: (data.contact as string || '').toUpperCase(),
-    rangement: (data.rangement as string || '').toUpperCase(),
+    lieu_enrolement: removeAccents(data.lieu_enrolement as string || ''),
+    contact,
+    rangement: removeAccents(data.rangement as string || ''),
     statut: data.statut || 'EN STOCK',
     agent_saisie: data.agent_saisie || 'SYSTEM',
     centre_id: data.centre_id || null,
@@ -118,6 +138,7 @@ export function createCarte(data: Record<string, unknown>) {
     cle_doublon: cleDbl,
     cle_doublon_flex: cleFlex,
     sync_id: syncId,
+    site_id: siteIdToUse,
     created_at: now,
     updated_at: now
   });
@@ -125,22 +146,49 @@ export function createCarte(data: Record<string, unknown>) {
   return { id: result.lastInsertRowid, sync_id: syncId };
 }
 
-export function updateCarte(id: number, data: Record<string, unknown>) {
+export function updateCarte(id: number, data: Record<string, unknown>, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
-  const stmt = db.prepare(`UPDATE t_cartes SET ${fields}, updated_at = @updated_at, is_dirty = 1 WHERE id_carte = @id`);
-  return stmt.run({ ...data, updated_at: now, id });
+  
+  let query = `UPDATE t_cartes SET ${fields}, updated_at = @updated_at, is_dirty = 1 WHERE id_carte = @id`;
+  const params: any = { ...data, updated_at: now, id };
+  
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
+  
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
-export function deleteCarte(id: number) {
-  return getDatabase()!.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id);
+export function deleteCarte(id: number, currentUser?: { role: string; site_id?: number }) {
+  const db = getDatabase()!;
+  let query = 'DELETE FROM t_cartes WHERE id_carte = ?';
+  const params: any[] = [id];
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = ?';
+    params.push(currentUser.site_id);
+  }
+  const result = db.prepare(query).run(...params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
-export function delivrerCarte(id: number, data: { nom_retirant: string; num_retirant: string; agent_distributeur: string; centre_retrait?: string }) {
+export function delivrerCarte(
+  id: number, 
+  data: { nom_retirant: string; num_retirant: string; agent_distributeur: string; centre_retrait?: string }, 
+  currentUser?: { role: string; site_id?: number }
+) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  return db.prepare(`
+  let query = `
     UPDATE t_cartes SET
       statut = 'DELIVRE',
       date_delivrance = @now,
@@ -151,25 +199,45 @@ export function delivrerCarte(id: number, data: { nom_retirant: string; num_reti
       updated_at = @now,
       is_dirty = 1
     WHERE id_carte = @id
-  `).run({ 
+  `;
+  const params: any = { 
     id,
     nom_retirant: data.nom_retirant,
     num_retirant: data.num_retirant,
     agent_distributeur: data.agent_distributeur,
     centre_retrait: data.centre_retrait || null,
     now 
-  });
+  };
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
-export function signalerAbsence(id: number, agent: string) {
+export function signalerAbsence(id: number, agent: string, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  return db.prepare(`
+  let query = `
     UPDATE t_cartes SET statut_physique = 'ABSENT',
       agent_signalement_absence = @agent, date_signalement_absence = @now,
       updated_at = @now, is_dirty = 1
     WHERE id_carte = @id
-  `).run({ agent, now, id });
+  `;
+  const params: any = { agent, now, id };
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
 export function getAbsencesReportees(siteId?: number) {
@@ -188,10 +256,14 @@ export function getAbsencesReportees(siteId?: number) {
   `).all();
 }
 
-export function resoudreAbsence(id: number, data: { status: string, agent: string, note: string }) {
+export function resoudreAbsence(
+  id: number, 
+  data: { status: string, agent: string, note: string }, 
+  currentUser?: { role: string; site_id?: number }
+) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  return db.prepare(`
+  let query = `
     UPDATE t_cartes SET 
       statut_physique = @status,
       agent_resolution_absence = @agent,
@@ -200,7 +272,17 @@ export function resoudreAbsence(id: number, data: { status: string, agent: strin
       updated_at = @now,
       is_dirty = 1
     WHERE id_carte = @id
-  `).run({ ...data, now, id });
+  `;
+  const params: any = { ...data, now, id };
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
 export function getInvalidDateRecords(siteId?: number) {
@@ -208,14 +290,14 @@ export function getInvalidDateRecords(siteId?: number) {
   if (siteId) {
     return db.prepare(`
       SELECT * FROM t_cartes 
-      WHERE date_de_naissance NOT REGEXP '^\\d{2}/\\d{2}/\\d{4}$'
+      WHERE date_de_naissance NOT REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
       AND site_id = ?
       LIMIT 500
     `).all(siteId);
   }
   return db.prepare(`
     SELECT * FROM t_cartes 
-    WHERE date_de_naissance NOT REGEXP '^\\d{2}/\\d{2}/\\d{4}$'
+    WHERE date_de_naissance NOT REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
     LIMIT 500
   `).all();
 }
@@ -257,12 +339,35 @@ export function exportCartes(filters?: Record<string, string>) {
 // IMPORT ENGINE
 // ============================================================
 
-export function clearImportTemp() {
-  return getDatabase()!.prepare('DELETE FROM t_import_temp').run();
+export function clearImportTemp(siteId: number) {
+  return getDatabase()!.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(siteId);
 }
 
 function removeAccents(str: string): string {
-  return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (!str) return '';
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .trim();
+}
+
+function normalizeContact(contactStr: string): string {
+  if (!contactStr) return '';
+  // Nettoyer tous les caractères non numériques
+  let cleaned = contactStr.replace(/\D/g, '');
+  
+  // Si le numéro commence par 00225 ou +225 (225 après nettoyage)
+  if (cleaned.startsWith('225') && cleaned.length > 10) {
+    cleaned = cleaned.substring(3);
+  }
+  
+  // Conserver uniquement les 10 derniers chiffres (format ivoirien standard)
+  if (cleaned.length > 10) {
+    cleaned = cleaned.substring(cleaned.length - 10);
+  }
+  
+  return cleaned;
 }
 
 export function importBatch(rows: Record<string, string>[], agentSaisie: string, siteId: number) {
@@ -280,11 +385,12 @@ export function importBatch(rows: Record<string, string>[], agentSaisie: string,
 
   const insertMany = db.transaction((items: Record<string, string>[]) => {
     for (const row of items) {
-      const noms = (row.noms || '').toUpperCase().trim();
-      const prenoms = (row.prenoms || '').toUpperCase().trim();
+      const noms = removeAccents(row.noms || '');
+      const prenoms = removeAccents(row.prenoms || '');
       const ddn = row.date_de_naissance || '';
-      const lieuN = (row.lieu_de_naissance || '').toUpperCase().trim();
-      const contact = (row.contact || '').trim();
+      const lieuN = removeAccents(row.lieu_de_naissance || '');
+      const contact = normalizeContact(row.contact || '');
+      
       const cleDbl = `${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`;
       const cleFlex = `${noms}|${prenoms}|${ddn}|${contact}`;
 
@@ -449,14 +555,6 @@ export function getStats(siteId?: number) {
 export function authenticateUser(login: string, password: string) {
   const db = getDatabase()!;
   
-  // BYPASS D'URGENCE POUR TEST
-  if (login.toLowerCase() === 'superadmin' && password === 'admin') {
-    const user = db.prepare('SELECT * FROM t_users WHERE LOWER(login) = LOWER(?)').get(login) as any;
-    if (user) {
-      const { password_hash, ...safeUser } = user;
-      return safeUser;
-    }
-  }
 
   const user = db.prepare(`
     SELECT u.*, s.is_active as site_active 
@@ -497,31 +595,140 @@ export function authenticateUser(login: string, password: string) {
   return safeUser;
 }
 
-export function getUsers() {
-  return getDatabase()!.prepare('SELECT id_user, login, role, nom_user, prenom_user, email, telephone, statut_actif, centre_id, poste_id, last_login, created_at FROM t_users ORDER BY login').all();
+export function getUsers(siteId?: number) {
+  const db = getDatabase()!;
+  if (siteId) {
+    return db.prepare(`
+      SELECT u.*, s.nom as site_nom, c.nom as centre_nom
+      FROM t_users u
+      LEFT JOIN t_sites s ON u.site_id = s.id
+      LEFT JOIN t_centres c ON u.centre_id = c.id
+      WHERE u.site_id = ?
+      ORDER BY u.login
+    `).all(siteId);
+  }
+  return db.prepare(`
+    SELECT u.*, s.nom as site_nom, c.nom as centre_nom
+    FROM t_users u
+    LEFT JOIN t_sites s ON u.site_id = s.id
+    LEFT JOIN t_centres c ON u.centre_id = c.id
+    ORDER BY u.login
+  `).all();
 }
 
-export function createUser(data: { login: string; password: string; role: string; nom_user?: string; prenom_user?: string; centre_id?: number }) {
+export function createUser(
+  data: { login: string; password: string; role: string; nom_user?: string; prenom_user?: string; centre_id?: number; site_id?: number },
+  creator?: { role: string; site_id?: number }
+) {
   const db = getDatabase()!;
   const hash = hashPassword(data.password);
+  const syncId = uuidv4();
+  
+  let targetSiteId = data.site_id || 1;
+  if (creator && creator.role !== 'SUPER ADMIN') {
+    targetSiteId = creator.site_id!;
+  }
+  if (!targetSiteId) {
+    throw new Error("Accès non autorisé : site_id invalide ou absent.");
+  }
+
+  log.info(`createUser: login=${data.login}, role=${data.role}, site_id=${targetSiteId}, centre_id=${data.centre_id}`);
+
+  // Check if user already exists
+  const existing = db.prepare('SELECT id_user, site_id, statut_actif FROM t_users WHERE LOWER(login) = LOWER(?)').get(data.login) as any;
+  
+  if (existing) {
+    // Check site match for non super admin
+    if (creator && creator.role !== 'SUPER ADMIN' && existing.site_id !== creator.site_id) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+    
+    log.info(`createUser: found existing user id=${existing.id_user}, site_id=${existing.site_id}, updating...`);
+    return db.prepare(`
+      UPDATE t_users 
+      SET password_hash = @hash, role = @role, nom_user = @nom_user, 
+          prenom_user = @prenom_user, site_id = @site_id, centre_id = @centre_id, 
+          statut_actif = 1, updated_at = datetime('now'), is_dirty = 1
+      WHERE id_user = @id
+    `).run({ 
+      id: existing.id_user,
+      hash, 
+      role: data.role, 
+      nom_user: data.nom_user || '', 
+      prenom_user: data.prenom_user || '', 
+      centre_id: data.centre_id || null, 
+      site_id: targetSiteId
+    });
+  }
+
   return db.prepare(`
-    INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, sync_id, is_dirty)
-    VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @sync_id, 1)
-  `).run({ login: data.login, hash, role: data.role, nom_user: data.nom_user || '', prenom_user: data.prenom_user || '', centre_id: data.centre_id || null, sync_id: uuidv4() });
+    INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, site_id, sync_id, is_dirty)
+    VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @site_id, @sync_id, 1)
+  `).run({ 
+    login: data.login, 
+    hash, 
+    role: data.role, 
+    nom_user: data.nom_user || '', 
+    prenom_user: data.prenom_user || '', 
+    centre_id: data.centre_id || null, 
+    site_id: targetSiteId,
+    sync_id: syncId 
+  });
 }
 
-export function updateUser(id: number, data: Record<string, unknown>) {
+export function updateUser(id: number, data: Record<string, unknown>, creator?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
+  
+  if (creator && creator.role !== 'SUPER ADMIN') {
+    const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
+    if (!target || target.site_id !== creator.site_id) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+  }
+  
   if (data.password) {
     data.password_hash = hashPassword(data.password as string);
     delete data.password;
   }
   const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
-  return db.prepare(`UPDATE t_users SET ${fields}, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = @id`).run({ ...data, id });
+  const result = db.prepare(`UPDATE t_users SET ${fields}, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = @id`).run({ ...data, id });
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
 }
 
-export function deleteUser(id: number) {
-  return getDatabase()!.prepare('UPDATE t_users SET statut_actif = 0, updated_at = datetime(\'now\') WHERE id_user = ?').run(id);
+export function deleteUser(id: number, creator?: { role: string; site_id?: number }) {
+  const db = getDatabase()!;
+  if (creator && creator.role !== 'SUPER ADMIN') {
+    const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
+    if (!target || target.site_id !== creator.site_id) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+  }
+  const result = db.prepare("UPDATE t_users SET statut_actif = 0, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = ?").run(id);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+  return result;
+}
+
+export function hardDeleteUser(id: number, creator?: { role: string; site_id?: number }) {
+  const db = getDatabase()!;
+  if (creator && creator.role !== 'SUPER ADMIN') {
+    const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
+    if (!target || target.site_id !== creator.site_id) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+  }
+  return db.transaction(() => {
+    db.prepare('DELETE FROM t_logs WHERE id_user = ?').run(id);
+    const result = db.prepare('DELETE FROM t_users WHERE id_user = ?').run(id);
+    if (result.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+    return result;
+  })();
 }
 
 // ============================================================
@@ -765,57 +972,113 @@ export function getGlobalStats() {
 // MAINTENANCE
 // ============================================================
 
-export function clearDatabaseCartes(siteId?: number) {
+export async function clearDatabaseCartes(siteId?: number, onProgress?: (percent: number) => void) {
   const db = getDatabase()!;
   try {
-    log.info(`Starting database clear for site ${siteId || 'ALL'}...`);
+    log.info(`Starting asynchronous batch clear for site ${siteId || 'ALL'}...`);
     
-    let where = '';
-    const params: Record<string, any> = {};
-    if (siteId) {
-      where = 'WHERE site_id = @siteId';
-      params.siteId = siteId;
-    }
-
-    // 1. Delete main data
-    const result = db.prepare(`DELETE FROM t_cartes ${where}`).run(params);
-    log.info(`Deleted ${result.changes} cards from t_cartes`);
-    
-    // 2. Clear temp tables (scoped by site if provided)
+    // 1. Clear temp tables (scoped by site if provided)
     if (siteId) {
       db.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(siteId);
     } else {
       db.prepare('DELETE FROM t_import_temp').run();
       db.prepare('DELETE FROM t_sync_queue').run();
     }
+
+    // 2. Count total rows to delete
+    let countQuery = 'SELECT COUNT(*) as count FROM t_cartes';
+    const countParams: any = {};
+    if (siteId) {
+      countQuery += ' WHERE site_id = @siteId';
+      countParams.siteId = siteId;
+    }
+    const totalToLink = db.prepare(countQuery).get(countParams) as { count: number };
+    const total = totalToLink?.count || 0;
+
+    let deleted = 0;
+    let batchCount = 1;
     
-    logAction(0, 'SYSTEM', 'MAINTENANCE', `Vidage de la base de données (${result.changes} cartes supprimées - Site: ${siteId || 'Tous'})`);
-    return { success: true, count: result.changes };
+    // Loop batch delete
+    while (true) {
+      let deleteQuery = 'DELETE FROM t_cartes WHERE id_carte IN (SELECT id_carte FROM t_cartes ';
+      const deleteParams: any = {};
+      if (siteId) {
+        deleteQuery += 'WHERE site_id = @siteId ';
+        deleteParams.siteId = siteId;
+      }
+      deleteQuery += 'LIMIT 5000)';
+
+      const result = db.prepare(deleteQuery).run(deleteParams);
+      if (result.changes === 0) {
+        break;
+      }
+      deleted += result.changes;
+
+      if (total > 0 && onProgress) {
+        const percent = Math.min(100, Math.round((deleted / total) * 100));
+        onProgress(percent);
+      }
+
+      log.info(`[clearDatabaseCartes] Deleted batch #${batchCount++}: ${result.changes} rows (total: ${deleted}/${total})`);
+      
+      // Let event loop breathe
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    // 3. Compact database
+    log.info('[clearDatabaseCartes] Running VACUUM...');
+    db.prepare('VACUUM').run();
+    log.info('[clearDatabaseCartes] Database compacted successfully.');
+    
+    logAction(0, 'SYSTEM', 'MAINTENANCE', `Vidage de la base de données (${deleted} cartes supprimées - Site: ${siteId || 'Tous'})`);
+    return { success: true, count: deleted };
   } catch (error) {
     log.error('CRITICAL: clearDatabaseCartes failed', error);
     throw error;
   }
 }
 
-export function fullSystemReset() {
+export async function fullSystemReset(onProgress?: (percent: number) => void) {
   try {
     const db = getDatabase()!;
+    log.info('Starting full system reset batch...');
     
-    // Perform in a transaction for safety
-    db.transaction(() => {
-      // 1. Delete all cards
-      db.prepare('DELETE FROM t_cartes').run();
-      
-      // 2. Clear temp tables
-      db.prepare('DELETE FROM t_import_temp').run();
-      db.prepare('DELETE FROM t_sync_queue').run();
-      
-      // 3. Delete all logs
-      db.prepare('DELETE FROM t_logs').run();
-      
-      // 4. Delete all users except SUPER ADMIN
-      db.prepare("DELETE FROM t_users WHERE role != 'SUPER ADMIN'").run();
-    })();
+    // 1. Clear temp tables and logs
+    db.prepare('DELETE FROM t_import_temp').run();
+    db.prepare('DELETE FROM t_sync_queue').run();
+    db.prepare('DELETE FROM t_logs').run();
+
+    // 2. Count total cards
+    const totalToLink = db.prepare('SELECT COUNT(*) as count FROM t_cartes').get() as { count: number };
+    const total = totalToLink?.count || 0;
+
+    let deleted = 0;
+    let batchCount = 1;
+
+    // Loop delete
+    while (true) {
+      const result = db.prepare('DELETE FROM t_cartes WHERE id_carte IN (SELECT id_carte FROM t_cartes LIMIT 5000)').run();
+      if (result.changes === 0) {
+        break;
+      }
+      deleted += result.changes;
+
+      if (total > 0 && onProgress) {
+        const percent = Math.min(100, Math.round((deleted / total) * 100));
+        onProgress(percent);
+      }
+
+      log.info(`[fullSystemReset] Deleted batch #${batchCount++}: ${result.changes} rows (total: ${deleted}/${total})`);
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    // 3. Delete all users except SUPER ADMIN
+    db.prepare("DELETE FROM t_users WHERE role != 'SUPER ADMIN'").run();
+
+    // 4. Compact database
+    log.info('[fullSystemReset] Running VACUUM...');
+    db.prepare('VACUUM').run();
+    log.info('[fullSystemReset] Database compacted successfully.');
 
     logAction(0, 'SYSTEM', 'MAINTENANCE', 'RÉINITIALISATION TOTALE DU SYSTÈME (Cartes + Utilisateurs hors Super Admin)');
     return { success: true };
@@ -827,4 +1090,80 @@ export function fullSystemReset() {
 
 export function getAllConfig() {
   return getDatabase()!.prepare('SELECT * FROM t_config').all();
+}
+
+// ============================================================
+// OFFLINE SYNC CAPTURE FUNCTIONS
+// ============================================================
+
+/**
+ * Enregistre une opération de modification locale dans la file d'attente de synchronisation.
+ */
+export function enqueueSyncOp(
+  tableName: string, 
+  recordId: number, 
+  operation: 'INSERT' | 'UPDATE' | 'DELETE', 
+  payload: any
+): void {
+  try {
+    const db = getDatabase()!;
+    db.prepare(`
+      INSERT INTO t_sync_queue (table_name, record_id, operation, payload, synced)
+      VALUES (?, ?, ?, ?, 0)
+    `).run(tableName, recordId, operation, JSON.stringify(payload));
+  } catch (e) {
+    log.error(`Failed to enqueue sync op for table ${tableName} (ID: ${recordId}):`, e);
+  }
+}
+
+/**
+ * Récupère les prochains lots d'écritures en attente dans la queue.
+ */
+export function getNextSyncBatches(limit: number = 50) {
+  const db = getDatabase()!;
+  return db.prepare(`
+    SELECT * FROM t_sync_queue
+    WHERE synced = 0
+    ORDER BY created_at ASC
+    LIMIT ?
+  `).all(limit) as any[];
+}
+
+/**
+ * Marque un enregistrement local de t_sync_queue comme synchronisé avec succès
+ * et remet is_dirty à 0 dans la table métier si aucun changement local n'a eu lieu entre-temps.
+ */
+export function markRecordsAsSynced(
+  queueId: number,
+  tableName: string,
+  recordId: number,
+  lastUpdatedAtLocal: string
+): void {
+  const db = getDatabase()!;
+  
+  db.transaction(() => {
+    // 1. Marquer l'entrée comme synchronisée dans la queue
+    db.prepare('UPDATE t_sync_queue SET synced = 1 WHERE id = ?').run(queueId);
+
+    // 2. Déterminer le nom de la clé primaire de la table concernée
+    const pkName = tableName === 't_users' ? 'id_user' : 'id_carte';
+
+    // 3. Vérifier le timestamp updated_at actuel pour s'assurer que la ligne n'a pas été modifiée à nouveau
+    const currentRecord = db.prepare(`
+      SELECT updated_at, is_dirty FROM ${tableName} WHERE ${pkName} = ?
+    `).get(recordId) as { updated_at?: string; is_dirty?: number } | undefined;
+
+    if (currentRecord) {
+      // Ajustement stratégique 2 : On ne repasse is_dirty à 0 que si le timestamp local concorde
+      if (currentRecord.updated_at === lastUpdatedAtLocal) {
+        db.prepare(`
+          UPDATE ${tableName} 
+          SET is_dirty = 0, synced_at = datetime('now')
+          WHERE ${pkName} = ?
+        `).run(recordId);
+      } else {
+        log.info(`Sync safety triggered: Record ${tableName} (ID: ${recordId}) was modified locally during upload. Keeping is_dirty = 1.`);
+      }
+    }
+  })();
 }

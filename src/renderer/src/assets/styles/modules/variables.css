@@ -1,0 +1,66 @@
+:root {
+  /* Primary Palette */
+  --bg-primary: #0a0e27;
+  --bg-secondary: #0f1335;
+  --bg-tertiary: #151a3d;
+  --bg-card: #1a1f4a;
+  --bg-card-hover: #1f2555;
+  --bg-sidebar: #080b20;
+  --bg-input: #151a3d;
+
+  /* Accent Colors */
+  --accent-primary: #6c63ff;
+  --accent-primary-hover: #7b73ff;
+  --accent-secondary: #4ecdc4;
+  --accent-green: #27ae60;
+  --accent-green-glow: rgba(39,174,96,0.3);
+  --accent-orange: #f39c12;
+  --accent-orange-glow: rgba(243,156,18,0.3);
+  --accent-red: #e74c3c;
+  --accent-red-glow: rgba(231,76,60,0.3);
+  --accent-blue: #3498db;
+  --accent-blue-glow: rgba(52,152,219,0.3);
+  --accent-purple: #9b59b6;
+
+  /* Text */
+  --text-primary: #e8eaf6;
+  --text-secondary: #8b8fa3;
+  --text-muted: #5a5f7a;
+  --text-white: #ffffff;
+
+  /* Borders */
+  --border-color: #2d3561;
+  --border-subtle: #1e2347;
+
+  /* Gradients */
+  --gradient-card: linear-gradient(135deg, #1a1f4a 0%, #151a3d 100%);
+  --gradient-sidebar: linear-gradient(180deg, #080b20 0%, #0a0e27 100%);
+  --gradient-kpi-1: linear-gradient(135deg, #6c63ff 0%, #4834d4 100%);
+  --gradient-kpi-2: linear-gradient(135deg, #27ae60 0%, #2ecc71 100%);
+  --gradient-kpi-3: linear-gradient(135deg, #f39c12 0%, #e67e22 100%);
+  --gradient-kpi-4: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+  --gradient-kpi-5: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+  --gradient-button: linear-gradient(135deg, #6c63ff 0%, #5a52e0 100%);
+
+  /* Shadows */
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+  --shadow-glow: 0 0 20px rgba(108,99,255,0.15);
+
+  /* Spacing */
+  --sidebar-width: 260px;
+  --topbar-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Font */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}

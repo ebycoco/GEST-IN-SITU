@@ -6,21 +6,27 @@ export default function CentreContextSwitcher() {
   const user = useAuthStore((s) => s.user);
   const selectedCentreId = useAuthStore((s) => s.selectedCentreId);
   const setSelectedCentreId = useAuthStore((s) => s.setSelectedCentreId);
+  const activeSiteId = useAuthStore((s) => s.activeSiteId);
   
   const [centres, setCentres] = useState<any[]>([]);
   const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    if (user?.site_id) {
-      window.api.hierarchy.getCentres(user.site_id).then(setCentres);
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (siteIdToUse) {
+      window.api.hierarchy.getCentres(siteIdToUse).then(setCentres);
+    } else {
+      setCentres([]);
     }
-  }, [user?.site_id]);
+  }, [user?.site_id, activeSiteId]);
 
   if (user?.role !== 'ADMINISTRATEUR' && user?.role !== 'SUPER ADMIN') {
     return null;
   }
 
   const currentCentre = centres.find(c => c.id === selectedCentreId);
+  const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+  const isDisabled = !siteIdToUse;
 
   return (
     <div className="centre-context-switcher">
@@ -29,13 +35,19 @@ export default function CentreContextSwitcher() {
         <span>Centre de travail actuel :</span>
       </div>
       
-      <div className={`switcher-dropdown ${isOpen ? 'open' : ''}`} onClick={() => setIsOpen(!isOpen)}>
+      <div 
+        className={`switcher-dropdown ${isOpen ? 'open' : ''} ${isDisabled ? 'disabled' : ''}`} 
+        onClick={() => !isDisabled && setIsOpen(!isOpen)}
+        style={{ opacity: isDisabled ? 0.5 : 1, cursor: isDisabled ? 'not-allowed' : 'pointer' }}
+      >
         <div className="selected-value">
-          {currentCentre ? currentCentre.nom : '--- Choisir un centre ---'}
+          {isDisabled 
+            ? '--- Aucun site sélectionné ---' 
+            : (currentCentre ? currentCentre.nom : '--- Choisir un centre ---')}
           <ChevronDown size={16} />
         </div>
         
-        {isOpen && (
+        {isOpen && !isDisabled && (
           <div className="dropdown-menu">
             {centres.map((centre) => (
               <div 

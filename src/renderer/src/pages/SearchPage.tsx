@@ -106,23 +106,25 @@ export default function SearchPage() {
                  <p>Aucun résultat trouvé pour "{query}"</p>
                </div>
              ) : (
-               <table className="data-table">
-                 <thead>
-                   <tr><th>Noms</th><th>Prénoms</th><th>Contact</th><th>N° Sécu</th><th>Rangement</th><th>Statut</th></tr>
-                 </thead>
-                 <tbody>
-                   {results.map((c) => (
-                     <tr key={c.id_carte}>
-                       <td style={{ fontWeight: 600 }}>{c.noms}</td>
-                       <td>{c.prenoms}</td>
-                       <td>{c.contact || '—'}</td>
-                       <td>{c.num_secu || '—'}</td>
-                       <td>{c.rangement || '—'}</td>
-                       <td><span className="status-badge stock">{c.statut}</span></td>
-                     </tr>
-                   ))}
-                 </tbody>
-               </table>
+               <div className="table-responsive-wrapper">
+                 <table className="data-table">
+                   <thead>
+                     <tr><th>Noms</th><th>Prénoms</th><th>Contact</th><th>N° Sécu</th><th>Rangement</th><th>Statut</th></tr>
+                   </thead>
+                   <tbody>
+                     {results.map((c) => (
+                       <tr key={c.id_carte}>
+                         <td style={{ fontWeight: 600 }}>{c.noms}</td>
+                         <td>{c.prenoms}</td>
+                         <td>{c.contact || '—'}</td>
+                         <td>{c.num_secu || '—'}</td>
+                         <td>{c.rangement || '—'}</td>
+                         <td><span className="status-badge stock">{c.statut}</span></td>
+                       </tr>
+                     ))}
+                   </tbody>
+                 </table>
+               </div>
              )}
           </div>
         </div>

@@ -45,10 +45,11 @@ const api = {
   },
   // Users
   users: {
-    getAll: () => ipcRenderer.invoke('users:getAll'),
+    getAll: (siteId?: number) => ipcRenderer.invoke('users:getAll', siteId),
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('users:create', data),
     update: (id: number, data: Record<string, unknown>) => ipcRenderer.invoke('users:update', id, data),
     delete: (id: number) => ipcRenderer.invoke('users:delete', id),
+    hardDelete: (id: number) => ipcRenderer.invoke('users:hardDelete', id),
   },
   // Logs
   logs: {
@@ -96,6 +97,22 @@ const api = {
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getDbPath: () => ipcRenderer.invoke('app:getDbPath'),
+  },
+  // Sync offline-first
+  sync: {
+    getStatus: () => ipcRenderer.invoke('sync:getStatus'),
+    force: () => ipcRenderer.invoke('sync:force'),
+    onStatusChanged: (callback: (status: any) => void) => {
+      const listener = (_: any, status: any) => callback(status);
+      ipcRenderer.on('sync:status-changed', listener);
+      return () => ipcRenderer.removeListener('sync:status-changed', listener);
+    },
+    startBulk: (siteId: number) => ipcRenderer.invoke('sync:startBulk', siteId),
+    onBulkProgress: (callback: (p: number) => void) => {
+      const listener = (_: any, p: number) => callback(p);
+      ipcRenderer.on('sync:bulk-progress', listener);
+      return () => ipcRenderer.removeListener('sync:bulk-progress', listener);
+    }
   },
   // Maintenance
   maintenance: {

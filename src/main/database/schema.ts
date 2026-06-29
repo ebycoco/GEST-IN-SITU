@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import log from 'electron-log';
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -42,8 +42,72 @@ export function runMigrations(db: Database.Database): void {
     migrateV7(db);
   }
 
+  if (currentVersion < 8) {
+    log.info('Running migration v8: Adding composite index (site_id, statut) to t_cartes');
+    migrateV8(db);
+  }
+
+  if (currentVersion < 9) {
+    log.info('Running migration v9: Migrating date formats from DD/MM/YYYY to YYYY-MM-DD');
+    migrateV9(db);
+  }
+
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   log.info('All migrations complete');
+}
+
+function migrateV9(db: Database.Database): void {
+  db.transaction(() => {
+    // 1. Migrer t_cartes
+    const cartes = db.prepare('SELECT id_carte, date_de_naissance FROM t_cartes WHERE date_de_naissance IS NOT NULL').all() as any[];
+    const updateCarte = db.prepare('UPDATE t_cartes SET date_de_naissance = ? WHERE id_carte = ?');
+    
+    for (const c of cartes) {
+      const isoDate = convertToIsoDate(c.date_de_naissance);
+      updateCarte.run(isoDate, c.id_carte);
+    }
+
+    // 2. Migrer t_import_temp
+    const tempCartes = db.prepare('SELECT id_tmp, date_de_naissance FROM t_import_temp WHERE date_de_naissance IS NOT NULL').all() as any[];
+    const updateTemp = db.prepare('UPDATE t_import_temp SET date_de_naissance = ? WHERE id_tmp = ?');
+    
+    for (const tc of tempCartes) {
+      const isoDate = convertToIsoDate(tc.date_de_naissance);
+      updateTemp.run(isoDate, tc.id_tmp);
+    }
+  })();
+}
+
+function convertToIsoDate(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  const s = dateStr.trim();
+  
+  // Format DD/MM/YYYY
+  const ddmmyyyyMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const day = ddmmyyyyMatch[1].padStart(2, '0');
+    const month = ddmmyyyyMatch[2].padStart(2, '0');
+    const year = ddmmyyyyMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+
+  // Format YYYY-MM-DD (déjà correct)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    return s;
+  }
+
+  // Invalide ou corrompu (N/A, 0, etc.)
+  return null;
+}
+
+function migrateV8(db: Database.Database): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_statut ON t_cartes (site_id, statut);');
+    log.info('Migration V8: Created index idx_cartes_site_statut');
+  } catch (e) {
+    log.error('Migration V8 failed:', e);
+    throw e;
+  }
 }
 
 function migrateV7(db: Database.Database): void {
@@ -77,7 +141,8 @@ function migrateV6(db: Database.Database): void {
       db.exec(`ALTER TABLE ${table} ADD COLUMN site_id INTEGER DEFAULT 1;`);
       log.info(`Migration V6: Added site_id to ${table}`);
     } catch (e) {
-      log.warn(`Migration V6: site_id already exists or error in ${table}: ${e.message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      log.warn(`Migration V6: site_id already exists or error in ${table}: ${message}`);
     }
   }
 }

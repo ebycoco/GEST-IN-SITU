@@ -1,13 +1,41 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron';
 import * as queries from '../database/queries';
-import { getDbPath } from '../database/connection';
+import { getDbPath, getDatabase } from '../database/connection';
 import { createReadStream } from 'fs';
 import { join } from 'path';
 import log from 'electron-log';
 import * as readline from 'readline';
 import { Worker } from 'worker_threads';
+import { networkMonitor } from '../sync/network-monitor';
+import { syncEngine } from '../sync/sync-engine';
+import { runBulkUpload } from '../sync/bulk-uploader';
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
+  // Écouteur de changement d'état réseau pour notifier le Renderer
+  networkMonitor.on('change', async ({ newState }) => {
+    try {
+      const db = getDatabase();
+      let queueCount = 0;
+      if (db) {
+        const row = db.prepare("SELECT COUNT(*) as count FROM t_sync_queue WHERE synced = 0").get() as { count: number } | undefined;
+        queueCount = row ? row.count : 0;
+      }
+      
+      let lastSync = 'Jamais';
+      if (db) {
+        const row = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+        if (row && row.value) lastSync = row.value;
+      }
+
+      mainWindow.webContents.send('sync:status-changed', {
+        state: newState,
+        lastSync,
+        queueCount
+      });
+    } catch (err) {
+      log.error('Failed to send sync status change to renderer:', err);
+    }
+  });
   // AUTH
   ipcMain.handle('auth:login', (_, login: string, password: string) => {
     try { return queries.authenticateUser(login, password); }
@@ -28,7 +56,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getById', e); throw e; }
   });
   ipcMain.handle('cartes:create', async (_, data) => {
-    try { return queries.createCarte(data); }
+    try { 
+      const siteId = Number(data.site_id);
+      if (!siteId) throw new Error("site_id manquant ou invalide.");
+      return queries.createCarte(data, siteId); 
+    }
     catch (e) { log.error('IPC Error: cartes:create', e); throw e; }
   });
   ipcMain.handle('cartes:update', async (_, id, data) => {
@@ -122,7 +154,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // IMPORT - Utilities
-  ipcMain.handle('import:clearTemp', (_, siteId) => queries.clearImportTemp(siteId));
+  ipcMain.handle('import:clearTemp', (_, siteId) => {
+    if (siteId === undefined || siteId === null) {
+      throw new Error('siteId requis pour nettoyer la table temporaire d\'import.');
+    }
+    return queries.clearImportTemp(Number(siteId));
+  });
   ipcMain.handle('import:executeBatch', (_, rows, agent, siteId) => queries.importBatch(rows, agent, siteId));
   ipcMain.handle('import:fusionner', (_, agent, siteId) => queries.fusionnerImport(siteId));
 
@@ -221,10 +258,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // USERS
-  ipcMain.handle('users:getAll', () => queries.getUsers());
+  ipcMain.handle('users:getAll', (_, siteId?: number) => queries.getUsers(siteId));
   ipcMain.handle('users:create', (_, data) => queries.createUser(data));
   ipcMain.handle('users:update', (_, id, data) => queries.updateUser(id, data));
   ipcMain.handle('users:delete', (_, id) => queries.deleteUser(id));
+  ipcMain.handle('users:hardDelete', (_, id) => queries.hardDeleteUser(id));
 
   // LOGS
   ipcMain.handle('logs:get', (_, offset, limit, filters) => queries.getLogs(offset, limit, filters));
@@ -287,9 +325,73 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('app:getDbPath', () => getDbPath());
 
   // MAINTENANCE
-  ipcMain.handle('maintenance:clearAll', () => queries.clearDatabaseCartes());
-  ipcMain.handle('maintenance:clearDatabaseCartes', (_, siteId) => queries.clearDatabaseCartes(siteId));
-  ipcMain.handle('maintenance:fullReset', () => queries.fullSystemReset());
+  ipcMain.handle('maintenance:clearAll', async (event) => {
+    try {
+      return await queries.clearDatabaseCartes(undefined, (percent) => {
+        event.sender.send('maintenance-progress', percent);
+      });
+    } catch (e) {
+      log.error('IPC Error: maintenance:clearAll', e);
+      throw e;
+    }
+  });
+  ipcMain.handle('maintenance:clearDatabaseCartes', async (event, siteId) => {
+    try {
+      return await queries.clearDatabaseCartes(siteId, (percent) => {
+        event.sender.send('maintenance-progress', percent);
+      });
+    } catch (e) {
+      log.error('IPC Error: maintenance:clearDatabaseCartes', e);
+      throw e;
+    }
+  });
+  ipcMain.handle('maintenance:fullReset', async (event) => {
+    try {
+      return await queries.fullSystemReset((percent) => {
+        event.sender.send('maintenance-progress', percent);
+      });
+    } catch (e) {
+      log.error('IPC Error: maintenance:fullReset', e);
+      throw e;
+    }
+  });
+
+  // SYNC
+  ipcMain.handle('sync:getStatus', () => {
+    const db = getDatabase();
+    let queueCount = 0;
+    if (db) {
+      const row = db.prepare("SELECT COUNT(*) as count FROM t_sync_queue WHERE synced = 0").get() as { count: number } | undefined;
+      queueCount = row ? row.count : 0;
+    }
+    
+    let lastSync = 'Jamais';
+    if (db) {
+      const row = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+      if (row && row.value) lastSync = row.value;
+    }
+
+    return {
+      state: networkMonitor.getState(),
+      lastSync,
+      queueCount
+    };
+  });
+
+  ipcMain.handle('sync:force', async () => {
+    return syncEngine.forceSync();
+  });
+
+  ipcMain.handle('sync:startBulk', async (_, siteId: number) => {
+    try {
+      return await runBulkUpload(Number(siteId), (progress: number) => {
+        mainWindow.webContents.send('sync:bulk-progress', progress);
+      });
+    } catch (err: any) {
+      log.error('IPC sync:startBulk error:', err);
+      return { success: false, uploadedCount: 0, message: err.message || String(err) };
+    }
+  });
 
   log.info('All IPC handlers registered');
 }

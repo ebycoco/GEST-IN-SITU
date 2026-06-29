@@ -1,4 +1,5 @@
-import { HashRouter, Routes, Route } from 'react-router-dom';
+import React from 'react';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import MainLayout from './components/layout/MainLayout';
 import LoginPage from './pages/LoginPage';
@@ -17,10 +18,11 @@ import EditeurMission1Page from './pages/EditeurMission1Page';
 import AdminQueuePage from './pages/AdminQueuePage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect } from 'react';
-function ProtectedRoute({ children, requiredRoles }: { children: JSX.Element; requiredRoles?: string[] }) {
+
+function ProtectedRoute({ children, requiredRoles }: { children: React.ReactElement; requiredRoles?: string[] }) {
   const user = useAuthStore(s => s.user);
-  if (!user) return <LoginPage />;
-  if (requiredRoles && !requiredRoles.includes(user.role)) return <div>Accès refusé</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (requiredRoles && !requiredRoles.includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
 

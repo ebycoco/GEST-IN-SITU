@@ -66,6 +66,6 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ activeSiteId: id, selectedCentreId: null }); // Reset centre when site changes
   },
   checkAuth: async () => {
-    return null;
+    // Vérification de session locale (actuellement non implémentée/vide)
   }
 }));

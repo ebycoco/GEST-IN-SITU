@@ -8,31 +8,36 @@ declare global {
       };
       stats: {
         get: (siteId?: number) => Promise<any>;
+        getGlobal: () => Promise<any>;
       };
       cartes: {
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
-        search: (query: string, limit?: number) => Promise<any[]>;
+        search: (query: string, limit?: number, filters?: any) => Promise<any[]>;
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
         delivrer: (id: number, data: any) => Promise<boolean>;
         signalerAbsence: (id: number, agent: string) => Promise<boolean>;
-        getAbsences: () => Promise<any[]>;
+        getAbsences: (siteId?: number) => Promise<any[]>;
         resoudreAbsence: (id: number, data: any) => Promise<boolean>;
-        getInvalidDates: () => Promise<any[]>;
+        getInvalidDates: (siteId?: number) => Promise<any[]>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
       };
       users: {
-        getAll: () => Promise<any[]>;
+        getAll: (siteId?: number) => Promise<any[]>;
         create: (data: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
+        hardDelete: (id: number) => Promise<boolean>;
       };
       logs: {
         get: (offset?: number, limit?: number, filters?: any) => Promise<{rows: any[], total: number}>;
         add: (userId: number, login: string, action: string, detail?: string) => Promise<boolean>;
         purge: () => Promise<boolean>;
+      };
+      export: {
+        csv: (filters?: any) => Promise<any>;
       };
       import: {
         selectFile: () => Promise<string | null>;
@@ -45,9 +50,11 @@ declare global {
       };
       hierarchy: {
         getSites: () => Promise<any[]>;
+        getSitesSummary: () => Promise<any[]>;
         createSite: (data: any) => Promise<any>;
         updateSite: (id: number, data: any) => Promise<any>;
         deleteSite: (id: number) => Promise<any>;
+        resetAdminPassword: (siteId: number, pass: string) => Promise<any>;
         verifyPassword: (password: string) => Promise<boolean>;
         getCentres: (siteId?: number) => Promise<any[]>;
         createCentre: (data: any) => Promise<any>;
@@ -67,6 +74,13 @@ declare global {
       app: {
         getVersion: () => Promise<string>;
         getDbPath: () => Promise<string>;
+      };
+      sync: {
+        getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number }>;
+        force: () => Promise<{ success: boolean; message: string }>;
+        onStatusChanged: (callback: (status: any) => void) => () => void;
+        startBulk: (siteId: number) => Promise<{ success: boolean; uploadedCount: number; message: string }>;
+        onBulkProgress: (callback: (p: number) => void) => () => void;
       };
     };
   }

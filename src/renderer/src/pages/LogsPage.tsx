@@ -40,51 +40,51 @@ export default function LogsPage() {
         </div>
       </div>
 
-      <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        <div className="table-container" style={{ flex: 1, overflowY: 'auto' }}>
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Date & Heure</th>
-                <th>Utilisateur</th>
-                <th>Action</th>
-                <th>Détails</th>
+  <div className="card" style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <div className="table-responsive-wrapper" style={{ flex: 1 }}>
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th>Date & Heure</th>
+            <th>Utilisateur</th>
+            <th>Action</th>
+            <th>Détails</th>
+          </tr>
+        </thead>
+        <tbody>
+          {logs.length === 0 ? (
+            <tr>
+              <td colSpan={4} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
+                Aucun journal d'activité trouvé.
+              </td>
+            </tr>
+          ) : (
+            logs.map((l) => (
+              <tr key={l.id_log}>
+                <td style={{ color: 'var(--text-muted)', fontSize: 13 }}>
+                  {new Date(l.date_heure).toLocaleString('fr-FR')}
+                </td>
+                <td style={{ fontWeight: 600 }}>{l.login_user}</td>
+                <td>
+                  <span className="badge" style={{ 
+                    background: 'var(--bg-card-hover)', 
+                    color: 'var(--text-color)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: 11
+                  }}>
+                    {l.action}
+                  </span>
+                </td>
+                <td className="log-detail-cell" title={l.detail} style={{ fontSize: 13 }}>
+                  {l.detail}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 ? (
-                <tr>
-                  <td colSpan={4} style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
-                    Aucun journal d'activité trouvé.
-                  </td>
-                </tr>
-              ) : (
-                logs.map((l) => (
-                  <tr key={l.id_log}>
-                    <td style={{ color: 'var(--text-muted)', fontSize: 13 }}>
-                      {new Date(l.date_heure).toLocaleString('fr-FR')}
-                    </td>
-                    <td style={{ fontWeight: 600 }}>{l.login_user}</td>
-                    <td>
-                      <span className="badge" style={{ 
-                        background: 'var(--bg-card-hover)', 
-                        color: 'var(--text-color)',
-                        border: '1px solid var(--border-color)',
-                        fontSize: 11
-                      }}>
-                        {l.action}
-                      </span>
-                    </td>
-                    <td style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                      {l.detail}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
+  </div>
     </div>
   );
 }

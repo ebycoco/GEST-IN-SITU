@@ -42,6 +42,7 @@ interface SiteSummary {
   id: number;
   nom: string;
   code_site: string;
+  code?: string;
   is_active: number;
   total_centres: number;
   total_cartes: number;
@@ -65,6 +66,25 @@ export default function DashboardPage() {
     adminPass: ''
   });
   const { user, activeSiteId } = useAuthStore();
+  
+  // États pour le bulk upload initial
+  const [bulkProgress, setBulkProgress] = useState<number>(-1);
+  const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
+
+  useEffect(() => {
+    // Écouter la progression du bulk upload
+    const unsubscribe = window.api.sync.onBulkProgress((progress: number) => {
+      setBulkProgress(progress);
+      if (progress >= 100) {
+        setIsBulkUploading(false);
+        setBulkProgress(-1);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   const isGovernanceView = user?.role === 'SUPER ADMIN' && !activeSiteId;
 
@@ -97,12 +117,46 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const data = await window.api.stats.get(siteIdToUse);
+      const data = await window.api.stats.get(siteIdToUse || undefined);
       setStats(data);
     } catch (e) { 
       console.error(e); 
     } finally { 
       setLoading(false); 
+    }
+  };
+
+  const handleStartBulkUpload = async () => {
+    if (isBulkUploading) return;
+    
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) {
+      toast.error("Veuillez d'abord sélectionner un site actif.");
+      return;
+    }
+
+    const confirm = window.confirm(
+      "Êtes-vous sûr de vouloir lancer la synchronisation de masse vers le Cloud ? Cette opération peut prendre plusieurs minutes si vous avez des milliers de cartes en attente."
+    );
+    if (!confirm) return;
+
+    setIsBulkUploading(true);
+    setBulkProgress(0);
+    const toastId = toast.loading("Initialisation du transfert de masse...");
+
+    try {
+      const res = await window.api.sync.startBulk(Number(siteIdToUse));
+      if (res.success) {
+        toast.success(res.message, { id: toastId });
+        if (stats) loadStats(); // Recharger les statistiques locales
+      } else {
+        toast.error(res.message, { id: toastId });
+      }
+    } catch (err: any) {
+      toast.error(`Échec du transfert : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsBulkUploading(false);
+      setBulkProgress(-1);
     }
   };
 
@@ -168,7 +222,7 @@ export default function DashboardPage() {
     try {
       setLoading(true);
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const result = await window.api.maintenance.clearDatabaseCartes(siteIdToUse);
+      const result = await window.api.maintenance.clearDatabaseCartes(siteIdToUse || undefined);
       if (result.success) {
         toast.success(`${result.count} cartes supprimées.`);
         loadStats();
@@ -193,7 +247,7 @@ export default function DashboardPage() {
     const gs = globalStats || { total_sites: 0, active_sites: 0, total_cartes: 0, total_agents: 0 };
     return (
       <div className="dashboard-premium animate-fade-in">
-        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+        <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
           <div className="premium-card premium-glass">
             <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #6c63ff, #4834d4)' }}>
               <Globe size={28} color="white" />
@@ -676,7 +730,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
         {kpis.map((kpi, i) => {
           const Icon = kpi.icon;
           return (
@@ -693,28 +747,77 @@ export default function DashboardPage() {
         })}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
-        <div className="premium-card premium-glass">
-          <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16, marginBottom: 16 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Activity size={20} color="var(--accent-primary)" /> État du Système Local
-            </span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
-              <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Base de données</h4>
-              <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>Connecté (SQLite)</p>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Site : {activeSiteId || 'Non défini'}</p>
-            </div>
-            <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
-              <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Session Active</h4>
-              <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>{user?.login}</p>
-              <p style={{ fontSize: 12, color: 'var(--accent-secondary)' }}>{user?.role}</p>
-            </div>
-          </div>
+  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+    <div className="premium-card premium-glass">
+      <div style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16, marginBottom: 16 }}>
+        <span style={{ fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Activity size={20} color="var(--accent-primary)" /> État du Système Local
+        </span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
+          <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Base de données</h4>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>Connecté (SQLite)</p>
+          <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>Site : {activeSiteId || 'Non défini'}</p>
         </div>
+        <div style={{ padding: 16, background: 'rgba(0,0,0,0.2)', borderRadius: 12 }}>
+          <h4 style={{ color: 'var(--text-secondary)', fontSize: 11, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 }}>Session Active</h4>
+          <p style={{ fontSize: 14, fontWeight: 600, color: 'white' }}>{user?.login}</p>
+          <p style={{ fontSize: 12, color: 'var(--accent-secondary)' }}>{user?.role}</p>
+        </div>
+      </div>
+    </div>
 
-        {user?.role === 'SUPER ADMIN' && activeSiteId && (
+    {/* Section Initialisation Cloud / Bulk Sync */}
+    {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR') && (activeSiteId || user?.site_id) && (
+      <div className="premium-card premium-glass" style={{ border: '1px solid rgba(99, 102, 241, 0.3)', background: 'rgba(99, 102, 241, 0.05)' }}>
+        <div style={{ borderBottom: '1px solid rgba(99, 102, 241, 0.1)', paddingBottom: 16, marginBottom: 16 }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Globe size={20} /> Initialisation Cloud (Mass Upload)
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5 }}>
+            Recommandé lors du premier déploiement ou après un import de masse. Pousse l'ensemble des cartes modifiées locales vers le cloud par blocs optimisés.
+          </p>
+
+          {bulkProgress >= 0 && (
+            <div style={{ width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '4px', color: 'var(--text-muted)' }}>
+                <span>Progression du transfert...</span>
+                <span>{bulkProgress}%</span>
+              </div>
+              <div style={{ height: '8px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${bulkProgress}%`, background: 'var(--accent-primary)', transition: 'width 0.2s ease-in-out' }} />
+              </div>
+            </div>
+          )}
+
+          <button 
+            onClick={handleStartBulkUpload} 
+            disabled={isBulkUploading}
+            className="btn-primary" 
+            style={{ 
+              padding: '12px 24px', 
+              alignSelf: 'flex-start', 
+              borderRadius: 12, 
+              fontWeight: 700,
+              backgroundColor: isBulkUploading ? 'var(--bg-secondary)' : 'var(--accent-primary)',
+              cursor: isBulkUploading ? 'not-allowed' : 'pointer',
+              boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}
+          >
+            <RefreshCw size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+            {isBulkUploading ? 'TRANSFERT EN COURS...' : 'POUSSER LES DONNÉES LOCALES'}
+          </button>
+        </div>
+      </div>
+    )}
+
+    {user?.role === 'SUPER ADMIN' && activeSiteId && (
           <div className="premium-card premium-glass" style={{ border: '1px solid rgba(239, 68, 68, 0.3)', background: 'rgba(239, 68, 68, 0.05)' }}>
             <div style={{ borderBottom: '1px solid rgba(239, 68, 68, 0.1)', paddingBottom: 16, marginBottom: 16 }}>
               <span style={{ fontSize: 16, fontWeight: 700, color: '#ef4444', display: 'flex', alignItems: 'center', gap: 8 }}>

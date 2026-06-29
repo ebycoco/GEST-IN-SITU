@@ -1,11 +1,39 @@
-import React, { useState } from 'react';
-import { UserPlus, Save, RotateCcw } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import {
+  UserPlus,
+  Save,
+  RotateCcw,
+  User,
+  Hash,
+  Phone,
+  MapPin,
+  Archive,
+  Building2,
+  Layers,
+  Briefcase,
+  CheckCircle2,
+  Sparkles,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
 
-const INITIAL_STATE = {
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface FormState {
+  noms: string;
+  prenoms: string;
+  date_de_naissance: string;
+  lieu_de_naissance: string;
+  contact: string;
+  num_secu: string;
+  rangement: string;
+  site: string;
+  centre: string;
+  poste: string;
+}
+
+const INITIAL_STATE: FormState = {
   noms: '',
   prenoms: '',
   date_de_naissance: '',
@@ -15,218 +43,589 @@ const INITIAL_STATE = {
   rangement: '',
   site: '',
   centre: '',
-  poste: ''
+  poste: '',
 };
 
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+interface FieldProps {
+  label: string;
+  required?: boolean;
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  hint?: string;
+}
+
+function FormField({ label, required, icon, children, hint }: FieldProps) {
+  return (
+    <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <label
+        className="form-label"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          fontSize: 12,
+          fontWeight: 600,
+          letterSpacing: '0.05em',
+          textTransform: 'uppercase',
+          color: 'var(--text-muted)',
+        }}
+      >
+        <span style={{ opacity: 0.7 }}>{icon}</span>
+        {label}
+        {required && <span style={{ color: '#f97316', marginLeft: 2 }}>*</span>}
+      </label>
+      {children}
+      {hint && (
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', opacity: 0.7 }}>{hint}</span>
+      )}
+    </div>
+  );
+}
+
+interface InputWithIconProps {
+  icon: React.ReactNode;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  tabIndex?: number;
+  autoFocus?: boolean;
+  required?: boolean;
+  style?: React.CSSProperties;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
+}
+
+function InputWithIcon({
+  icon,
+  value,
+  onChange,
+  placeholder,
+  tabIndex,
+  autoFocus,
+  required,
+  style,
+  inputMode,
+}: InputWithIconProps) {
+  return (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+      <span
+        style={{
+          position: 'absolute',
+          left: 14,
+          color: 'var(--text-muted)',
+          opacity: 0.55,
+          display: 'flex',
+          alignItems: 'center',
+          pointerEvents: 'none',
+          zIndex: 1,
+        }}
+      >
+        {icon}
+      </span>
+      <input
+        type="text"
+        className="form-input"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        tabIndex={tabIndex}
+        autoFocus={autoFocus}
+        required={required}
+        inputMode={inputMode}
+        style={{ paddingLeft: 42, width: '100%', ...style }}
+      />
+    </div>
+  );
+}
+
+// ─── Section Separator ────────────────────────────────────────────────────────
+interface SectionProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  accentColor?: string;
+}
+
+function SectionHeader({ icon, title, subtitle, accentColor = 'var(--accent-primary)' }: SectionProps) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 0',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+        marginBottom: 4,
+      }}
+    >
+      <div
+        style={{
+          width: 36,
+          height: 36,
+          borderRadius: 10,
+          background: `linear-gradient(135deg, ${accentColor}33, ${accentColor}18)`,
+          border: `1px solid ${accentColor}44`,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: accentColor,
+          flexShrink: 0,
+        }}
+      >
+        {icon}
+      </div>
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
+        {subtitle && (
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 1 }}>{subtitle}</div>
+        )}
+      </div>
+      <div
+        style={{
+          flex: 1,
+          height: 1,
+          background: `linear-gradient(90deg, ${accentColor}30, transparent)`,
+          marginLeft: 8,
+        }}
+      />
+    </div>
+  );
+}
+
+// ─── Grid helper ──────────────────────────────────────────────────────────────
+const GRID2: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  gap: '1.2rem',
+};
+const GRID3: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+  gap: '1.2rem',
+};
+
+// ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function AjoutantSaisiePage() {
   const { user, activeSiteId, selectedCentreId } = useAuthStore();
-  
-  const [formData, setFormData] = useState(INITIAL_STATE);
+  const [formData, setFormData] = useState<FormState>(INITIAL_STATE);
   const [isSaving, setIsSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const firstInputRef = useRef<HTMLDivElement>(null);
+
+  const updateUpper = (field: keyof FormState) => (value: string) =>
+    setFormData((prev) => ({ ...prev, [field]: value.toUpperCase() }));
+
+  const updateRaw = (field: keyof FormState) => (value: string) =>
+    setFormData((prev) => ({ ...prev, [field]: value }));
 
   const handleReset = () => {
     if (confirm('Voulez-vous vraiment vider le formulaire ?')) {
       setFormData(INITIAL_STATE);
+      setSaved(false);
+      setTimeout(() => {
+        (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
+      }, 50);
     }
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (!formData.noms || !formData.prenoms || formData.date_de_naissance.length !== 10) {
-      toast.error('Veuillez remplir les champs obligatoires (*)');
+
+    if (!formData.noms.trim() || !formData.prenoms.trim()) {
+      toast.error('Nom et Prénom sont obligatoires.');
+      return;
+    }
+    if (formData.date_de_naissance.length !== 10) {
+      toast.error('La date de naissance est invalide ou incomplète.');
+      return;
+    }
+    if (user?.role === 'ADMINISTRATEUR' && !selectedCentreId) {
+      toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
       return;
     }
 
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) {
+      toast.error('Aucun site sélectionné.');
+      return;
+    }
+
+    setIsSaving(true);
+    setSaved(false);
     try {
-      if (user?.role === 'ADMINISTRATEUR' && !selectedCentreId) {
-        toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
-        setIsSaving(false);
-        return;
-      }
-
-      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      if (!siteIdToUse) {
-        toast.error('Aucun site sélectionné');
-        return;
-      }
-
-      const agent = user?.login || 'AJOUTANT';
-      const dataToSave = {
+      await window.api.cartes.create({
         ...formData,
         site_id: siteIdToUse,
-        agent_saisie: agent,
+        agent_saisie: user?.login || 'AJOUTANT',
         centre_id: selectedCentreId,
         statut: 'EN STOCK',
-        statut_physique: 'OK'
-      };
-
-      await window.api.cartes.create(dataToSave);
-      toast.success('Carte enregistrée avec succès !');
+        statut_physique: 'OK',
+      });
+      toast.success('✅ Carte enregistrée avec succès !');
+      setSaved(true);
       setFormData(INITIAL_STATE);
+      setTimeout(() => {
+        (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
+      }, 100);
     } catch (err) {
       console.error(err);
-      toast.error('Erreur lors de l\'enregistrement.');
+      toast.error("Erreur lors de l'enregistrement.");
     } finally {
       setIsSaving(false);
     }
   };
 
-  const updateField = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value.toUpperCase() }));
-  };
-
   return (
-    <div className="animate-fade-in" style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+    <div
+      className="animate-fade-in"
+      style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}
+    >
       <CentreContextSwitcher />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 24 }}>
-        <div style={{ padding: 12, background: 'var(--gradient-button)', borderRadius: 12, color: 'white' }}>
-          <UserPlus size={24} />
+
+      {/* ── Page Header ──────────────────────────────────────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          padding: '20px 24px',
+          background: 'linear-gradient(135deg, rgba(139,92,246,0.12) 0%, rgba(59,130,246,0.06) 100%)',
+          border: '1px solid rgba(139,92,246,0.2)',
+          borderRadius: 16,
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        <div
+          style={{
+            width: 52,
+            height: 52,
+            borderRadius: 14,
+            background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            boxShadow: '0 4px 20px rgba(139,92,246,0.4)',
+            flexShrink: 0,
+          }}
+        >
+          <UserPlus size={26} />
         </div>
-        <div>
-          <h2 style={{ margin: 0 }}>Nouvelle Saisie de Carte</h2>
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>Enregistrez manuellement une nouvelle carte dans le système.</p>
+        <div style={{ flex: 1 }}>
+          <h2
+            style={{
+              margin: 0,
+              fontSize: 20,
+              fontWeight: 800,
+              background: 'linear-gradient(135deg, #c4b5fd, #93c5fd)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+            }}
+          >
+            Nouvelle Saisie de Carte CMU
+          </h2>
+          <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
+            Enregistrement manuel · Champs marqués{' '}
+            <strong style={{ color: '#f97316' }}>*</strong> obligatoires
+          </p>
         </div>
+        {saved && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '8px 16px',
+              background: 'rgba(34,197,94,0.15)',
+              border: '1px solid rgba(34,197,94,0.3)',
+              borderRadius: 10,
+              color: '#4ade80',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            <CheckCircle2 size={16} />
+            Enregistrée !
+          </div>
+        )}
       </div>
 
-      <div className="card">
-        <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          {/* Identité */}
-          <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 12 }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>Identité de l'assuré</h3>
-          </div>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div className="form-group">
-              <label className="form-label">Nom <span className="text-red-500">*</span></label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.noms} 
-                onChange={e => updateField('noms', e.target.value)} 
-                required 
-              />
+      {/* ── Form Card ────────────────────────────────────────────────────────── */}
+      <form
+        onSubmit={handleSave}
+        style={{
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.07)',
+          borderRadius: 20,
+          padding: '28px 32px',
+          backdropFilter: 'blur(12px)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 28,
+          boxShadow: '0 8px 40px rgba(0,0,0,0.25)',
+        }}
+      >
+        {/* ── SECTION 1 : Identité ─────────────────────────────────────────── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <SectionHeader
+            icon={<User size={18} />}
+            title="Identité de l'assuré"
+            subtitle="Informations civiles principales"
+            accentColor="#8b5cf6"
+          />
+
+          <div style={GRID2}>
+            <div ref={firstInputRef}>
+              <FormField label="Nom de famille" required icon={<User size={14} />}>
+                <InputWithIcon
+                  icon={<User size={16} />}
+                  value={formData.noms}
+                  onChange={updateUpper('noms')}
+                  placeholder="Ex: KOUASSI"
+                  tabIndex={1}
+                  autoFocus
+                  required
+                />
+              </FormField>
             </div>
-            <div className="form-group">
-              <label className="form-label">Prénom <span className="text-red-500">*</span></label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.prenoms} 
-                onChange={e => updateField('prenoms', e.target.value)} 
-                required 
+            <FormField label="Prénom(s)" required icon={<User size={14} />}>
+              <InputWithIcon
+                icon={<User size={16} />}
+                value={formData.prenoms}
+                onChange={updateUpper('prenoms')}
+                placeholder="Ex: JEAN BAPTISTE"
+                tabIndex={2}
+                required
               />
-            </div>
+            </FormField>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <DateInput 
-              label="Date de naissance *" 
-              value={formData.date_de_naissance} 
-              onChange={val => setFormData(prev => ({ ...prev, date_de_naissance: val }))} 
-              required 
+          <div style={GRID2}>
+            <DateInput
+              label="Date de naissance *"
+              value={formData.date_de_naissance}
+              onChange={updateRaw('date_de_naissance')}
+              required
             />
-            <div className="form-group">
-              <label className="form-label">Lieu de naissance</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.lieu_de_naissance} 
-                onChange={e => updateField('lieu_de_naissance', e.target.value)} 
+            <FormField label="Lieu de naissance" icon={<MapPin size={14} />}>
+              <InputWithIcon
+                icon={<MapPin size={16} />}
+                value={formData.lieu_de_naissance}
+                onChange={updateUpper('lieu_de_naissance')}
+                placeholder="Ex: ABIDJAN"
+                tabIndex={4}
               />
-            </div>
+            </FormField>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <div className="form-group">
-              <label className="form-label">N° Sécurité Sociale (CMU)</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.num_secu} 
-                onChange={e => updateField('num_secu', e.target.value)} 
-                placeholder="Ex: 1234567890"
+          <div style={GRID2}>
+            <FormField
+              label="N° Sécurité Sociale (CMU)"
+              icon={<Hash size={14} />}
+              hint="Numéro figurant sur le bordereau"
+            >
+              <InputWithIcon
+                icon={<Hash size={16} />}
+                value={formData.num_secu}
+                onChange={updateUpper('num_secu')}
+                placeholder="Ex: 1 234 567 890 12"
+                tabIndex={5}
+                inputMode="numeric"
               />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Contact / Téléphone</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.contact} 
-                onChange={e => setFormData(prev => ({ ...prev, contact: e.target.value }))} 
+            </FormField>
+            <FormField
+              label="Contact / Téléphone"
+              icon={<Phone size={14} />}
+              hint="10 chiffres sans espaces"
+            >
+              <InputWithIcon
+                icon={<Phone size={16} />}
+                value={formData.contact}
+                onChange={updateRaw('contact')}
+                placeholder="Ex: 0700000000"
+                tabIndex={6}
+                inputMode="tel"
               />
-            </div>
+            </FormField>
           </div>
+        </div>
 
-          {/* Localisation / Rangement */}
-          <div style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 12, marginTop: 12 }}>
-            <h3 style={{ margin: 0, fontSize: 16 }}>Localisation & Rangement</h3>
-          </div>
+        {/* ── SECTION 2 : Localisation & Rangement ─────────────────────────── */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <SectionHeader
+            icon={<Briefcase size={18} />}
+            title="Localisation &amp; Rangement"
+            subtitle="Emplacement physique de la carte dans le stock"
+            accentColor="#3b82f6"
+          />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
-            <div className="form-group">
-              <label className="form-label">Site</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.site} 
-                onChange={e => updateField('site', e.target.value)} 
+          <div style={GRID3}>
+            <FormField label="Site" icon={<Building2 size={14} />}>
+              <InputWithIcon
+                icon={<Building2 size={16} />}
+                value={formData.site}
+                onChange={updateUpper('site')}
                 placeholder="Ex: ABOBO"
+                tabIndex={7}
               />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Centre</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.centre} 
-                onChange={e => updateField('centre', e.target.value)} 
+            </FormField>
+            <FormField label="Centre" icon={<Layers size={14} />}>
+              <InputWithIcon
+                icon={<Layers size={16} />}
+                value={formData.centre}
+                onChange={updateUpper('centre')}
+                placeholder="Ex: CENTRE 1"
+                tabIndex={8}
               />
-            </div>
-            <div className="form-group">
-              <label className="form-label">Poste</label>
-              <input 
-                type="text" 
-                className="form-input" 
-                value={formData.poste} 
-                onChange={e => updateField('poste', e.target.value)} 
+            </FormField>
+            <FormField label="Poste" icon={<MapPin size={14} />}>
+              <InputWithIcon
+                icon={<MapPin size={16} />}
+                value={formData.poste}
+                onChange={updateUpper('poste')}
+                placeholder="Ex: POSTE 2"
+                tabIndex={9}
               />
-            </div>
+            </FormField>
           </div>
 
-          <div className="form-group">
-            <label className="form-label">Code Rangement (Boîte/Casier)</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              value={formData.rangement} 
-              onChange={e => updateField('rangement', e.target.value)} 
-              placeholder="Ex: BOITE 42 / RAYON C"
-              style={{ fontWeight: 'bold', fontSize: 18 }}
-            />
-          </div>
+          {/* Code Rangement — pleine largeur, mis en avant */}
+          <FormField
+            label="Code Rangement"
+            icon={<Archive size={14} />}
+            hint="Code de la boîte ou du casier de stockage physique"
+          >
+            <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+              <span
+                style={{
+                  position: 'absolute',
+                  left: 14,
+                  color: '#3b82f6',
+                  opacity: 0.7,
+                  display: 'flex',
+                  alignItems: 'center',
+                  pointerEvents: 'none',
+                  zIndex: 1,
+                }}
+              >
+                <Archive size={18} />
+              </span>
+              <input
+                type="text"
+                className="form-input"
+                value={formData.rangement}
+                onChange={(e) => updateUpper('rangement')(e.target.value)}
+                placeholder="Ex: BOITE 42 / RAYON C"
+                tabIndex={10}
+                style={{
+                  paddingLeft: 42,
+                  width: '100%',
+                  fontWeight: 700,
+                  fontSize: 16,
+                  letterSpacing: '0.08em',
+                  background: 'rgba(59,130,246,0.06)',
+                  border: '1px solid rgba(59,130,246,0.2)',
+                }}
+              />
+            </div>
+          </FormField>
+        </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
-            <button 
-              type="button" 
-              className="btn btn-secondary" 
-              onClick={handleReset}
-              disabled={isSaving}
-            >
-              <RotateCcw size={16} /> Réinitialiser
-            </button>
-            <button 
-              type="submit" 
-              className="btn btn-primary" 
-              disabled={isSaving}
-              style={{ padding: '12px 32px' }}
-            >
-              <Save size={18} /> {isSaving ? 'Enregistrement...' : 'Enregistrer la carte'}
-            </button>
-          </div>
-        </form>
-      </div>
+        {/* ── Info Banner ──────────────────────────────────────────────────── */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 16px',
+            background: 'rgba(250,204,21,0.06)',
+            border: '1px solid rgba(250,204,21,0.18)',
+            borderRadius: 10,
+            fontSize: 12,
+            color: 'var(--text-muted)',
+          }}
+        >
+          <Sparkles size={14} style={{ color: '#facc15', flexShrink: 0 }} />
+          <span>
+            La carte sera enregistrée avec le statut&nbsp;
+            <strong style={{ color: '#facc15' }}>EN STOCK</strong> et affectée à l&apos;agent&nbsp;
+            <strong style={{ color: 'var(--text-primary)' }}>{user?.login || '—'}</strong>.
+            Le formulaire se réinitialise automatiquement après chaque enregistrement.
+          </span>
+        </div>
+
+        {/* ── Actions ──────────────────────────────────────────────────────── */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+            paddingTop: 8,
+            borderTop: '1px solid rgba(255,255,255,0.05)',
+          }}
+        >
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleReset}
+            disabled={isSaving}
+            tabIndex={11}
+            style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+          >
+            <RotateCcw size={15} />
+            Réinitialiser
+          </button>
+
+          <button
+            type="submit"
+            disabled={isSaving}
+            tabIndex={12}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '13px 32px',
+              background: isSaving
+                ? 'rgba(139,92,246,0.4)'
+                : 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 12,
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: isSaving ? 'not-allowed' : 'pointer',
+              boxShadow: isSaving ? 'none' : '0 4px 20px rgba(139,92,246,0.4)',
+              transition: 'all 0.2s ease',
+              letterSpacing: '0.02em',
+            }}
+          >
+            {isSaving ? (
+              <>
+                <span
+                  style={{
+                    width: 16,
+                    height: 16,
+                    border: '2px solid rgba(255,255,255,0.3)',
+                    borderTopColor: 'white',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                    display: 'inline-block',
+                  }}
+                />
+                Enregistrement…
+              </>
+            ) : (
+              <>
+                <Save size={18} />
+                Enregistrer la carte
+              </>
+            )}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

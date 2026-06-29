@@ -16,7 +16,7 @@ export default function AdminQueuePage() {
     setIsLoading(true);
     try {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const res = await window.api.cartes.getAbsences(siteIdToUse);
+      const res = await window.api.cartes.getAbsences(siteIdToUse || undefined);
       console.log('Absences loaded:', res);
       setAbsences(Array.isArray(res) ? res : []);
     } catch (err) {

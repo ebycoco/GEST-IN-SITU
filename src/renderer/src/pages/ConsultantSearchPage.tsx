@@ -8,6 +8,7 @@ import { useAuthStore } from '../stores/authStore';
 export default function ConsultantSearchPage() {
   const user = useAuthStore((s) => s.user);
   const selectedCentreId = useAuthStore((s) => s.selectedCentreId);
+  const activeSiteId = useAuthStore((s) => s.activeSiteId);
   
   const [noms, setNoms] = useState('');
   const [prenoms, setPrenoms] = useState('');
@@ -118,7 +119,7 @@ export default function ConsultantSearchPage() {
 
       // Get the name of the selected centre
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const centres = await window.api.hierarchy.getCentres(siteIdToUse);
+      const centres = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
       const centreName = centres.find((c: any) => c.id === selectedCentreId)?.nom || '';
 
       await window.api.cartes.delivrer(selectedCarte.id_carte, {
@@ -592,6 +593,23 @@ export default function ConsultantSearchPage() {
                           Le bénéficiaire présent physiquement correspond-il strictement à cette identité ?
                         </div>
                       </div>
+                      {user?.role === 'CONSULTANT' && (
+                        <div style={{ 
+                          padding: 16, 
+                          background: 'rgba(108, 99, 255, 0.08)', 
+                          borderRadius: 16, 
+                          border: '1px solid rgba(108, 99, 255, 0.2)',
+                          textAlign: 'center',
+                          marginTop: 16
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: 'var(--accent-primary)', fontWeight: 800, fontSize: 13, textTransform: 'uppercase' }}>
+                            ℹ️ Mode Lecture Seule
+                          </div>
+                          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
+                            Votre compte de Consultant est configuré en lecture seule pour ce site.
+                          </div>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div style={{ animation: 'fadeIn 0.3s ease-out' }}>
@@ -689,7 +707,7 @@ export default function ConsultantSearchPage() {
               display: 'flex',
               gap: 16
             }}>
-              {selectedCarte.statut === 'EN STOCK' ? (
+              {selectedCarte.statut === 'EN STOCK' && user?.role !== 'CONSULTANT' && user?.role !== 'AJOUTANT' ? (
                 modalStep === 1 ? (
                   <>
                     <button 

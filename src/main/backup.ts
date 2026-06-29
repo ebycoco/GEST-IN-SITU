@@ -1,25 +1,33 @@
-import { getDbPath, getBackupDir } from './database/connection';
-import { copyFileSync, readdirSync, unlinkSync, statSync } from 'fs';
+import { getDbPath, getBackupDir, getDatabase } from './database/connection';
+import { readdirSync, unlinkSync, statSync } from 'fs';
 import { join } from 'path';
 import log from 'electron-log';
 
 export function initBackupScheduler(): void {
   // Run backup every 24 hours
   const INTERVAL = 24 * 60 * 60 * 1000;
-  performBackup();
-  setInterval(performBackup, INTERVAL);
+  performBackup().catch(err => log.error('Initial backup failed:', err));
+  setInterval(() => {
+    performBackup().catch(err => log.error('Scheduled backup failed:', err));
+  }, INTERVAL);
   log.info('Backup scheduler initialized (every 24h)');
 }
 
-export function performBackup(): void {
+export async function performBackup(): Promise<void> {
   try {
-    const dbPath = getDbPath();
+    const db = getDatabase();
+    if (!db) {
+      log.error('Backup failed: Database instance not available');
+      return;
+    }
+
     const backupDir = getBackupDir();
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const backupPath = join(backupDir, `gest_in_situ_backup_${timestamp}.db`);
 
-    copyFileSync(dbPath, backupPath);
-    log.info(`Backup created: ${backupPath}`);
+    log.info(`Starting backup: ${backupPath}...`);
+    await db.backup(backupPath);
+    log.info(`Backup successfully created via SQLite API: ${backupPath}`);
 
     // Rotate: keep only last 7 backups
     const MAX_BACKUPS = 7;
@@ -35,6 +43,6 @@ export function performBackup(): void {
       });
     }
   } catch (e) {
-    log.error('Backup failed:', e);
+    log.error('Backup transaction failed:', e);
   }
 }

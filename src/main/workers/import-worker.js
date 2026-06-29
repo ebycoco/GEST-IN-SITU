@@ -14,6 +14,7 @@ async function run() {
   db.pragma('synchronous = NORMAL');
   db.pragma('cache_size = -64000');
   db.pragma('temp_store = MEMORY');
+  db.pragma('foreign_keys = ON');
 
   // Ensure t_import_temp has the new columns
   try {
@@ -53,12 +54,33 @@ async function run() {
   var sep = ';';
 
   function removeAccents(str) {
-    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    if (!str) return '';
+    return str
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .trim();
+  }
+
+  function normalizeContact(contactStr) {
+    if (!contactStr) return '';
+    let cleaned = contactStr.toString().replace(/\D/g, '');
+    if (cleaned.startsWith('225') && cleaned.length > 10) {
+      cleaned = cleaned.substring(3);
+    }
+    if (cleaned.length > 10) {
+      cleaned = cleaned.substring(cleaned.length - 10);
+    }
+    return cleaned;
   }
 
   function cleanDate(dateStr) {
     if (!dateStr) return '';
     let s = dateStr.toString().trim();
+    
+    // Si déjà au format ISO YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    
     s = s.replace(/\/\/+/g, '/');
     const months = { 'jan': '01', 'fev': '02', 'fév': '02', 'mar': '03', 'avr': '04', 'mai': '05', 'jui': '06', 'juin': '06', 'juil': '07', 'aou': '08', 'aoû': '08', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12', 'déc': '12' };
     let match = s.match(/^(\d{1,3})[-\s\/]+([a-zA-Zàâäéèêëïîôöùûüç]+)\.??[-\s\/]+(\d{2,4})$/i);
@@ -71,7 +93,7 @@ async function run() {
       for (const [k, v] of Object.entries(months)) {
         if (mStr.startsWith(k)) { mNum = v; break; }
       }
-      if (mNum) return day + '/' + mNum + '/' + year;
+      if (mNum) return year + '-' + mNum + '-' + day;
     }
     let parts = s.split(/[^0-9]+/).filter(Boolean);
     if (parts.length >= 3) {
@@ -81,9 +103,9 @@ async function run() {
       m = parseInt(m, 10).toString().padStart(2, '0');
       if (y.length === 2) y = (parseInt(y) > 50 ? '19' : '20') + y;
       if (parseInt(d, 10) > 31) d = parts[0].substring(0, 2);
-      return d + '/' + m + '/' + y;
+      return y + '-' + m + '-' + d;
     }
-    return s;
+    return '';
   }
 
   for await (const line of rl) {
@@ -98,11 +120,11 @@ async function run() {
         rowData[headers[i].toLowerCase().replace(/\s+/g, '_')] = cols[i] || '';
       }
 
-      var noms = (rowData.noms || '').toUpperCase().trim();
-      var prenoms = (rowData.prenoms || '').toUpperCase().trim();
+      var noms = removeAccents(rowData.noms || '');
+      var prenoms = removeAccents(rowData.prenoms || '');
       var ddn = cleanDate(rowData.date_de_naissance || '');
-      var lieuN = (rowData.lieu_de_naissance || '').toUpperCase().trim();
-      var contact = (rowData.contact || '').trim();
+      var lieuN = removeAccents(rowData.lieu_de_naissance || '');
+      var contact = normalizeContact(rowData.contact || '');
 
       // --- IMPROVED STATUT LOGIC ---
       var rawStatut = removeAccents((rowData.statut || '').toUpperCase().trim());
@@ -153,8 +175,8 @@ async function run() {
         num_secu: (rowData.num_secu || '').trim(),
         lieu_de_naissance: lieuN,
         contact: contact,
-        lieu_enrolement: (rowData.lieu_enrolement || '').toUpperCase().trim(),
-        rangement: (rowData.rangement || '').toUpperCase().trim(),
+        lieu_enrolement: removeAccents(rowData.lieu_enrolement || ''),
+        rangement: removeAccents(rowData.rangement || ''),
         statut: finalStatut,
         date_delivrance: rowData.date_delivrance || (finalStatut === 'DELIVRE' ? new Date().toISOString().split('T')[0] : ''),
         agent_saisie: agent,

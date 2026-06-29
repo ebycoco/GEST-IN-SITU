@@ -50,7 +50,7 @@ export default function DateInput({ value, onChange, label, error, className, ..
       {label && <label className="form-label">{label}</label>}
       <input
         type="text"
-        className={`form-input ${className || ''} ${error ? 'border-red-500' : ''}`}
+        className={`form-input ${className || ''} ${error ? 'border-error' : ''}`}
         placeholder="JJ/MM/AAAA"
         value={inputValue}
         onChange={handleChange}
@@ -58,7 +58,7 @@ export default function DateInput({ value, onChange, label, error, className, ..
         maxLength={10}
         {...props}
       />
-      {error && <span className="text-red-500 text-xs mt-1 block">{error}</span>}
+      {error && <span className="text-error text-xs mt-1 block">{error}</span>}
     </div>
   );
 }

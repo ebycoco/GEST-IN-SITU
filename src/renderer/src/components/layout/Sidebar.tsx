@@ -227,6 +227,11 @@ export default function Sidebar() {
 
       <nav className="sidebar-nav">
         <div className="sidebar-section-label sidebar-text">Navigation</div>
+        {user?.role === 'SUPER ADMIN' && !activeSiteId && !isCollapsed && (
+          <div style={{ margin: '8px 16px 16px', padding: '12px', borderRadius: '12px', background: 'rgba(241, 196, 15, 0.08)', border: '1px dashed rgba(241, 196, 15, 0.25)', color: '#f39c12', fontSize: '11px', lineHeight: '1.4', fontWeight: 600 }}>
+            ⚠️ Sélectionnez un site ci-dessus pour activer les modules de gestion (Cartes, Saisie, Agents, Import...).
+          </div>
+        )}
         {getNavItems().map((item) => {
           const Icon = item.icon;
           return (
