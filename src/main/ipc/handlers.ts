@@ -71,8 +71,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.deleteCarte(id); }
     catch (e) { log.error('IPC Error: cartes:delete', e); throw e; }
   });
-  ipcMain.handle('cartes:delivrer', async (_, id, data) => {
-    try { return queries.delivrerCarte(id, data); }
+  ipcMain.handle('cartes:delivrer', async (_, id, data, currentUser) => {
+    try { return queries.delivrerCarte(id, data, currentUser); }
     catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
   });
   ipcMain.handle('cartes:signalerAbsence', async (_, id, agent) => {
@@ -83,9 +83,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getAbsencesReportees(siteId); }
     catch (e) { log.error('IPC Error: cartes:getAbsences', e); throw e; }
   });
+  ipcMain.handle('cartes:getAgentAbsences', async (_, agent: string, siteId?: number) => {
+    try { return queries.getAgentReportedAbsences(agent, siteId); }
+    catch (e) { log.error('IPC Error: cartes:getAgentAbsences', e); throw e; }
+  });
   ipcMain.handle('cartes:resoudreAbsence', async (_, id, data) => {
     try { return queries.resoudreAbsence(id, data); }
     catch (e) { log.error('IPC Error: cartes:resoudreAbsence', e); throw e; }
+  });
+  ipcMain.handle('cartes:declarerPerdue', async (_, id) => {
+    try { return queries.declarerPerdue(id); }
+    catch (e) { log.error('IPC Error: cartes:declarerPerdue', e); throw e; }
   });
   ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number) => {
     try { return queries.getInvalidDateRecords(siteId); }
@@ -96,11 +104,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
 
-  // STATS
-  ipcMain.handle('stats:get', (_, siteId) => queries.getStats(siteId));
+   ipcMain.handle('stats:get', (_, siteId) => queries.getStats(siteId));
   ipcMain.handle('stats:getGlobal', async () => {
     try { return queries.getGlobalStats(); }
     catch (e) { log.error('IPC Error: stats:getGlobal', e); throw e; }
+  });
+  ipcMain.handle('stats:getConsultant', async (_, agentUsername, siteId) => {
+    try { return queries.getConsultantStats(agentUsername, siteId); }
+    catch (e) { log.error('IPC Error: stats:getConsultant', e); throw e; }
+  });
+  ipcMain.handle('stats:getCardsToday', async (_, agentUsername, siteId) => {
+    try { return queries.getConsultantCardsToday(agentUsername, siteId); }
+    catch (e) { log.error('IPC Error: stats:getCardsToday', e); throw e; }
   });
 
   // IMPORT - File selection
@@ -323,6 +338,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // APP INFO
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getDbPath', () => getDbPath());
+  ipcMain.handle('db:purge', async () => {
+    try { return queries.purgeLocalDatabase(); }
+    catch (e) { log.error('IPC Error: db:purge', e); throw e; }
+  });
+  ipcMain.handle('db:getCardCount', async () => {
+    try { return queries.getLocalCardCount(); }
+    catch (e) { log.error('IPC Error: db:getCardCount', e); throw e; }
+  });
 
   // MAINTENANCE
   ipcMain.handle('maintenance:clearAll', async (event) => {
@@ -390,6 +413,33 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (err: any) {
       log.error('IPC sync:startBulk error:', err);
       return { success: false, uploadedCount: 0, message: err.message || String(err) };
+    }
+  });
+
+  ipcMain.handle('sync:getUnreadCount', (_, siteId?: number) => {
+    try {
+      return queries.getUnreadSyncNotifications(siteId);
+    } catch (e) {
+      log.error('IPC Error: sync:getUnreadCount', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('sync:getUnreadList', (_, siteId?: number) => {
+    try {
+      return queries.getUnreadNotificationsList(siteId);
+    } catch (e) {
+      log.error('IPC Error: sync:getUnreadList', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('sync:markAsRead', (_, siteId?: number) => {
+    try {
+      return queries.markUnreadSyncNotificationsAsRead(siteId);
+    } catch (e) {
+      log.error('IPC Error: sync:markAsRead', e);
+      throw e;
     }
   });
 

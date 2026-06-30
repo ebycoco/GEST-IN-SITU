@@ -1,9 +1,19 @@
-import React, { useState } from 'react';
-import { Search, MapPin, Phone, AlertTriangle, CheckCircle, Package, Calendar, Clock, User, X, ShieldCheck, ArrowRight, XCircle, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, MapPin, Phone, AlertTriangle, CheckCircle, Package, Calendar, Clock, User, X, ShieldCheck, ArrowRight, XCircle, RotateCcw, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
+
+const convertToISODate = (dateStr: string): string => {
+  if (!dateStr || dateStr.length !== 10) return dateStr;
+  const parts = dateStr.split('/');
+  if (parts.length === 3) {
+    const [day, month, year] = parts;
+    return `${year}-${month}-${day}`;
+  }
+  return dateStr;
+};
 
 export default function ConsultantSearchPage() {
   const user = useAuthStore((s) => s.user);
@@ -23,11 +33,86 @@ export default function ConsultantSearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
+  const [searchMode, setSearchMode] = useState<'name' | 'contact'>('name');
+  const [searchContactQuery, setSearchContactQuery] = useState('+225 ');
+  const isRefinementRequired = searchMode === 'name' && results.length > 2 && !lieuNaissance.trim() && !contact.trim();
   const [showReportModal, setShowReportModal] = useState(false);
   const [modalStep, setModalStep] = useState(1); // 1: Verification, 2: Finalize
   const [nomRetirant, setNomRetirant] = useState('');
   const [telRetirant, setTelRetirant] = useState('');
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [stats, setStats] = useState<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days?: { dayName: string; count: number }[] }>({ today: 0, yesterday: 0, week: 0, month: 0, year: 0 });
+  const [cardsToday, setCardsToday] = useState<any[]>([]);
+  const [retirantType, setRetirantType] = useState('lui-meme');
+  const [myAbsences, setMyAbsences] = useState<any[]>([]);
+  const nomInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (retirantType === 'lui-meme' && selectedCarte) {
+      setNomRetirant(`${selectedCarte.noms} ${selectedCarte.prenoms}`.trim().toUpperCase());
+      if (selectedCarte.contact) {
+        // Formater le contact existant
+        const clean = selectedCarte.contact.replace(/\D/g, '');
+        const local = clean.startsWith('225') ? clean.slice(3) : clean;
+        const formattedParts = local.match(/.{1,2}/g);
+        const formatted = formattedParts ? formattedParts.join(' ') : '';
+        setTelRetirant(formatted ? `+225 ${formatted}` : '');
+      } else {
+        setTelRetirant('');
+      }
+    } else if (retirantType === 'tiers') {
+      setNomRetirant('');
+      setTelRetirant('');
+    }
+  }, [retirantType, selectedCarte]);
+
+  const loadStats = async () => {
+    if (user?.login && user?.site_id) {
+      try {
+        const res = await window.api.stats.getConsultant(user.login, user.site_id);
+        if (res) setStats(res);
+      } catch (err) {
+        console.error('Failed to load consultant stats:', err);
+      }
+    }
+  };
+
+  const loadCardsToday = async () => {
+    if (user?.login && user?.site_id) {
+      try {
+        const res = await window.api.stats.getCardsToday(user.login, user.site_id);
+        if (res) setCardsToday(res);
+      } catch (err) {
+        console.error('Failed to load consultant cards today:', err);
+      }
+    }
+  };
+
+  const loadMyReportedAbsences = async () => {
+    if (user?.login && user?.site_id) {
+      try {
+        const res = await window.api.cartes.getAgentAbsences(user.login, user.site_id);
+        setMyAbsences(res || []);
+      } catch (err) {
+        console.error('Failed to load my reported absences:', err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadStats();
+    loadCardsToday();
+    loadMyReportedAbsences();
+  }, [user]);
+
+  useEffect(() => {
+    if (window.api && window.api.onDatabaseUpdated) {
+      const unsubscribe = window.api.onDatabaseUpdated(() => {
+        loadMyReportedAbsences();
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
 
   const resetModal = () => {
     setShowReportModal(false);
@@ -35,6 +120,7 @@ export default function ConsultantSearchPage() {
     setModalStep(1);
     setNomRetirant('');
     setTelRetirant('');
+    setRetirantType('lui-meme');
   };
 
   const handleClear = () => {
@@ -50,6 +136,7 @@ export default function ConsultantSearchPage() {
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (searchMode !== 'name') return;
     if (!noms.trim() || !prenoms.trim() || ddn.length !== 10) {
       toast.error('Veuillez remplir Nom, Prénom et une Date de Naissance valide (JJ/MM/AAAA).');
       return;
@@ -59,10 +146,28 @@ export default function ConsultantSearchPage() {
     try {
       const query = `${noms.trim()} ${prenoms.trim()}`;
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const filters: any = { date_de_naissance: ddn };
+      const isoDdn = convertToISODate(ddn);
+      const filters: any = { 
+        date_de_naissance: isoDdn,
+        exclude_delivered: 'false'
+      };
       if (siteIdToUse) filters.site_id = siteIdToUse.toString();
       if (lieuNaissance.trim()) filters.lieu_de_naissance = lieuNaissance.trim();
-      if (contact.trim()) filters.contact = contact.trim();
+      if (contact.trim()) {
+        const cleanDigits = contact.replace(/\D/g, '');
+        const localDigits = cleanDigits.startsWith('225') ? cleanDigits.slice(3) : cleanDigits;
+        filters.contact = `%${localDigits.split('').join('%')}%`;
+      }
+
+      console.log("🔍 [RENDERER] Paramètres envoyés à l'API :", { 
+        noms, 
+        prenoms, 
+        ddnOriginal: ddn, 
+        ddnConverted: isoDdn, 
+        siteIdToUse, 
+        filters, 
+        userRole: user?.role 
+      });
 
       const res = await window.api.cartes.search(query, 50, filters);
       const searchResults = res || [];
@@ -70,7 +175,7 @@ export default function ConsultantSearchPage() {
       setResults(searchResults);
       setHasSearched(true);
       
-      if (searchResults.length === 1) {
+      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT') {
         setSelectedCarte(searchResults[0]);
         setShowReportModal(true);
         setModalStep(1);
@@ -85,6 +190,88 @@ export default function ConsultantSearchPage() {
     }
   };
 
+  const formatPhoneString = (value: string): string => {
+    let input = value;
+    if (!input.startsWith('+225 ')) {
+      input = '+225 ';
+    }
+
+    const localPart = input.slice(5);
+    const digitsOnly = localPart.replace(/\D/g, '');
+    const truncatedDigits = digitsOnly.slice(0, 10);
+    const formattedParts = truncatedDigits.match(/.{1,2}/g);
+    const formattedLocal = formattedParts ? formattedParts.join(' ') : '';
+    return `+225 ${formattedLocal}`;
+  };
+
+  const handleContactChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchContactQuery(formatPhoneString(e.target.value));
+  };
+
+  const handleRefinementContactChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === '' || val === '+225' || val === '+225 ') {
+      setContact('');
+    } else {
+      setContact(formatPhoneString(val));
+    }
+  };
+
+  const handleTelRetirantChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (val === '' || val === '+225' || val === '+225 ') {
+      setTelRetirant('');
+    } else {
+      setTelRetirant(formatPhoneString(val));
+    }
+  };
+
+  const handleContactSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchContactQuery.trim()) {
+      toast.error('Veuillez saisir un numéro de téléphone.');
+      return;
+    }
+    setIsSearching(true);
+    try {
+      const cleanDigits = searchContactQuery.replace(/\D/g, '');
+      const localDigits = cleanDigits.startsWith('225') ? cleanDigits.slice(3) : cleanDigits;
+      if (localDigits.length !== 10) {
+        toast.error('Veuillez saisir un numéro ivoirien valide à 10 chiffres.');
+        setIsSearching(false);
+        return;
+      }
+      
+      // Build a flexible SQL LIKE pattern from the 10 digits
+      const contactPattern = `%${localDigits.split('').join('%')}%`;
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      const filters: any = {
+        contact: contactPattern,
+        exclude_delivered: 'false'
+      };
+      if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+      
+      const res = await window.api.cartes.search('', 100, filters);
+      const searchResults = res || [];
+      
+      setResults(searchResults);
+      setHasSearched(true);
+      
+      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT') {
+        setSelectedCarte(searchResults[0]);
+        setShowReportModal(true);
+        setModalStep(1);
+      } else {
+        setSelectedCarte(null);
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error('Échec de la recherche par contact.');
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   const handleSignalerAbsence = async () => {
     if (!selectedCarte) return;
     try {
@@ -93,8 +280,18 @@ export default function ConsultantSearchPage() {
       
       await window.api.cartes.signalerAbsence(selectedCarte.id_carte, agent);
       toast.success('Absence physique signalée. Traitement admin en cours.');
-      resetModal();
-      handleSearch({ preventDefault: () => {} } as any);
+      
+      // Explicitly close modal and reset selected card state
+      setShowReportModal(false);
+      setSelectedCarte(null);
+      setModalStep(1);
+      
+      if (searchMode === 'name') {
+        handleSearch({ preventDefault: () => {} } as any);
+      } else {
+        handleContactSearch({ preventDefault: () => {} } as any);
+      }
+      loadMyReportedAbsences();
     } catch (err) {
       console.error(err);
       toast.error('Erreur lors du signalement.');
@@ -127,11 +324,23 @@ export default function ConsultantSearchPage() {
         num_retirant: telRetirant.trim(),
         agent_distributeur: agent,
         centre_retrait: centreName
+      }, {
+        role: user?.role,
+        site_id: user?.site_id
       });
 
       toast.success('Carte délivrée avec succès !');
       resetModal();
-      handleSearch({ preventDefault: () => {} } as any);
+      await loadStats();
+      await loadCardsToday();
+      setNoms('');
+      setPrenoms('');
+      setDdn('');
+      setResults([]);
+      setHasSearched(false);
+      setTimeout(() => {
+        nomInputRef.current?.focus();
+      }, 50);
     } catch (err) {
       console.error(err);
       toast.error('Erreur lors de la délivrance.');
@@ -163,8 +372,44 @@ export default function ConsultantSearchPage() {
         </p>
       </div>
 
-      <div style={{ maxWidth: 800, margin: '0 auto' }}>
+      <div style={{ maxWidth: 800, margin: '0 auto 32px auto' }}>
         <CentreContextSwitcher />
+      </div>
+
+      {/* KPI Section */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(5, 1fr)',
+        gap: 16,
+        maxWidth: 800,
+        margin: '0 auto 32px auto',
+        animation: 'fadeIn 0.5s ease-out'
+      }}>
+        {[
+          { label: "Aujourd'hui", value: stats.today, icon: Clock, color: 'var(--accent-primary)' },
+          { label: "Hier", value: stats.yesterday, icon: Calendar, color: 'var(--text-muted)' },
+          { label: "Cette Semaine", value: stats.week, icon: Calendar, color: 'var(--accent-secondary)' },
+          { label: "Ce Mois", value: stats.month, icon: Calendar, color: 'var(--accent-green)' },
+          { label: "Cette Année", value: stats.year, icon: Calendar, color: 'var(--warning-color)' }
+        ].map((kpi, idx) => (
+          <div key={idx} className="premium-glass-card" style={{
+            background: 'rgba(23, 23, 37, 0.45)',
+            backdropFilter: 'blur(10px)',
+            border: '1px solid rgba(255, 255, 255, 0.05)',
+            borderRadius: 14,
+            padding: '16px 12px',
+            textAlign: 'center',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 4
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-muted)', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              <kpi.icon size={12} color={kpi.color} /> {kpi.label}
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: 'white', marginTop: 2 }}>{kpi.value}</div>
+          </div>
+        ))}
       </div>
 
       {/* Search Form Card */}
@@ -177,8 +422,35 @@ export default function ConsultantSearchPage() {
         border: '1px solid var(--border-color)',
         boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
       }}>
-        <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+        {/* Search Mode Tabs */}
+        <div style={{ display: 'flex', gap: 16, marginBottom: 24, borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16 }}>
+          <button 
+            type="button"
+            onClick={() => { setSearchMode('name'); setResults([]); setHasSearched(false); }}
+            style={{ 
+              background: 'none', border: 'none', color: searchMode === 'name' ? 'var(--accent-primary)' : 'var(--text-muted)', 
+              fontSize: 16, fontWeight: 700, cursor: 'pointer', padding: '8px 16px',
+              borderBottom: searchMode === 'name' ? '2px solid var(--accent-primary)' : 'none'
+            }}
+          >
+            Recherche par État Civil
+          </button>
+          <button 
+            type="button"
+            onClick={() => { setSearchMode('contact'); setSearchContactQuery('+225 '); setResults([]); setHasSearched(false); }}
+            style={{ 
+              background: 'none', border: 'none', color: searchMode === 'contact' ? 'var(--accent-primary)' : 'var(--text-muted)', 
+              fontSize: 16, fontWeight: 700, cursor: 'pointer', padding: '8px 16px',
+              borderBottom: searchMode === 'contact' ? '2px solid var(--accent-primary)' : 'none'
+            }}
+          >
+            Recherche par Téléphone
+          </button>
+        </div>
+
+        {searchMode === 'name' ? (
+          <form onSubmit={handleSearch} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
             <div className="form-group" style={{ gridColumn: 'span 2' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
                 <div>
@@ -186,6 +458,7 @@ export default function ConsultantSearchPage() {
                     <User size={14} /> Nom de famille <span style={{ color: '#ef4444' }}>*</span>
                   </label>
                   <input 
+                    ref={nomInputRef}
                     type="text" 
                     className="form-input" 
                     value={noms} 
@@ -230,7 +503,7 @@ export default function ConsultantSearchPage() {
             </div>
           </div>
 
-          {hasSearched && results.length > 3 && (
+          {hasSearched && results.length > 2 && (
             <div className="animate-slide-up" style={{ 
               padding: 20, 
               background: 'rgba(245, 158, 11, 0.05)', 
@@ -263,8 +536,8 @@ export default function ConsultantSearchPage() {
                     type="text" 
                     className="form-input" 
                     value={contact} 
-                    onChange={e => setContact(e.target.value)} 
-                    placeholder="Ex: 0102030405" 
+                    onChange={handleRefinementContactChange} 
+                    placeholder="+225 07 57 39 91 15" 
                     style={{ background: 'var(--bg-secondary)' }}
                   />
                 </div>
@@ -327,20 +600,103 @@ export default function ConsultantSearchPage() {
               </button>
             )}
           </div>
-        </form>
+          </form>
+        ) : (
+          <form onSubmit={handleContactSearch} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+            <div>
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <Phone size={14} /> Numéro de téléphone du bénéficiaire <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input 
+                type="text" 
+                className="form-input" 
+                value={searchContactQuery} 
+                onChange={handleContactChange} 
+                placeholder="+225 07 57 39 91 15" 
+                style={{ height: 48, fontSize: 16 }}
+                required 
+              />
+            </div>
+            <button 
+              type="submit" 
+              className="btn btn-primary" 
+              disabled={isSearching}
+              style={{ height: 48, borderRadius: 12, fontWeight: 700, width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >
+              {isSearching ? <Loader className="animate-spin" /> : 'Rechercher par Téléphone'}
+            </button>
+
+            {hasSearched && (
+              <button 
+                type="button" 
+                onClick={() => {
+                  setSearchContactQuery('+225 ');
+                  setResults([]);
+                  setHasSearched(false);
+                  toast.success('Champ réinitialisé');
+                }}
+                className="btn btn-secondary animate-fade-in"
+                style={{ 
+                  width: '100%', 
+                  height: 48, 
+                  fontSize: 16, 
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 10,
+                  borderRadius: 12,
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: 'var(--text-muted)'
+                }}
+              >
+                <RotateCcw size={18} />
+                Vider le champ pour une nouvelle saisie
+              </button>
+            )}
+          </form>
+        )}
       </div>
 
       {hasSearched && (
         <div className="card animate-slide-up" style={{ padding: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-            <h3 style={{ margin: 0, fontSize: 20 }}>Résultats de recherche ({results.length})</h3>
-            {results.length > 1 && <span className="badge">Sélectionnez une carte pour vérification</span>}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, fontSize: 20 }}>Résultats de recherche ({results.length})</h3>
+              {results.length > 1 && (
+                <span className="badge" style={{ 
+                  background: isRefinementRequired ? 'rgba(239, 68, 68, 0.1)' : undefined, 
+                  color: isRefinementRequired ? '#ef4444' : undefined,
+                  border: isRefinementRequired ? '1px solid rgba(239, 68, 68, 0.2)' : undefined
+                }}>
+                  {isRefinementRequired ? 'Affinage requis' : 'Sélectionnez une carte pour vérification'}
+                </span>
+              )}
+            </div>
+            {isRefinementRequired && (
+              <div style={{ 
+                padding: '12px 16px', 
+                background: 'rgba(239, 68, 68, 0.08)', 
+                border: '1px solid rgba(239, 68, 68, 0.2)', 
+                borderRadius: 10, 
+                color: '#ff6b6b', 
+                fontSize: 14, 
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                animation: 'fadeIn 0.2s ease-out'
+              }}>
+                <AlertTriangle size={16} /> Veuillez affiner votre recherche en renseignant le lieu de naissance ou le contact ci-dessus pour débloquer la vérification.
+              </div>
+            )}
           </div>
           
           {results.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)' }}>
               <Package size={64} style={{ opacity: 0.1, margin: '0 auto 20px auto' }} />
-              <p style={{ fontSize: 18 }}>Aucune carte trouvée pour ces critères.</p>
+              <p style={{ fontSize: 18 }}>Aucun résultat pour ce requérant sur ce site.</p>
             </div>
           ) : (
             <div className="table-container">
@@ -392,7 +748,17 @@ export default function ConsultantSearchPage() {
                       <td>
                         <button 
                           className="btn btn-secondary" 
-                          style={{ padding: '8px 16px', fontSize: 13, borderRadius: 8 }}
+                          disabled={isRefinementRequired}
+                          style={{ 
+                            padding: '8px 16px', 
+                            fontSize: 13, 
+                            borderRadius: 8,
+                            opacity: isRefinementRequired ? 0.5 : 1,
+                            cursor: isRefinementRequired ? 'not-allowed' : 'pointer',
+                            background: isRefinementRequired ? 'rgba(255,255,255,0.05)' : undefined,
+                            color: isRefinementRequired ? 'var(--text-muted)' : undefined,
+                            border: isRefinementRequired ? '1px solid rgba(255,255,255,0.05)' : undefined
+                          }}
                           onClick={() => {
                             setSelectedCarte(r);
                             setShowReportModal(true);
@@ -410,6 +776,178 @@ export default function ConsultantSearchPage() {
           )}
         </div>
       )}
+
+      {stats.last7Days && stats.last7Days.length > 0 && (
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          gap: 12,
+          maxWidth: 800,
+          margin: '-16px auto 32px auto',
+          padding: '8px 16px',
+          background: 'rgba(255,255,255,0.01)',
+          border: '1px solid rgba(255,255,255,0.03)',
+          borderRadius: 12
+        }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', alignSelf: 'center', textTransform: 'uppercase' }}>7 Derniers Jours :</span>
+          {stats.last7Days.map((d, idx) => (
+            <div key={idx} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '2px 8px' }}>
+              <span style={{ fontSize: 9, color: 'var(--text-muted)', fontWeight: 600 }}>{d.dayName}</span>
+              <span style={{ fontSize: 12, color: 'white', fontWeight: 800 }}>{d.count}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Mes Distributions du Jour Section */}
+      <div className="card" style={{
+        maxWidth: 800,
+        margin: '32px auto 48px auto',
+        padding: 32,
+        background: 'rgba(23, 23, 37, 0.7)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid var(--border-color)',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
+      }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+          📋 Mes Distributions du Jour
+        </h3>
+
+        {cardsToday.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '16px 0' }}>
+            Aucune carte distribuée aujourd'hui.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left' }}>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Heure de remise</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Nom & Prénoms</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>ID Carte</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Contact</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cardsToday.map((c, idx) => (
+                  <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                    <td style={{ padding: '12px 8px', fontWeight: 600, color: 'var(--accent-secondary)' }}>
+                      {new Date(c.date_delivrance).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td style={{ padding: '12px 8px', color: 'white', fontWeight: 500 }}>
+                      {c.noms} {c.prenoms}
+                    </td>
+                    <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                      {c.id_carte}
+                    </td>
+                    <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                      {c.contact || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+ 
+      {/* Suivi de mes signalements Section */}
+      <div className="card" style={{
+        maxWidth: 800,
+        margin: '0 auto 48px auto',
+        padding: 32,
+        background: 'rgba(23, 23, 37, 0.7)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid var(--border-color)',
+        boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
+      }}>
+        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+          ⚠️ Suivi de mes signalements
+        </h3>
+
+        {myAbsences.length === 0 ? (
+          <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '16px 0' }}>
+            Aucun signalement de carte absente enregistré.
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left' }}>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Date de signalement</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Nom & Prénoms</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Rangement</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Statut de recherche</th>
+                </tr>
+              </thead>
+              <tbody>
+                {myAbsences.map((c, idx) => {
+                  const isActive = c.statut_physique === 'ABSENT';
+                  return (
+                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                      <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                        {c.date_signalement_absence ? new Date(c.date_signalement_absence).toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      <td style={{ padding: '12px 8px', color: 'white', fontWeight: 500 }}>
+                        {c.noms} {c.prenoms}
+                      </td>
+                      <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                        {c.rangement || '—'}
+                      </td>
+                      <td style={{ padding: '12px 8px' }}>
+                        {c.statut_physique === 'ABSENT' ? (
+                          <span style={{ 
+                            background: 'rgba(231, 76, 60, 0.1)', 
+                            color: '#e74c3c', 
+                            padding: '4px 8px', 
+                            borderRadius: 6, 
+                            fontWeight: 'bold', 
+                            fontSize: 11,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}>
+                            ⏳ En cours de recherche par l'admin
+                          </span>
+                        ) : c.statut_physique === 'PERDUE' ? (
+                          <span style={{ 
+                            background: 'rgba(231, 76, 60, 0.1)', 
+                            color: '#e74c3c', 
+                            padding: '4px 8px', 
+                            borderRadius: 6, 
+                            fontWeight: 'bold', 
+                            fontSize: 11,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            border: '1px solid rgba(231, 76, 60, 0.3)'
+                          }}>
+                            ❌ Introuvable (Clôturé)
+                          </span>
+                        ) : (
+                          <span style={{ 
+                            background: 'rgba(39, 174, 96, 0.1)', 
+                            color: '#27ae60', 
+                            padding: '4px 8px', 
+                            borderRadius: 6, 
+                            fontWeight: 'bold', 
+                            fontSize: 11,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}>
+                            ✅ Traitée - Relocalisée dans {c.rangement || 'rangement'}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Modal Dynamique : Vérification ou Info Retrait */}
       {showReportModal && selectedCarte && (
@@ -436,9 +974,9 @@ export default function ConsultantSearchPage() {
           {/* Container du Modal */}
           <div className="animate-slide-up" style={{ 
             position: 'relative', 
-            width: '100%', 
+            width: '95%', 
             maxWidth: '600px', 
-            maxHeight: 'min(900px, 95vh)',
+            maxHeight: '90vh',
             background: '#0f172a', 
             borderRadius: '24px', 
             boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
@@ -621,14 +1159,63 @@ export default function ConsultantSearchPage() {
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
                         <div className="input-group">
+                          <label style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginBottom: 12, fontWeight: 700, textTransform: 'uppercase' }}>Qui retire la carte ?</label>
+                          <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                            <button
+                              type="button"
+                              onClick={() => setRetirantType('lui-meme')}
+                              style={{
+                                flex: 1,
+                                padding: '12px 16px',
+                                borderRadius: 10,
+                                border: retirantType === 'lui-meme' ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.05)',
+                                background: retirantType === 'lui-meme' ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
+                                color: retirantType === 'lui-meme' ? 'white' : 'var(--text-muted)',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              Le bénéficiaire lui-même
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setRetirantType('tiers')}
+                              style={{
+                                flex: 1,
+                                padding: '12px 16px',
+                                borderRadius: 10,
+                                border: retirantType === 'tiers' ? '1px solid var(--accent-primary)' : '1px solid rgba(255,255,255,0.05)',
+                                background: retirantType === 'tiers' ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
+                                color: retirantType === 'tiers' ? 'white' : 'var(--text-muted)',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                transition: 'all 0.2s'
+                              }}
+                            >
+                              Un mandataire / Tiers
+                            </button>
+                          </div>
+
                           <label style={{ display: 'block', fontSize: 12, color: 'var(--text-muted)', marginBottom: 10, fontWeight: 700, textTransform: 'uppercase' }}>Nom complet du retirant</label>
                           <input 
                             type="text" 
                             value={nomRetirant}
                             onChange={(e) => setNomRetirant(e.target.value)}
                             placeholder="Ex: M. KOFFI Kouame Jean"
-                            style={{ width: '100%', padding: '16px 20px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 14, color: 'white', fontSize: 16, outline: 'none' }}
-                            autoFocus
+                            readOnly={retirantType === 'lui-meme'}
+                            style={{ 
+                              width: '100%', 
+                              padding: '16px 20px', 
+                              background: retirantType === 'lui-meme' ? 'rgba(255,255,255,0.01)' : 'rgba(255,255,255,0.03)', 
+                              border: '1px solid rgba(255,255,255,0.1)', 
+                              borderRadius: 14, 
+                              color: retirantType === 'lui-meme' ? 'var(--text-muted)' : 'white', 
+                              fontSize: 16, 
+                              outline: 'none',
+                              cursor: retirantType === 'lui-meme' ? 'not-allowed' : 'text'
+                            }}
+                            autoFocus={retirantType === 'tiers'}
                           />
                         </div>
                         <div className="input-group">
@@ -636,8 +1223,8 @@ export default function ConsultantSearchPage() {
                           <input 
                             type="text" 
                             value={telRetirant}
-                            onChange={(e) => setTelRetirant(e.target.value)}
-                            placeholder="Ex: 07 08 09 10 11"
+                            onChange={handleTelRetirantChange}
+                            placeholder="+225 07 57 39 91 15"
                             style={{ width: '100%', padding: '16px 20px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 14, color: 'white', fontSize: 16, outline: 'none' }}
                           />
                         </div>
@@ -652,17 +1239,25 @@ export default function ConsultantSearchPage() {
                 <div style={{ animation: 'fadeIn 0.3s ease-out' }}>
                   <div style={{ 
                     padding: 24, 
-                    background: 'rgba(239, 68, 68, 0.08)', 
+                    background: 'rgba(239, 68, 68, 0.12)', 
                     borderRadius: 20, 
-                    border: '1px solid rgba(239, 68, 68, 0.2)',
+                    border: '2px solid #ef4444',
                     textAlign: 'center',
                     marginBottom: 24
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: '#ef4444', fontWeight: 800, marginBottom: 8, fontSize: 13, textTransform: 'uppercase' }}>
                       <XCircle size={20} /> Carte Déjà Retirée
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 700, color: 'white', lineHeight: 1.4 }}>
-                      Cette carte n'est plus disponible en stock. Elle a été remise au bénéficiaire ou à un mandataire.
+                    <div style={{ 
+                      fontSize: 20, 
+                      fontWeight: 900, 
+                      color: '#ff4d4d', 
+                      lineHeight: 1.4,
+                      animation: user?.role === 'CONSULTANT' ? 'pulse 1s infinite' : 'none'
+                    }}>
+                      {user?.role === 'CONSULTANT' 
+                        ? `ATTENTION : Cette carte a déjà été retirée${selectedCarte.centre_retrait ? ` au ${selectedCarte.centre_retrait}` : ''} !` 
+                        : `Cette carte n'est plus disponible en stock. Elle a été remise au bénéficiaire ou à un mandataire${selectedCarte.centre_retrait ? ` au ${selectedCarte.centre_retrait}` : ''}.`}
                     </div>
                   </div>
 
@@ -680,6 +1275,10 @@ export default function ConsultantSearchPage() {
                       <div>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Contact Retirant</div>
                         <div style={{ fontWeight: 700, fontSize: 17, color: 'white' }}>{selectedCarte.num_retirant || 'NON DISPONIBLE'}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Centre de Retrait</div>
+                        <div style={{ fontWeight: 700, fontSize: 17, color: 'white' }}>{selectedCarte.centre_retrait || 'NON SPÉCIFIÉ'}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Date de délivrance</div>
@@ -707,22 +1306,50 @@ export default function ConsultantSearchPage() {
               display: 'flex',
               gap: 16
             }}>
-              {selectedCarte.statut === 'EN STOCK' && user?.role !== 'CONSULTANT' && user?.role !== 'AJOUTANT' ? (
+              {selectedCarte.statut === 'EN STOCK' && user?.role !== 'AJOUTANT' ? (
                 modalStep === 1 ? (
                   <>
                     <button 
                       onClick={handleSignalerAbsence}
-                      style={{ flex: 1, padding: '16px', borderRadius: 14, background: 'rgba(255,255,255,0.05)', color: 'white', border: '1px solid rgba(255,255,255,0.1)', fontWeight: 600, cursor: 'pointer' }}
-                      className="hover-scale"
+                      disabled={selectedCarte.statut_physique === 'ABSENT'}
+                      style={{ 
+                        flex: 1.5, 
+                        padding: '16px', 
+                        borderRadius: 14, 
+                        background: selectedCarte.statut_physique === 'ABSENT' ? 'rgba(245, 158, 11, 0.1)' : 'rgba(239, 68, 68, 0.1)', 
+                        color: selectedCarte.statut_physique === 'ABSENT' ? '#f59e0b' : '#ef4444', 
+                        border: selectedCarte.statut_physique === 'ABSENT' ? '1px solid rgba(245, 158, 11, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)', 
+                        fontWeight: 600, 
+                        cursor: selectedCarte.statut_physique === 'ABSENT' ? 'not-allowed' : 'pointer',
+                        opacity: selectedCarte.statut_physique === 'ABSENT' ? 0.75 : 1
+                      }}
+                      className={selectedCarte.statut_physique === 'ABSENT' ? '' : 'hover-scale'}
                     >
-                      Signaler Introuvable
+                      {selectedCarte.statut_physique === 'ABSENT' 
+                        ? "⏳ En cours de traitement par l'administration" 
+                        : "⚠️ Signaler Carte Introuvable dans ce Rangement"
+                      }
                     </button>
                     <button 
                       onClick={() => setModalStep(2)}
-                      style={{ flex: 2, padding: '16px', borderRadius: 14, background: 'var(--accent-primary)', color: 'white', border: 'none', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+                      style={{ 
+                        flex: 2, 
+                        padding: '16px', 
+                        borderRadius: 14, 
+                        background: 'var(--accent-primary)', 
+                        color: 'white', 
+                        border: 'none', 
+                        fontWeight: 700, 
+                        cursor: 'pointer', 
+                        display: 'flex', 
+                        alignItems: 'center', 
+                        justifyContent: 'center', 
+                        gap: 10,
+                        animation: user?.role === 'CONSULTANT' ? 'pulse 1.5s infinite' : 'none'
+                      }}
                       className="hover-scale btn-glow"
                     >
-                      OUI, CONTINUER <ArrowRight size={20} />
+                      {user?.role === 'CONSULTANT' ? 'Confirmer le Retrait' : 'OUI, CONTINUER'} <ArrowRight size={20} />
                     </button>
                   </>
                 ) : (

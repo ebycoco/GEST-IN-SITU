@@ -63,47 +63,69 @@ async function run() {
   }
 
   function normalizeContact(contactStr) {
-    if (!contactStr) return '';
-    let cleaned = contactStr.toString().replace(/\D/g, '');
-    if (cleaned.startsWith('225') && cleaned.length > 10) {
-      cleaned = cleaned.substring(3);
+    if (!contactStr) return '+225 00 00 00 00 00';
+    let digits = contactStr.toString().replace(/\D/g, '');
+    let localNumber = '';
+
+    if (digits.startsWith('225')) {
+      localNumber = digits.slice(3);
+    } else {
+      localNumber = digits;
     }
-    if (cleaned.length > 10) {
-      cleaned = cleaned.substring(cleaned.length - 10);
+
+    if (localNumber.length !== 10) {
+      return '+225 00 00 00 00 00';
     }
-    return cleaned;
+
+    const part1 = localNumber.slice(0, 2);
+    const part2 = localNumber.slice(2, 4);
+    const part3 = localNumber.slice(4, 6);
+    const part4 = localNumber.slice(6, 8);
+    const part5 = localNumber.slice(8, 10);
+
+    return `+225 ${part1} ${part2} ${part3} ${part4} ${part5}`;
   }
 
-  function cleanDate(dateStr) {
+  function cleanBirthDate(dateStr) {
     if (!dateStr) return '';
-    let s = dateStr.toString().trim();
-    
-    // Si déjà au format ISO YYYY-MM-DD
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    
-    s = s.replace(/\/\/+/g, '/');
-    const months = { 'jan': '01', 'fev': '02', 'fév': '02', 'mar': '03', 'avr': '04', 'mai': '05', 'jui': '06', 'juin': '06', 'juil': '07', 'aou': '08', 'aoû': '08', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12', 'déc': '12' };
-    let match = s.match(/^(\d{1,3})[-\s\/]+([a-zA-Zàâäéèêëïîôöùûüç]+)\.??[-\s\/]+(\d{2,4})$/i);
-    if (match) {
-      let day = parseInt(match[1], 10).toString().padStart(2, '0');
-      let mStr = match[2].toLowerCase().replace(/\./g, '');
-      let year = match[3];
-      if (year.length === 2) year = (parseInt(year) > 50 ? '19' : '20') + year;
-      let mNum = null;
-      for (const [k, v] of Object.entries(months)) {
-        if (mStr.startsWith(k)) { mNum = v; break; }
-      }
-      if (mNum) return year + '-' + mNum + '-' + day;
+    const cleanStr = dateStr.toString().trim().toLowerCase();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) return cleanStr;
+
+    if (/^\d{1,2}[\/\s-]\d{1,2}[\/\s-]\d{4}$/.test(cleanStr)) {
+      const parts = cleanStr.split(/[\/\s-]+/);
+      return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
     }
-    let parts = s.split(/[^0-9]+/).filter(Boolean);
-    if (parts.length >= 3) {
-      let d = parts[0]; let m = parts[1]; let y = parts[2];
-      if (d.length === 4) { let temp = y; y = d; d = temp; }
-      d = parseInt(d, 10).toString().padStart(2, '0');
-      m = parseInt(m, 10).toString().padStart(2, '0');
-      if (y.length === 2) y = (parseInt(y) > 50 ? '19' : '20') + y;
-      if (parseInt(d, 10) > 31) d = parts[0].substring(0, 2);
-      return y + '-' + m + '-' + d;
+
+    const normalizedLiteral = cleanStr.replace(/\./g, '');
+    const partsLiteral = normalizedLiteral.split(/[- ]+/);
+
+    if (partsLiteral.length === 3) {
+      const day = partsLiteral[0].padStart(2, '0');
+      let monthToken = partsLiteral[1];
+      let year = partsLiteral[2];
+
+      if (monthToken.includes('jan')) monthToken = 'janv';
+      else if (monthToken.startsWith('f')) monthToken = 'fevr';
+      else if (monthToken.includes('mar')) monthToken = 'mars';
+      else if (monthToken.startsWith('av')) monthToken = 'avr';
+      else if (monthToken.includes('mai')) monthToken = 'mai';
+      else if (monthToken.includes('jui') && monthToken.includes('n')) monthToken = 'juin';
+      else if (monthToken.includes('jui')) monthToken = 'juil';
+      else if (monthToken.startsWith('a')) monthToken = 'aout';
+      else if (monthToken.includes('sep')) monthToken = 'sept';
+      else if (monthToken.includes('oct')) monthToken = 'oct';
+      else if (monthToken.startsWith('n')) monthToken = 'nov';
+      else if (monthToken.includes('d') || monthToken.includes('c')) monthToken = 'dec';
+
+      const frenchMonths = {
+        'janv': '01', 'fevr': '02', 'mars': '03', 'avr': '04', 'mai': '05', 'juin': '06',
+        'juil': '07', 'aout': '08', 'sept': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+      };
+
+      if (frenchMonths[monthToken]) {
+        if (year.length === 2) year = parseInt(year) > 30 ? `19${year}` : `20${year}`;
+        return `${year}-${frenchMonths[monthToken]}-${day}`;
+      }
     }
     return '';
   }
@@ -122,7 +144,7 @@ async function run() {
 
       var noms = removeAccents(rowData.noms || '');
       var prenoms = removeAccents(rowData.prenoms || '');
-      var ddn = cleanDate(rowData.date_de_naissance || '');
+      var ddn = cleanBirthDate(rowData.date_de_naissance || '');
       var lieuN = removeAccents(rowData.lieu_de_naissance || '');
       var contact = normalizeContact(rowData.contact || '');
 

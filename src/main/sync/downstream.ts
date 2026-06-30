@@ -2,6 +2,99 @@ import log from 'electron-log';
 import { getSupabaseClient } from './supabase-client';
 import { getDatabase } from '../database/connection';
 import { logAction } from '../database/queries';
+import { BrowserWindow } from 'electron';
+import { v4 as uuidv4 } from 'uuid';
+
+function cleanBirthDate(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null;
+  const cleanStr = dateStr.trim().toLowerCase();
+
+  // 1. Si c'est déjà au format ISO parfait (YYYY-MM-DD), on le retourne directement
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) return cleanStr;
+
+  // 2. CAS DU FORMAT STANDARD : JJ/MM/AAAA ou JJ-MM-AAAA purement numérique
+  if (/^\d{1,2}[\/\s-]\d{1,2}[\/\s-]\d{4}$/.test(cleanStr)) {
+    const parts = cleanStr.split(/[\/\s-]+/);
+    const day = parts[0].padStart(2, '0');
+    const month = parts[1].padStart(2, '0');
+    const year = parts[2];
+    return `${year}-${month}-${day}`;
+  }
+
+  // 3. CAS DU FORMAT LITTÉRAL ABRÉGÉ : ex "1-févr.-1997", "27-dc.-1997", "25-sept.-1998"
+  // Nettoyage des points (ex: sept. -> sept) et découpage par les tirets/espaces
+  const normalizedLiteral = cleanStr.replace(/\./g, '');
+  const partsLiteral = normalizedLiteral.split(/[- ]+/);
+
+  if (partsLiteral.length === 3) {
+    const day = partsLiteral[0].padStart(2, '0');
+    let monthToken = partsLiteral[1].toLowerCase();
+    let year = partsLiteral[2];
+
+    // TECHNIQUE DE SÉCURITÉ : On nettoie les caractères corrompus d'encodage
+    if (monthToken.includes('jan')) monthToken = 'janv';
+    else if (monthToken.startsWith('f')) monthToken = 'fevr'; // Février est le SEUL mois qui commence par 'f'
+    else if (monthToken.includes('mar')) monthToken = 'mars';
+    else if (monthToken.startsWith('av')) monthToken = 'avr'; // Avril commence par 'av'
+    else if (monthToken.includes('mai')) monthToken = 'mai';
+    else if (monthToken.includes('jui') && monthToken.includes('n')) monthToken = 'juin';
+    else if (monthToken.includes('jui')) monthToken = 'juil';
+    else if (monthToken.startsWith('a')) monthToken = 'aout'; // Août commence par 'a' (et se distingue d'avril)
+    else if (monthToken.includes('sep')) monthToken = 'sept';
+    else if (monthToken.includes('oct')) monthToken = 'oct';
+    else if (monthToken.startsWith('n')) monthToken = 'nov';  // Novembre est le SEUL mois qui commence par 'n'
+    else if (monthToken.includes('d') || monthToken.includes('c')) monthToken = 'dec'; // Décembre (déc, dc, etc.)
+
+    const frenchMonths: { [key: string]: string } = {
+      'janv': '01', 'fevr': '02', 'mars': '03', 'avr': '04', 'mai': '05', 'juin': '06',
+      'juil': '07', 'aout': '08', 'sept': '09', 'oct': '10', 'nov': '11', 'dec': '12'
+    };
+
+    if (frenchMonths[monthToken]) {
+      const month = frenchMonths[monthToken];
+      if (year.length === 2) {
+        year = parseInt(year) > 30 ? `19${year}` : `20${year}`;
+      }
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // Si aucun pattern ne matche, on renvoie la chaîne brute pour éviter de perdre la donnée
+  return dateStr;
+}
+
+function normalizeContact(contactStr: string | null | undefined): string {
+  if (!contactStr) return '+225 00 00 00 00 00';
+  
+  // 1. Extraire uniquement les caractères numériques
+  let digits = contactStr.toString().replace(/\D/g, '');
+
+  // 2. Isoler le numéro local ivoirien à 10 chiffres
+  let localNumber = '';
+
+  if (digits.startsWith('225')) {
+    // Si ça commence par 225, le numéro local est ce qui suit
+    localNumber = digits.slice(3);
+  } else {
+    // Sinon, on considère que toute la chaîne est le numéro local
+    localNumber = digits;
+  }
+
+  // 3. Sécurité : Si le numéro local ne fait pas exactement 10 chiffres, on renvoie le format vide de sécurité
+  if (localNumber.length !== 10) {
+    return '+225 00 00 00 00 00';
+  }
+
+  // 4. Découper le numéro local à 10 chiffres en blocs de 2 (XX XX XX XX XX)
+  const part1 = localNumber.slice(0, 2);
+  const part2 = localNumber.slice(2, 4);
+  const part3 = localNumber.slice(4, 6);
+  const part4 = localNumber.slice(6, 8);
+  const part5 = localNumber.slice(8, 10);
+
+  // 5. Retourner le format international standardisé propre
+  return `+225 ${part1} ${part2} ${part3} ${part4} ${part5}`;
+}
 
 /**
  * Récupère les données depuis Supabase modifiées après le watermark et les intègre localement.
@@ -38,6 +131,8 @@ export async function runDownstream(siteId: number): Promise<number> {
   }
 
   log.info(`Downstream: Found ${cloudCards.length} updates on Cloud to merge.`);
+  console.log("📥 [SYNC] Première carte brute reçue de Supabase :", cloudCards[0]);
+
   let processedCount = 0;
   let latestUpdatedAt = watermark;
 
@@ -76,6 +171,26 @@ export async function runDownstream(siteId: number): Promise<number> {
     `).run(latestUpdatedAt);
   })();
 
+  console.log(`✅ [SYNC SUCCESS] ${cloudCards.length} cartes enregistrées/fusionnées en local.`);
+
+  if (processedCount > 0) {
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+        VALUES (NULL, 'SYSTEM', 'SYNC_UPDATE', ?, '{"read": false}', ?, 1, ?)
+      `).run(`${processedCount} cartes synchronisées depuis le Cloud.`, uuidv4(), siteId);
+
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length > 0) {
+        windows[0].webContents.send('sync:updated-data', {
+          count: processedCount
+        });
+      }
+    } catch (err) {
+      log.error('Failed to record downstream update notification:', err);
+    }
+  }
+
   return processedCount;
 }
 
@@ -105,11 +220,11 @@ function insertLocalCard(db: any, card: any): void {
   insertStmt.run({
     noms: card.noms,
     prenoms: card.prenoms || '',
-    date_de_naissance: card.date_naissance || null, // Supabase utilise date_naissance
-    lieu_de_naissance: card.lieu_naissance || null, // Supabase utilise lieu_naissance
+    date_de_naissance: cleanBirthDate(card.date_naissance || card.date_de_naissance), // Supabase utilise date_naissance ou date_de_naissance
+    lieu_de_naissance: card.lieu_naissance || card.lieu_de_naissance || null,
     num_secu: card.num_secu || null,
     lieu_enrolement: card.lieu_enrolement || null,
-    contact: card.contact || null,
+    contact: normalizeContact(card.contact),
     rangement: card.rangement || null,
     statut: card.statut || 'EN STOCK',
     date_delivrance: card.date_delivrance || null,
@@ -121,7 +236,7 @@ function insertLocalCard(db: any, card: any): void {
     cle_doublon: card.cle_doublon || null,
     cle_doublon_flex: card.cle_doublon_flex || null,
     statut_physique: card.statut_physique || 'OK',
-    site_id: card.site_id || 1,
+    site_id: Number(card.site_id || card.siteId || 1),
     centre_id: card.centre_id || null,
     poste_id: card.poste_id || null,
     qr_code_data: card.qr_code_data || null,
@@ -155,11 +270,11 @@ function updateLocalCard(db: any, idCarte: number, card: any): void {
     idCarte,
     noms: card.noms,
     prenoms: card.prenoms || '',
-    date_de_naissance: card.date_naissance || null,
-    lieu_de_naissance: card.lieu_naissance || null,
+    date_de_naissance: cleanBirthDate(card.date_naissance || card.date_de_naissance),
+    lieu_de_naissance: card.lieu_naissance || card.lieu_de_naissance || null,
     num_secu: card.num_secu || null,
     lieu_enrolement: card.lieu_enrolement || null,
-    contact: card.contact || null,
+    contact: normalizeContact(card.contact),
     rangement: card.rangement || null,
     statut: card.statut || 'EN STOCK',
     date_delivrance: card.date_delivrance || null,

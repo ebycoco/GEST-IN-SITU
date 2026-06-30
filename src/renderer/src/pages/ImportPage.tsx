@@ -20,6 +20,21 @@ export default function ImportPage() {
   // Custom Modals State
   const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [purgeConfirmText, setPurgeConfirmText] = useState('');
+  const [isPurging, setIsPurging] = useState(false);
+  const [cardCount, setCardCount] = useState<number>(0);
+
+  const fetchCardCount = async () => {
+    try {
+      const count = await window.api.db.getCardCount();
+      setCardCount(count);
+    } catch (err) {
+      console.error('Failed to fetch card count:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchCardCount();
+  }, []);
 
   const handleSelectFile = async () => {
     try {
@@ -63,6 +78,7 @@ export default function ImportPage() {
       const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, siteIdToUse);
       setResult(res);
       toast.success(`Migration terminée !`);
+      await fetchCardCount();
     } catch (e) {
       toast.error(`Échec de l'importation`);
     } finally {
@@ -78,16 +94,19 @@ export default function ImportPage() {
       return;
     }
 
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-    if (!siteIdToUse) return;
-
+    setIsPurging(true);
     try {
-      await window.api.maintenance.clearDatabaseCartes(siteIdToUse);
-      toast.success('Données purgées avec succès');
-      setShowPurgeModal(false);
-      setPurgeConfirmText('');
+      const res = await window.api.db.purge();
+      if (res.success) {
+        toast.success("Base de données locale purgée avec succès !");
+        setPurgeConfirmText('');
+        setShowPurgeModal(false);
+        setCardCount(0);
+      }
     } catch (e) {
       toast.error('Échec de la purge');
+    } finally {
+      setIsPurging(false);
     }
   };
 
@@ -407,10 +426,15 @@ export default function ImportPage() {
               </div>
               <button 
                 className="btn" 
+                disabled={cardCount === 0 || isPurging}
                 onClick={() => setShowPurgeModal(true)}
                 style={{ 
-                  background: 'rgba(231, 76, 60, 0.1)', color: 'var(--accent-red)', 
-                  padding: '14px 28px', borderRadius: 16, fontWeight: 800, border: '1px solid rgba(231, 76, 60, 0.2)' 
+                  background: (cardCount === 0 || isPurging) ? 'rgba(255,255,255,0.05)' : 'rgba(231, 76, 60, 0.1)', 
+                  color: (cardCount === 0 || isPurging) ? 'var(--text-muted)' : 'var(--accent-red)', 
+                  padding: '14px 28px', borderRadius: 16, fontWeight: 800, 
+                  border: (cardCount === 0 || isPurging) ? '1px solid rgba(255,255,255,0.05)' : '1px solid rgba(231, 76, 60, 0.2)',
+                  cursor: (cardCount === 0 || isPurging) ? 'not-allowed' : 'pointer',
+                  opacity: (cardCount === 0 || isPurging) ? 0.5 : 1
                 }}
               >
                 Purger la base
@@ -462,19 +486,29 @@ export default function ImportPage() {
             </div>
 
             <div style={{ display: 'flex', gap: 16 }}>
-              <button className="btn btn-outline" style={{ flex: 1, borderRadius: 20, padding: '18px' }} onClick={() => { setShowPurgeModal(false); setPurgeConfirmText(''); }}>
+              <button 
+                className="btn btn-outline" 
+                disabled={isPurging}
+                style={{ flex: 1, borderRadius: 20, padding: '18px', cursor: isPurging ? 'not-allowed' : 'pointer' }} 
+                onClick={() => { setShowPurgeModal(false); setPurgeConfirmText(''); }}
+              >
                 Annuler
               </button>
               <button 
                 className="btn" 
-                disabled={purgeConfirmText !== 'CONFIRMER'}
+                disabled={purgeConfirmText !== 'CONFIRMER' || isPurging}
                 style={{ 
-                  flex: 1, borderRadius: 20, background: purgeConfirmText === 'CONFIRMER' ? 'var(--accent-red)' : 'rgba(255,255,255,0.05)', 
-                  color: 'white', fontWeight: 900, border: 'none' 
+                  flex: 1, 
+                  borderRadius: 20, 
+                  background: (purgeConfirmText === 'CONFIRMER' && !isPurging) ? 'var(--accent-red)' : 'rgba(255,255,255,0.05)', 
+                  color: 'white', 
+                  fontWeight: 900, 
+                  border: 'none',
+                  cursor: (purgeConfirmText !== 'CONFIRMER' || isPurging) ? 'not-allowed' : 'pointer'
                 }}
                 onClick={handlePurge}
               >
-                Purger
+                {isPurging ? 'Purge en cours...' : 'Purger'}
               </button>
             </div>
           </div>

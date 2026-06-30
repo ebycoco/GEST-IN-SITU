@@ -1,7 +1,8 @@
-import { Bell, Settings, CheckCircle, AlertTriangle, RefreshCw, MapPin, ShieldAlert } from 'lucide-react';
+import { Bell, Settings, CheckCircle, AlertTriangle, RefreshCw, MapPin, ShieldAlert, XCircle } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
+import { toast } from 'react-hot-toast';
 import SyncWidget from '../SyncWidget';
 
 function ConsultantPerimeter() {
@@ -64,8 +65,14 @@ function ConsultantPerimeter() {
 export default function TopBar() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [syncStatus, setSyncStatus] = useState<{ status: string; queueLength: number }>({ status: 'OFFLINE', queueLength: 0 });
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [showResolutionModal, setShowResolutionModal] = useState(false);
+  const [selectedResolution, setSelectedResolution] = useState<any>(null);
+  const user = useAuthStore((s) => s.user);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+
+  const unreadCount = notifications.length;
 
   // Polling sync status
   useEffect(() => {
@@ -87,6 +94,122 @@ export default function TopBar() {
     const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
   }, []);
+
+  // Polling unread sync notifications list
+  const fetchUnreadNotifications = async () => {
+    try {
+      if (window.api && window.api.sync.getUnreadList && user) {
+        const list = await window.api.sync.getUnreadList(user.site_id);
+        const filteredList = (list || []).filter(n => {
+          if (user.role === 'ADMINISTRATEUR' || user.role === 'SUPER ADMIN') {
+            return n.action !== 'CARTE_ABSENTE_RETROUVEE';
+          }
+          if (user.role === 'CONSULTANT') {
+            if (n.site_id !== undefined && n.site_id !== null && n.site_id !== user.site_id) {
+              return false;
+            }
+            return n.action !== 'CARTE_ABSENTE_SIGNALEE';
+          }
+          return true;
+        });
+        setNotifications(filteredList);
+      }
+    } catch (err) {
+      console.error('[TopBar] Failed to fetch unread sync count:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchUnreadNotifications();
+    const interval = setInterval(fetchUnreadNotifications, 10000);
+    return () => clearInterval(interval);
+  }, [user]);
+
+  // Real-time update count increment
+  useEffect(() => {
+    if (window.api && window.api.onDatabaseUpdated) {
+      const unsubscribe = window.api.onDatabaseUpdated((data) => {
+        fetchUnreadNotifications();
+        if (data && data.type === 'ABSENCE_SIGNALEE') {
+          if (user?.role === 'ADMINISTRATEUR' || user?.role === 'SUPER ADMIN') {
+            toast.error("⚠️ 1 carte signalée manquante dans les rangements !", {
+              duration: 6000,
+              style: {
+                background: '#000',
+                color: '#FFD700',
+                border: '1px solid #FFD700'
+              }
+            });
+          }
+        } else if (data && data.type === 'ABSENCE_RESOLUE') {
+          toast.success("📥 1 carte introuvable a été retrouvée et relocalisée !", {
+            duration: 6000,
+            style: {
+              background: '#000',
+              color: '#FFD700',
+              border: '1px solid #FFD700'
+            }
+          });
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
+
+  const handleMarkAsRead = async () => {
+    try {
+      if (window.api && window.api.sync.markAsRead && user) {
+        await window.api.sync.markAsRead(user.site_id);
+        setNotifications([]);
+      }
+    } catch (err) {
+      console.error('[TopBar] Failed to mark notifications as read:', err);
+    }
+  };
+
+  const handleNotificationClick = (n: any) => {
+    if (n.action === 'CARTE_ABSENTE_SIGNALEE') {
+      navigate('/editeur/mission1');
+      setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
+      setShowNotifications(false);
+    } else if (n.action === 'CARTE_ABSENTE_RETROUVEE' || n.action === 'CARTE_PERDUE_CONFIRMEE') {
+      let parsed = null;
+      try {
+        parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+      } catch (e) {
+        console.error('Failed to parse valeur_apres:', e);
+      }
+      setSelectedResolution({
+        id_log: n.id_log,
+        message: n.detail,
+        noms: parsed?.noms || 'Inconnu',
+        prenoms: parsed?.prenoms || '',
+        rangement: parsed?.rangement || 'Non classé',
+        contact: parsed?.contact || '—',
+        isLost: n.action === 'CARTE_PERDUE_CONFIRMEE'
+      });
+      setShowResolutionModal(true);
+      setShowNotifications(false);
+    } else {
+      setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
+      setShowNotifications(false);
+    }
+  };
+
+  const handleCloseResolutionModal = async () => {
+    if (selectedResolution) {
+      try {
+        setNotifications(prev => prev.filter(item => item.id_log !== selectedResolution.id_log));
+        if (window.api && window.api.sync.markAsRead && user) {
+          await window.api.sync.markAsRead(user.site_id);
+        }
+      } catch (err) {
+        console.error('[TopBar] Failed to mark single resolution as read:', err);
+      }
+      setShowResolutionModal(false);
+      setSelectedResolution(null);
+    }
+  };
 
   // Click Outside logic
   useEffect(() => {
@@ -123,10 +246,35 @@ export default function TopBar() {
           style={{ position: 'relative' }}
         >
           <Bell size={16} />
-          {syncStatus.queueLength > 0 && (
-            <span className="badge" style={{ background: isOnline ? 'var(--accent-primary)' : 'var(--accent-red)', animation: isOnline ? 'pulse 2s infinite' : 'none' }}>
-              {syncStatus.queueLength}
+          {unreadCount > 0 ? (
+            <span 
+              className="animate-pulse" 
+              style={{ 
+                position: 'absolute',
+                top: '-4px',
+                right: '-4px',
+                display: 'flex',
+                height: '18px',
+                width: '18px',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '50%',
+                background: '#e74c3c',
+                color: '#fff',
+                fontSize: '10px',
+                fontWeight: 'bold',
+                border: '2px solid #0a0e27',
+                boxShadow: '0 0 8px rgba(231,76,60,0.5)'
+              }}
+            >
+              {unreadCount}
             </span>
+          ) : (
+            syncStatus.queueLength > 0 && (
+              <span className="badge" style={{ background: isOnline ? 'var(--accent-primary)' : 'var(--accent-red)', animation: isOnline ? 'pulse 2s infinite' : 'none' }}>
+                {syncStatus.queueLength}
+              </span>
+            )
           )}
         </button>
 
@@ -136,13 +284,103 @@ export default function TopBar() {
 
         {/* Dynamic Notification Popover */}
         {showNotifications && (
-          <div className="topbar-notifications-dropdown">
-            <div className="topbar-notifications-header">
-              <h4>Notifications & Synchronisation</h4>
+          <div className="topbar-notifications-dropdown" style={{ minWidth: 320 }}>
+            <div className="topbar-notifications-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', borderBottom: '1px solid var(--border-color)' }}>
+              <h4 style={{ margin: 0 }}>Notifications</h4>
+              {unreadCount > 0 && (
+                <button 
+                  onClick={handleMarkAsRead}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#FFD700',
+                    fontSize: 12,
+                    fontWeight: 'bold',
+                    cursor: 'pointer',
+                    padding: 0
+                  }}
+                >
+                  Tout marquer comme lu
+                </button>
+              )}
             </div>
             
             <div style={{ maxHeight: 300, overflowY: 'auto' }}>
-              {syncStatus.queueLength > 0 ? (
+              {unreadCount > 0 ? (
+                notifications.map(n => {
+                  const isAbsence = n.action === 'CARTE_ABSENTE_SIGNALEE';
+                  const isResolution = n.action === 'CARTE_ABSENTE_RETROUVEE';
+                  const isPerdue = n.action === 'CARTE_PERDUE_CONFIRMEE';
+                  
+                  return (
+                    <div 
+                      key={n.id_log}
+                      className="topbar-notification-item cursor-pointer hover:bg-zinc-800/50 transition-colors" 
+                      onClick={() => handleNotificationClick(n)}
+                      style={{ 
+                        borderLeft: isAbsence || isPerdue ? '3px solid #e74c3c' : isResolution ? '3px solid #27ae60' : '3px solid #FFD700',
+                        background: 'rgba(255, 255, 255, 0.01)',
+                        padding: '12px 16px',
+                        borderBottom: '1px solid var(--border-subtle)',
+                        display: 'flex',
+                        gap: 12,
+                        cursor: 'pointer',
+                        transition: 'background-color 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.03)'}
+                      onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.01)'}
+                    >
+                      <div 
+                        style={{ 
+                          background: isAbsence || isPerdue ? 'rgba(231, 76, 60, 0.1)' : isResolution ? 'rgba(39, 174, 96, 0.1)' : 'rgba(255, 215, 0, 0.1)', 
+                          color: isAbsence || isPerdue ? '#e74c3c' : isResolution ? '#27ae60' : '#FFD700',
+                          width: 32,
+                          height: 32,
+                          borderRadius: 8,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}
+                      >
+                        {isPerdue ? <XCircle size={16} /> : <Bell size={16} />}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div 
+                          style={{ 
+                            color: isAbsence || isPerdue ? '#e74c3c' : isResolution ? '#27ae60' : '#FFD700', 
+                            fontWeight: 'bold',
+                            fontSize: 13
+                          }}
+                        >
+                          {isAbsence ? 'Absence Signalée' : isResolution ? 'Absence Résolue' : isPerdue ? 'Carte Introuvable (Perdue)' : 'Mise à jour Base'}
+                        </div>
+                        <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                          {isPerdue ? `❌ Carte de ${n.detail.split(' ')[2] || 'l\'assuré'} introuvable après fouille admin.` : n.detail}
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
+                          {n.date_heure ? new Date(n.date_heure).toLocaleString() : ''}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                syncStatus.queueLength === 0 && (
+                  <div className="topbar-notification-item">
+                    <div className="topbar-notification-icon" style={{ background: 'rgba(34, 197, 94, 0.1)', color: 'var(--accent-green)' }}>
+                      <CheckCircle size={18} />
+                    </div>
+                    <div className="topbar-notification-content">
+                      <div className="topbar-notification-title">Système à jour</div>
+                      <div className="topbar-notification-desc">
+                        Aucune notification. Votre base locale est entièrement synchronisée.
+                      </div>
+                    </div>
+                  </div>
+                )
+              )}
+              {syncStatus.queueLength > 0 && (
                 <div className="topbar-notification-item">
                   <div className="topbar-notification-icon" style={{ background: isOnline ? 'rgba(99, 102, 241, 0.1)' : 'rgba(239, 68, 68, 0.1)', color: isOnline ? 'var(--accent-primary)' : 'var(--accent-red)' }}>
                     {isOnline ? <RefreshCw size={18} className="animate-spin" /> : <AlertTriangle size={18} />}
@@ -157,19 +395,122 @@ export default function TopBar() {
                     </div>
                   </div>
                 </div>
-              ) : (
-                <div className="topbar-notification-item">
-                  <div className="topbar-notification-icon" style={{ background: 'rgba(34, 197, 94, 0.1)', color: 'var(--accent-green)' }}>
-                    <CheckCircle size={18} />
-                  </div>
-                  <div className="topbar-notification-content">
-                    <div className="topbar-notification-title">Système à jour</div>
-                    <div className="topbar-notification-desc">
-                      Aucune notification. Votre base locale est entièrement synchronisée.
-                    </div>
+              )}
+            </div>
+          </div>
+        )}
+        {/* Resolution Modal for Consultant */}
+        {showResolutionModal && selectedResolution && (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 11000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px'
+          }}>
+            {/* Background Blur Overlay */}
+            <div style={{
+              background: 'rgba(2, 6, 23, 0.85)',
+              backdropFilter: 'blur(8px)',
+              position: 'absolute',
+              inset: 0
+            }} onClick={handleCloseResolutionModal} />
+
+            {/* Modal Body */}
+            <div className="animate-slide-up" style={{
+              position: 'relative',
+              width: '95%',
+              maxWidth: '500px',
+              background: '#0f172a',
+              borderRadius: '24px',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              overflow: 'hidden',
+              padding: '32px'
+            }}>
+              <div style={{ textAlign: 'center', marginBottom: 24 }}>
+                <div style={{ 
+                  display: 'inline-flex', 
+                  padding: 16, 
+                  background: selectedResolution.isLost ? 'rgba(239, 68, 68, 0.1)' : 'rgba(39, 174, 96, 0.1)', 
+                  borderRadius: '50%', 
+                  color: selectedResolution.isLost ? '#ef4444' : '#27ae60',
+                  marginBottom: 16
+                }}>
+                  {selectedResolution.isLost ? <XCircle size={36} /> : <CheckCircle size={36} />}
+                </div>
+                <h3 style={{ margin: '0 0 8px 0', fontSize: 22, fontWeight: 800, color: 'white' }}>
+                  {selectedResolution.isLost ? '❌ Recherche Infructueuse !' : '📥 Carte Physique Relocalisée !'}
+                </h3>
+                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 14 }}>
+                  {selectedResolution.isLost 
+                    ? "Après une fouille approfondie par l'administration, cette carte n'a pas pu être retrouvée."
+                    : "Bonne nouvelle ! L'administration a retrouvé et rangé la carte suivante :"
+                  }
+                </p>
+              </div>
+
+              {/* Contraste Card */}
+              <div style={{
+                background: 'rgba(255, 255, 255, 0.02)',
+                border: '1px solid rgba(255, 255, 255, 0.05)',
+                borderRadius: 16,
+                padding: 24,
+                marginBottom: 24
+              }}>
+                <div style={{ marginBottom: 16 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Assuré</span>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: 'white', marginTop: 2, textTransform: 'uppercase' }}>
+                    {selectedResolution.noms} {selectedResolution.prenoms}
                   </div>
                 </div>
-              )}
+
+                <div style={{ marginBottom: 16 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Contact Client</span>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-secondary)', marginTop: 2 }}>
+                    {selectedResolution.contact}
+                  </div>
+                </div>
+
+                <div>
+                  {selectedResolution.isLost ? (
+                    <>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Statut / Recommandation</span>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: '#ef4444', marginTop: 6, lineHeight: 1.4 }}>
+                        ⚠️ Recherche infructueuse. Veuillez orienter l'assuré vers une demande de duplicata.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Nouveau Rangement</span>
+                      <div style={{ fontSize: 28, fontWeight: 900, color: '#FFD700', marginTop: 4 }}>
+                        {selectedResolution.rangement}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Action Button */}
+              <button
+                onClick={handleCloseResolutionModal}
+                style={{
+                  width: '100%',
+                  padding: '16px',
+                  borderRadius: 14,
+                  background: selectedResolution.isLost ? '#ef4444' : '#27ae60',
+                  color: 'white',
+                  border: 'none',
+                  fontWeight: 800,
+                  fontSize: 15,
+                  cursor: 'pointer'
+                }}
+                className="hover-scale"
+              >
+                Fermer et archiver
+              </button>
             </div>
           </div>
         )}

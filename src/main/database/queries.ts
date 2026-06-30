@@ -52,15 +52,33 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
   }
   if (filters?.contact) {
     filtersSql += ' AND t_cartes.contact LIKE @contact';
-    params.contact = `%${filters.contact}%`;
+    let finalContactParam = filters.contact;
+    if (finalContactParam) {
+      // Sécurité : Si le Renderer a déjà envoyé un pattern avec des %, on le prend tel quel, sinon on l'encapsule
+      if (!finalContactParam.startsWith('%')) {
+        finalContactParam = `%${finalContactParam}%`;
+      }
+    }
+    params.contact = finalContactParam;
     hasFilters = true;
   }
 
   if (filters?.site_id) {
     filtersSql += ' AND t_cartes.site_id = @site_id';
-    params.site_id = filters.site_id;
+    params.site_id = Number(filters.site_id);
     hasFilters = true;
   }
+
+  if (filters?.exclude_delivered === 'true') {
+    filtersSql += " AND t_cartes.statut = 'EN STOCK'";
+    hasFilters = true;
+  }
+
+  console.log("🗄️ [MAIN PROCESS - SQL] Requête exécutée sur SQLite local. Paramètres résolus :", {
+    query,
+    filters,
+    resolvedParams: params
+  });
 
   if (!query.trim()) {
     if (!hasFilters) return [];
@@ -71,6 +89,7 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
     if (filters?.lieu_de_naissance) nonFtsQuery += ' AND lieu_de_naissance LIKE @lieu_de_naissance';
     if (filters?.contact) nonFtsQuery += ' AND contact LIKE @contact';
     if (filters?.site_id) nonFtsQuery += ' AND site_id = @site_id';
+    if (filters?.exclude_delivered === 'true') nonFtsQuery += " AND statut = 'EN STOCK'";
     nonFtsQuery += ' ORDER BY id_carte DESC LIMIT @limit';
     
     return db.prepare(nonFtsQuery).all(params);
@@ -219,7 +238,7 @@ export function delivrerCarte(
   return result;
 }
 
-export function signalerAbsence(id: number, agent: string, currentUser?: { role: string; site_id?: number }) {
+export function signalerAbsence(id: number, agent: string, currentUser?: { role: string; site_id?: number; id_user?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   let query = `
@@ -237,6 +256,30 @@ export function signalerAbsence(id: number, agent: string, currentUser?: { role:
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
+
+  const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+  if (card) {
+    const siteId = card.site_id;
+    const message = `Carte de ${card.noms} ${card.prenoms} signalée ABSENTE par ${agent}.`;
+    const userId = currentUser?.id_user || null;
+    const userLogin = agent;
+
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+        VALUES (?, ?, 'CARTE_ABSENTE_SIGNALEE', ?, '{"read": false}', ?, 1, ?)
+      `).run(userId, userLogin, message, uuidv4(), siteId);
+
+      const { BrowserWindow } = require('electron');
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length > 0) {
+        windows[0].webContents.send('sync:updated-data', { type: 'ABSENCE_SIGNALEE' });
+      }
+    } catch (err) {
+      log.error('Failed to log or notify CARTE_ABSENTE_SIGNALEE:', err);
+    }
+  }
+
   return result;
 }
 
@@ -258,7 +301,7 @@ export function getAbsencesReportees(siteId?: number) {
 
 export function resoudreAbsence(
   id: number, 
-  data: { status: string, agent: string, note: string }, 
+  data: { status: string, agent: string, note: string, rangement?: string }, 
   currentUser?: { role: string; site_id?: number }
 ) {
   const db = getDatabase()!;
@@ -269,11 +312,12 @@ export function resoudreAbsence(
       agent_resolution_absence = @agent,
       date_resolution_absence = @now,
       note_resolution = @note,
+      rangement = COALESCE(@rangement, rangement),
       updated_at = @now,
       is_dirty = 1
     WHERE id_carte = @id
   `;
-  const params: any = { ...data, now, id };
+  const params: any = { ...data, now, id, rangement: data.rangement || null };
   if (currentUser && currentUser.role !== 'SUPER ADMIN') {
     query += ' AND site_id = @site_id';
     params.site_id = currentUser.site_id;
@@ -282,6 +326,43 @@ export function resoudreAbsence(
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
+
+  const card = db.prepare('SELECT site_id, noms, prenoms, rangement, contact FROM t_cartes WHERE id_carte = ?').get(id) as any;
+  if (card) {
+    const siteId = card.site_id;
+    const message = `Carte de ${card.noms} ${card.prenoms} retrouvée (Rangement: ${card.rangement || 'non spécifié'}) par ${data.agent}.`;
+
+    try {
+      db.prepare(`
+        UPDATE t_logs 
+        SET valeur_apres = '{"read": true}', is_dirty = 1 
+        WHERE action = 'CARTE_ABSENTE_SIGNALEE' 
+        AND site_id = ?
+        AND (valeur_apres LIKE '%"read":false%' OR valeur_apres LIKE '%"read": false%')
+      `).run(siteId);
+
+      const payload = {
+        read: false,
+        noms: card.noms,
+        prenoms: card.prenoms,
+        rangement: card.rangement,
+        contact: card.contact
+      };
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+        VALUES (NULL, 'SYSTEM', 'CARTE_ABSENTE_RETROUVEE', ?, ?, ?, 1, ?)
+      `).run(message, JSON.stringify(payload), uuidv4(), siteId);
+
+      const { BrowserWindow } = require('electron');
+      const windows = BrowserWindow.getAllWindows();
+      if (windows.length > 0) {
+        windows[0].webContents.send('sync:updated-data', { type: 'ABSENCE_RESOLUE' });
+      }
+    } catch (err) {
+      log.error('Failed to log or notify CARTE_ABSENTE_RETROUVEE:', err);
+    }
+  }
+
   return result;
 }
 
@@ -1166,4 +1247,211 @@ export function markRecordsAsSynced(
       }
     }
   })();
+}
+
+export function getConsultantStats(agentUsername: string, siteId: number) {
+  const db = getDatabase()!;
+  
+  const today = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND date(date_delivrance, 'localtime') = date('now', 'localtime')
+  `).get(agentUsername, siteId) as { count: number } | undefined;
+
+  const yesterday = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND date(date_delivrance, 'localtime') = date('now', '-1 day', 'localtime')
+  `).get(agentUsername, siteId) as { count: number } | undefined;
+
+  const week = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND date(date_delivrance, 'localtime') >= date('now', '-7 days', 'localtime')
+  `).get(agentUsername, siteId) as { count: number } | undefined;
+
+  const month = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND date(date_delivrance, 'localtime') >= date('now', '-30 days', 'localtime')
+  `).get(agentUsername, siteId) as { count: number } | undefined;
+
+  const year = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND strftime('%Y', date_delivrance, 'localtime') = strftime('%Y', 'now', 'localtime')
+  `).get(agentUsername, siteId) as { count: number } | undefined;
+
+  // Décompte individuel des 7 derniers jours glissants typés par nom de jour
+  const weekdays = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+  const last7Days: { dayName: string; count: number }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const dayOffset = i === 0 ? '0 days' : `-${i} day${i > 1 ? 's' : ''}`;
+    const queryStr = `
+      SELECT COUNT(*) as count, strftime('%w', date('now', ?, 'localtime')) as dayIndex
+      FROM t_cartes 
+      WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+      AND date(date_delivrance, 'localtime') = date('now', ?, 'localtime')
+    `;
+    const row = db.prepare(queryStr).get(dayOffset, agentUsername, siteId, dayOffset) as { count: number; dayIndex: string } | undefined;
+    const dayName = weekdays[Number(row?.dayIndex || 0)];
+    last7Days.push({
+      dayName,
+      count: row?.count || 0
+    });
+  }
+
+  return {
+    today: today?.count || 0,
+    yesterday: yesterday?.count || 0,
+    week: week?.count || 0,
+    month: month?.count || 0,
+    year: year?.count || 0,
+    last7Days
+  };
+}
+
+export function getConsultantCardsToday(agentUsername: string, siteId: number) {
+  const db = getDatabase()!;
+  return db.prepare(`
+    SELECT id_carte, noms, prenoms, date_delivrance, contact 
+    FROM t_cartes 
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ? 
+    AND date(date_delivrance, 'localtime') = date('now', 'localtime') 
+    ORDER BY date_delivrance DESC
+  `).all(agentUsername, siteId);
+}
+
+export function purgeLocalDatabase() {
+  const db = getDatabase()!;
+  
+  // 1. Suppression ultra-rapide des données
+  db.pragma('foreign_keys = OFF');
+  db.prepare("DELETE FROM t_cartes").run();
+  db.prepare("DELETE FROM t_cartes_fts").run();
+  db.pragma('foreign_keys = ON');
+  
+  // 2. Déporter le VACUUM lourd en tâche de fond asynchrone
+  setTimeout(() => {
+    try {
+      console.log("⏳ [BACKGROUND] Lancement du VACUUM de compactage du disque...");
+      db.prepare("VACUUM").run();
+      console.log("✅ [BACKGROUND] VACUUM terminé avec succès.");
+    } catch (err) {
+      console.error("Erreur lors du VACUUM en tâche de fond:", err);
+    }
+  }, 500);
+
+  // Renvoyer immédiatement le succès pour fermer la modal côté React sans attendre le VACUUM
+  return { success: true };
+}
+
+export function getLocalCardCount(): number {
+  const db = getDatabase()!;
+  const row = db.prepare("SELECT COUNT(*) as count FROM t_cartes").get() as { count: number };
+  return row ? row.count : 0;
+}
+
+export function getUnreadSyncNotifications(siteId?: number): number {
+  const db = getDatabase()!;
+  let query = `SELECT COUNT(*) as count FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE') AND (valeur_apres LIKE '%"read":false%' OR valeur_apres LIKE '%"read": false%')`;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND site_id = ?';
+    params.push(Number(siteId));
+  }
+  const row = db.prepare(query).get(...params) as { count: number } | undefined;
+  return row ? row.count : 0;
+}
+
+export function getUnreadNotificationsList(siteId?: number): any[] {
+  const db = getDatabase()!;
+  let query = `SELECT * FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE') AND (valeur_apres LIKE '%"read":false%' OR valeur_apres LIKE '%"read": false%')`;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND site_id = ?';
+    params.push(Number(siteId));
+  }
+  query += ' ORDER BY date_heure DESC LIMIT 10';
+  return db.prepare(query).all(...params);
+}
+
+export function markUnreadSyncNotificationsAsRead(siteId?: number): boolean {
+  const db = getDatabase()!;
+  let query = `UPDATE t_logs SET valeur_apres = '{"read": true}', is_dirty = 1 WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE') AND (valeur_apres LIKE '%"read":false%' OR valeur_apres LIKE '%"read": false%')`;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND site_id = ?';
+    params.push(Number(siteId));
+  }
+  const result = db.prepare(query).run(...params);
+  return result.changes > 0;
+}
+
+export function getAgentReportedAbsences(agent: string, siteId?: number): any[] {
+  const db = getDatabase()!;
+  let query = `SELECT * FROM t_cartes WHERE statut_physique IN ('ABSENT', 'RETROUVE', 'PERDUE')`;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND site_id = ?';
+    params.push(Number(siteId));
+  }
+  query += ' ORDER BY date_signalement_absence DESC LIMIT 50';
+  return db.prepare(query).all(...params);
+}
+
+export function declarerPerdue(id: number, currentUser?: { role: string; site_id?: number }) {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
+  let query = `
+    UPDATE t_cartes 
+    SET statut_physique = 'PERDUE', updated_at = @now, is_dirty = 1
+    WHERE id_carte = @id
+  `;
+  const params: any = { now, id };
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+
+  const card = db.prepare('SELECT site_id, noms, prenoms, contact FROM t_cartes WHERE id_carte = ?').get(id) as any;
+  if (card) {
+    const siteId = card.site_id;
+    const message = `Carte de ${card.noms} ${card.prenoms} introuvable après fouille administration.`;
+    const payload = {
+      read: false,
+      noms: card.noms,
+      prenoms: card.prenoms,
+      contact: card.contact || '—',
+      isLost: true
+    };
+    try {
+      db.prepare(`
+        UPDATE t_logs 
+        SET valeur_apres = '{"read": true}', is_dirty = 1 
+        WHERE action = 'CARTE_ABSENTE_SIGNALEE' 
+        AND site_id = ?
+        AND (valeur_apres LIKE '%"read":false%' OR valeur_apres LIKE '%"read": false%')
+      `).run(siteId);
+
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+        VALUES (NULL, 'SYSTEM', 'CARTE_PERDUE_CONFIRMEE', ?, ?, ?, 1, ?)
+      `).run(message, JSON.stringify(payload), uuidv4(), siteId);
+    } catch (err) {
+      log.error('Failed to log or update on declarerPerdue:', err);
+    }
+
+    const { BrowserWindow } = require('electron');
+    const windows = BrowserWindow.getAllWindows();
+    if (windows.length > 0) {
+      windows[0].webContents.send('sync:updated-data', { type: 'ABSENCE_RESOLUE' });
+    }
+  }
+
+  return result;
 }

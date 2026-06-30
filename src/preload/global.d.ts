@@ -9,6 +9,8 @@ declare global {
       stats: {
         get: (siteId?: number) => Promise<any>;
         getGlobal: () => Promise<any>;
+        getConsultant: (agentUsername: string, siteId: number) => Promise<any>;
+        getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
       };
       cartes: {
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
@@ -17,10 +19,12 @@ declare global {
         create: (data: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
-        delivrer: (id: number, data: any) => Promise<boolean>;
+        delivrer: (id: number, data: any, currentUser?: any) => Promise<boolean>;
         signalerAbsence: (id: number, agent: string) => Promise<boolean>;
         getAbsences: (siteId?: number) => Promise<any[]>;
+        getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;
         resoudreAbsence: (id: number, data: any) => Promise<boolean>;
+        declarerPerdue: (id: number) => Promise<boolean>;
         getInvalidDates: (siteId?: number) => Promise<any[]>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
       };
@@ -75,13 +79,21 @@ declare global {
         getVersion: () => Promise<string>;
         getDbPath: () => Promise<string>;
       };
+      db: {
+        purge: () => Promise<{ success: boolean }>;
+        getCardCount: () => Promise<number>;
+      };
       sync: {
         getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number }>;
         force: () => Promise<{ success: boolean; message: string }>;
         onStatusChanged: (callback: (status: any) => void) => () => void;
         startBulk: (siteId: number) => Promise<{ success: boolean; uploadedCount: number; message: string }>;
         onBulkProgress: (callback: (p: number) => void) => () => void;
+        getUnreadCount: (siteId?: number) => Promise<number>;
+        getUnreadList: (siteId?: number) => Promise<any[]>;
+        markAsRead: (siteId?: number) => Promise<boolean>;
       };
+      onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };
   }
 }

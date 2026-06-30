@@ -13,17 +13,20 @@ const api = {
     create: (data: Record<string, unknown>) => ipcRenderer.invoke('cartes:create', data),
     update: (id: number, data: Record<string, unknown>) => ipcRenderer.invoke('cartes:update', id, data),
     delete: (id: number) => ipcRenderer.invoke('cartes:delete', id),
-    delivrer: (id: number, data: Record<string, unknown>) => ipcRenderer.invoke('cartes:delivrer', id, data),
+    delivrer: (id: number, data: Record<string, unknown>, currentUser?: any) => ipcRenderer.invoke('cartes:delivrer', id, data, currentUser),
     signalerAbsence: (id: number, agent: string) => ipcRenderer.invoke('cartes:signalerAbsence', id, agent),
     getAbsences: (siteId?: number) => ipcRenderer.invoke('cartes:getAbsences', siteId),
+    getAgentAbsences: (agent: string, siteId?: number) => ipcRenderer.invoke('cartes:getAgentAbsences', agent, siteId),
     resoudreAbsence: (id: number, data: any) => ipcRenderer.invoke('cartes:resoudreAbsence', id, data),
+    declarerPerdue: (id: number) => ipcRenderer.invoke('cartes:declarerPerdue', id),
     getInvalidDates: (siteId?: number) => ipcRenderer.invoke('cartes:getInvalidDates', siteId),
     updateDate: (id: number, newDate: string) => ipcRenderer.invoke('cartes:updateDate', id, newDate),
   },
-  // Stats
   stats: { 
     get: (siteId?: number) => ipcRenderer.invoke('stats:get', siteId),
     getGlobal: () => ipcRenderer.invoke('stats:getGlobal'),
+    getConsultant: (agentUsername: string, siteId: number) => ipcRenderer.invoke('stats:getConsultant', agentUsername, siteId),
+    getCardsToday: (agentUsername: string, siteId: number) => ipcRenderer.invoke('stats:getCardsToday', agentUsername, siteId),
   },
   // Import
   import: {
@@ -98,6 +101,10 @@ const api = {
     getVersion: () => ipcRenderer.invoke('app:getVersion'),
     getDbPath: () => ipcRenderer.invoke('app:getDbPath'),
   },
+  db: {
+    purge: () => ipcRenderer.invoke('db:purge'),
+    getCardCount: () => ipcRenderer.invoke('db:getCardCount'),
+  },
   // Sync offline-first
   sync: {
     getStatus: () => ipcRenderer.invoke('sync:getStatus'),
@@ -112,13 +119,21 @@ const api = {
       const listener = (_: any, p: number) => callback(p);
       ipcRenderer.on('sync:bulk-progress', listener);
       return () => ipcRenderer.removeListener('sync:bulk-progress', listener);
-    }
+    },
+    getUnreadCount: (siteId?: number) => ipcRenderer.invoke('sync:getUnreadCount', siteId),
+    getUnreadList: (siteId?: number) => ipcRenderer.invoke('sync:getUnreadList', siteId),
+    markAsRead: (siteId?: number) => ipcRenderer.invoke('sync:markAsRead', siteId),
   },
   // Maintenance
   maintenance: {
     clearAll: () => ipcRenderer.invoke('maintenance:clearAll'),
     clearDatabaseCartes: (siteId?: number) => ipcRenderer.invoke('maintenance:clearDatabaseCartes', siteId),
     fullReset: () => ipcRenderer.invoke('maintenance:fullReset'),
+  },
+  onDatabaseUpdated: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('sync:updated-data', listener);
+    return () => ipcRenderer.removeListener('sync:updated-data', listener);
   },
 };
 

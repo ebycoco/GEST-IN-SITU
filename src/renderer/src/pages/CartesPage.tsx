@@ -581,7 +581,7 @@ export default function CartesPage() {
             </div>
 
             <div style={{ padding: 20, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 10 }}>
-              {!['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && user?.role !== 'CONSULTANT' && user?.role !== 'AJOUTANT' && (
+               {!['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && user?.role !== 'AJOUTANT' && (
                 <button 
                   className="btn btn-primary" 
                   style={{ 
