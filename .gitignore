@@ -9,4 +9,5 @@ build/
 *.sqlite3
 *.db
 .DS_Store
+doc/
 build-log.txt

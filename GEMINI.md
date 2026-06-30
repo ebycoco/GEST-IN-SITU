@@ -1,6 +1,6 @@
 # GEMINI.md — GEST-IN-SITU : Guide de Contexte Complet
 
-> **Dernière mise à jour** : 2026-06-29
+> **Dernière mise à jour** : 2026-06-30
 > **Ce fichier** est la source de vérité pour tout modèle IA travaillant sur ce projet.
 > Lis-le en entier avant de modifier quoi que ce soit.
 
@@ -215,6 +215,14 @@ Site (ex: ABOBO, YOPOUGON)
 ### Type des dates
 *   Les dates de naissance (`date_de_naissance`) sont stockées au format standard ISO **`YYYY-MM-DD`** en local (SQLite) et sur le Cloud (PostgreSQL).
 
+### 5.4 Nettoyage et Normalisation des Données (Data Cleansing)
+Les fonctions de nettoyage `cleanBirthDate` et `normalizeContact` sont injectées de manière identique et synchronisée dans `src/main/sync/downstream.ts` et au cœur du script du Worker Thread `src/main/workers/import-worker.js`.
+- **Dates Hybrides (`cleanBirthDate`)** : Convertit le format ISO, le format standard `JJ/MM/AAAA` et le format littéral Excel (ex: `1-févr.-1997`). Intègre des signatures exclusives pour éliminer les collisions de lettres entre les mois (Février commence par `f`, Novembre par `n`, Avril par `av`, Août par `a`) et est totalement immunisé contre les corruptions d'encodage (ex: `f├®vr` ou `d├®c` générés par Excel/ANSI).
+- **Contacts (`normalizeContact`)** : Extrait uniquement les chiffres, retire le préfixe pays `225` s'il est au début pour isoler les 10 chiffres locaux, et formate sous la forme exacte `+225 XX XX XX XX XX`. Si le numéro local ne fait pas exactement 10 chiffres, applique le fallback de sécurité `+225 00 00 00 00 00`.
+
+### 5.5 Cycle de Purge & Fluidité UI
+L'instruction de suppression globale dans `queries.ts` désactive temporairement les clés étrangères (`foreign_keys = OFF`). Pour éviter le blocage synchrone du thread principal (freeze de l'UI pendant l'importation de 238k lignes), l'instruction lourde `db.prepare("VACUUM").run()` est déportée de manière asynchrone dans un `setTimeout(..., 500)`. Le succès `{ success: true }` est renvoyé immédiatement à l'interface utilisateur.
+
 ---
 
 ## 6. Architecture de Synchronisation Offline-First
@@ -245,6 +253,32 @@ Les conflits de données entre le client local et le cloud sont résolus de mani
 1.  **Priorité des Statuts** : La hiérarchie irréversible des statuts l'emporte toujours : `EN STOCK (1) -> DELIVRE (2) -> ANNULE (3)`. Le statut le plus avancé gagne.
 2.  **Last-Write-Wins (LWW)** : En cas de statuts identiques ou non conflictuels, la résolution s'effectue champ par champ en comparant le timestamp de mise à jour `updated_at`. La modification la plus récente l'emporte.
 3.  **Anti-boucle infinie** : Les écritures avales (Downstream) mettent à jour la base locale avec `is_dirty = 0` et ne génèrent **jamais** de logs dans `t_sync_queue`.
+
+### 6.5 Système de Notification Hybride (Direct + Différé)
+Lorsqu'un cycle de synchronisation descendante réussit à intégrer des mises à jour (`processedCount > 0` dans `downstream.ts`) :
+*   **Enregistrement Persistant** : L'application insère un log d'audit système spécial de type `'SYNC_UPDATE'` dans la table locale `t_logs` avec l'état non lu (`valeur_apres = '{"read": false}'`) et marqué `is_dirty = 1` pour être synchronisé sur le Cloud lors du prochain cycle Upstream.
+*   **Alerte Temps Réel** : Si l'utilisateur est connecté et actif sur son poste, un événement IPC `'sync:updated-data'` est envoyé par le Main process. La vue React réceptrice dans `MainLayout.tsx` intercepte ce signal et lève instantanément un Toast thématique "Plein Soleil" (Jaune et noir, bordure jaune contrastée) via `react-hot-toast` pour notifier l'utilisateur.
+*   **Badge d'Alerte Différé** : Si l'application était fermée ou le consultant déconnecté, la `TopBar.tsx` interroge le nombre de logs non lus de ce type à la connexion et à intervalle régulier via `window.api.sync.getUnreadCount`. S'il y en a, un badge thématique jaune Plein Soleil s'affiche sur la cloche. Cliquer sur l'alerte appelle `window.api.sync.markAsRead` qui passe les logs à `read: true` en base locale avec `is_dirty = 1` pour réinitialiser le badge et propager le marquage comme lu au Cloud.
+
+### 6.6 🚨 FLUX DES ANOMALIES PHYSIQUES (CARTES ABSENTES)
+1. **Signalement Consultant (ConsultantSearchPage.tsx) :**
+   - La recherche par Téléphone et État Civil intègre une fermeture chirurgicale de la modal (`setShowReportModal(false)`) dès la réussite de l'appel IPC, sans effet de rebond.
+   - Sécurité Doublon : Le bouton "Signaler" est désactivé (`disabled`) si `carte.statut_physique === 'ABSENT'`, affichant "⏳ En cours de traitement par l'administration".
+
+2. **Isolation Strict par Sous-Site / Box (Abobo Mairie, Box FHB, PK18, etc.) :**
+   - Les notifications de résolution ou de perte sont strictement cloisonnées via `site_id`.
+   - Seuls les consultants connectés au même `site_id` (Box) que celui qui a émis le signalement reçoivent l'alerte dans leur cloche (`TopBar.tsx`). Les autres centres sont totalement ignorés.
+
+3. **Traitement Admin (EditeurMission1Page.tsx & queries.ts) :**
+   - Saisie forcée en MAJUSCULES en temps réel pour le champ "Nouveau Rangement" via `.toUpperCase()` et la classe Tailwind `uppercase`.
+   - Deux issues possibles : 
+     * Rangement trouvé -> `resoudreAbsence(id_carte, nouveau_rangement)` (Statut passe à 'OK').
+     * Rangement introuvable -> `declarerPerdue(id_carte)` (Statut passe à 'PERDUE').
+   - Clôture Atomique : La soumission de l'admin passe automatiquement l'ancien log 'CARTE_ABSENTE_SIGNALEE' à `read: true` pour vider instantanément la cloche de l'admin.
+
+4. **Notifications Temps Réel & Deep Linking Consultant (TopBar.tsx) :**
+   - Synchro : Le thread Main émet le signal global `sync:updated-data` après chaque action admin pour forcer le rafraîchissement instantané des cloches consultants.
+   - UX Multi-jours : Au clic sur une notification 'CARTE_ABSENTE_RETROUVEE' ou 'CARTE_PERDUE_CONFIRMEE', le consultant ne subit pas de redirection vide, mais ouvre une Modal récapitulative dédiée (Plein Soleil - fort contraste) affichant le Nom, le Contact, et le Nouveau Rangement (en gros et en Jaune) ou la procédure de duplicata.
 
 ---
 
@@ -278,6 +312,9 @@ Le fichier CSS monolithique de 25 Ko a été segmenté sous `src/renderer/src/as
 - `components.css` : Boutons, modales, badges de statut, formulaires.
 - `pages.css` : Vues spécifiques du Login, du Dashboard et des switchers.
 
+### 8.3 Ergonomie de Maintenance & Purge (ImportPage.tsx)
+Au chargement, `ImportPage.tsx` appelle le nouveau handler IPC `db:getCardCount` (lié à `getLocalCardCount()`). Si le nombre de cartes locales est égal à 0, le bouton "Purger la base" est automatiquement désactivé (`disabled`), son opacité passe à 50% et son curseur passe en `not-allowed`. L'état réactif `isPurging` bloque toute action concurrente dans la modal.
+
 ---
 
 ## 9. Communication IPC (Main ↔ Renderer)
@@ -297,7 +334,7 @@ Le fichier CSS monolithique de 25 Ko a été segmenté sous `src/renderer/src/as
 | `notification` | `show`                                                                |
 | `theme`        | `get`, `set`                                                          |
 | `app`          | `getVersion`, `getDbPath`                                             |
-| `sync`         | `getStatus`, `force`, `startBulk`                                     |
+| `sync`         | `getStatus`, `force`, `startBulk`, `getUnreadCount`, `markAsRead`, `onDatabaseUpdated` (Écouteur du signal de fin de synchronisation descendante Main -> Renderer) |
 | `maintenance`  | `clearAll`, `clearDatabaseCartes`, `fullReset`                        |
 
 ---
