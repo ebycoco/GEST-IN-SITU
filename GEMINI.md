@@ -166,7 +166,7 @@ GEST_IN-SITU_CARTE_ABOBO_V2/
 │           │   ├── SearchPage.tsx         # Recherche rapide FTS5
 │           │   ├── ConsultantSearchPage.tsx  # Recherche en lecture seule
 │           │   ├── AjoutantSaisiePage.tsx # Saisie manuelle de cartes
-│           │   ├── EditeurMission1Page.tsx # Interface d'assainissement
+│           │   ├── QualiteAssainissementPage.tsx # Interface d'assainissement
 │           │   ├── AgentsPage.tsx         # CRUD utilisateurs/agents
 │           │   ├── SitesPage.tsx          # Gestion multi-sites
 │           │   ├── AdminQueuePage.tsx     # File d'attente admin (sync queue)
@@ -300,7 +300,7 @@ Lorsqu'un cycle de synchronisation descendante réussit à intégrer des mises �
 ### 8.1 Politique d'Accès par Rôle
 *   **SUPER ADMIN** : Accès total, gestion multi-sites (Infrastructures), réinitialisations, dashboard global. Un Switcher dans la Sidebar permet de choisir le site actif. Si aucun site n'est sélectionné, une invitation claire s'affiche à la place de la navigation.
 *   **ADMINISTRATEUR** : Accès au dashboard et statistiques de son propre site uniquement, gestion des agents de son site, déclenchement du Mass Sync Initial de son site.
-*   **EDITEUR** : Voit uniquement la page d'Assainissement et la page Cartes. Les boutons "Nouvelle Carte" et "Export CSV" lui sont masqués. Il peut modifier ou distribuer des cartes.
+*   **OPERATEUR_QUALITE** : Voit uniquement la page d'Assainissement et la page Cartes. Les boutons "Nouvelle Carte" et "Export CSV" lui sont masqués. Il peut modifier ou distribuer des cartes.
 *   **AJOUTANT** : A uniquement accès au formulaire de saisie manuelle et au moteur de recherche. Il ne peut effectuer aucune modification ou distribution de cartes existantes.
 *   **CONSULTANT** : Recherche uniquement (lecture seule). Tous les boutons d'édition, de modification, de signalement d'absence et de délivrance lui sont masqués. Un badge signale le mode lecture seule dans ses vues.
 

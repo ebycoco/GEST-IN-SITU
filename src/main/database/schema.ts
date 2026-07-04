@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
 import log from 'electron-log';
-
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 18;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -50,6 +49,51 @@ export function runMigrations(db: Database.Database): void {
   if (currentVersion < 9) {
     log.info('Running migration v9: Migrating date formats from DD/MM/YYYY to YYYY-MM-DD');
     migrateV9(db);
+  }
+
+  if (currentVersion < 10) {
+    log.info('Running migration v10: Updating t_cartes statut_physique check constraint to allow PERDUE');
+    migrateV10(db);
+  }
+
+  if (currentVersion < 11) {
+    log.info('Running migration v11: Adding prefixe_rangement to t_sites');
+    migrateV11(db);
+  }
+
+  if (currentVersion < 12) {
+    log.info('Running migration v12: Moving prefixe_rangement to t_centres');
+    migrateV12(db);
+  }
+
+  if (currentVersion < 13) {
+    log.info('Running migration v13: Adding is_exported column to t_cartes');
+    migrateV13(db);
+  }
+
+  if (currentVersion < 14) {
+    log.info('Running migration v14: Adding created_by column to t_cartes and refactoring AJOUTANT role to OPERATEUR_SAISIE');
+    migrateV14(db);
+  }
+
+  if (currentVersion < 15) {
+    log.info('Running migration v15: Refactoring CONSULTANT role to OPERATEUR_VERIFICATION');
+    migrateV15(db);
+  }
+
+  if (currentVersion < 16) {
+    log.info('Running migration v16: Adding OPERATEUR_INVENTAIRE check constraint and role');
+    migrateV16(db);
+  }
+
+  if (currentVersion < 17) {
+    log.info('Running migration v17: Renaming EDITEUR role to OPERATEUR_QUALITE');
+    migrateV17(db);
+  }
+
+  if (currentVersion < 18) {
+    log.info('Running migration v18: Renaming ADMINISTRATEUR role to ADMINISTRATEUR_SITE and adding ADMIN_CENTRE');
+    migrateV18(db);
   }
 
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -225,7 +269,7 @@ function migrateV1(db: Database.Database): void {
       id_user INTEGER PRIMARY KEY AUTOINCREMENT,
       login TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','CONSULTANT','EDITEUR','AJOUTANT')),
+      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
       nom_user TEXT,
       prenom_user TEXT,
       email TEXT,
@@ -326,13 +370,11 @@ function migrateV1(db: Database.Database): void {
     END;
 
     CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES ('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
     END;
 
     CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES ('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
       INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
       VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
     END;
@@ -453,4 +495,438 @@ function migrateV2(db: Database.Database): void {
       cle_doublon TEXT, cle_doublon_flex TEXT
     );
   `);
+}
+
+function migrateV10(db: Database.Database): void {
+  db.transaction(() => {
+    // 1. Renommer la table existante
+    db.exec('ALTER TABLE t_cartes RENAME TO t_cartes_old;');
+
+    // 2. Créer la nouvelle table avec le CHECK mis à jour (incluant 'PERDUE')
+    db.exec(`
+      CREATE TABLE t_cartes (
+        id_carte INTEGER PRIMARY KEY AUTOINCREMENT,
+        noms TEXT NOT NULL,
+        prenoms TEXT NOT NULL,
+        date_de_naissance TEXT,
+        lieu_de_naissance TEXT,
+        num_secu TEXT,
+        lieu_enrolement TEXT,
+        contact TEXT,
+        rangement TEXT,
+        statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE')),
+        date_delivrance TEXT,
+        agent_saisie TEXT,
+        nom_retirant TEXT,
+        num_retirant TEXT,
+        agent_distributeur TEXT,
+        centre_retrait TEXT,
+        cle_doublon TEXT,
+        cle_doublon_flex TEXT,
+        statut_physique TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE','PERDUE')),
+        agent_signalement_absence TEXT,
+        date_signalement_absence TEXT,
+        date_resolution_absence TEXT,
+        agent_resolution_absence TEXT,
+        note_resolution TEXT,
+        notif_lue INTEGER DEFAULT 1,
+        site_id INTEGER DEFAULT 1,
+        centre_id INTEGER,
+        poste_id INTEGER,
+        qr_code_data TEXT,
+        sync_id TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        synced_at TEXT,
+        is_dirty INTEGER DEFAULT 0,
+        FOREIGN KEY (site_id) REFERENCES t_sites(id),
+        FOREIGN KEY (centre_id) REFERENCES t_centres(id),
+        FOREIGN KEY (poste_id) REFERENCES t_postes(id)
+      );
+    `);
+
+    // 3. Copier les données de l'ancienne table vers la nouvelle
+    db.exec('INSERT INTO t_cartes SELECT * FROM t_cartes_old;');
+
+    // 4. Supprimer l'ancienne table
+    db.exec('DROP TABLE t_cartes_old;');
+
+    // 5. Recréer les index sur la nouvelle table t_cartes
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_noms ON t_cartes(noms);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_prenoms ON t_cartes(prenoms);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_num_secu ON t_cartes(num_secu);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_rangement ON t_cartes(rangement);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_statut ON t_cartes(statut);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_statut_physique ON t_cartes(statut_physique);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_cle_doublon ON t_cartes(cle_doublon);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_cle_flex ON t_cartes(cle_doublon_flex);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_centre ON t_cartes(centre_id);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_sync ON t_cartes(is_dirty, synced_at);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_updated ON t_cartes(updated_at);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_contact ON t_cartes(contact);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_statut ON t_cartes(site_id, statut);');
+
+    // 6. Recréer les triggers FTS
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_ai;');
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_ad;');
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+
+    db.exec(`
+      CREATE TRIGGER trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+
+    db.exec(`
+      CREATE TRIGGER trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
+        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+      END;
+    `);
+
+    db.exec(`
+      CREATE TRIGGER trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
+        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+  })();
+}
+
+function migrateV11(db: Database.Database): void {
+  db.transaction(() => {
+    // 1. Ajouter la colonne prefixe_rangement
+    try {
+      db.exec('ALTER TABLE t_sites ADD COLUMN prefixe_rangement TEXT DEFAULT NULL;');
+      log.info('Added column prefixe_rangement to t_sites');
+    } catch (e: any) {
+      log.warn('Could not add prefixe_rangement column (might already exist):', e.message);
+    }
+
+    // 2. Pré-remplir les préfixes d'Abobo s'ils existent
+    try {
+      db.prepare("UPDATE t_sites SET prefixe_rangement = 'CH' WHERE code = 'ABOBO_FHB'").run();
+      db.prepare("UPDATE t_sites SET prefixe_rangement = 'MAIRIE' WHERE code = 'ABOBO_MAIRIE'").run();
+      db.prepare("UPDATE t_sites SET prefixe_rangement = 'PK18' WHERE code = 'ABOBO_PK18'").run();
+      log.info('Pre-populated prefixe_rangement for Abobo sites');
+    } catch (e: any) {
+      log.error('Failed to pre-populate prefixe_rangement:', e.message);
+    }
+  })();
+}
+
+function migrateV12(db: Database.Database): void {
+  db.transaction(() => {
+    // 1. Ajouter la colonne prefixe_rangement à t_centres
+    try {
+      db.exec('ALTER TABLE t_centres ADD COLUMN prefixe_rangement TEXT DEFAULT NULL;');
+      log.info('Added column prefixe_rangement to t_centres');
+    } catch (e: any) {
+      log.warn('Could not add prefixe_rangement column to t_centres (might already exist):', e.message);
+    }
+
+    // 2. Pré-remplir les préfixes d'Abobo s'ils existent
+    try {
+      db.prepare("UPDATE t_centres SET prefixe_rangement = 'CH' WHERE nom LIKE '%FHB%' OR nom LIKE '%HOUPHOUET%'").run();
+      db.prepare("UPDATE t_centres SET prefixe_rangement = 'MAIRIE' WHERE nom LIKE '%MAIRIE%'").run();
+      db.prepare("UPDATE t_centres SET prefixe_rangement = 'PK18' WHERE nom LIKE '%PK18%'").run();
+      log.info('Pre-populated prefixe_rangement for Abobo centres');
+    } catch (e: any) {
+      log.error('Failed to pre-populate prefixe_rangement for centres:', e.message);
+    }
+  })();
+}
+
+function migrateV13(db: Database.Database): void {
+  db.transaction(() => {
+    try {
+      db.exec('ALTER TABLE t_cartes ADD COLUMN is_exported INTEGER DEFAULT 0;');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_is_exported ON t_cartes (is_exported);');
+      log.info('Migration V13: Added is_exported to t_cartes and created index');
+    } catch (e: any) {
+      log.warn('Migration V13 warnings (column might already exist):', e.message);
+    }
+  })();
+}
+
+function migrateV14(db: Database.Database): void {
+  db.transaction(() => {
+    // 1. Ajouter created_by
+    try {
+      db.exec('ALTER TABLE t_cartes ADD COLUMN created_by INTEGER DEFAULT NULL;');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);');
+      log.info('Migration V14: Added created_by to t_cartes and created index');
+    } catch (e: any) {
+      log.warn('Migration V14: created_by column might already exist:', e.message);
+    }
+
+    // 2. Mettre à jour les rôles dans t_users
+    try {
+      db.prepare("UPDATE t_users SET role = 'OPERATEUR_SAISIE' WHERE role = 'AJOUTANT'").run();
+      log.info('Migration V14: Updated AJOUTANT user roles to OPERATEUR_SAISIE');
+    } catch (e: any) {
+      log.error('Migration V14: Failed to update AJOUTANT roles:', e.message);
+    }
+  })();
+}
+
+function migrateV15(db: Database.Database): void {
+  // PRAGMA foreign_keys doit s'exécuter HORS transaction sous SQLite
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.transaction(() => {
+      try {
+        log.info('Migration V15: Reconstructing t_users to update CHECK constraint...');
+
+        // Sauvegarder les données
+        db.exec('CREATE TABLE t_users_backup AS SELECT * FROM t_users;');
+
+        // Supprimer l\'ancienne table
+        db.exec('DROP TABLE t_users;');
+
+        // Recréer la table avec la nouvelle contrainte CHECK
+        db.exec(`
+          CREATE TABLE t_users (
+            id_user INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','OPERATEUR_VERIFICATION','EDITEUR','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE')),
+            nom_user TEXT,
+            prenom_user TEXT,
+            email TEXT,
+            telephone TEXT,
+            statut_actif INTEGER DEFAULT 1,
+            site_id INTEGER DEFAULT 1,
+            centre_id INTEGER,
+            poste_id INTEGER,
+            avatar_url TEXT,
+            last_login TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            sync_id TEXT
+          );
+        `);
+
+        // Restaurer les données en remplaçant 'CONSULTANT' par 'OPERATEUR_VERIFICATION'
+        db.exec(`
+          INSERT INTO t_users (
+            id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          )
+          SELECT
+            id_user, login, password_hash,
+            CASE WHEN role = 'CONSULTANT' THEN 'OPERATEUR_VERIFICATION' ELSE role END,
+            nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          FROM t_users_backup;
+        `);
+
+        // Supprimer la table de backup
+        db.exec('DROP TABLE t_users_backup;');
+
+        log.info('Migration V15: Reconstructed t_users successfully with OPERATEUR_LOGISTIQUE check constraint');
+      } catch (e: any) {
+        log.error('Migration V15: Failed to reconstruct t_users:', e.message);
+        throw e;
+      }
+    })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+}
+
+function migrateV16(db: Database.Database): void {
+  // PRAGMA foreign_keys doit s'exécuter HORS transaction sous SQLite
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.transaction(() => {
+      try {
+        log.info('Migration V16: Reconstructing t_users to update CHECK constraint with OPERATEUR_INVENTAIRE...');
+
+        // Sauvegarder les données
+        db.exec('CREATE TABLE t_users_backup AS SELECT * FROM t_users;');
+
+        // Supprimer l\'ancienne table
+        db.exec('DROP TABLE t_users;');
+
+        // Recréer la table avec la nouvelle contrainte CHECK
+        db.exec(`
+          CREATE TABLE t_users (
+            id_user INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','OPERATEUR_VERIFICATION','EDITEUR','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+            nom_user TEXT,
+            prenom_user TEXT,
+            email TEXT,
+            telephone TEXT,
+            statut_actif INTEGER DEFAULT 1,
+            site_id INTEGER DEFAULT 1,
+            centre_id INTEGER,
+            poste_id INTEGER,
+            avatar_url TEXT,
+            last_login TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            sync_id TEXT
+          );
+        `);
+
+        // Restaurer les données
+        db.exec(`
+          INSERT INTO t_users (
+            id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          )
+          SELECT
+            id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          FROM t_users_backup;
+        `);
+
+        // Supprimer la table de backup
+        db.exec('DROP TABLE t_users_backup;');
+
+        log.info('Migration V16: Reconstructed t_users successfully with OPERATEUR_INVENTAIRE check constraint');
+      } catch (e: any) {
+        log.error('Migration V16: Failed to reconstruct t_users:', e.message);
+        throw e;
+      }
+    })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+}
+
+function migrateV17(db: Database.Database): void {
+  // PRAGMA foreign_keys doit s'exécuter HORS transaction sous SQLite
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.transaction(() => {
+      try {
+        log.info('Migration V17: Reconstructing t_users to rename EDITEUR to OPERATEUR_QUALITE...');
+
+        // Sauvegarder les données
+        db.exec('CREATE TABLE t_users_backup AS SELECT * FROM t_users;');
+
+        // Supprimer l\'ancienne table
+        db.exec('DROP TABLE t_users;');
+
+        // Recréer la table avec la nouvelle contrainte CHECK (EDITEUR remplacé par OPERATEUR_QUALITE)
+        db.exec(`
+          CREATE TABLE t_users (
+            id_user INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+            nom_user TEXT,
+            prenom_user TEXT,
+            email TEXT,
+            telephone TEXT,
+            statut_actif INTEGER DEFAULT 1,
+            site_id INTEGER DEFAULT 1,
+            centre_id INTEGER,
+            poste_id INTEGER,
+            avatar_url TEXT,
+            last_login TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            sync_id TEXT
+          );
+        `);
+
+        // Restaurer les données en convertissant 'EDITEUR' en 'OPERATEUR_QUALITE'
+        db.exec(`
+          INSERT INTO t_users (
+            id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          )
+          SELECT
+            id_user, login, password_hash,
+            CASE WHEN role = 'EDITEUR' THEN 'OPERATEUR_QUALITE' ELSE role END,
+            nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+          FROM t_users_backup;
+        `);
+
+        // Supprimer la table de backup
+        db.exec('DROP TABLE t_users_backup;');
+
+        log.info('Migration V17: Reconstructed t_users successfully — EDITEUR renamed to OPERATEUR_QUALITE');
+    } catch (e: any) {
+      log.error('Migration V17: Failed to reconstruct t_users:', e.message);
+      throw e;
+    }
+  })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+}
+
+function migrateV18(db: Database.Database): void {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.transaction(() => {
+      try {
+        log.info('Migration V18: Reconstructing t_users to update CHECK constraint and rename role...');
+
+        // Sauvegarder les données
+        db.exec('CREATE TABLE t_users_backup AS SELECT * FROM t_users;');
+
+        // Supprimer l\'ancienne table
+        db.exec('DROP TABLE t_users;');
+
+        // Recréer la table avec la nouvelle contrainte CHECK
+        db.exec(`
+          CREATE TABLE t_users (
+            id_user INTEGER PRIMARY KEY AUTOINCREMENT,
+            login TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+            nom_user TEXT,
+            prenom_user TEXT,
+            email TEXT,
+            telephone TEXT,
+            statut_actif INTEGER DEFAULT 1,
+            site_id INTEGER DEFAULT 1,
+            centre_id INTEGER,
+            poste_id INTEGER,
+            avatar_url TEXT,
+            last_login TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            sync_id TEXT,
+            is_dirty INTEGER DEFAULT 0,
+            synced_at TEXT
+          );
+        `);
+
+        // Restaurer les données en convertissant 'ADMINISTRATEUR' en 'ADMINISTRATEUR_SITE'
+        db.exec(`
+          INSERT INTO t_users (
+            id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id, is_dirty, synced_at
+          )
+          SELECT
+            id_user, login, password_hash,
+            CASE WHEN role = 'ADMINISTRATEUR' THEN 'ADMINISTRATEUR_SITE' ELSE role END,
+            nom_user, prenom_user, email, telephone,
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            COALESCE(is_dirty, 0), synced_at
+          FROM t_users_backup;
+        `);
+
+        // Supprimer la table de backup
+        db.exec('DROP TABLE t_users_backup;');
+
+        log.info('Migration V18: Reconstructed t_users successfully — ADMINISTRATEUR renamed to ADMINISTRATEUR_SITE');
+      } catch (e: any) {
+        log.error('Migration V18: Failed to reconstruct t_users:', e.message);
+        throw e;
+      }
+    })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
 }

@@ -35,8 +35,8 @@ export default function DateInput({ value, onChange, label, error, className, ..
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // allow backspace, delete, tab, arrows
-    const allowed = ['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+    // allow backspace, delete, tab, arrows, enter
+    const allowed = ['Backspace', 'Delete', 'Tab', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter'];
     if (allowed.includes(e.key) || e.ctrlKey || e.metaKey) return;
     
     // block non-numeric
@@ -47,7 +47,23 @@ export default function DateInput({ value, onChange, label, error, className, ..
 
   return (
     <div className="form-group" style={{ marginBottom: 0 }}>
-      {label && <label className="form-label">{label}</label>}
+      {label && (
+        <label 
+          className="form-label" 
+          style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 6, 
+            fontSize: 12, 
+            fontWeight: 600, 
+            letterSpacing: '0.05em', 
+            textTransform: 'uppercase', 
+            color: 'var(--text-muted)' 
+          }}
+        >
+          {label}
+        </label>
+      )}
       <input
         type="text"
         className={`form-input ${className || ''} ${error ? 'border-error' : ''}`}

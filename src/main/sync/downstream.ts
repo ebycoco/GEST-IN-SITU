@@ -380,3 +380,58 @@ function resolveAndApplyConflict(db: any, local: any, cloud: any): void {
     `Conflit résolu sur carte sync_id ${local.sync_id}. Méthode : ${resolvedBy}. Avant : ${JSON.stringify({statut: local.statut, rangement: local.rangement})}, Après : ${JSON.stringify({statut: resolvedCard.statut, rangement: resolvedCard.rangement})}`
   );
 }
+
+/**
+ * Télécharge proactivement tous les utilisateurs actifs rattachés à ce site
+ * depuis Supabase et les insère localement en SQLite.
+ */
+export async function syncUsersFromCloud(siteId: number): Promise<number> {
+  const db = getDatabase()!;
+  const supabase = getSupabaseClient();
+
+  log.info(`Downstream: Synchronisation des utilisateurs pour le site ${siteId} depuis Supabase...`);
+  
+  const { data: cloudUsers, error } = await supabase
+    .from('t_users')
+    .select('login, password_hash, role, nom_user, prenom_user, site_id, centre_id, sync_id, statut_actif')
+    .eq('site_id', siteId)
+    .eq('statut_actif', 1);
+
+  if (error) {
+    log.error(`Downstream error on syncUsersFromCloud: ${error.message}`);
+    return 0;
+  }
+
+  if (!cloudUsers || cloudUsers.length === 0) {
+    return 0;
+  }
+
+  let count = 0;
+  db.transaction(() => {
+    const insertStmt = db.prepare(`
+      INSERT OR IGNORE INTO t_users 
+        (login, password_hash, role, nom_user, prenom_user, statut_actif, site_id, centre_id, sync_id, is_dirty)
+      VALUES 
+        (@login, @password_hash, @role, @nom_user, @prenom_user, 1, @site_id, @centre_id, @sync_id, 0)
+    `);
+
+    for (const u of cloudUsers) {
+      const result = insertStmt.run({
+        login: u.login,
+        password_hash: u.password_hash,
+        role: u.role,
+        nom_user: u.nom_user || '',
+        prenom_user: u.prenom_user || '',
+        site_id: u.site_id,
+        centre_id: u.centre_id || null,
+        sync_id: u.sync_id
+      });
+      if (result.changes > 0) count++;
+    }
+  })();
+
+  if (count > 0) {
+    log.info(`Downstream: Rapatriement de ${count} utilisateur(s) depuis Supabase pour le site ${siteId}.`);
+  }
+  return count;
+}

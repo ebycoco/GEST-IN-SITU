@@ -206,12 +206,24 @@ const GRID3: React.CSSProperties = {
 };
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
-export default function AjoutantSaisiePage() {
+export default function SaisiePage() {
   const { user, activeSiteId, selectedCentreId } = useAuthStore();
   const [formData, setFormData] = useState<FormState>(INITIAL_STATE);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const firstInputRef = useRef<HTMLDivElement>(null);
+
+  const [sites, setSites] = useState<any[]>([]);
+  const [centres, setCentres] = useState<any[]>([]);
+
+  // Charger les référentiels de sites et centres
+  React.useEffect(() => {
+    window.api.hierarchy.getSites().then(setSites).catch(console.error);
+    window.api.hierarchy.getCentres().then(setCentres).catch(console.error);
+  }, []);
+
+  const activeSiteName = sites.find(s => s.id === (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id))?.nom || '';
+  const activeCentreName = centres.find(c => c.id === selectedCentreId)?.nom || '';
 
   const updateUpper = (field: keyof FormState) => (value: string) =>
     setFormData((prev) => ({ ...prev, [field]: value.toUpperCase() }));
@@ -221,7 +233,11 @@ export default function AjoutantSaisiePage() {
 
   const handleReset = () => {
     if (confirm('Voulez-vous vraiment vider le formulaire ?')) {
-      setFormData(INITIAL_STATE);
+      setFormData({
+        ...INITIAL_STATE,
+        site: activeSiteName,
+        centre: activeCentreName,
+      });
       setSaved(false);
       setTimeout(() => {
         (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
@@ -229,18 +245,50 @@ export default function AjoutantSaisiePage() {
     }
   };
 
+  // Synchronise les valeurs site/centre au montage ou au changement de site/centre actif
+  React.useEffect(() => {
+    setFormData(prev => ({
+      ...prev,
+      site: activeSiteName,
+      centre: activeCentreName
+    }));
+  }, [activeSiteName, activeCentreName]);
+
+  // Formatage de téléphone dynamique style Ivoirien (+225 XX XX XX XX XX)
+  const formatPhoneNumber = (value: string) => {
+    const digits = value.replace(/\D/g, '');
+    if (digits.length === 0) return '';
+    let localNum = digits;
+    if (digits.startsWith('225') && digits.length > 3) {
+      localNum = digits.substring(3);
+    }
+    const truncated = localNum.substring(0, 10);
+    let formatted = '+225';
+    for (let i = 0; i < truncated.length; i++) {
+      if (i % 2 === 0) {
+        formatted += ' ';
+      }
+      formatted += truncated[i];
+    }
+    return formatted;
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.noms.trim() || !formData.prenoms.trim()) {
-      toast.error('Nom et Prénom sont obligatoires.');
+    if (!formData.noms.trim() || !formData.prenoms.trim() || !formData.lieu_de_naissance.trim()) {
+      toast.error('Les champs Nom de famille, Prénom(s) et Lieu de naissance sont obligatoires.');
       return;
     }
     if (formData.date_de_naissance.length !== 10) {
       toast.error('La date de naissance est invalide ou incomplète.');
       return;
     }
-    if (user?.role === 'ADMINISTRATEUR' && !selectedCentreId) {
+    if (!formData.num_secu.trim() || formData.num_secu.trim().length !== 13) {
+      toast.error('Le N° de Sécurité Sociale (CMU) est obligatoire et doit faire exactement 13 chiffres.');
+      return;
+    }
+    if (user?.role === 'ADMINISTRATEUR_SITE' && !selectedCentreId) {
       toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
       return;
     }
@@ -256,15 +304,22 @@ export default function AjoutantSaisiePage() {
     try {
       await window.api.cartes.create({
         ...formData,
+        site: activeSiteName,
+        centre: activeCentreName,
         site_id: siteIdToUse,
-        agent_saisie: user?.login || 'AJOUTANT',
+        agent_saisie: `${user?.nom_user || ''} ${user?.prenom_user || ''}`.trim() || user?.login || 'OPERATEUR_SAISIE',
+        created_by: user?.id_user || null,
         centre_id: selectedCentreId,
         statut: 'EN STOCK',
         statut_physique: 'OK',
       });
       toast.success('✅ Carte enregistrée avec succès !');
       setSaved(true);
-      setFormData(INITIAL_STATE);
+      setFormData({
+        ...INITIAL_STATE,
+        site: activeSiteName,
+        centre: activeCentreName,
+      });
       setTimeout(() => {
         (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
       }, 100);
@@ -386,6 +441,7 @@ export default function AjoutantSaisiePage() {
                   tabIndex={1}
                   autoFocus
                   required
+                  style={{ textTransform: 'uppercase' }}
                 />
               </FormField>
             </div>
@@ -397,24 +453,31 @@ export default function AjoutantSaisiePage() {
                 placeholder="Ex: JEAN BAPTISTE"
                 tabIndex={2}
                 required
+                style={{ textTransform: 'uppercase' }}
               />
             </FormField>
           </div>
 
           <div style={GRID2}>
             <DateInput
-              label="Date de naissance *"
+              label={
+                <>
+                  Date de naissance <span style={{ color: '#f97316', marginLeft: 2 }}>*</span>
+                </>
+              }
               value={formData.date_de_naissance}
               onChange={updateRaw('date_de_naissance')}
               required
             />
-            <FormField label="Lieu de naissance" icon={<MapPin size={14} />}>
+            <FormField label="Lieu de naissance" required icon={<MapPin size={14} />}>
               <InputWithIcon
                 icon={<MapPin size={16} />}
                 value={formData.lieu_de_naissance}
                 onChange={updateUpper('lieu_de_naissance')}
                 placeholder="Ex: ABIDJAN"
                 tabIndex={4}
+                required
+                style={{ textTransform: 'uppercase' }}
               />
             </FormField>
           </div>
@@ -422,28 +485,30 @@ export default function AjoutantSaisiePage() {
           <div style={GRID2}>
             <FormField
               label="N° Sécurité Sociale (CMU)"
+              required
               icon={<Hash size={14} />}
-              hint="Numéro figurant sur le bordereau"
+              hint="Saisie obligatoire (Exactement 13 chiffres)"
             >
               <InputWithIcon
                 icon={<Hash size={16} />}
                 value={formData.num_secu}
-                onChange={updateUpper('num_secu')}
-                placeholder="Ex: 1 234 567 890 12"
+                onChange={(v) => updateUpper('num_secu')(v.replace(/\D/g, '').substring(0, 13))}
+                placeholder="Ex: 3841236548952"
                 tabIndex={5}
                 inputMode="numeric"
+                required
               />
             </FormField>
             <FormField
               label="Contact / Téléphone"
               icon={<Phone size={14} />}
-              hint="10 chiffres sans espaces"
+              hint="Format : +225 XX XX XX XX XX"
             >
               <InputWithIcon
                 icon={<Phone size={16} />}
                 value={formData.contact}
-                onChange={updateRaw('contact')}
-                placeholder="Ex: 0700000000"
+                onChange={(v) => updateRaw('contact')(formatPhoneNumber(v))}
+                placeholder="Ex: +225 07 00 00 00 00"
                 tabIndex={6}
                 inputMode="tel"
               />
@@ -461,30 +526,34 @@ export default function AjoutantSaisiePage() {
           />
 
           <div style={GRID3}>
-            <FormField label="Site" icon={<Building2 size={14} />}>
+            <FormField label="Site" required icon={<Building2 size={14} />}>
               <InputWithIcon
                 icon={<Building2 size={16} />}
                 value={formData.site}
-                onChange={updateUpper('site')}
-                placeholder="Ex: ABOBO"
+                onChange={() => {}}
+                placeholder="Site de rattachement"
                 tabIndex={7}
+                style={{ opacity: 0.75, background: 'rgba(255,255,255,0.02)', cursor: 'not-allowed' }}
+                required
               />
             </FormField>
-            <FormField label="Centre" icon={<Layers size={14} />}>
+            <FormField label="Centre" required icon={<Layers size={14} />}>
               <InputWithIcon
                 icon={<Layers size={16} />}
                 value={formData.centre}
-                onChange={updateUpper('centre')}
-                placeholder="Ex: CENTRE 1"
+                onChange={() => {}}
+                placeholder="Centre de travail"
                 tabIndex={8}
+                style={{ opacity: 0.75, background: 'rgba(255,255,255,0.02)', cursor: 'not-allowed' }}
+                required
               />
             </FormField>
-            <FormField label="Poste" icon={<MapPin size={14} />}>
+            <FormField label="Lieu d'enrôlement" icon={<MapPin size={14} />}>
               <InputWithIcon
                 icon={<MapPin size={16} />}
                 value={formData.poste}
                 onChange={updateUpper('poste')}
-                placeholder="Ex: POSTE 2"
+                placeholder="Ex: MAIRIE ABOBO"
                 tabIndex={9}
               />
             </FormField>
@@ -494,7 +563,7 @@ export default function AjoutantSaisiePage() {
           <FormField
             label="Code Rangement"
             icon={<Archive size={14} />}
-            hint="Code de la boîte ou du casier de stockage physique"
+            hint="Code de la boîte ou du casier de stockage physique (Optionnel)"
           >
             <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
               <span
@@ -550,7 +619,7 @@ export default function AjoutantSaisiePage() {
           <span>
             La carte sera enregistrée avec le statut&nbsp;
             <strong style={{ color: '#facc15' }}>EN STOCK</strong> et affectée à l&apos;agent&nbsp;
-            <strong style={{ color: 'var(--text-primary)' }}>{user?.login || '—'}</strong>.
+            <strong style={{ color: 'var(--text-primary)' }}>{user?.nom_user || user?.login || '—'}</strong>.
             Le formulaire se réinitialise automatiquement après chaque enregistrement.
           </span>
         </div>

@@ -11,7 +11,7 @@ function ConsultantPerimeter() {
   const [perimeter, setPerimeter] = useState<{ siteNom: string; centreNom: string } | null>(null);
 
   useEffect(() => {
-    if (user?.role === 'CONSULTANT' && user.site_id && user.centre_id) {
+    if (user?.role === 'OPERATEUR_VERIFICATION' && user.site_id && user.centre_id) {
       setLoading(true);
       Promise.all([
         window.api.hierarchy.getSites(),
@@ -33,7 +33,7 @@ function ConsultantPerimeter() {
     }
   }, [user]);
 
-  if (user?.role !== 'CONSULTANT') return null;
+  if (user?.role !== 'OPERATEUR_VERIFICATION') return null;
 
   if (loading) {
     return (
@@ -101,13 +101,25 @@ export default function TopBar() {
       if (window.api && window.api.sync.getUnreadList && user) {
         const list = await window.api.sync.getUnreadList(user.site_id);
         const filteredList = (list || []).filter(n => {
-          if (user.role === 'ADMINISTRATEUR' || user.role === 'SUPER ADMIN') {
-            return n.action !== 'CARTE_ABSENTE_RETROUVEE';
+          if (user.role === 'ADMINISTRATEUR_SITE' || user.role === 'SUPER ADMIN') {
+            return n.action !== 'CARTE_ABSENTE_RETROUVEE' && n.action !== 'CARTE_PERDUE_CONFIRMEE' && n.action !== 'CARTE_PERDUE_RETROUVEE';
           }
-          if (user.role === 'CONSULTANT') {
+          if (user.role === 'OPERATEUR_VERIFICATION') {
             if (n.site_id !== undefined && n.site_id !== null && n.site_id !== user.site_id) {
               return false;
             }
+
+            // Filtrer par centre (site_id) si présent dans le payload
+            let parsed = null;
+            try {
+              parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+            } catch (e) {}
+            if (parsed && parsed.site_id !== undefined && parsed.site_id !== null) {
+              if (Number(parsed.site_id) !== Number(user.site_id)) {
+                return false;
+              }
+            }
+
             return n.action !== 'CARTE_ABSENTE_SIGNALEE';
           }
           return true;
@@ -131,7 +143,7 @@ export default function TopBar() {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
         fetchUnreadNotifications();
         if (data && data.type === 'ABSENCE_SIGNALEE') {
-          if (user?.role === 'ADMINISTRATEUR' || user?.role === 'SUPER ADMIN') {
+          if (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN') {
             toast.error("⚠️ 1 carte signalée manquante dans les rangements !", {
               duration: 6000,
               style: {
@@ -141,7 +153,7 @@ export default function TopBar() {
               }
             });
           }
-        } else if (data && data.type === 'ABSENCE_RESOLUE') {
+        } else if (data && (data.type === 'ABSENCE_RESOLUE' || data.type === 'CARTE_RETROUVEE')) {
           toast.success("📥 1 carte introuvable a été retrouvée et relocalisée !", {
             duration: 6000,
             style: {
@@ -152,9 +164,11 @@ export default function TopBar() {
           });
         }
       });
-      return () => unsubscribe();
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
     }
-  }, [user]);
+  }, [user?.site_id]);
 
   const handleMarkAsRead = async () => {
     try {
@@ -167,12 +181,11 @@ export default function TopBar() {
     }
   };
 
-  const handleNotificationClick = (n: any) => {
+  const handleNotificationClick = async (n: any) => {
     if (n.action === 'CARTE_ABSENTE_SIGNALEE') {
-      navigate('/editeur/mission1');
-      setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
+      navigate('/admin/queue');
       setShowNotifications(false);
-    } else if (n.action === 'CARTE_ABSENTE_RETROUVEE' || n.action === 'CARTE_PERDUE_CONFIRMEE') {
+    } else if (n.action === 'CARTE_ABSENTE_RETROUVEE' || n.action === 'CARTE_PERDUE_CONFIRMEE' || n.action === 'CARTE_PERDUE_RETROUVEE') {
       let parsed = null;
       try {
         parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
@@ -181,7 +194,9 @@ export default function TopBar() {
       }
       setSelectedResolution({
         id_log: n.id_log,
-        message: n.detail,
+        message: n.action === 'CARTE_PERDUE_RETROUVEE' 
+          ? `Bonne nouvelle ! La carte de ${parsed?.noms || ''} ${parsed?.prenoms || ''} a été RETROUVÉE et réintégrée au stock.`
+          : n.detail,
         noms: parsed?.noms || 'Inconnu',
         prenoms: parsed?.prenoms || '',
         rangement: parsed?.rangement || 'Non classé',
@@ -191,6 +206,13 @@ export default function TopBar() {
       setShowResolutionModal(true);
       setShowNotifications(false);
     } else {
+      try {
+        if (window.api && window.api.sync.markNotificationAsRead) {
+          await window.api.sync.markNotificationAsRead(n.id_log);
+        }
+      } catch (err) {
+        console.error('[TopBar] Failed to mark notification as read:', err);
+      }
       setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
       setShowNotifications(false);
     }
@@ -200,8 +222,8 @@ export default function TopBar() {
     if (selectedResolution) {
       try {
         setNotifications(prev => prev.filter(item => item.id_log !== selectedResolution.id_log));
-        if (window.api && window.api.sync.markAsRead && user) {
-          await window.api.sync.markAsRead(user.site_id);
+        if (window.api && window.api.sync.markNotificationAsRead) {
+          await window.api.sync.markNotificationAsRead(selectedResolution.id_log);
         }
       } catch (err) {
         console.error('[TopBar] Failed to mark single resolution as read:', err);
@@ -233,7 +255,7 @@ export default function TopBar() {
       </div>
 
       <div className="topbar-right" ref={dropdownRef}>
-        {/* Affichage du périmètre d'affectation pour le Consultant */}
+        {/* Affichage du périmètre d'affectation pour l'Opérateur de Vérification */}
         <ConsultantPerimeter />
 
         {/* Widget de synchronisation offline-first */}
@@ -309,7 +331,7 @@ export default function TopBar() {
               {unreadCount > 0 ? (
                 notifications.map(n => {
                   const isAbsence = n.action === 'CARTE_ABSENTE_SIGNALEE';
-                  const isResolution = n.action === 'CARTE_ABSENTE_RETROUVEE';
+                  const isResolution = n.action === 'CARTE_ABSENTE_RETROUVEE' || n.action === 'CARTE_PERDUE_RETROUVEE';
                   const isPerdue = n.action === 'CARTE_PERDUE_CONFIRMEE';
                   
                   return (
@@ -353,10 +375,22 @@ export default function TopBar() {
                             fontSize: 13
                           }}
                         >
-                          {isAbsence ? 'Absence Signalée' : isResolution ? 'Absence Résolue' : isPerdue ? 'Carte Introuvable (Perdue)' : 'Mise à jour Base'}
+                          {isAbsence ? 'Absence Signalée' : isResolution ? (n.action === 'CARTE_PERDUE_RETROUVEE' ? 'Carte Réactivée' : 'Absence Résolue') : isPerdue ? 'Carte Introuvable (Perdue)' : 'Mise à jour Base'}
                         </div>
                         <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-                          {isPerdue ? `❌ Carte de ${n.detail.split(' ')[2] || 'l\'assuré'} introuvable après fouille admin.` : n.detail}
+                          {isPerdue ? (() => {
+                            let parsed = null;
+                            try {
+                              parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+                            } catch (e) {}
+                            return `La carte de ${parsed?.noms || ''} ${parsed?.prenoms || ''} a été confirmée PERDUE après fouille par l'administration.`;
+                          })() : n.action === 'CARTE_PERDUE_RETROUVEE' ? (() => {
+                            let parsed = null;
+                            try {
+                              parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+                            } catch (e) {}
+                            return `Bonne nouvelle ! La carte de ${parsed?.noms || ''} ${parsed?.prenoms || ''} a été RETROUVÉE et réintégrée au stock.`;
+                          })() : n.detail}
                         </div>
                         <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 4 }}>
                           {n.date_heure ? new Date(n.date_heure).toLocaleString() : ''}

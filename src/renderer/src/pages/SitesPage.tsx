@@ -18,6 +18,10 @@ export default function SitesPage() {
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
   
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+  
   // Modals state
   const [showCentreModal, setShowCentreModal] = useState(false);
   const [showSiteModal, setShowSiteModal] = useState(false);
@@ -25,10 +29,10 @@ export default function SitesPage() {
   const [editingCentre, setEditingCentre] = useState<any>(null);
   const [confirmModal, setConfirmModal] = useState<{ type: 'DELETE' | 'BAN' | 'ACTIVATE', site: Site } | null>(null);
   
-  const [activeTab, setActiveTab] = useState<'SITES' | 'CENTRES'>('SITES');
+  const [activeTab, setActiveTab] = useState<'SITES' | 'CENTRES'>(userContext?.role === 'SUPER ADMIN' ? 'SITES' : 'CENTRES');
   
   // Forms state
-  const [centreFormData, setCentreFormData] = useState({ nom: '', numero: '', lieu: '', site_id: '' });
+  const [centreFormData, setCentreFormData] = useState({ nom: '', numero: '', lieu: '', site_id: '', prefixe_rangement: '' });
   const [siteFormData, setSiteFormData] = useState({ 
     nom: '', 
     code: '', 
@@ -41,8 +45,9 @@ export default function SitesPage() {
   const [isVerifying, setIsVerifying] = useState(false);
 
   useEffect(() => { 
+    setCurrentPage(1);
     loadData();
-  }, [userContext?.site_id]);
+  }, [userContext?.site_id, activeTab]);
 
   const loadData = async () => {
     setLoading(true);
@@ -119,11 +124,12 @@ export default function SitesPage() {
         nom: centreFormData.nom,
         numero: parseInt(centreFormData.numero) || 0,
         // @ts-ignore
-        lieu: centreFormData.lieu
+        lieu: centreFormData.lieu,
+        prefixe_rangement: centreFormData.prefixe_rangement || undefined
       });
       toast.success('Centre créé avec succès');
       setShowCentreModal(false);
-      setCentreFormData({ nom: '', numero: '', lieu: '', site_id: '' });
+      setCentreFormData({ nom: '', numero: '', lieu: '', site_id: '', prefixe_rangement: '' });
       loadData();
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la création du centre');
@@ -136,7 +142,8 @@ export default function SitesPage() {
     try {
       await window.api.hierarchy.updateCentre(editingCentre.id, {
         nom: editingCentre.nom,
-        numero: editingCentre.numero
+        numero: editingCentre.numero,
+        prefixe_rangement: editingCentre.prefixe_rangement || null
       });
       toast.success('Centre modifié avec succès');
       setEditingCentre(null);
@@ -182,13 +189,13 @@ export default function SitesPage() {
   };
 
 
-  if (userContext?.role !== 'SUPER ADMIN') {
+  if (userContext?.role !== 'SUPER ADMIN' && userContext?.role !== 'ADMINISTRATEUR_SITE') {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div className="card" style={{ padding: 40, textAlign: 'center', maxWidth: 400 }}>
           <Lock size={48} color="var(--accent-red)" style={{ marginBottom: 20 }} />
           <h3 style={{ marginBottom: 12 }}>Accès Restreint</h3>
-          <p style={{ color: 'var(--text-muted)' }}>Cette section est réservée exclusivement à l'administration centrale du système.</p>
+          <p style={{ color: 'var(--text-muted)' }}>Cette section est réservée exclusivement à l'administration du système.</p>
         </div>
       </div>
     );
@@ -210,30 +217,47 @@ export default function SitesPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 12 }}>
-          <div className="tabs-premium">
-            <button className={activeTab === 'SITES' ? 'active' : ''} onClick={() => setActiveTab('SITES')}>
-              <MapPin size={16} /> Sites
-            </button>
-            <button className={activeTab === 'CENTRES' ? 'active' : ''} onClick={() => setActiveTab('CENTRES')}>
-              <Building2 size={16} /> Centres
-            </button>
-          </div>
+          {userContext?.role === 'SUPER ADMIN' ? (
+            <div className="tabs-premium">
+              <button className={activeTab === 'SITES' ? 'active' : ''} onClick={() => setActiveTab('SITES')}>
+                <MapPin size={16} /> Sites
+              </button>
+              <button className={activeTab === 'CENTRES' ? 'active' : ''} onClick={() => setActiveTab('CENTRES')}>
+                <Building2 size={16} /> Centres
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 215, 0, 0.05)', border: '1px solid rgba(255, 215, 0, 0.2)', padding: '6px 16px', borderRadius: 12, gap: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#ffd700' }}>
+                Centres créés : {centres.filter(c => c.site_id === userContext?.site_id).length} / {(() => {
+                  const s = sites.find(x => x.id === userContext?.site_id);
+                  return s ? s.max_centres : 4;
+                })()}
+              </span>
+            </div>
+          )}
           
-          <button className="btn btn-primary btn-lg" onClick={() => activeTab === 'SITES' ? setShowSiteModal(true) : setShowCentreModal(true)}>
+          <button 
+            className="btn btn-primary btn-lg" 
+            disabled={userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4)}
+            onClick={() => activeTab === 'SITES' ? setShowSiteModal(true) : setShowCentreModal(true)}
+          >
             <Plus size={18} /> {activeTab === 'SITES' ? 'Nouveau Site' : 'Nouveau Centre'}
           </button>
         </div>
       </div>
 
       {/* Statistiques Rapides */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
-        <div className="stat-card-mini">
-          <div className="icon"><MapPin size={16} /></div>
-          <div className="content">
-            <span className="label">Sites Total</span>
-            <span className="value">{sites.length}</span>
+      <div style={{ display: 'grid', gridTemplateColumns: userContext?.role === 'SUPER ADMIN' ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)', gap: 20 }}>
+        {userContext?.role === 'SUPER ADMIN' && (
+          <div className="stat-card-mini">
+            <div className="icon"><MapPin size={16} /></div>
+            <div className="content">
+              <span className="label">Sites Total</span>
+              <span className="value">{sites.length}</span>
+            </div>
           </div>
-        </div>
+        )}
         <div className="stat-card-mini">
           <div className="icon"><Building2 size={16} /></div>
           <div className="content">
@@ -244,93 +268,142 @@ export default function SitesPage() {
         <div className="stat-card-mini">
           <div className="icon"><Activity size={16} /></div>
           <div className="content">
-            <span className="label">Disponibilité Réseau</span>
+            <span className="label">
+              {userContext?.role === 'SUPER ADMIN' ? 'Disponibilité Réseau' : `Disponibilité : ${(() => {
+                const s = sites.find(x => x.id === userContext?.site_id);
+                return s ? s.nom : 'Mon Site';
+              })()}`}
+            </span>
             <span className="value" style={{ color: 'var(--accent-green)' }}>100%</span>
           </div>
         </div>
       </div>
 
       {/* Main Content Table */}
-      <div className="card card-premium" style={{ flex: 1, overflow: 'hidden' }}>
-        <div style={{ height: '100%', overflowY: 'auto' }}>
+      <div className="card card-premium" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ flex: 1, overflowY: 'auto' }}>
           {activeTab === 'SITES' ? (
-            <table className="table-premium">
-              <thead>
-                <tr>
-                  <th>ÉTAT SYSTÈME</th>
-                  <th>IDENTIFIANT</th>
-                  <th>DÉSIGNATION DU SITE</th>
-                  <th>CAPACITÉ</th>
-                  <th>DÉPLOIEMENT</th>
-                  <th style={{ textAlign: 'right' }}>ACTIONS</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sites.map(s => (
-                  <tr key={s.id} className={!s.is_active ? 'row-inactive' : ''}>
-                    <td>
-                      <div className={`status-badge ${s.is_active ? 'active' : 'banned'}`}>
-                        <div className="pulse-dot" />
-                        {s.is_active ? 'OPÉRATIONNEL' : 'ACCÈS RÉVOQUÉ'}
-                      </div>
-                    </td>
-                    <td><code className="code-tag">{s.code}</code></td>
-                    <td><span style={{ fontWeight: 700, fontSize: 14 }}>{s.nom}</span></td>
-                    <td>
-                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <div className="progress-bar-mini"><div style={{ width: '60%' }} /></div>
-                          <span style={{ fontSize: 12 }}>{s.max_centres} Centres</span>
-                       </div>
-                    </td>
-                    <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                    <td>
-                      <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                        <button className="btn-action" onClick={() => setEditingSite(s)} title="Paramètres"><Edit size={14} /></button>
-                        {s.is_active ? (
-                          <button className="btn-action ban" onClick={() => setConfirmModal({ type: 'BAN', site: s })} title="Révoquer l'accès"><Lock size={14} /></button>
-                        ) : (
-                          <button className="btn-action activate" onClick={() => setConfirmModal({ type: 'ACTIVATE', site: s })} title="Restaurer l'accès"><Unlock size={14} /></button>
-                        )}
-                        <button className="btn-action delete" onClick={() => setConfirmModal({ type: 'DELETE', site: s })} title="Suppression irréversible"><Trash2 size={14} /></button>
-                      </div>
-                    </td>
+            <>
+              <table className="table-premium">
+                <thead>
+                  <tr>
+                    <th>ÉTAT SYSTÈME</th>
+                    <th>IDENTIFIANT</th>
+                    <th>DÉSIGNATION DU SITE</th>
+                    <th>CAPACITÉ</th>
+                    <th>DÉPLOIEMENT</th>
+                    <th style={{ textAlign: 'right' }}>ACTIONS</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {sites.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(s => (
+                    <tr key={s.id} className={!s.is_active ? 'row-inactive' : ''}>
+                      <td>
+                        <div className={`status-badge ${s.is_active ? 'active' : 'banned'}`}>
+                          <div className="pulse-dot" />
+                          {s.is_active ? 'OPÉRATIONNEL' : 'ACCÈS RÉVOQUÉ'}
+                        </div>
+                      </td>
+                      <td><code className="code-tag">{s.code}</code></td>
+                      <td><span style={{ fontWeight: 700, fontSize: 14 }}>{s.nom}</span></td>
+                      <td>
+                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <div className="progress-bar-mini"><div style={{ width: '60%' }} /></div>
+                            <span style={{ fontSize: 12 }}>{s.max_centres} Centres</span>
+                         </div>
+                      </td>
+                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td>
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                          <button className="btn-action" onClick={() => setEditingSite(s)} title="Paramètres"><Edit size={14} /></button>
+                          {s.is_active ? (
+                            <button className="btn-action ban" onClick={() => setConfirmModal({ type: 'BAN', site: s })} title="Révoquer l'accès"><Lock size={14} /></button>
+                          ) : (
+                            <button className="btn-action activate" onClick={() => setConfirmModal({ type: 'ACTIVATE', site: s })} title="Restaurer l'accès"><Unlock size={14} /></button>
+                          )}
+                          <button className="btn-action delete" onClick={() => setConfirmModal({ type: 'DELETE', site: s })} title="Suppression irréversible"><Trash2 size={14} /></button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           ) : (
-            <table className="table-premium">
-              <thead>
-                <tr>
-                  <th>RÉFÉRENCE</th>
-                  <th>NOM DU CENTRE</th>
-                  <th>LOCALISATION GÉOGRAPHIQUE</th>
-                  <th>SITE DE RATTACHEMENT</th>
-                  <th style={{ textAlign: 'right' }}>STATUT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {centres.map(c => (
-                  <tr key={c.id}>
-                    <td><span className="id-badge">ID-{c.numero.toString().padStart(2, '0')}</span></td>
-                    <td style={{ fontWeight: 700 }}>{c.nom}</td>
-                    <td>{c.lieu || 'Zone non définie'}</td>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <MapPin size={12} color="var(--accent-primary)" />
-                        <span className="badge-site">{c.site_nom || 'SITE PRINCIPAL'}</span>
-                      </div>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                         <span className="status-badge active">EN SERVICE</span>
-                         <button className="btn-action" onClick={() => setEditingCentre(c)} title="Modifier le Centre"><Edit size={14} /></button>
-                       </div>
-                    </td>
+            <>
+              <table className="table-premium">
+                <thead>
+                  <tr>
+                    <th>RÉFÉRENCE</th>
+                    <th>NOM DU CENTRE</th>
+                    <th>LOCALISATION GÉOGRAPHIQUE</th>
+                    <th>PRÉFIXE CSV</th>
+                    <th>SITE DE RATTACHEMENT</th>
+                    <th style={{ textAlign: 'right' }}>STATUT</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {centres.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
+                    <tr key={c.id}>
+                      <td><span className="id-badge">ID-{c.numero.toString().padStart(2, '0')}</span></td>
+                      <td style={{ fontWeight: 700 }}>{c.nom}</td>
+                      <td>{c.lieu || 'Zone non définie'}</td>
+                      <td>
+                        {c.prefixe_rangement ? (
+                          <code className="code-tag" style={{ color: '#FFD700', border: '1px solid #FFD700' }}>
+                            {c.prefixe_rangement}
+                          </code>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Aucun</span>
+                        )}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <MapPin size={12} color="var(--accent-primary)" />
+                          <span className="badge-site">{c.site_nom || 'SITE PRINCIPAL'}</span>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                           <span className="status-badge active">EN SERVICE</span>
+                           <button className="btn-action" onClick={() => setEditingCentre(c)} title="Modifier le Centre"><Edit size={14} /></button>
+                         </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+
+        {/* ZONE PAGINATION SITES / CENTRES */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 24px', background: 'rgba(255, 255, 255, 0.01)', borderTop: '1px solid rgba(255, 255, 255, 0.05)', flexWrap: 'wrap', gap: 12 }}>
+          <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+            Affichage de <strong>{(activeTab === 'SITES' ? sites : centres).length > 0 ? ((currentPage - 1) * itemsPerPage) + 1 : 0}</strong> à <strong>{Math.min(currentPage * itemsPerPage, (activeTab === 'SITES' ? sites : centres).length)}</strong> sur <strong>{(activeTab === 'SITES' ? sites : centres).length}</strong> éléments
+          </span>
+          {Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage) > 1 && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))} 
+                disabled={currentPage === 1} 
+                style={{ padding: '8px 16px', fontSize: 13, opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? 'not-allowed' : 'pointer', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, background: 'rgba(255,255,255,0.02)', color: 'white' }}
+              >
+                Précédent
+              </button>
+              <span style={{ display: 'flex', alignItems: 'center', padding: '0 8px', fontSize: 13, fontWeight: 600, color: 'white' }}>
+                Page {currentPage} sur {Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage)}
+              </span>
+              <button 
+                className="btn-secondary" 
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage)))} 
+                disabled={currentPage === Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage)} 
+                style={{ padding: '8px 16px', fontSize: 13, opacity: currentPage === Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage) ? 0.5 : 1, cursor: currentPage === Math.ceil((activeTab === 'SITES' ? sites : centres).length / itemsPerPage) ? 'not-allowed' : 'pointer', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, background: 'rgba(255,255,255,0.02)', color: 'white' }}
+              >
+                Suivant
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -566,9 +639,30 @@ export default function SitesPage() {
                   <input className="input-p" type="text" value={centreFormData.lieu} onChange={e => setCentreFormData({...centreFormData, lieu: e.target.value.toUpperCase()})} placeholder="Quartier..." />
                 </div>
               </div>
+              <div className="input-group-premium" style={{ marginTop: 16 }}>
+                <label>Préfixe de Rangement (Import CSV)</label>
+                <input className="input-p" type="text" value={centreFormData.prefixe_rangement || ''} onChange={e => setCentreFormData({...centreFormData, prefixe_rangement: e.target.value.toUpperCase()})} placeholder="Ex: BOX FHB, PK18" />
+                <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                  Pour plusieurs préfixes, séparez-les par des virgules (ex: <code>BOX FHB, FHB, GESTION</code>).
+                </span>
+              </div>
+              {userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4) && (
+                <div style={{ background: 'rgba(239, 68, 68, 0.05)', border: '1px solid rgba(239, 68, 68, 0.2)', padding: 12, borderRadius: 12, display: 'flex', gap: 10, color: '#ef4444', fontSize: 12, marginTop: 16, alignItems: 'flex-start' }}>
+                  <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <p style={{ margin: 0, lineHeight: 1.4 }}>
+                    <strong>🚫 Limite atteinte :</strong> Vous avez atteint le quota maximal de centres autorisés pour votre site. Veuillez contacter le Super Administrateur.
+                  </p>
+                </div>
+              )}
               <div className="modal-footer">
                 <button type="button" className="btn-secondary" onClick={() => setShowCentreModal(false)}>Annuler</button>
-                <button type="submit" className="btn-execute btn-primary">CRÉER LE CENTRE</button>
+                <button 
+                  type="submit" 
+                  disabled={userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4)}
+                  className="btn-execute btn-primary"
+                >
+                  CRÉER LE CENTRE
+                </button>
               </div>
             </form>
           </div>
@@ -592,9 +686,18 @@ export default function SitesPage() {
                 <label>Nom du Centre</label>
                 <input className="input-p" type="text" value={editingCentre.nom} onChange={e => setEditingCentre({...editingCentre, nom: e.target.value.toUpperCase()})} required />
               </div>
-              <div className="input-group-premium" style={{ marginTop: 16 }}>
-                <label>Numéro de Centre</label>
-                <input className="input-p" type="number" value={editingCentre.numero} onChange={e => setEditingCentre({...editingCentre, numero: e.target.value})} required />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+                <div className="input-group-premium">
+                  <label>Numéro de Centre</label>
+                  <input className="input-p" type="number" value={editingCentre.numero} onChange={e => setEditingCentre({...editingCentre, numero: e.target.value})} required />
+                </div>
+                <div className="input-group-premium">
+                  <label>Préfixe de Rangement</label>
+                  <input className="input-p" type="text" value={editingCentre.prefixe_rangement || ''} onChange={e => setEditingCentre({...editingCentre, prefixe_rangement: e.target.value.toUpperCase()})} placeholder="Ex: BOX FHB, PK18" />
+                  <span style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, display: 'block' }}>
+                    Séparez par des virgules pour plusieurs préfixes.
+                  </span>
+                </div>
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn-secondary" onClick={() => setEditingCentre(null)}>Annuler</button>

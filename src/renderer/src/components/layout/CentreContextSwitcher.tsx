@@ -20,7 +20,7 @@ export default function CentreContextSwitcher() {
     }
   }, [user?.site_id, activeSiteId]);
 
-  if (user?.role !== 'ADMINISTRATEUR' && user?.role !== 'SUPER ADMIN') {
+  if (user?.role !== 'ADMINISTRATEUR_SITE' && user?.role !== 'SUPER ADMIN') {
     return null;
   }
 

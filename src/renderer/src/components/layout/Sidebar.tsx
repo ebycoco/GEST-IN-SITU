@@ -3,7 +3,7 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
-  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X
+  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
@@ -14,13 +14,15 @@ const getNavItemsForRole = (role?: string) => {
     { label: 'Mon Profil', icon: UserCircle, path: '/profile' },
   ];
 
-  if (role === 'SUPER ADMIN' || role === 'ADMINISTRATEUR') {
+  if (role === 'SUPER ADMIN' || role === 'ADMINISTRATEUR_SITE') {
     const adminItems = [
       { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
       { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-      { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
-      { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
-      { label: 'Assainissement', icon: Clock, path: '/editeur/mission1' },
+      { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
+      { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
+      { label: 'Classement Logistique', icon: Package, path: '/logistique' },
+      { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+      { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
       { label: 'Importation', icon: Upload, path: '/import' },
       { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
     ];
@@ -32,32 +34,59 @@ const getNavItemsForRole = (role?: string) => {
     return [
       ...adminItems,
       { label: 'Agents', icon: Users, path: '/agents' },
+      { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
       { label: 'Journaux', icon: FileText, path: '/logs' },
       ...baseItems
     ];
   }
 
-  if (role === 'EDITEUR') {
+  if (role === 'OPERATEUR_QUALITE') {
     return [
-      { label: 'Assainissement', icon: FileText, path: '/editeur/mission1' },
+      { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
       { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
       { label: 'Recherche', icon: Search, path: '/search' },
       ...baseItems
     ];
   }
 
-  if (role === 'AJOUTANT') {
+  if (role === 'OPERATEUR_SAISIE') {
     return [
-      { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
+      { label: 'Tableau de bord', icon: Activity, path: '/dashboard' },
+      { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
       { label: 'Recherche', icon: Search, path: '/search' },
       ...baseItems
     ];
   }
 
-  if (role === 'CONSULTANT') {
+  if (role === 'OPERATEUR_LOGISTIQUE') {
     return [
-      { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
+      { label: 'Classement Logistique', icon: Package, path: '/logistique' },
       ...baseItems
+    ];
+  }
+
+  if (role === 'OPERATEUR_INVENTAIRE') {
+    return [
+      { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+      ...baseItems
+    ];
+  }
+
+  if (role === 'OPERATEUR_VERIFICATION') {
+    return [
+      { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
+      ...baseItems
+    ];
+  }
+
+  if (role === 'ADMIN_CENTRE') {
+    return [
+      { label: 'Tableau de bord Centre', icon: LayoutDashboard, path: '/centre/dashboard' },
+      { label: 'Suivi des Retraits',     icon: BarChart2,        path: '/retraits' },
+      { label: 'Cartes CMU',             icon: CreditCard,       path: '/cartes' },
+      { label: 'Recherche CMU',          icon: Search,           path: '/verification/recherche' },
+      { label: 'Journaux',               icon: FileText,         path: '/logs' },
+      ...baseItems,
     ];
   }
 
@@ -114,54 +143,87 @@ export default function Sidebar() {
       if (activeSiteId) {
         items.splice(1, 0, 
           { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-          { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
-          { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
-          { label: 'Assainissement', icon: Clock, path: '/editeur/mission1' },
+          { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
+          { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
+          { label: 'Classement Logistique', icon: Package, path: '/logistique' },
+          { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+          { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
           { label: 'Importation', icon: Upload, path: '/import' },
+          { label: 'Exportation', icon: Download, path: '/export' },
           { label: 'File d\'attente', icon: Clock, path: '/admin/queue' }
         );
         items.push(
           { label: 'Agents', icon: Users, path: '/agents' },
+          { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
           { label: 'Journaux', icon: FileText, path: '/logs' }
         );
       }
       return items;
     }
 
-    if (user.role === 'ADMINISTRATEUR') {
+    if (user.role === 'ADMINISTRATEUR_SITE') {
       return [
         { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
         { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-        { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
-        { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
-        { label: 'Assainissement', icon: Clock, path: '/editeur/mission1' },
+        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
+        { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
+        { label: 'Classement Logistique', icon: Package, path: '/logistique' },
+        { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
         { label: 'Importation', icon: Upload, path: '/import' },
+        { label: 'Exportation', icon: Download, path: '/export' },
         { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
+        { label: 'Infrastructures', icon: MapPin, path: '/sites' },
         { label: 'Agents', icon: Users, path: '/agents' },
+        { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
+        { label: 'Journaux', icon: FileText, path: '/logs' },
+        ...baseItems.filter(i => i.path === '/profile')
+      ];
+    }
+
+    if (user.role === 'ADMIN_CENTRE') {
+      return [
+        { label: 'Tableau de bord', icon: LayoutDashboard, path: '/centre/dashboard' },
+        { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
+        { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
+        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
         { label: 'Journaux', icon: FileText, path: '/logs' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
 
     // Autres rôles...
-    if (user.role === 'EDITEUR') {
+    if (user.role === 'OPERATEUR_QUALITE') {
       return [
-        { label: 'Assainissement', icon: FileText, path: '/editeur/mission1' },
+        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
         { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-        { label: 'Recherche', icon: Search, path: '/consultant/recherche' },
+        { label: 'Recherche', icon: Search, path: '/verification/recherche' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
-    if (user.role === 'AJOUTANT') {
+    if (user.role === 'OPERATEUR_SAISIE') {
       return [
-        { label: 'Nouvelle Saisie', icon: FileText, path: '/ajoutant/saisie' },
-        { label: 'Recherche', icon: Search, path: '/consultant/recherche' },
+        { label: 'Tableau de bord', icon: Activity, path: '/dashboard' },
+        { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
+        { label: 'Recherche', icon: Search, path: '/verification/recherche' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
-    if (user.role === 'CONSULTANT') {
+    if (user.role === 'OPERATEUR_LOGISTIQUE') {
       return [
-        { label: 'Recherche CMU', icon: Search, path: '/consultant/recherche' },
+        { label: 'Classement Logistique', icon: Package, path: '/logistique' },
+        ...baseItems.filter(i => i.path === '/profile')
+      ];
+    }
+    if (user.role === 'OPERATEUR_INVENTAIRE') {
+      return [
+        { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+        ...baseItems.filter(i => i.path === '/profile')
+      ];
+    }
+    if (user.role === 'OPERATEUR_VERIFICATION') {
+      return [
+        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

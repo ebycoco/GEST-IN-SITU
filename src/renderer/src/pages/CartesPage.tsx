@@ -8,6 +8,7 @@ import {
   Hash, Phone, MapPin, Package, Info, X, User
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 
 interface Carte {
@@ -137,7 +138,7 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
       </div>
 
       <div style={{ width: 100, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        {!isDelivered && !isCancelled && userRole !== 'CONSULTANT' && userRole !== 'AJOUTANT' && (
+        {!isDelivered && !isCancelled && userRole !== 'OPERATEUR_VERIFICATION' && userRole !== 'OPERATEUR_SAISIE' && (
           <button 
             className="btn-icon" 
             style={{ 
@@ -182,6 +183,7 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
 });
 
 export default function CartesPage() {
+  const navigate = useNavigate();
   const [cartes, setCartes] = useState<Carte[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -203,9 +205,16 @@ export default function CartesPage() {
       const finalFilters = { ...flt };
       if (siteIdToUse) finalFilters.site_id = siteIdToUse.toString();
 
+      // Filtrage automatique par centre_id pour l'ADMIN_CENTRE
+      if (user?.role === 'ADMIN_CENTRE' && user?.centre_id) {
+        finalFilters.centre_id = user.centre_id.toString();
+      }
+
       const [data, statsData] = await Promise.all([
         window.api.cartes.getPage(off, LIMIT, finalFilters),
-        window.api.stats.get(siteIdToUse || undefined)
+        user?.role === 'ADMIN_CENTRE' && user?.centre_id && user?.site_id
+          ? window.api.stats.getCentre(user.centre_id, user.site_id)
+          : window.api.stats.get(siteIdToUse || undefined)
       ]);
       
       setCartes(data.rows);
@@ -227,6 +236,7 @@ export default function CartesPage() {
     const newF = { ...filters, [key]: value };
     if (!value) delete newF[key];
     setFilters(newF);
+    setSelected(null);
     loadData(0, newF);
   };
 
@@ -308,7 +318,7 @@ export default function CartesPage() {
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
           </button>
-          {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR') && (
+          {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (
             <button 
               className="btn btn-outline" 
               style={{ 
@@ -316,16 +326,16 @@ export default function CartesPage() {
                 background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
                 display: 'flex', alignItems: 'center', gap: 8
               }} 
-              onClick={handleExport} 
-              disabled={exporting}
+              onClick={() => navigate('/export')} 
             >
-              {exporting ? <RefreshCw size={15} className="animate-spin" /> : <Download size={15} />}
-              <span style={{ fontSize: 13, fontWeight: 600 }}>Export CSV</span>
+              <Download size={15} />
+              <span style={{ fontSize: 13, fontWeight: 600 }}>Exportation de Données</span>
             </button>
           )}
-          {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR') && (
+          {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (
             <button 
               className="btn" 
+              onClick={() => navigate('/saisie')}
               style={{ 
                 borderRadius: 12, padding: '0 20px', height: 42, 
                 background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
@@ -382,7 +392,7 @@ export default function CartesPage() {
         >
           <option value="">Tous les Statuts</option>
           <option value="EN STOCK">📦 En Stock</option>
-          <option value="DISTRIBUEE">✅ Distribuées</option>
+          <option value="DELIVRE">✅ Distribuées</option>
           <option value="ANNULE">⚠️ Annulées</option>
         </select>
 
@@ -573,7 +583,7 @@ export default function CartesPage() {
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                       <span style={{ color: 'var(--text-muted)' }}>Le:</span>
-                      <span style={{ fontWeight: 600, color: 'white' }}>{selected.date_retrait ? new Date(selected.date_retrait).toLocaleDateString('fr') : '—'}</span>
+                      <span style={{ fontWeight: 600, color: 'white' }}>{selected.date_delivrance ? new Date(selected.date_delivrance).toLocaleDateString('fr') : '—'}</span>
                     </div>
                   </div>
                 </div>
@@ -581,7 +591,7 @@ export default function CartesPage() {
             </div>
 
             <div style={{ padding: 20, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 10 }}>
-               {!['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && user?.role !== 'AJOUTANT' && (
+               {!['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && user?.role !== 'OPERATEUR_SAISIE' && (
                 <button 
                   className="btn btn-primary" 
                   style={{ 

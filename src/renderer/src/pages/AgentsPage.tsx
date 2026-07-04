@@ -38,7 +38,7 @@ export default function AgentsPage() {
   const [formData, setFormData] = useState({ 
     login: '', 
     password: '', 
-    role: 'CONSULTANT', 
+    role: 'OPERATEUR_VERIFICATION', 
     nom_user: '', 
     prenom_user: '',
     centre_id: '',
@@ -74,8 +74,8 @@ export default function AgentsPage() {
     return {
       total: users.length,
       active: users.filter(u => u.statut_actif === 1).length,
-      admins: users.filter(u => u.role === 'ADMINISTRATEUR' || u.role === 'SUPER ADMIN').length,
-      operators: users.filter(u => u.role !== 'ADMINISTRATEUR' && u.role !== 'SUPER ADMIN').length
+      admins: users.filter(u => ['ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'SUPER ADMIN'].includes(u.role)).length,
+      operators: users.filter(u => !['ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'SUPER ADMIN'].includes(u.role)).length
     };
   }, [users]);
 
@@ -176,7 +176,7 @@ export default function AgentsPage() {
     setIsEditing(false);
     setEditId(null);
     setFormData({ 
-      login: '', password: '', role: 'CONSULTANT', 
+      login: '', password: '', role: 'OPERATEUR_VERIFICATION', 
       nom_user: '', prenom_user: '', centre_id: '',
       email: '', telephone: ''
     });
@@ -438,10 +438,13 @@ export default function AgentsPage() {
                 <div style={{ position: 'relative' }}>
                   <Shield size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-purple)', zIndex: 1 }} />
                   <select className="form-select" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', appearance: 'none', position: 'relative', outline: 'none' }} value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })}>
-                    <option value="CONSULTANT">Consultant (Lecture seule)</option>
-                    <option value="AJOUTANT">Ajoutant (Saisie & Import)</option>
-                    <option value="EDITEUR">Éditeur (Modification & Stats)</option>
-                    <option value="ADMINISTRATEUR">Administrateur de Site (Totalité du site)</option>
+                    <option value="OPERATEUR_VERIFICATION">Opérateur de Vérification (Lecture seule)</option>
+                    <option value="OPERATEUR_SAISIE">Opérateur de Saisie (Nouvelle Saisie)</option>
+                    <option value="OPERATEUR_LOGISTIQUE">Opérateur Logistique (Classement à la chaîne)</option>
+                    <option value="OPERATEUR_INVENTAIRE">Opérateur Inventaire (Apurement historique)</option>
+                    <option value="OPERATEUR_QUALITE">Opérateur Qualité &amp; Assainissement</option>
+                    <option value="ADMINISTRATEUR_SITE">Administrateur de Site (Totalité du site)</option>
+                    <option value="ADMIN_CENTRE">Administrateur de Centre (Supervision locale)</option>
                   </select>
                   <div style={{ position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }}>▼</div>
                 </div>

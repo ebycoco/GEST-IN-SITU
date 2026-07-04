@@ -24,11 +24,7 @@ export async function runUpstream(): Promise<number> {
     let payload = JSON.parse(payloadStr);
 
     try {
-      // Exclure password_hash pour des raisons de sécurité évidentes si la table est t_users
-      if (tableName === 't_users' && payload.password_hash) {
-        delete payload.password_hash;
-      }
-
+      // Conserver le password_hash de t_users afin de permettre le bootstrap cloud
       // Supabase attend des noms de tables sans préfixe t_ ou alignés
       // Dans le cadre du schéma, on utilise le nom de table standardisé
       const targetTable = tableName;

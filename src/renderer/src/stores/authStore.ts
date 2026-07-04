@@ -34,12 +34,12 @@ export const useAuthStore = create<AuthState>((set) => ({
       const user = await window.api.auth.login(username, password);
       if (user) {
         // Initialize context
-        const initialCentreId = user.role !== 'SUPER ADMIN' && user.role !== 'ADMINISTRATEUR' 
+        const initialCentreId = user.role !== 'SUPER ADMIN' && user.role !== 'ADMINISTRATEUR_SITE' 
           ? user.centre_id 
           : null;
         
-        // For Site Admins, fix the activeSiteId to their assigned site
-        const initialSiteId = user.role === 'ADMINISTRATEUR' ? user.site_id : null;
+        // For Site & Centre Admins, fix the activeSiteId to their assigned site
+        const initialSiteId = (user.role === 'ADMINISTRATEUR_SITE' || user.role === 'ADMIN_CENTRE') ? user.site_id : null;
           
         set({ 
           user, 

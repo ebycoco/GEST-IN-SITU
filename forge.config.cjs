@@ -8,6 +8,28 @@ module.exports = {
     asar: {
       unpack: '**/{*.node,*.dll,better-sqlite3/**}'
     },
+    ignore: [
+      /^\/src/,
+      /^\/\.git/,
+      /^\/\.github/,
+      /^\/\.vscode/,
+      /^\/tsconfig\.json/,
+      /^\/electron\.vite\.config\./,
+      /^\/README\.md/,
+      /^\/dist\/make/,
+      /^\/dist\/GEST-IN-SITU/,
+      /^\/compile_installer\.ps1/,
+      /^\/installer\.iss/,
+      /^\/GEMINI\.md/,
+      /^\/debug_ignore\.txt/,
+      /^\/build-log\.txt/,
+      /^\/create_project\.json/,
+      /^\/scratch/,
+      /^\/supabase_schema\.sql/,
+      /^\/scripts/,
+      /^\/index-relais\.js/,
+      /^\/out/
+    ],
     icon: './resources/icon',
     name: 'GEST-IN-SITU',
     executableName: 'gest-in-situ',
@@ -20,18 +42,7 @@ module.exports = {
     }
   },
   makers: [
-    new MakerSquirrel({
-      name: 'GEST-IN-SITU',
-      setupIcon: './resources/icon.ico',
-      setupExe: 'GEST-IN-SITU-Setup.exe',
-      noMsi: true
-    }),
-    new MakerZIP({}, ['darwin', 'linux']),
-    new MakerDMG({
-      name: 'GEST-IN-SITU',
-      icon: './resources/icon.icns',
-      format: 'ULFO'
-    })
+    new MakerZIP({}, ['win32', 'darwin', 'linux'])
   ],
   plugins: [
     new AutoUnpackNativesPlugin({})

@@ -1,82 +1,204 @@
--- GEST-IN-SITU Supabase Schema (PostgreSQL)
+-- ============================================================
+-- GEST-IN-SITU : Schéma Supabase/PostgreSQL officiel
+-- Version : alignée sur schema.ts v18 + mapping bulk-uploader.ts
+-- Généré le : 2026-07-03
+-- ============================================================
 
--- Enable RLS
--- Tables definitions
+-- ============================================================
+-- 0. NETTOYAGE : DROP dans l'ordre (enfants avant parents)
+-- ============================================================
+DROP TABLE IF EXISTS public.t_cartes CASCADE;
+DROP TABLE IF EXISTS public.t_logs CASCADE;
+DROP TABLE IF EXISTS public.t_users CASCADE;
+DROP TABLE IF EXISTS public.t_postes CASCADE;
+DROP TABLE IF EXISTS public.t_centres CASCADE;
+DROP TABLE IF EXISTS public.t_sites CASCADE;
 
-CREATE TABLE IF NOT EXISTS public.t_sites (
-    id_site SERIAL PRIMARY KEY,
-    nom_site TEXT NOT NULL UNIQUE,
-    code_site TEXT UNIQUE,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+
+-- ============================================================
+-- 1. t_sites
+-- ============================================================
+CREATE TABLE public.t_sites (
+    id          BIGSERIAL PRIMARY KEY,
+    nom         TEXT NOT NULL,
+    code        TEXT UNIQUE NOT NULL,
+    is_active   INTEGER DEFAULT 1,
+    max_centres INTEGER DEFAULT 4,
+    sync_id     TEXT UNIQUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS public.t_centres (
-    id_centre SERIAL PRIMARY KEY,
-    id_site INTEGER REFERENCES public.t_sites(id_site) ON DELETE CASCADE,
-    nom_centre TEXT NOT NULL,
-    code_centre TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 2. t_centres
+-- Mapping local : site_id -> site_id (FK t_sites.id)
+-- ============================================================
+CREATE TABLE public.t_centres (
+    id                  BIGSERIAL PRIMARY KEY,
+    site_id             BIGINT REFERENCES public.t_sites(id) ON DELETE CASCADE,
+    nom                 TEXT NOT NULL,
+    numero              INTEGER CHECK(numero BETWEEN 1 AND 4),
+    lieu                TEXT,
+    prefixe_rangement   TEXT,
+    sync_id             TEXT UNIQUE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS public.t_postes (
-    id_poste SERIAL PRIMARY KEY,
-    id_centre INTEGER REFERENCES public.t_centres(id_centre) ON DELETE CASCADE,
-    nom_poste TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 3. t_postes
+-- ============================================================
+CREATE TABLE public.t_postes (
+    id          BIGSERIAL PRIMARY KEY,
+    centre_id   BIGINT REFERENCES public.t_centres(id) ON DELETE CASCADE,
+    nom         TEXT NOT NULL,
+    numero      INTEGER CHECK(numero BETWEEN 1 AND 4),
+    sync_id     TEXT UNIQUE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS public.t_cartes (
-    id_carte BIGSERIAL PRIMARY KEY,
-    num_secu TEXT,
-    noms TEXT NOT NULL,
-    prenoms TEXT,
-    date_naissance DATE,
-    lieu_naissance TEXT,
-    sexe TEXT,
-    contact TEXT,
-    contact_2 TEXT,
-    rangement TEXT,
-    id_site INTEGER REFERENCES public.t_sites(id_site),
-    id_centre INTEGER REFERENCES public.t_centres(id_centre),
-    id_poste INTEGER REFERENCES public.t_postes(id_poste),
-    statut TEXT DEFAULT 'EN STOCK',
-    statut_physique TEXT DEFAULT 'OK',
-    nom_retirant TEXT,
-    num_retirant TEXT,
-    date_delivrance TIMESTAMPTZ,
-    agent_distributeur TEXT,
-    centre_retrait TEXT,
-    cle_doublon TEXT UNIQUE,
-    cle_doublon_flex TEXT,
-    synced_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 4. t_users (v18 final)
+-- ============================================================
+CREATE TABLE public.t_users (
+    id_user         BIGSERIAL PRIMARY KEY,
+    login           TEXT UNIQUE NOT NULL,
+    password_hash   TEXT NOT NULL,
+    role            TEXT NOT NULL CHECK(role IN (
+                        'SUPER ADMIN',
+                        'ADMINISTRATEUR_SITE',
+                        'ADMIN_CENTRE',
+                        'OPERATEUR_VERIFICATION',
+                        'OPERATEUR_QUALITE',
+                        'OPERATEUR_SAISIE',
+                        'OPERATEUR_LOGISTIQUE',
+                        'OPERATEUR_INVENTAIRE'
+                    )),
+    nom_user        TEXT,
+    prenom_user     TEXT,
+    email           TEXT,
+    telephone       TEXT,
+    statut_actif    INTEGER DEFAULT 1,
+    site_id         BIGINT DEFAULT 1 REFERENCES public.t_sites(id),
+    centre_id       BIGINT REFERENCES public.t_centres(id),
+    poste_id        BIGINT REFERENCES public.t_postes(id),
+    avatar_url      TEXT,
+    last_login      TIMESTAMPTZ,
+    sync_id         TEXT UNIQUE,
+    is_dirty        INTEGER DEFAULT 0,
+    synced_at       TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE IF NOT EXISTS public.t_logs (
-    id_log BIGSERIAL PRIMARY KEY,
-    action_type TEXT NOT NULL,
-    table_concernee TEXT NOT NULL,
-    id_enregistrement BIGINT,
-    date_action TIMESTAMPTZ DEFAULT NOW(),
-    details TEXT,
-    user_login TEXT
+-- ============================================================
+-- 5. t_cartes — TABLE PRINCIPALE (200k+ lignes)
+-- Mapping bulk-uploader.ts :
+--   date_de_naissance -> date_naissance
+--   lieu_de_naissance -> lieu_naissance
+--   site_id           -> id_site
+--   centre_id         -> id_centre
+--   poste_id          -> id_poste
+-- ============================================================
+CREATE TABLE public.t_cartes (
+    id_carte                    BIGSERIAL PRIMARY KEY,
+    sync_id                     TEXT UNIQUE,
+    noms                        TEXT NOT NULL,
+    prenoms                     TEXT NOT NULL DEFAULT '',
+    date_naissance              DATE,
+    lieu_naissance              TEXT,
+    num_secu                    TEXT,
+    lieu_enrolement             TEXT,
+    contact                     TEXT,
+    rangement                   TEXT,
+    statut                      TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE')),
+    statut_physique             TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE','PERDUE')),
+    date_delivrance             TIMESTAMPTZ,
+    agent_saisie                TEXT,
+    agent_distributeur          TEXT,
+    centre_retrait              TEXT,
+    nom_retirant                TEXT,
+    num_retirant                TEXT,
+    cle_doublon                 TEXT,
+    cle_doublon_flex            TEXT,
+    agent_signalement_absence   TEXT,
+    date_signalement_absence    TIMESTAMPTZ,
+    date_resolution_absence     TIMESTAMPTZ,
+    agent_resolution_absence    TEXT,
+    note_resolution             TEXT,
+    notif_lue                   INTEGER DEFAULT 1,
+    id_site                     BIGINT DEFAULT 1 REFERENCES public.t_sites(id),
+    id_centre                   BIGINT REFERENCES public.t_centres(id),
+    id_poste                    BIGINT REFERENCES public.t_postes(id),
+    qr_code_data                TEXT,
+    is_exported                 INTEGER DEFAULT 0,
+    created_by                  BIGINT REFERENCES public.t_users(id_user),
+    is_dirty                    INTEGER DEFAULT 0,
+    synced_at                   TIMESTAMPTZ,
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at                  TIMESTAMPTZ DEFAULT NOW()
 );
 
--- RLS Policies
-ALTER TABLE public.t_sites ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.t_centres ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.t_postes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.t_cartes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.t_logs ENABLE ROW LEVEL SECURITY;
+-- ============================================================
+-- 6. t_logs — Journal d'audit
+-- ============================================================
+CREATE TABLE public.t_logs (
+    id_log          BIGSERIAL PRIMARY KEY,
+    id_user         BIGINT REFERENCES public.t_users(id_user),
+    login_user      TEXT,
+    action          TEXT NOT NULL,
+    detail          TEXT,
+    valeur_avant    TEXT,
+    valeur_apres    TEXT,
+    date_heure      TIMESTAMPTZ DEFAULT NOW(),
+    ip_address      TEXT,
+    centre_id       BIGINT REFERENCES public.t_centres(id),
+    site_id         BIGINT REFERENCES public.t_sites(id),
+    sync_id         TEXT UNIQUE,
+    is_dirty        INTEGER DEFAULT 0,
+    synced_at       TIMESTAMPTZ
+);
 
--- Simple Policy: Authenticated users can read everything
-CREATE POLICY "Allow read access for authenticated users" ON public.t_sites FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow read access for authenticated users" ON public.t_centres FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow read access for authenticated users" ON public.t_postes FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow read access for authenticated users" ON public.t_cartes FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow read access for authenticated users" ON public.t_logs FOR SELECT TO authenticated USING (true);
+-- ============================================================
+-- 7. INDEX DE PERFORMANCE
+-- ============================================================
+CREATE INDEX IF NOT EXISTS idx_cartes_noms          ON public.t_cartes(noms);
+CREATE INDEX IF NOT EXISTS idx_cartes_prenoms        ON public.t_cartes(prenoms);
+CREATE INDEX IF NOT EXISTS idx_cartes_num_secu       ON public.t_cartes(num_secu);
+CREATE INDEX IF NOT EXISTS idx_cartes_rangement      ON public.t_cartes(rangement);
+CREATE INDEX IF NOT EXISTS idx_cartes_statut         ON public.t_cartes(statut);
+CREATE INDEX IF NOT EXISTS idx_cartes_statut_phys    ON public.t_cartes(statut_physique);
+CREATE INDEX IF NOT EXISTS idx_cartes_cle_doublon    ON public.t_cartes(cle_doublon);
+CREATE INDEX IF NOT EXISTS idx_cartes_cle_flex       ON public.t_cartes(cle_doublon_flex);
+CREATE INDEX IF NOT EXISTS idx_cartes_id_centre      ON public.t_cartes(id_centre);
+CREATE INDEX IF NOT EXISTS idx_cartes_id_site        ON public.t_cartes(id_site);
+CREATE INDEX IF NOT EXISTS idx_cartes_sync           ON public.t_cartes(is_dirty, synced_at);
+CREATE INDEX IF NOT EXISTS idx_cartes_updated        ON public.t_cartes(updated_at);
+CREATE INDEX IF NOT EXISTS idx_cartes_contact        ON public.t_cartes(contact);
+CREATE INDEX IF NOT EXISTS idx_cartes_site_statut    ON public.t_cartes(id_site, statut);
+CREATE INDEX IF NOT EXISTS idx_cartes_sync_id        ON public.t_cartes(sync_id);
+CREATE INDEX IF NOT EXISTS idx_logs_date             ON public.t_logs(date_heure);
+CREATE INDEX IF NOT EXISTS idx_logs_action           ON public.t_logs(action);
+CREATE INDEX IF NOT EXISTS idx_logs_sync_id          ON public.t_logs(sync_id);
 
--- Simple Policy: Only Admins can modify (example)
--- Note: In a real app, you'd use app_metadata or a separate profiles table
-CREATE POLICY "Allow write access for authenticated users" ON public.t_cartes FOR ALL TO authenticated USING (true);
+-- ============================================================
+-- 8. RLS : DÉSACTIVÉ sur toutes les tables
+-- ============================================================
+ALTER TABLE public.t_sites    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.t_centres  DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.t_postes   DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.t_users    DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.t_cartes   DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.t_logs     DISABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- 9. GRANTS complets pour anon, authenticated, service_role
+-- ============================================================
+GRANT ALL ON public.t_sites    TO anon, authenticated, service_role;
+GRANT ALL ON public.t_centres  TO anon, authenticated, service_role;
+GRANT ALL ON public.t_postes   TO anon, authenticated, service_role;
+GRANT ALL ON public.t_users    TO anon, authenticated, service_role;
+GRANT ALL ON public.t_cartes   TO anon, authenticated, service_role;
+GRANT ALL ON public.t_logs     TO anon, authenticated, service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;

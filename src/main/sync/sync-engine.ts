@@ -3,7 +3,7 @@ import { networkMonitor, NetworkState } from './network-monitor';
 import { getSupabaseClient } from './supabase-client';
 
 import { runUpstream } from './upstream';
-import { runDownstream } from './downstream';
+import { runDownstream, syncUsersFromCloud } from './downstream';
 import { getDatabase } from '../database/connection';
 
 class SyncEngine {
@@ -80,6 +80,21 @@ class SyncEngine {
     }, this.SYNC_INTERVAL);
   }
 
+  public pause(): void {
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = null;
+      log.info('Sync Engine PAUSED (import in progress).');
+    }
+  }
+
+  public resume(): void {
+    if (!this.syncTimer && networkMonitor.getState() === 'ONLINE') {
+      this.startSyncCycle();
+      log.info('Sync Engine RESUMED (import finished).');
+    }
+  }
+
   private stopSyncCycle(): void {
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
@@ -125,6 +140,14 @@ class SyncEngine {
 
       // 3. Downstream (Pull cloud -> local)
       log.info(`Executing Downstream phase for siteId ${siteId}...`);
+      
+      // Rapatrier proactivement les utilisateurs du site avant de traiter les cartes
+      try {
+        await syncUsersFromCloud(siteId);
+      } catch (err) {
+        log.error('Error during syncUsersFromCloud:', err);
+      }
+
       const pulledCount = await runDownstream(siteId);
       log.info(`Downstream phase complete. Merged ${pulledCount} records.`);
 

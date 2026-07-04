@@ -14,6 +14,7 @@ export default function ImportPage() {
   const [file, setFile] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ rows: any[]; headers: string[]; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ updated: number; inserted: number } | null>(null);
   
@@ -21,6 +22,8 @@ export default function ImportPage() {
   const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [purgeConfirmText, setPurgeConfirmText] = useState('');
   const [isPurging, setIsPurging] = useState(false);
+  const [isEmergencyPurging, setIsEmergencyPurging] = useState(false);
+  const [purgeProgress, setPurgeProgress] = useState(0);
   const [cardCount, setCardCount] = useState<number>(0);
 
   const fetchCardCount = async () => {
@@ -60,6 +63,7 @@ export default function ImportPage() {
   const handleImport = async () => {
     if (!file) return;
     setImporting(true);
+    setIsImporting(true);
     setProgress(0);
     
     const removeListener = window.api.import.onProgress((p: number) => {
@@ -71,6 +75,7 @@ export default function ImportPage() {
       if (!siteIdToUse) {
         toast.error('Aucun site sélectionné');
         setImporting(false);
+        setIsImporting(false);
         return;
       }
 
@@ -84,6 +89,7 @@ export default function ImportPage() {
     } finally {
       removeListener();
       setImporting(false);
+      setIsImporting(false);
       setProgress(100);
     }
   };
@@ -95,8 +101,22 @@ export default function ImportPage() {
     }
 
     setIsPurging(true);
+    setPurgeProgress(0);
+
+    const removePurgeListener = window.api.db.onPurgeProgress((p: number) => {
+      setPurgeProgress(p);
+    });
+
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) {
+      toast.error("Impossible de déterminer le site à purger.");
+      setIsPurging(false);
+      removePurgeListener();
+      return;
+    }
+
     try {
-      const res = await window.api.db.purge();
+      const res = await window.api.db.purge(Number(siteIdToUse));
       if (res.success) {
         toast.success("Base de données locale purgée avec succès !");
         setPurgeConfirmText('');
@@ -106,6 +126,7 @@ export default function ImportPage() {
     } catch (e) {
       toast.error('Échec de la purge');
     } finally {
+      removePurgeListener();
       setIsPurging(false);
     }
   };
@@ -402,7 +423,7 @@ export default function ImportPage() {
         )}
 
         {/* Maintenance Zone */}
-        {(user?.role === 'ADMINISTRATEUR' || (user?.role === 'SUPER ADMIN' && activeSiteId)) && !importing && (
+        {(user?.role === 'ADMINISTRATEUR_SITE' || (user?.role === 'SUPER ADMIN' && activeSiteId)) && !importing && (
           <div style={{ marginTop: 20 }}>
             <div className="premium-glass" style={{ 
               padding: 32, borderRadius: 32, 
@@ -442,6 +463,56 @@ export default function ImportPage() {
             </div>
           </div>
         )}
+
+        <button
+          disabled={isEmergencyPurging || isPurging}
+          onClick={async () => {
+            try {
+              const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+              if (!siteIdToUse) {
+                toast.error("Impossible de déterminer le site pour la purge d'urgence.");
+                return;
+              }
+              setIsEmergencyPurging(true);
+              await window.api.db.emergencyPurge(Number(siteIdToUse));
+              toast.success("Base de données vidée et FTS5 réparé avec succès !");
+              setFile(null);
+              setPreview(null);
+              setProgress(0);
+              setResult(null);
+              setCardCount(0);
+            } catch (err: any) {
+              toast.error("Échec de la purge forcée : " + err.message);
+            } finally {
+              setIsEmergencyPurging(false);
+            }
+          }}
+          style={{
+            marginTop: '20px',
+            background: (isEmergencyPurging || isPurging) ? 'rgba(255,255,255,0.05)' : '#8B0000',
+            color: (isEmergencyPurging || isPurging) ? 'var(--text-muted)' : '#FFF',
+            border: (isEmergencyPurging || isPurging) ? '1px solid rgba(255,255,255,0.05)' : '2px solid #FF0000',
+            padding: '12px 24px',
+            borderRadius: '8px',
+            fontWeight: 'bold',
+            cursor: (isEmergencyPurging || isPurging) ? 'not-allowed' : 'pointer',
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '10px',
+            opacity: (isEmergencyPurging || isPurging) ? 0.5 : 1
+          }}
+        >
+          {isEmergencyPurging ? (
+            <>
+              <Loader className="animate-spin" size={18} />
+              Réparation en cours...
+            </>
+          ) : (
+            "🔴 RÉPARATION ET PURGE FORCÉE"
+          )}
+        </button>
       </div>
 
       {/* Purge Modal */}
@@ -490,7 +561,7 @@ export default function ImportPage() {
                 className="btn btn-outline" 
                 disabled={isPurging}
                 style={{ flex: 1, borderRadius: 20, padding: '18px', cursor: isPurging ? 'not-allowed' : 'pointer' }} 
-                onClick={() => { setShowPurgeModal(false); setPurgeConfirmText(''); }}
+                onClick={() => { if (!isPurging) { setShowPurgeModal(false); setPurgeConfirmText(''); } }}
               >
                 Annuler
               </button>
@@ -504,13 +575,69 @@ export default function ImportPage() {
                   color: 'white', 
                   fontWeight: 900, 
                   border: 'none',
-                  cursor: (purgeConfirmText !== 'CONFIRMER' || isPurging) ? 'not-allowed' : 'pointer'
+                  cursor: (purgeConfirmText !== 'CONFIRMER' || isPurging) ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8
                 }}
                 onClick={handlePurge}
               >
-                {isPurging ? 'Purge en cours...' : 'Purger'}
+                {isPurging && <Loader className="animate-spin" size={16} />}
+                {isPurging ? `Purge: ${purgeProgress}%` : 'Purger'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Overlay de blocage pendant l'importation */}
+      {isImporting && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(5, 7, 15, 0.9)',
+          backdropFilter: 'blur(10px)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          cursor: 'not-allowed'
+        }}>
+          <div style={{
+            background: 'rgba(23, 23, 37, 0.8)',
+            padding: 48,
+            borderRadius: 24,
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            textAlign: 'center',
+            maxWidth: 450,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 24,
+            boxShadow: '0 20px 50px rgba(0,0,0,0.5)'
+          }}>
+            <Loader className="animate-spin" size={48} color="var(--accent-primary)" />
+            <div>
+              <h3 style={{ fontSize: 22, fontWeight: 900, color: 'white', marginBottom: 8 }}>
+                Importation en cours...
+              </h3>
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 14, lineHeight: 1.6 }}>
+                Veuillez patienter pendant l'injection et la réindexation. Pour éviter tout dysfonctionnement, ne fermez pas l'application et n'interagissez pas.
+              </p>
+            </div>
+            <div style={{ width: '100%', background: 'rgba(255,255,255,0.05)', borderRadius: 10, height: 12, overflow: 'hidden' }}>
+              <div style={{
+                background: 'var(--accent-primary)',
+                width: `${progress}%`,
+                height: '100%',
+                transition: 'width 0.3s ease-out'
+              }} />
+            </div>
+            <span style={{ fontSize: 18, fontWeight: 900, color: 'white' }}>
+              {progress}%
+            </span>
           </div>
         </div>
       )}

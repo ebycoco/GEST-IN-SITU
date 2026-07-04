@@ -19,14 +19,31 @@ const api = {
     getAgentAbsences: (agent: string, siteId?: number) => ipcRenderer.invoke('cartes:getAgentAbsences', agent, siteId),
     resoudreAbsence: (id: number, data: any) => ipcRenderer.invoke('cartes:resoudreAbsence', id, data),
     declarerPerdue: (id: number) => ipcRenderer.invoke('cartes:declarerPerdue', id),
+    getHistoriquePertes: (siteId?: number) => ipcRenderer.invoke('cartes:getHistoriquePertes', siteId),
+    reactiverCarte: (id: number, nouveauRangement: string, currentUser?: any) => ipcRenderer.invoke('cartes:reactiverCarte', id, nouveauRangement, currentUser),
     getInvalidDates: (siteId?: number) => ipcRenderer.invoke('cartes:getInvalidDates', siteId),
     updateDate: (id: number, newDate: string) => ipcRenderer.invoke('cartes:updateDate', id, newDate),
+    getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string) => ipcRenderer.invoke('cartes:getDoublonsPage', siteId, offset, limit, query),
+    getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string) => ipcRenderer.invoke('cartes:getSansNumSecuPage', siteId, offset, limit, query),
+    getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string) => ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query),
+    updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }) => ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
+    searchQuickLogistique: (siteId: number, critere: string) => ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere),
+    updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }) => ipcRenderer.invoke('cartes:updateRangementEtFiche', id, fields),
+    searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => ipcRenderer.invoke('cartes:searchCombinedInventaire', siteId, queryNomsPrenoms, dateNaissance, lieuNaissance),
+    updateApurementHistorique: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) => ipcRenderer.invoke('cartes:updateApurementHistorique', id, fields),
   },
   stats: { 
     get: (siteId?: number) => ipcRenderer.invoke('stats:get', siteId),
+    getCentre: (centreId: number, siteId: number) => ipcRenderer.invoke('stats:getCentre', centreId, siteId),
+    getCentreOperateurs: (centreId: number) => ipcRenderer.invoke('stats:getCentreOperateurs', centreId),
     getGlobal: () => ipcRenderer.invoke('stats:getGlobal'),
-    getConsultant: (agentUsername: string, siteId: number) => ipcRenderer.invoke('stats:getConsultant', agentUsername, siteId),
+    getVerification: (agentUsername: string, siteId: number) => ipcRenderer.invoke('stats:getVerification', agentUsername, siteId),
     getCardsToday: (agentUsername: string, siteId: number) => ipcRenderer.invoke('stats:getCardsToday', agentUsername, siteId),
+    getAgentToday: (userId: number) => ipcRenderer.invoke('stats:getAgentToday', userId),
+    getAgentRecentSaisies: (userId: number, limit?: number) => ipcRenderer.invoke('stats:getAgentRecentSaisies', userId, limit),
+    getSiteSaisieToday: (siteId: number) => ipcRenderer.invoke('stats:getSiteSaisieToday', siteId),
+    getRetraits: (siteId: number, centreId: number | null, period: string) => ipcRenderer.invoke('stats:getRetraits', siteId, centreId, period),
+    getRetraitsTrend: (siteId: number, centreId: number | null, period: string) => ipcRenderer.invoke('stats:getRetraitsTrend', siteId, centreId, period),
   },
   // Import
   import: {
@@ -45,6 +62,10 @@ const api = {
   // Export
   export: {
     csv: (filters?: Record<string, string>) => ipcRenderer.invoke('export:csv', filters),
+    excel: (filters?: Record<string, string>) => ipcRenderer.invoke('export:excel', filters),
+    getRangements: (siteId?: number) => ipcRenderer.invoke('cartes:getRangements', siteId),
+    marquerExporte: (ids: number[]) => ipcRenderer.invoke('export:marquerExporte', ids),
+    getRows: (filters?: Record<string, string>) => ipcRenderer.invoke('export:getRows', filters),
   },
   // Users
   users: {
@@ -102,8 +123,14 @@ const api = {
     getDbPath: () => ipcRenderer.invoke('app:getDbPath'),
   },
   db: {
-    purge: () => ipcRenderer.invoke('db:purge'),
+    purge: (siteId?: number) => ipcRenderer.invoke('db:purge', siteId),
+    emergencyPurge: (siteId: number) => ipcRenderer.invoke('db:emergency-purge', siteId),
     getCardCount: () => ipcRenderer.invoke('db:getCardCount'),
+    onPurgeProgress: (callback: (p: number) => void) => {
+      const listener = (_: any, p: number) => callback(p);
+      ipcRenderer.on('db:purge-progress', listener);
+      return () => ipcRenderer.removeListener('db:purge-progress', listener);
+    },
   },
   // Sync offline-first
   sync: {
@@ -123,6 +150,9 @@ const api = {
     getUnreadCount: (siteId?: number) => ipcRenderer.invoke('sync:getUnreadCount', siteId),
     getUnreadList: (siteId?: number) => ipcRenderer.invoke('sync:getUnreadList', siteId),
     markAsRead: (siteId?: number) => ipcRenderer.invoke('sync:markAsRead', siteId),
+    markNotificationAsRead: (idLog: number) => ipcRenderer.invoke('sync:markNotificationAsRead', idLog),
+    forceGlobal: () => ipcRenderer.invoke('sync:forceGlobal'),
+    forceSite: (siteId: number) => ipcRenderer.invoke('sync:forceSite', siteId),
   },
   // Maintenance
   maintenance: {

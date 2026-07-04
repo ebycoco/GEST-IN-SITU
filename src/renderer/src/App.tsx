@@ -11,11 +11,16 @@ import AgentsPage from './pages/AgentsPage';
 import LogsPage from './pages/LogsPage';
 import ProfilePage from './pages/ProfilePage';
 import SitesPage from './pages/SitesPage';
+import ExportPage from './pages/ExportPage';
 import RoleRedirect from './components/RoleRedirect';
-import ConsultantSearchPage from './pages/ConsultantSearchPage';
-import AjoutantSaisiePage from './pages/AjoutantSaisiePage';
-import EditeurMission1Page from './pages/EditeurMission1Page';
+import VerificationSearchPage from './pages/VerificationSearchPage';
+import SaisiePage from './pages/SaisiePage';
+import QualiteAssainissementPage from './pages/QualiteAssainissementPage';
 import AdminQueuePage from './pages/AdminQueuePage';
+import LogistiquePage from './pages/LogistiquePage';
+import InventairePage from './pages/InventairePage';
+import AdminCentreDashboardPage from './pages/AdminCentreDashboardPage';
+import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect } from 'react';
 
@@ -43,28 +48,37 @@ export default function App() {
           <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
             {/* Redirection dynamique par défaut */}
             <Route index element={<RoleRedirect />} />
-            <Route path="dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><DashboardPage /></ProtectedRoute>} />
+            <Route path="dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_SAISIE']}><DashboardPage /></ProtectedRoute>} />
+            <Route path="centre/dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><AdminCentreDashboardPage /></ProtectedRoute>} />
             
-            {/* Routes Consultant */}
-            <Route path="consultant/recherche" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'CONSULTANT']}><ConsultantSearchPage /></ProtectedRoute>} />
+            {/* Routes Opérateur de Vérification */}
+            <Route path="verification/recherche" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION']}><VerificationSearchPage /></ProtectedRoute>} />
 
-            {/* Routes Ajoutant */}
-            <Route path="ajoutant/saisie" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'AJOUTANT']}><AjoutantSaisiePage /></ProtectedRoute>} />
+            {/* Routes Opérateur de Saisie */}
+            <Route path="saisie" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_SAISIE']}><SaisiePage /></ProtectedRoute>} />
 
-            {/* Routes Editeur */}
-            <Route path="editeur/mission1" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'EDITEUR']}><EditeurMission1Page /></ProtectedRoute>} />
+            {/* Routes Opérateur Logistique */}
+            <Route path="logistique" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_LOGISTIQUE']}><LogistiquePage /></ProtectedRoute>} />
+
+            {/* Routes Opérateur Inventaire */}
+            <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE']}><InventairePage /></ProtectedRoute>} />
+
+            {/* Routes Opérateur Qualité */}
+            <Route path="qualite" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE']}><QualiteAssainissementPage /></ProtectedRoute>} />
 
             {/* Routes Transversales */}
-            <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR', 'EDITEUR']}><CartesPage /></ProtectedRoute>} />
+            <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE']}><CartesPage /></ProtectedRoute>} />
             <Route path="search" element={<SearchPage />} />
             <Route path="profile" element={<ProfilePage />} />
             
             {/* Routes Admin */}
-            <Route path="import" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><ImportPage /></ProtectedRoute>} />
-            <Route path="agents" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><AgentsPage /></ProtectedRoute>} />
-            <Route path="sites" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><SitesPage /></ProtectedRoute>} />
-            <Route path="admin/queue" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><AdminQueuePage /></ProtectedRoute>} />
-            <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR']}><LogsPage /></ProtectedRoute>} />
+            <Route path="import" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ImportPage /></ProtectedRoute>} />
+            <Route path="agents" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentsPage /></ProtectedRoute>} />
+            <Route path="sites" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><SitesPage /></ProtectedRoute>} />
+            <Route path="export" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ExportPage /></ProtectedRoute>} />
+            <Route path="admin/queue" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AdminQueuePage /></ProtectedRoute>} />
+            <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><LogsPage /></ProtectedRoute>} />
+            <Route path="retraits" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><RetraitsPage /></ProtectedRoute>} />
           </Route>
         </Routes>
       </HashRouter>

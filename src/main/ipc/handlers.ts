@@ -1,7 +1,7 @@
 import { ipcMain, dialog, app, BrowserWindow } from 'electron';
 import * as queries from '../database/queries';
 import { getDbPath, getDatabase } from '../database/connection';
-import { createReadStream } from 'fs';
+import { createReadStream, openSync, readSync, closeSync } from 'fs';
 import { join } from 'path';
 import log from 'electron-log';
 import * as readline from 'readline';
@@ -37,8 +37,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
   // AUTH
-  ipcMain.handle('auth:login', (_, login: string, password: string) => {
-    try { return queries.authenticateUser(login, password); }
+  ipcMain.handle('auth:login', async (_, login: string, password: string) => {
+    try { return await queries.authenticateUser(login, password); }
     catch (e) { log.error('Auth error', e); return null; }
   });
 
@@ -95,6 +95,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.declarerPerdue(id); }
     catch (e) { log.error('IPC Error: cartes:declarerPerdue', e); throw e; }
   });
+  ipcMain.handle('cartes:getHistoriquePertes', async (_, siteId?: number) => {
+    try { return queries.getHistoriquePertes(siteId); }
+    catch (e) { log.error('IPC Error: cartes:getHistoriquePertes', e); throw e; }
+  });
+  ipcMain.handle('cartes:reactiverCarte', async (_, id, nouveauRangement, currentUser) => {
+    try { return queries.reactiverCarte(id, nouveauRangement, currentUser); }
+    catch (e) { log.error('IPC Error: cartes:reactiverCarte', e); throw e; }
+  });
   ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number) => {
     try { return queries.getInvalidDateRecords(siteId); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
@@ -103,18 +111,61 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.updateDateDeNaissance(id, newDate); }
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
+  ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getDoublonsStrictsPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getDoublonsPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSansNumSecuPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansNumSecuPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansNumSecuPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansRangementPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
+    try { return queries.updateQuickFields(id, fields); }
+    catch (e) { log.error('IPC Error: cartes:updateQuickFields', e); throw e; }
+  });
+  ipcMain.handle('cartes:searchQuickLogistique', async (_, siteId, critere) => {
+    try { return queries.searchQuickLogistique(siteId, critere); }
+    catch (e) { log.error('IPC Error: cartes:searchQuickLogistique', e); throw e; }
+  });
+  ipcMain.handle('cartes:updateRangementEtFiche', async (_, id, fields) => {
+    try { return queries.updateRangementEtFiche(id, fields); }
+    catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
+  });
+  ipcMain.handle('cartes:searchCombinedInventaire', async (_, siteId, queryNomsPrenoms, dateNaissance, lieuNaissance) => {
+    try { return queries.searchCombinedInventaire(siteId, queryNomsPrenoms, dateNaissance, lieuNaissance); }
+    catch (e) { log.error('IPC Error: cartes:searchCombinedInventaire', e); throw e; }
+  });
+  ipcMain.handle('cartes:updateApurementHistorique', async (_, id, fields) => {
+    try { return queries.updateApurementHistorique(id, fields); }
+    catch (e) { log.error('IPC Error: cartes:updateApurementHistorique', e); throw e; }
+  });
 
-   ipcMain.handle('stats:get', (_, siteId) => queries.getStats(siteId));
+   ipcMain.handle('stats:get', async (_, siteId) => {
+    try { return await queries.getStats(siteId); }
+    catch (e) { log.error('IPC Error: stats:get', e); throw e; }
+   });
+   ipcMain.handle('stats:getCentre', async (_, centreId, siteId) => {
+     try { return await queries.getCentreStats(centreId, siteId); }
+     catch (e) { log.error('IPC Error: stats:getCentre', e); throw e; }
+   });
+   ipcMain.handle('stats:getCentreOperateurs', async (_, centreId) => {
+     try { return queries.getCentreOperateurCadence(centreId); }
+     catch (e) { log.error('IPC Error: stats:getCentreOperateurs', e); throw e; }
+   });
   ipcMain.handle('stats:getGlobal', async () => {
     try { return queries.getGlobalStats(); }
     catch (e) { log.error('IPC Error: stats:getGlobal', e); throw e; }
   });
-  ipcMain.handle('stats:getConsultant', async (_, agentUsername, siteId) => {
-    try { return queries.getConsultantStats(agentUsername, siteId); }
-    catch (e) { log.error('IPC Error: stats:getConsultant', e); throw e; }
+  ipcMain.handle('stats:getVerification', async (_, agentUsername, siteId) => {
+    try { return queries.getVerificationStats(agentUsername, siteId); }
+    catch (e) { log.error('IPC Error: stats:getVerification', e); throw e; }
   });
   ipcMain.handle('stats:getCardsToday', async (_, agentUsername, siteId) => {
-    try { return queries.getConsultantCardsToday(agentUsername, siteId); }
+    try { return queries.getVerificationCardsToday(agentUsername, siteId); }
     catch (e) { log.error('IPC Error: stats:getCardsToday', e); throw e; }
   });
 
@@ -130,6 +181,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return result.canceled ? null : result.filePaths[0];
   });
 
+  // Détecteur d'encodage pour supporter UTF-8 et Windows-1252 (Latin1)
+  function detectEncoding(filePath: string): 'utf8' | 'latin1' {
+    try {
+      const fd = openSync(filePath, 'r');
+      const buffer = Buffer.alloc(102400);
+      const bytesRead = readSync(fd, buffer, 0, 102400, 0);
+      closeSync(fd);
+      
+      const slice = buffer.subarray(0, bytesRead);
+      const str = slice.toString('utf8');
+      const reencoded = Buffer.from(str, 'utf8');
+      
+      if (slice.equals(reencoded)) {
+        return 'utf8';
+      }
+      return 'latin1';
+    } catch (e) {
+      return 'utf8';
+    }
+  }
+
   // IMPORT - Preview (only reads first 1000 rows + counts total)
   ipcMain.handle('import:parseCSV', async (_, filePath: string) => {
     try {
@@ -137,7 +209,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let headers: string[] = [];
       let total = 0;
 
-      const fileStream = createReadStream(filePath);
+      const encoding = detectEncoding(filePath);
+      log.info(`[MAIN PROCESS] Preview encoding resolved to: ${encoding}`);
+      const fileStream = createReadStream(filePath, { encoding });
       const rl = readline.createInterface({ input: fileStream, crlfDelay: Infinity });
       let lineCount = 0;
       let sep = ',';
@@ -155,11 +229,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               row[h.toLowerCase().replace(/\s+/g, '_')] = cols[i] || '';
             });
             rows.push(row);
+          } else {
+            break;
           }
         }
         lineCount++;
       }
-      total = lineCount > 0 ? lineCount - 1 : 0;
+      total = rows.length;
 
       return { rows, headers, total };
     } catch (e) {
@@ -197,6 +273,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.info(`DB path: ${getDbPath()}`);
       log.info(`File: ${filePath}, Total estimate: ${totalEstimate}`);
 
+      // Construction de la table de routage dynamique par centre du site admin
+      let routingTable: any[] = [];
+      try {
+        if (siteId) {
+          routingTable = queries.getCentresWithPrefixes(Number(siteId));
+          log.info(`Centres routing table resolved for site ID ${siteId}:`, routingTable.map(c => `${c.nom} -> ${c.prefixe_rangement}`));
+        }
+      } catch (err) {
+        log.error('Failed to resolve centres routing table for import', err);
+      }
+
+      // Suspendre le moteur de sync pour éviter les conflits de verrou SQLite pendant l'import
+      syncEngine.pause();
+
       const worker = new Worker(workerPath, {
         workerData: {
           sqlitePath,
@@ -204,6 +294,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           filePath,
           agent,
           siteId,
+          routingTable,
           totalEstimate: totalEstimate || 220000
         }
       });
@@ -215,21 +306,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           }
         } else if (msg.type === 'done') {
           log.info('Import worker completed', msg.result);
+          syncEngine.resume();
           resolve(msg.result);
         } else if (msg.type === 'error') {
           log.error('Import worker error', msg.error);
+          syncEngine.resume();
           reject(new Error(msg.error));
         }
       });
 
       worker.on('error', (err) => {
         log.error('Worker thread error', err);
+        syncEngine.resume();
         reject(err);
       });
 
       worker.on('exit', (code) => {
         if (code !== 0) {
           log.error(`Worker exited with code ${code}`);
+          syncEngine.resume();
           reject(new Error(`Worker stopped with exit code ${code}`));
         }
       });
@@ -264,6 +359,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const { writeFileSync } = await import('fs');
       writeFileSync(result.filePath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
 
+      if (filters?.incremental === 'true') {
+        const ids = rows.map(r => r.id_carte as number);
+        queries.marquerCartesExporte(ids);
+      }
+
       log.info(`Export CSV: ${rows.length} rows to ${result.filePath}`);
       return { success: true, count: rows.length, path: result.filePath };
     } catch (e) {
@@ -271,6 +371,65 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: false, reason: String(e) };
     }
   });
+
+  // EXPORT - Excel with save dialog (using exceljs)
+  ipcMain.handle('export:excel', async (_, filters?: Record<string, string>) => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Exporter les cartes en Excel',
+      defaultPath: `cartes_export_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      filters: [
+        { name: 'Classeur Excel', extensions: ['xlsx'] },
+        { name: 'Tous', extensions: ['*'] }
+      ]
+    });
+    if (result.canceled || !result.filePath) return { success: false, reason: 'cancelled' };
+
+    try {
+      const rows = queries.exportCartes(filters) as Record<string, unknown>[];
+      if (rows.length === 0) return { success: false, reason: 'no_data' };
+
+      const ExcelJS = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Cartes CMU');
+
+      const headers = Object.keys(rows[0]);
+      worksheet.columns = headers.map(h => ({
+        header: h.toUpperCase().replace(/_/g, ' '),
+        key: h,
+        width: h === 'noms' || h === 'prenoms' ? 25 : 18
+      }));
+
+      // Add rows
+      rows.forEach(r => worksheet.addRow(r));
+
+      // Style header row
+      const headerRow = worksheet.getRow(1);
+      headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      headerRow.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF1E293B' } // Slate color header
+      };
+
+      await workbook.xlsx.writeFile(result.filePath);
+
+      if (filters?.incremental === 'true') {
+        const ids = rows.map(r => r.id_carte as number);
+        queries.marquerCartesExporte(ids);
+      }
+
+      log.info(`Export Excel: ${rows.length} rows to ${result.filePath}`);
+      return { success: true, count: rows.length, path: result.filePath };
+    } catch (e) {
+      log.error('Export Excel error', e);
+      return { success: false, reason: String(e) };
+    }
+  });
+
+  // EXPORT - RANGEMENTS
+  ipcMain.handle('cartes:getRangements', (_, siteId?: number) => queries.getDistinctRangements(siteId));
+  ipcMain.handle('export:marquerExporte', (_, ids: number[]) => queries.marquerCartesExporte(ids));
+  ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.exportCartes(filters));
 
   // USERS
   ipcMain.handle('users:getAll', (_, siteId?: number) => queries.getUsers(siteId));
@@ -338,9 +497,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // APP INFO
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('app:getDbPath', () => getDbPath());
-  ipcMain.handle('db:purge', async () => {
-    try { return queries.purgeLocalDatabase(); }
+  ipcMain.handle('db:purge', async (event, siteId) => {
+    try {
+      return await queries.purgeLocalDatabase(Number(siteId), (percent) => {
+        if (!mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('db:purge-progress', percent);
+        }
+      });
+    }
     catch (e) { log.error('IPC Error: db:purge', e); throw e; }
+  });
+  ipcMain.handle('db:emergency-purge', async (_, siteId) => {
+    try { return queries.emergencyPurge(Number(siteId)); }
+    catch (e) { log.error('IPC Error: db:emergency-purge', e); throw e; }
   });
   ipcMain.handle('db:getCardCount', async () => {
     try { return queries.getLocalCardCount(); }
@@ -440,6 +609,58 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e) {
       log.error('IPC Error: sync:markAsRead', e);
       throw e;
+    }
+  });
+
+  ipcMain.handle('sync:markNotificationAsRead', (_, idLog: number) => {
+    try {
+      return queries.markNotificationAsRead(idLog);
+    } catch (e) {
+      log.error('IPC Error: sync:markNotificationAsRead', e);
+      throw e;
+    }
+  });
+
+  // OPERATEUR STATS HANDLERS
+  ipcMain.handle('stats:getAgentToday', (_, userId: number) => queries.getAgentStatsToday(userId));
+  ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number) => queries.getAgentRecentSaisies(userId, limit));
+  ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number) => queries.getSiteSaisieStatsToday(siteId));
+
+  // RETRAITS ANALYTICS HANDLERS
+  ipcMain.handle('stats:getRetraits', (_, siteId: number, centreId: number | null, period: string) => {
+    try {
+      return queries.getRetraitsByCentre(siteId, centreId, period as any);
+    } catch (e) {
+      log.error('IPC Error: stats:getRetraits', e);
+      throw e;
+    }
+  });
+  ipcMain.handle('stats:getRetraitsTrend', (_, siteId: number, centreId: number | null, period: string) => {
+    try {
+      return queries.getRetraitsTrend(siteId, centreId, period as any);
+    } catch (e) {
+      log.error('IPC Error: stats:getRetraitsTrend', e);
+      throw e;
+    }
+  });
+
+  // SUPER ADMIN — Synchronisation Forcée Globale
+  ipcMain.handle('sync:forceGlobal', async () => {
+    try {
+      return await queries.forceGlobalSuperAdminSync();
+    } catch (error) {
+      log.error('Erreur lors de la synchronisation forcée globale:', error);
+      throw error;
+    }
+  });
+
+  // SITE ADMIN — Synchronisation Forcée du Site
+  ipcMain.handle('sync:forceSite', async (_, siteId: number) => {
+    try {
+      return await queries.forceSiteAdminSync(Number(siteId));
+    } catch (error) {
+      log.error(`Erreur lors de la synchronisation forcée du site ${siteId}:`, error);
+      throw error;
     }
   });
 

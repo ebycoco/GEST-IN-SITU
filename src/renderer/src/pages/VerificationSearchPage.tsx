@@ -15,10 +15,20 @@ const convertToISODate = (dateStr: string): string => {
   return dateStr;
 };
 
-export default function ConsultantSearchPage() {
+export default function VerificationSearchPage() {
   const user = useAuthStore((s) => s.user);
   const selectedCentreId = useAuthStore((s) => s.selectedCentreId);
   const activeSiteId = useAuthStore((s) => s.activeSiteId);
+  const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN';
+
+  const [adminSiteFilter, setAdminSiteFilter] = useState<number | null>(null);
+  const [sites, setSites] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (isAdmin) {
+      window.api.hierarchy.getSites().then(setSites).catch(console.error);
+    }
+  }, [isAdmin]);
   
   const [noms, setNoms] = useState('');
   const [prenoms, setPrenoms] = useState('');
@@ -45,6 +55,8 @@ export default function ConsultantSearchPage() {
   const [cardsToday, setCardsToday] = useState<any[]>([]);
   const [retirantType, setRetirantType] = useState('lui-meme');
   const [myAbsences, setMyAbsences] = useState<any[]>([]);
+  const [absenceTab, setAbsenceTab] = useState<'active' | 'lost'>('active');
+  const [absencePage, setAbsencePage] = useState(1);
   const nomInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -69,10 +81,10 @@ export default function ConsultantSearchPage() {
   const loadStats = async () => {
     if (user?.login && user?.site_id) {
       try {
-        const res = await window.api.stats.getConsultant(user.login, user.site_id);
+        const res = await window.api.stats.getVerification(user.login, user.site_id);
         if (res) setStats(res);
       } catch (err) {
-        console.error('Failed to load consultant stats:', err);
+        console.error('Failed to load verification stats:', err);
       }
     }
   };
@@ -83,7 +95,7 @@ export default function ConsultantSearchPage() {
         const res = await window.api.stats.getCardsToday(user.login, user.site_id);
         if (res) setCardsToday(res);
       } catch (err) {
-        console.error('Failed to load consultant cards today:', err);
+        console.error('Failed to load verification cards today:', err);
       }
     }
   };
@@ -151,7 +163,13 @@ export default function ConsultantSearchPage() {
         date_de_naissance: isoDdn,
         exclude_delivered: 'false'
       };
-      if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+      if (isAdmin) {
+        if (adminSiteFilter !== null) {
+          filters.site_id = adminSiteFilter.toString();
+        }
+      } else {
+        if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+      }
       if (lieuNaissance.trim()) filters.lieu_de_naissance = lieuNaissance.trim();
       if (contact.trim()) {
         const cleanDigits = contact.replace(/\D/g, '');
@@ -244,12 +262,18 @@ export default function ConsultantSearchPage() {
       
       // Build a flexible SQL LIKE pattern from the 10 digits
       const contactPattern = `%${localDigits.split('').join('%')}%`;
-      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
       const filters: any = {
         contact: contactPattern,
         exclude_delivered: 'false'
       };
-      if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+      if (isAdmin) {
+        if (adminSiteFilter !== null) {
+          filters.site_id = adminSiteFilter.toString();
+        }
+      } else {
+        const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+        if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+      }
       
       const res = await window.api.cartes.search('', 100, filters);
       const searchResults = res || [];
@@ -275,10 +299,13 @@ export default function ConsultantSearchPage() {
   const handleSignalerAbsence = async () => {
     if (!selectedCarte) return;
     try {
-      const auth = localStorage.getItem('gest-in-situ-auth');
-      const agent = auth ? JSON.parse(auth).state?.user?.login : 'CONSULTANT';
+      const consultantName = user 
+        ? `${user.prenom_user || ''} ${user.nom_user || ''}`.trim() || user.login 
+        : 'OPERATEUR_VERIFICATION';
+      const roleText = user ? user.role.toLowerCase() : 'operateur_verification';
+      const agentInfo = `${consultantName} (${roleText})`;
       
-      await window.api.cartes.signalerAbsence(selectedCarte.id_carte, agent);
+      await window.api.cartes.signalerAbsence(selectedCarte.id_carte, agentInfo);
       toast.success('Absence physique signalée. Traitement admin en cours.');
       
       // Explicitly close modal and reset selected card state
@@ -286,14 +313,19 @@ export default function ConsultantSearchPage() {
       setSelectedCarte(null);
       setModalStep(1);
       
-      if (searchMode === 'name') {
-        handleSearch({ preventDefault: () => {} } as any);
-      } else {
-        handleContactSearch({ preventDefault: () => {} } as any);
-      }
+      // Reset all search fields and results
+      setNoms('');
+      setPrenoms('');
+      setDdn('');
+      setSearchContactQuery('+225 ');
+      setResults([]);
+      setHasSearched(false);
+      setLieuNaissance('');
+      setContact('');
+      
       loadMyReportedAbsences();
     } catch (err) {
-      console.error(err);
+      console.error('Failed to report absence:', err);
       toast.error('Erreur lors du signalement.');
     }
   };
@@ -306,13 +338,13 @@ export default function ConsultantSearchPage() {
 
     setIsFinalizing(true);
     try {
-      if (user?.role === 'ADMINISTRATEUR' && !selectedCentreId) {
+      if (user?.role === 'ADMINISTRATEUR_SITE' && !selectedCentreId) {
         toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
         setIsFinalizing(false);
         return;
       }
 
-      const agent = user?.login || 'CONSULTANT';
+      const agent = user?.login || 'OPERATEUR_VERIFICATION';
 
       // Get the name of the selected centre
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -336,14 +368,15 @@ export default function ConsultantSearchPage() {
       setNoms('');
       setPrenoms('');
       setDdn('');
+      setSearchContactQuery('+225 ');
       setResults([]);
       setHasSearched(false);
       setTimeout(() => {
         nomInputRef.current?.focus();
       }, 50);
     } catch (err) {
-      console.error(err);
-      toast.error('Erreur lors de la délivrance.');
+      console.error('Failed to deliver card:', err);
+      toast.error('Erreur lors de la validation du retrait.');
     } finally {
       setIsFinalizing(false);
     }
@@ -368,13 +401,40 @@ export default function ConsultantSearchPage() {
           Recherche de Carte <span style={{ color: 'var(--accent-primary)' }}>CMU</span>
         </h1>
         <p style={{ fontSize: 16, color: 'var(--text-muted)', maxWidth: 600, margin: '0 auto' }}>
-          Système de vérification de disponibilité et d'emplacement physique pour les agents consultants.
+          Système de vérification de disponibilité et d'emplacement physique pour les opérateurs de vérification.
         </p>
       </div>
 
-      <div style={{ maxWidth: 800, margin: '0 auto 32px auto' }}>
-        <CentreContextSwitcher />
-      </div>
+      {/* Sélecteur de site interne pour la recherche Admin — Masque le switcher global */}
+      {isAdmin && (
+        <div style={{ maxWidth: 800, margin: '0 auto 32px auto', display: 'flex', alignItems: 'center', gap: 12, background: 'rgba(23, 23, 37, 0.45)', backdropFilter: 'blur(10px)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: 14, padding: '16px 20px' }}>
+          <MapPin size={16} style={{ color: '#FFD700', flexShrink: 0 }} />
+          <label style={{ fontSize: 14, color: 'var(--text-secondary)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+            Périmètre de recherche :
+          </label>
+          <select
+            value={adminSiteFilter === null ? '' : adminSiteFilter}
+            onChange={(e) => setAdminSiteFilter(e.target.value === '' ? null : Number(e.target.value))}
+            style={{
+              flex: 1,
+              padding: '10px 14px',
+              background: '#000',
+              border: '1px solid #FFD700',
+              borderRadius: 10,
+              color: '#FFD700',
+              fontSize: 14,
+              fontWeight: 700,
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            <option value="">🌍 Tous les centres (Recherche Globale)</option>
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>{s.nom}</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* KPI Section */}
       <div style={{
@@ -466,6 +526,12 @@ export default function ConsultantSearchPage() {
                     placeholder="Ex: KONE" 
                     style={{ height: 48, fontSize: 16 }}
                     required 
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSearch(e);
+                      }
+                    }}
                   />
                 </div>
                 <div>
@@ -480,6 +546,12 @@ export default function ConsultantSearchPage() {
                     placeholder="Ex: ADAMA" 
                     style={{ height: 48, fontSize: 16 }}
                     required 
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleSearch(e);
+                      }
+                    }}
                   />
                 </div>
               </div>
@@ -615,6 +687,12 @@ export default function ConsultantSearchPage() {
                 placeholder="+225 07 57 39 91 15" 
                 style={{ height: 48, fontSize: 16 }}
                 required 
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleContactSearch(e);
+                  }
+                }}
               />
             </div>
             <button 
@@ -707,6 +785,7 @@ export default function ConsultantSearchPage() {
                     <th>Informations Naissance</th>
                     <th>Rangement Physique</th>
                     <th>Statut Stock</th>
+                    {isAdmin && <th>Centre</th>}
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -745,6 +824,25 @@ export default function ConsultantSearchPage() {
                           {r.statut}
                         </span>
                       </td>
+                      {isAdmin && (
+                        <td>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            background: '#000',
+                            color: '#FFD700',
+                            border: '1px solid #FFD700',
+                            borderRadius: 8,
+                            padding: '3px 10px',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            whiteSpace: 'nowrap',
+                          }}>
+                            📍 {r.centre_nom || 'MAIRIE CENTRALE'}
+                          </span>
+                        </td>
+                      )}
                       <td>
                         <button 
                           className="btn btn-secondary" 
@@ -861,92 +959,180 @@ export default function ConsultantSearchPage() {
         border: '1px solid var(--border-color)',
         boxShadow: '0 20px 40px rgba(0,0,0,0.2)'
       }}>
-        <h3 style={{ fontSize: 18, fontWeight: 700, marginBottom: 20, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
-          ⚠️ Suivi de mes signalements
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 16 }}>
+          <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: 'white', display: 'flex', alignItems: 'center', gap: 8 }}>
+            ⚠️ Suivi de mes signalements
+          </h3>
+          <div style={{ display: 'flex', gap: 8, background: 'rgba(255,255,255,0.03)', padding: 4, borderRadius: 10, border: '1px solid rgba(255,255,255,0.05)' }}>
+            <button
+              onClick={() => { setAbsenceTab('active'); setAbsencePage(1); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                border: 'none',
+                background: absenceTab === 'active' ? 'var(--accent-primary)' : 'none',
+                color: absenceTab === 'active' ? 'white' : 'var(--text-secondary)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Signalements & Résolutions
+            </button>
+            <button
+              onClick={() => { setAbsenceTab('lost'); setAbsencePage(1); }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 8,
+                border: 'none',
+                background: absenceTab === 'lost' ? 'var(--accent-primary)' : 'none',
+                color: absenceTab === 'lost' ? 'white' : 'var(--text-secondary)',
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              Cartes Perdues
+            </button>
+          </div>
+        </div>
 
-        {myAbsences.length === 0 ? (
-          <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '16px 0' }}>
-            Aucun signalement de carte absente enregistré.
-          </div>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left' }}>
-                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Date de signalement</th>
-                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Nom & Prénoms</th>
-                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Rangement</th>
-                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Statut de recherche</th>
-                </tr>
-              </thead>
-              <tbody>
-                {myAbsences.map((c, idx) => {
-                  const isActive = c.statut_physique === 'ABSENT';
-                  return (
-                    <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                      <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
-                        {c.date_signalement_absence ? new Date(c.date_signalement_absence).toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                      </td>
-                      <td style={{ padding: '12px 8px', color: 'white', fontWeight: 500 }}>
-                        {c.noms} {c.prenoms}
-                      </td>
-                      <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
-                        {c.rangement || '—'}
-                      </td>
-                      <td style={{ padding: '12px 8px' }}>
-                        {c.statut_physique === 'ABSENT' ? (
-                          <span style={{ 
-                            background: 'rgba(231, 76, 60, 0.1)', 
-                            color: '#e74c3c', 
-                            padding: '4px 8px', 
-                            borderRadius: 6, 
-                            fontWeight: 'bold', 
-                            fontSize: 11,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4
-                          }}>
-                            ⏳ En cours de recherche par l'admin
-                          </span>
-                        ) : c.statut_physique === 'PERDUE' ? (
-                          <span style={{ 
-                            background: 'rgba(231, 76, 60, 0.1)', 
-                            color: '#e74c3c', 
-                            padding: '4px 8px', 
-                            borderRadius: 6, 
-                            fontWeight: 'bold', 
-                            fontSize: 11,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            border: '1px solid rgba(231, 76, 60, 0.3)'
-                          }}>
-                            ❌ Introuvable (Clôturé)
-                          </span>
-                        ) : (
-                          <span style={{ 
-                            background: 'rgba(39, 174, 96, 0.1)', 
-                            color: '#27ae60', 
-                            padding: '4px 8px', 
-                            borderRadius: 6, 
-                            fontWeight: 'bold', 
-                            fontSize: 11,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4
-                          }}>
-                            ✅ Traitée - Relocalisée dans {c.rangement || 'rangement'}
-                          </span>
-                        )}
-                      </td>
+        {(() => {
+          const filtered = myAbsences.filter(c => 
+            absenceTab === 'lost' ? c.statut_physique === 'PERDUE' : c.statut_physique !== 'PERDUE'
+          );
+          const itemsPerPage = 5;
+          const totalPages = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
+          const pageToUse = Math.min(absencePage, totalPages);
+          const paginated = filtered.slice((pageToUse - 1) * itemsPerPage, pageToUse * itemsPerPage);
+
+          if (filtered.length === 0) {
+            return (
+              <div style={{ color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', padding: '32px 0' }}>
+                Aucune carte dans cette catégorie.
+              </div>
+            );
+          }
+
+          return (
+            <>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left' }}>
+                      <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Date de signalement</th>
+                      <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Nom & Prénoms</th>
+                      <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Rangement</th>
+                      <th style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>Statut de recherche</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </thead>
+                  <tbody>
+                    {paginated.map((c, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                        <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                          {c.date_signalement_absence ? new Date(c.date_signalement_absence).toLocaleDateString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </td>
+                        <td style={{ padding: '12px 8px', color: 'white', fontWeight: 500 }}>
+                          {c.noms} {c.prenoms}
+                        </td>
+                        <td style={{ padding: '12px 8px', color: 'var(--text-muted)' }}>
+                          {c.rangement || '—'}
+                        </td>
+                        <td style={{ padding: '12px 8px' }}>
+                          {c.statut_physique === 'ABSENT' ? (
+                            <span style={{ 
+                              background: 'rgba(231, 76, 60, 0.1)', 
+                              color: '#e74c3c', 
+                              padding: '4px 8px', 
+                              borderRadius: 6, 
+                              fontWeight: 'bold', 
+                              fontSize: 11,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}>
+                              ⏳ En cours de recherche par l'admin
+                            </span>
+                          ) : c.statut_physique === 'PERDUE' ? (
+                            <span style={{ 
+                              background: 'rgba(231, 76, 60, 0.1)', 
+                              color: '#e74c3c', 
+                              padding: '4px 8px', 
+                              borderRadius: 6, 
+                              fontWeight: 'bold', 
+                              fontSize: 11,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              border: '1px solid rgba(231, 76, 60, 0.3)'
+                            }}>
+                              ❌ Introuvable (Clôturé)
+                            </span>
+                          ) : (
+                            <span style={{ 
+                              background: 'rgba(39, 174, 96, 0.1)', 
+                              color: '#27ae60', 
+                              padding: '4px 8px', 
+                              borderRadius: 6, 
+                              fontWeight: 'bold', 
+                              fontSize: 11,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}>
+                              ✅ Traitée - Relocalisée dans {c.rangement || 'rangement'}
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination Controls */}
+              {totalPages > 1 && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                  <button
+                    disabled={pageToUse === 1}
+                    onClick={() => setAbsencePage(p => Math.max(1, p - 1))}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: 10,
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      color: pageToUse === 1 ? 'var(--text-muted)' : 'white',
+                      cursor: pageToUse === 1 ? 'not-allowed' : 'pointer',
+                      fontSize: 13,
+                      fontWeight: 600
+                    }}
+                  >
+                    Précédent
+                  </button>
+                  <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                    Page {pageToUse} sur {totalPages}
+                  </span>
+                  <button
+                    disabled={pageToUse === totalPages}
+                    onClick={() => setAbsencePage(p => Math.min(totalPages, p + 1))}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: 10,
+                      background: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.05)',
+                      color: pageToUse === totalPages ? 'var(--text-muted)' : 'white',
+                      cursor: pageToUse === totalPages ? 'not-allowed' : 'pointer',
+                      fontSize: 13,
+                      fontWeight: 600
+                    }}
+                  >
+                    Suivant
+                  </button>
+                </div>
+              )}
+            </>
+          );
+        })()}
       </div>
 
       {/* Modal Dynamique : Vérification ou Info Retrait */}
@@ -1090,6 +1276,26 @@ export default function ConsultantSearchPage() {
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: 4 }}>Centre de Retrait / Enrôlement</div>
                     <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--accent-secondary)' }}>{selectedCarte.lieu_enrolement || 'NON SPÉCIFIÉ'}</div>
                   </div>
+                  
+                  {/* Localisation Physique Premium (Plein Soleil) */}
+                  <div style={{ 
+                    gridColumn: '1 / -1', 
+                    background: '#000', 
+                    padding: 16, 
+                    borderRadius: 12, 
+                    border: '1px solid #FFD700',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    marginTop: 8
+                  }}>
+                    <span style={{ fontSize: 11, color: '#FFD700', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      📍 CENTRE DE STOCKAGE PHYSIQUE
+                    </span>
+                    <span style={{ fontWeight: 900, fontSize: 16, color: '#FFD700' }}>
+                      {selectedCarte.centre_nom || 'MAIRIE CENTRALE'}
+                    </span>
+                  </div>
                 </div>
               </div>
 
@@ -1131,7 +1337,7 @@ export default function ConsultantSearchPage() {
                           Le bénéficiaire présent physiquement correspond-il strictement à cette identité ?
                         </div>
                       </div>
-                      {user?.role === 'CONSULTANT' && (
+                      {user?.role === 'OPERATEUR_VERIFICATION' && (
                         <div style={{ 
                           padding: 16, 
                           background: 'rgba(108, 99, 255, 0.08)', 
@@ -1144,7 +1350,7 @@ export default function ConsultantSearchPage() {
                             ℹ️ Mode Lecture Seule
                           </div>
                           <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 4 }}>
-                            Votre compte de Consultant est configuré en lecture seule pour ce site.
+                            Votre compte d'Opérateur de Vérification est configuré en lecture seule pour ce site.
                           </div>
                         </div>
                       )}
@@ -1253,9 +1459,9 @@ export default function ConsultantSearchPage() {
                       fontWeight: 900, 
                       color: '#ff4d4d', 
                       lineHeight: 1.4,
-                      animation: user?.role === 'CONSULTANT' ? 'pulse 1s infinite' : 'none'
+                      animation: user?.role === 'OPERATEUR_VERIFICATION' ? 'pulse 1s infinite' : 'none'
                     }}>
-                      {user?.role === 'CONSULTANT' 
+                      {user?.role === 'OPERATEUR_VERIFICATION' 
                         ? `ATTENTION : Cette carte a déjà été retirée${selectedCarte.centre_retrait ? ` au ${selectedCarte.centre_retrait}` : ''} !` 
                         : `Cette carte n'est plus disponible en stock. Elle a été remise au bénéficiaire ou à un mandataire${selectedCarte.centre_retrait ? ` au ${selectedCarte.centre_retrait}` : ''}.`}
                     </div>
@@ -1306,7 +1512,7 @@ export default function ConsultantSearchPage() {
               display: 'flex',
               gap: 16
             }}>
-              {selectedCarte.statut === 'EN STOCK' && user?.role !== 'AJOUTANT' ? (
+              {selectedCarte.statut === 'EN STOCK' && user?.role !== 'OPERATEUR_SAISIE' ? (
                 modalStep === 1 ? (
                   <>
                     <button 
@@ -1345,11 +1551,11 @@ export default function ConsultantSearchPage() {
                         alignItems: 'center', 
                         justifyContent: 'center', 
                         gap: 10,
-                        animation: user?.role === 'CONSULTANT' ? 'pulse 1.5s infinite' : 'none'
+                        animation: user?.role === 'OPERATEUR_VERIFICATION' ? 'pulse 1.5s infinite' : 'none'
                       }}
                       className="hover-scale btn-glow"
                     >
-                      {user?.role === 'CONSULTANT' ? 'Confirmer le Retrait' : 'OUI, CONTINUER'} <ArrowRight size={20} />
+                      {user?.role === 'OPERATEUR_VERIFICATION' ? 'Confirmer le Retrait' : 'OUI, CONTINUER'} <ArrowRight size={20} />
                     </button>
                   </>
                 ) : (

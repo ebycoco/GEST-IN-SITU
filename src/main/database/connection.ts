@@ -31,6 +31,7 @@ export async function initDatabase(): Promise<Database.Database> {
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
   db.pragma('cache_size = -64000'); // 64MB cache
+  db.pragma('busy_timeout = 30000'); // Attendre 30s la libération des verrous (compatibilité Worker)
   db.pragma('foreign_keys = ON');
   db.pragma('temp_store = MEMORY');
   db.pragma('mmap_size = 268435456'); // 256MB mmap

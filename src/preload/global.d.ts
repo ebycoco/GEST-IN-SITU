@@ -8,9 +8,16 @@ declare global {
       };
       stats: {
         get: (siteId?: number) => Promise<any>;
+        getCentre: (centreId: number, siteId: number) => Promise<any>;
+        getCentreOperateurs: (centreId: number) => Promise<any[]>;
         getGlobal: () => Promise<any>;
-        getConsultant: (agentUsername: string, siteId: number) => Promise<any>;
+        getVerification: (agentUsername: string, siteId: number) => Promise<any>;
         getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
+        getAgentToday: (userId: number) => Promise<number>;
+        getAgentRecentSaisies: (userId: number, limit?: number) => Promise<any[]>;
+        getSiteSaisieToday: (siteId: number) => Promise<any[]>;
+        getRetraits: (siteId: number, centreId: number | null, period: string) => Promise<{ rows: any[]; totaux: any }>;
+        getRetraitsTrend: (siteId: number, centreId: number | null, period: string) => Promise<Array<{ label: string; total: number }>>;
       };
       cartes: {
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
@@ -25,8 +32,18 @@ declare global {
         getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;
         resoudreAbsence: (id: number, data: any) => Promise<boolean>;
         declarerPerdue: (id: number) => Promise<boolean>;
+        getHistoriquePertes: (siteId?: number) => Promise<any[]>;
+        reactiverCarte: (id: number, nouveauRangement: string, currentUser?: any) => Promise<any>;
         getInvalidDates: (siteId?: number) => Promise<any[]>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
+        getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }) => Promise<any>;
+        searchQuickLogistique: (siteId: number, critere: string) => Promise<any[]>;
+        updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }) => Promise<any>;
+        searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
+        updateApurementHistorique: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) => Promise<any>;
       };
       users: {
         getAll: (siteId?: number) => Promise<any[]>;
@@ -42,6 +59,10 @@ declare global {
       };
       export: {
         csv: (filters?: any) => Promise<any>;
+        excel: (filters?: any) => Promise<any>;
+        getRangements: (siteId?: number) => Promise<string[]>;
+        marquerExporte: (ids: number[]) => Promise<any>;
+        getRows: (filters?: any) => Promise<any[]>;
       };
       import: {
         selectFile: () => Promise<string | null>;
@@ -62,6 +83,7 @@ declare global {
         verifyPassword: (password: string) => Promise<boolean>;
         getCentres: (siteId?: number) => Promise<any[]>;
         createCentre: (data: any) => Promise<any>;
+        updateCentre: (id: number, data: any) => Promise<any>;
         getPostes: (centreId?: number) => Promise<any[]>;
       };
       maintenance: {
@@ -80,8 +102,10 @@ declare global {
         getDbPath: () => Promise<string>;
       };
       db: {
-        purge: () => Promise<{ success: boolean }>;
+        purge: (siteId?: number) => Promise<{ success: boolean }>;
+        emergencyPurge: (siteId: number) => Promise<{ success: boolean }>;
         getCardCount: () => Promise<number>;
+        onPurgeProgress: (callback: (p: number) => void) => () => void;
       };
       sync: {
         getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number }>;
@@ -92,6 +116,7 @@ declare global {
         getUnreadCount: (siteId?: number) => Promise<number>;
         getUnreadList: (siteId?: number) => Promise<any[]>;
         markAsRead: (siteId?: number) => Promise<boolean>;
+        markNotificationAsRead: (idLog: number) => Promise<boolean>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };

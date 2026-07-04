@@ -23,12 +23,14 @@ export default function LoginPage() {
       
       // Get the user role from the store state to navigate directly
       const user = useAuthStore.getState().user;
-      if (user?.role === 'CONSULTANT') {
-        navigate('/consultant/recherche');
-      } else if (user?.role === 'AJOUTANT') {
-        navigate('/ajoutant/saisie');
-      } else if (user?.role === 'EDITEUR') {
-        navigate('/editeur/mission1');
+      if (user?.role === 'OPERATEUR_VERIFICATION') {
+        navigate('/verification/recherche');
+      } else if (user?.role === 'OPERATEUR_SAISIE') {
+        navigate('/dashboard');
+      } else if (user?.role === 'OPERATEUR_QUALITE') {
+        navigate('/qualite');
+      } else if (user?.role === 'ADMIN_CENTRE') {
+        navigate('/centre/dashboard');
       } else {
         navigate('/dashboard');
       }

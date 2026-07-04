@@ -17,7 +17,11 @@ export default function LogsPage() {
 
   const loadLogs = () => {
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-    window.api.logs.get(0, 100, { siteId: siteIdToUse }).then((res: any) => {
+    const logFilters: any = { siteId: siteIdToUse };
+    if (user?.role === 'ADMIN_CENTRE' && user?.centre_id) {
+      logFilters.centreId = user.centre_id;
+    }
+    window.api.logs.get(0, 100, logFilters).then((res: any) => {
       if (res && res.rows) {
         setLogs(res.rows);
       }
