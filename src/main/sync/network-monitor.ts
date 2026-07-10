@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 
 export type NetworkState = 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED';
 
-class NetworkMonitor extends EventEmitter {
+export class NetworkMonitor extends EventEmitter {
   private currentState: NetworkState = 'OFFLINE';
   private pingInterval: NodeJS.Timeout | null = null;
   private consecutiveFailures = 0;
@@ -16,9 +16,15 @@ class NetworkMonitor extends EventEmitter {
   private readonly SUCCESSES_FOR_ONLINE = 1;   // 1 succès suffit à repasser online
   
   private isChecking = false;
+  private bypassForceOnline = false;
 
   constructor() {
     super();
+  }
+
+  public setBypassForceOnline(value: boolean): void {
+    this.bypassForceOnline = value;
+    log.info(`NetworkMonitor bypassForceOnline set to ${value}`);
   }
 
   public start(): void {
@@ -26,8 +32,14 @@ class NetworkMonitor extends EventEmitter {
     
     log.info('Network monitor started.');
     
-    // Premier check immédiat
-    this.checkConnection();
+    // CORRECTION N°3 : Le premier check est retardé de 5 secondes.
+    // L'ancien comportement déclenchait le ping immédiatement au démarrage,
+    // bloquant l'affichage de la fenêtre pendant jusqu'à 7 secondes (ancien timeout).
+    // Avec ce délai, la fenêtre a le temps de s'afficher complètement avant
+    // que le moniteur réseau ne commence à interroger Supabase.
+    setTimeout(() => {
+      this.checkConnection();
+    }, 5_000);
 
     // Planifier les vérifications régulières
     this.pingInterval = setInterval(() => {
@@ -44,6 +56,9 @@ class NetworkMonitor extends EventEmitter {
   }
 
   public getState(): NetworkState {
+    if (this.bypassForceOnline) {
+      return 'ONLINE';
+    }
     return this.currentState;
   }
 
@@ -101,11 +116,13 @@ class NetworkMonitor extends EventEmitter {
         redirect: 'manual'
       });
 
-      // Timeout après 7 secondes
+      // CORRECTION N°3 : Timeout réduit à 3 secondes (était 7 secondes).
+      // L'ancien timeout de 7s bloquait l'affichage de la fenêtre au démarrage
+      // car le premier ping était lancé de façon synchrone avec le lancement de l'app.
       const timeout = setTimeout(() => {
         request.abort();
         resolve(false);
-      }, 7000);
+      }, 3_000);
 
       request.on('response', (response) => {
         clearTimeout(timeout);

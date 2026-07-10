@@ -4,7 +4,11 @@ import log from 'electron-log';
 
 export function initAutoUpdater(mainWindow: BrowserWindow): void {
   autoUpdater.logger = log;
-  autoUpdater.autoDownload = true;
+  // CORRECTION N°2 : autoDownload désactivé (était true).
+  // Raison : en mode production sur une machine sans release GitHub publiée,
+  // l'ancien comportement déclenchait un téléchargement agressif ou une exception
+  // réseau non gérée qui bloquait silencieusement le démarrage sur les PC cibles.
+  autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('checking-for-update', () => {
@@ -32,11 +36,37 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   });
 
   autoUpdater.on('error', (err) => {
-    log.error('Update error:', err);
+    // CORRECTION N°2 : Ce handler intercepte désormais les erreurs réseau (404
+    // si latest.yml absent sur GitHub, timeout, etc.) sans crasher le processus.
+    log.warn('Auto-updater non critique :', err.message);
     mainWindow.webContents.send('updater:error', err.message);
   });
 
-  // Check every 4 hours
-  autoUpdater.checkForUpdates();
-  setInterval(() => autoUpdater.checkForUpdates(), 4 * 60 * 60 * 1000);
+  // CORRECTION N°2 : L'appel checkForUpdates() est wrappé dans un try/catch
+  // asynchrone pour étouffer toute exception synchrone (ex: configuration GitHub
+  // absente, réseau inexistant au démarrage) qui gelait le démarrage sur PC cible.
+  // Le check initial est également retardé de 10 secondes pour laisser le temps
+  // à la fenêtre de s'afficher complètement avant toute requête réseau bloquante.
+  setTimeout(() => {
+    try {
+      autoUpdater.checkForUpdates().catch((err: Error) => {
+        log.warn('Vérification de mise à jour impossible (non critique) :', err.message);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('Vérification de mise à jour impossible (non critique) :', message);
+    }
+  }, 10_000); // Délai de 10 secondes après le démarrage
+
+  // Check toutes les 4 heures
+  setInterval(() => {
+    try {
+      autoUpdater.checkForUpdates().catch((err: Error) => {
+        log.warn('Vérification périodique de mise à jour impossible (non critique) :', err.message);
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn('Vérification périodique de mise à jour impossible (non critique) :', message);
+    }
+  }, 4 * 60 * 60 * 1000);
 }

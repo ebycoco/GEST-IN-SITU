@@ -74,7 +74,7 @@ export default function TopBar() {
 
   const unreadCount = notifications.length;
 
-  // Polling sync status
+  // Transition Event-Driven : Plus de setInterval périodique
   useEffect(() => {
     const fetchStatus = async () => {
       try {
@@ -91,11 +91,25 @@ export default function TopBar() {
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10000);
-    return () => clearInterval(interval);
+
+    // S'abonner aux changements de statut de synchronisation poussés par le main process
+    if (window.api && window.api.sync.onStatusChanged) {
+      const unsubscribe = window.api.sync.onStatusChanged((statusInfo: any) => {
+        if (statusInfo) {
+          setSyncStatus({
+            status: statusInfo.state || 'OFFLINE',
+            queueLength: typeof statusInfo.queueCount === 'number' ? statusInfo.queueCount : 0
+          });
+        }
+      });
+      return () => {
+        if (unsubscribe) unsubscribe();
+      };
+    }
+    return undefined;
   }, []);
 
-  // Polling unread sync notifications list
+  // Polling unread sync notifications list - initial fetch
   const fetchUnreadNotifications = async () => {
     try {
       if (window.api && window.api.sync.getUnreadList && user) {
@@ -133,15 +147,15 @@ export default function TopBar() {
 
   useEffect(() => {
     fetchUnreadNotifications();
-    const interval = setInterval(fetchUnreadNotifications, 10000);
-    return () => clearInterval(interval);
   }, [user]);
 
-  // Real-time update count increment
+  // Real-time update count increment & event reaction
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
+        // Rafraîchir les notifications de manière réactive
         fetchUnreadNotifications();
+        
         if (data && data.type === 'ABSENCE_SIGNALEE') {
           if (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN') {
             toast.error("⚠️ 1 carte signalée manquante dans les rangements !", {
@@ -168,7 +182,8 @@ export default function TopBar() {
         if (unsubscribe) unsubscribe();
       };
     }
-  }, [user?.site_id]);
+    return undefined;
+  }, [user?.site_id, user?.role]);
 
   const handleMarkAsRead = async () => {
     try {
@@ -251,7 +266,7 @@ export default function TopBar() {
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <h1 className="topbar-title">GEST-IN-SITU</h1>
+        <h1 className="topbar-title">GESTION CARTES IN-SITU</h1>
       </div>
 
       <div className="topbar-right" ref={dropdownRef}>

@@ -5,9 +5,13 @@ declare global {
     api: {
       auth: {
         login: (login: string, mdp: string) => Promise<any>;
+        logout: (login?: string) => Promise<boolean>;
+        updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean }>;
+        registerSuperAdmin: (data: any) => Promise<any>;
+        onSessionExpired: (callback: () => void) => () => void;
       };
       stats: {
-        get: (siteId?: number) => Promise<any>;
+        get: (siteId?: number, centreId?: number) => Promise<any>;
         getCentre: (centreId: number, siteId: number) => Promise<any>;
         getCentreOperateurs: (centreId: number) => Promise<any[]>;
         getGlobal: () => Promise<any>;
@@ -15,9 +19,13 @@ declare global {
         getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number) => Promise<any[]>;
-        getSiteSaisieToday: (siteId: number) => Promise<any[]>;
-        getRetraits: (siteId: number, centreId: number | null, period: string) => Promise<{ rows: any[]; totaux: any }>;
-        getRetraitsTrend: (siteId: number, centreId: number | null, period: string) => Promise<Array<{ label: string; total: number }>>;
+        getSiteSaisieToday: (siteId: number, centreId?: number) => Promise<any[]>;
+        getSiteQualiteToday: (siteId: number, centreId?: number) => Promise<any[]>;
+        getSiteLogistiqueToday: (siteId: number, centreId?: number) => Promise<any[]>;
+        getRetraits: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<{ rows: any[]; totaux: any }>;
+        getRetraitsTrend: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<Array<{ label: string; total: number }>>;
+        getUnsyncedCardsCount: (siteId: number) => Promise<number>;
+        getUnsyncedUsersCount: (siteId: number) => Promise<number>;
       };
       cartes: {
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
@@ -37,6 +45,7 @@ declare global {
         getInvalidDates: (siteId?: number) => Promise<any[]>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
         getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }) => Promise<any>;
@@ -45,24 +54,44 @@ declare global {
         searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
         updateApurementHistorique: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) => Promise<any>;
       };
+      logistique: {
+        recevoirLot: (payload: { lot_id: string; quantite: number; centre_origine: string }) => Promise<{ success: boolean }>;
+        triCartes: (payload: { lot_id: string; nombre_cartes_triées: number; statut_tri: string }) => Promise<{ success: boolean }>;
+        transfertCentre: (payload: { lot_id: string; centre_destination: string; nombre_cartes: number }) => Promise<{ success: boolean }>;
+        inventairePhysique: (payload: { centre_id: string | number; ecart_constaté: number; note_agent: string }) => Promise<{ success: boolean }>;
+      };
       users: {
         getAll: (siteId?: number) => Promise<any[]>;
         create: (data: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
         hardDelete: (id: number) => Promise<boolean>;
+        resetAgentPassword: (targetUserId: number, callerUserId: number) => Promise<{ success: boolean }>;
       };
       logs: {
         get: (offset?: number, limit?: number, filters?: any) => Promise<{rows: any[], total: number}>;
         add: (userId: number, login: string, action: string, detail?: string) => Promise<boolean>;
-        purge: () => Promise<boolean>;
+        purge: (payload?: { periode_purge?: string }) => Promise<any>;
+        consultation: (offset: number, limit: number, filters?: any) => Promise<{rows: any[], total: number}>;
+        export: (payload?: { periode_export?: string }) => Promise<{ success: boolean; filePath?: string; nombre_lignes_exportées?: number; error?: string; canceled?: boolean }>;
+      };
+      audit: {
+        getPage: (offset: number, limit: number, currentUser?: any) => Promise<{rows: any[], total: number}>;
+        delete: (id: number, currentUser: any) => Promise<{success: boolean}>;
+      };
+      qualite: {
+        fusionnerDoublons: (payload: { id_carte_source: number; id_carte_cible: number; champs_fusionnes: string[] }) => Promise<any>;
+        corrigerFormat: (payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => Promise<any>;
+        supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }) => Promise<any>;
       };
       export: {
         csv: (filters?: any) => Promise<any>;
         excel: (filters?: any) => Promise<any>;
+        pdf: (filters?: any) => Promise<any>;
         getRangements: (siteId?: number) => Promise<string[]>;
         marquerExporte: (ids: number[]) => Promise<any>;
         getRows: (filters?: any) => Promise<any[]>;
+        onPdfProgress: (callback: (progress: number) => void) => () => void;
       };
       import: {
         selectFile: () => Promise<string | null>;
@@ -71,6 +100,8 @@ declare global {
         clearTemp: (siteId?: number) => Promise<void>;
         processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number) => Promise<any>;
         fusionner: (agent: string, siteId?: number) => Promise<{updated: number, inserted: number}>;
+        getAnomalies: (siteId: number) => Promise<any[]>;
+        clearAnomalies: (siteId: number) => Promise<void>;
         onProgress: (callback: (p: number) => void) => () => void;
       };
       hierarchy: {
@@ -84,12 +115,14 @@ declare global {
         getCentres: (siteId?: number) => Promise<any[]>;
         createCentre: (data: any) => Promise<any>;
         updateCentre: (id: number, data: any) => Promise<any>;
+        deleteCentre: (id: number) => Promise<any>;
         getPostes: (centreId?: number) => Promise<any[]>;
       };
       maintenance: {
-        clearAll: () => Promise<any>;
-        clearDatabaseCartes: (siteId?: number) => Promise<any>;
-        fullReset: () => Promise<{success: boolean}>;
+        clearAll: (currentUser?: any) => Promise<any>;
+        clearDatabaseCartes: (siteId?: number, currentUser?: any) => Promise<any>;
+        clearCloudCartes: (siteId: number, currentUser?: any) => Promise<{ success: boolean }>;
+        fullReset: (currentUser?: any) => Promise<{success: boolean}>;
       };
       window: {
         minimize: () => void;
@@ -97,13 +130,30 @@ declare global {
         close: () => void;
         isMaximized: () => Promise<boolean>;
       };
+      log: {
+        info: (message: string) => void;
+        error: (message: string, error?: any) => void;
+        warn: (message: string) => void;
+      };
       app: {
+        getName: () => Promise<string>;
         getVersion: () => Promise<string>;
         getDbPath: () => Promise<string>;
+        exportLogs: () => Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }>;
+        checkFirstLaunch: () => Promise<{ isFirstLaunch: boolean }>;
+        checkRemoteVersion: () => Promise<{ success: boolean; version_minimale?: string; url_telechargement?: string; is_active?: boolean; reason?: string }>;
+        openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+        openExternalUrl: (url: string) => void;
+        updateRemoteVersion: (payload: { is_active: boolean; version_minimale: string; url_telechargement: string }) => Promise<{ success: boolean; error?: string }>;
+      };
+      database: {
+        getCardsCount: () => Promise<number>;
+        export: (currentUser?: any) => Promise<{ success: boolean; filePath?: string; reason?: string }>;
+        import: (currentUser?: any) => Promise<{ success: boolean; reason?: string }>;
       };
       db: {
-        purge: (siteId?: number) => Promise<{ success: boolean }>;
-        emergencyPurge: (siteId: number) => Promise<{ success: boolean }>;
+        purge: (siteId?: number, currentUser?: any) => Promise<{ success: boolean; count: number }>;
+        emergencyPurge: (siteId: number, currentUser?: any) => Promise<{ success: boolean }>;
         getCardCount: () => Promise<number>;
         onPurgeProgress: (callback: (p: number) => void) => () => void;
       };
@@ -111,12 +161,30 @@ declare global {
         getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number }>;
         force: () => Promise<{ success: boolean; message: string }>;
         onStatusChanged: (callback: (status: any) => void) => () => void;
-        startBulk: (siteId: number) => Promise<{ success: boolean; uploadedCount: number; message: string }>;
+        startBulk: (
+          siteId: number,
+          allowProbable?: boolean,
+          allowInvalid?: boolean
+        ) => Promise<{
+          success: boolean;
+          message: string;
+          status?: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID';
+          count?: number;
+          uploadedCount?: number;
+          strictCount?: number;
+          probableCount?: number;
+          invalidCount?: number;
+        }>;
         onBulkProgress: (callback: (p: number) => void) => () => void;
         getUnreadCount: (siteId?: number) => Promise<number>;
         getUnreadList: (siteId?: number) => Promise<any[]>;
         markAsRead: (siteId?: number) => Promise<boolean>;
         markNotificationAsRead: (idLog: number) => Promise<boolean>;
+        pullSiteCards: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;
+        forceGlobal: () => Promise<{ success: boolean; counts: { sites: number; centres: number; users: number } }>;
+        forceSite: (siteId: number) => Promise<{ success: boolean; counts: { cards: number; users: number }; errors: string[] }>;
+        pullAgents: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;
+        forceAgents: (siteId: number) => Promise<void>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };

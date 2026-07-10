@@ -1,0 +1,13 @@
+{
+  "cycle": {
+    "status": "ACTIVE",
+    "incident_count": 0,
+    "arbitration_required": false
+  },
+  "ticket": {
+    "emitter": null,
+    "target": null,
+    "reason": null,
+    "fix_requested": null
+  }
+}

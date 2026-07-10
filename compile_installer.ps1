@@ -1,4 +1,4 @@
-﻿$ProjectRoot = 'D:\Espace travail\GEST_IN-SITU_CARTE_ABOBO_V2'
+$ProjectRoot = 'D:\Espace travail\GEST_IN-SITU_CARTE_ABOBO_V2'
 $IssPath = Join-Path $ProjectRoot 'installer.iss'
 $TempDir = 'C:\Users\EBYCHOCO\.gemini\antigravity-ide\brain\94bd7e97-8ea8-47e1-ba4c-a9601587039d\scratch\inno-portable'
 
@@ -49,18 +49,33 @@ if (Test-Path $Iscc) {
     Write-Host "   Compilateur : $Iscc"
     Write-Host "   Script : $IssPath"
     
+    # Lire la version depuis package.json
+    $PackageJsonPath = Join-Path $ProjectRoot 'package.json'
+    $PackageJson = Get-Content -Raw -Path $PackageJsonPath | ConvertFrom-Json
+    $AppVersion = $PackageJson.version
+    $env:APP_VERSION = $AppVersion
+    Write-Host "   Version detectee : $AppVersion"
+    
     # Creer le repertoire de sortie s'il n'existe pas
     $OutDir = Join-Path $ProjectRoot "out\make\installer"
     if (!(Test-Path $OutDir)) {
         New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
     }
     
+    # 🚨 NETTOYAGE PRÉ-BUILD : Supprimer l'ancien installateur s'il existe déjà
+    # Cela évite les conflits d'écrasement ou les fichiers verrouillés par le système
+    $SetupPath = Join-Path $OutDir "GEST_CARTE_IN-SITU-Setup-v$AppVersion.exe"
+    if (Test-Path $SetupPath) {
+        Write-Host "[NETTOYAGE] Suppression de l'ancien installateur detecte : $SetupPath"
+        Remove-Item -Path $SetupPath -Force -ErrorAction SilentlyContinue
+    }
+    
+    # Lancement de la compilation Inno Setup
     Start-Process -FilePath $Iscc -ArgumentList "`"$IssPath`"" -Wait -NoNewWindow
     
-    $SetupPath = Join-Path $OutDir "GEST-IN-SITU-Setup.exe"
     if (Test-Path $SetupPath) {
         Write-Host "=========================================================="
-        Write-Host "[SUCCES] INSTALLATEUR Windows cree avec succes !"
+        Write-Host "[SUCCES] INSTALLATEUR Windows cree et ecrase avec succes !"
         Write-Host "   Fichier : $SetupPath"
         Write-Host "=========================================================="
     } else {

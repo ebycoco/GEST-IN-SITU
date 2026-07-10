@@ -14,7 +14,15 @@ export default function CentreContextSwitcher() {
   useEffect(() => {
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (siteIdToUse) {
-      window.api.hierarchy.getCentres(siteIdToUse).then(setCentres);
+      window.api.hierarchy.getCentres(siteIdToUse).then((data) => {
+        setCentres(data);
+        if (data && data.length > 0) {
+          const exists = data.some(c => c.id === useAuthStore.getState().selectedCentreId);
+          if (!exists) {
+            setSelectedCentreId(data[0].id);
+          }
+        }
+      });
     } else {
       setCentres([]);
     }

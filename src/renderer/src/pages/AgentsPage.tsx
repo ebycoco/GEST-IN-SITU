@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 import { 
   Users, Plus, Edit, Trash2, Shield, Search, 
   UserCheck, UserX, ShieldCheck, RefreshCw,
   MapPin, Mail, Phone, Calendar, Clock,
-  User, Lock, Building, Type, Key
+  User, Lock, Building, Type, Key, Eye, EyeOff
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -12,6 +13,7 @@ interface User {
   id_user: number; 
   login: string; 
   role: string; 
+  roles?: string[];
   nom_user: string; 
   prenom_user: string; 
   statut_actif: number; 
@@ -25,20 +27,106 @@ interface User {
   created_at?: string;
 }
 
+const AVAILABLE_ROLES = [
+  { value: 'OPERATEUR_VERIFICATION', label: 'Opérateur de Vérification (Lecture seule)' },
+  { value: 'OPERATEUR_SAISIE', label: 'Opérateur de Saisie (Nouvelle Saisie)' },
+  { value: 'OPERATEUR_LOGISTIQUE', label: 'Opérateur Logistique (Classement)' },
+  { value: 'OPERATEUR_INVENTAIRE', label: 'Opérateur Inventaire (Apurement)' },
+  { value: 'OPERATEUR_QUALITE', label: 'Opérateur Qualité & Assainissement' },
+  { value: 'ADMINISTRATEUR_SITE', label: 'Administrateur de Site (Totalité)' },
+  { value: 'ADMIN_CENTRE', label: 'Administrateur de Centre (Local)' },
+];
+
 export default function AgentsPage() {
   const { user: userContext, activeSiteId } = useAuthStore();
+  
+  const visibleRoles = useMemo(() => {
+    if (userContext?.role === 'SUPER ADMIN') {
+      return AVAILABLE_ROLES;
+    }
+    return AVAILABLE_ROLES.filter(r => r.value !== 'SUPER ADMIN' && r.value !== 'ADMINISTRATEUR_SITE');
+  }, [userContext?.role]);
+
   const [users, setUsers] = useState<User[]>([]);
+  const [showPassword, setShowPassword] = useState(false);
   const [centres, setCentres] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetTargetUser, setResetTargetUser] = useState<User | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, users]);
+
+  const handleOpenResetModal = (user: User) => {
+    setResetTargetUser(user);
+    setShowResetModal(true);
+  };
+
+  const handleCloseResetModal = () => {
+    setResetTargetUser(null);
+    setShowResetModal(false);
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetTargetUser || !userContext) return;
+    setIsResetting(true);
+    try {
+      await window.api.users.resetAgentPassword(resetTargetUser.id_user, userContext.id_user);
+      
+      toast.success(
+        (t) => (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Key size={20} color="#fbbf24" style={{ flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 800, color: '#ffffff' }}>Mot de passe réinitialisé !</div>
+              <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>
+                Nouvelle valeur temporaire : <span style={{ textDecoration: 'underline', fontWeight: 'bold' }}>cnam@2026</span>
+              </div>
+            </div>
+          </div>
+        ),
+        {
+          duration: 6000,
+          style: {
+            background: '#12131e',
+            color: '#fff',
+            border: '2px dashed #fbbf24',
+            borderRadius: '16px',
+            padding: '12px 18px',
+          },
+        }
+      );
+      handleCloseResetModal();
+    } catch (err: any) {
+      toast.error('Erreur: ' + err.message);
+    } finally {
+      setIsResetting(false);
+    }
+  };
   
-  const [formData, setFormData] = useState({ 
+  const [formData, setFormData] = useState<{
+    login: string;
+    password?: string;
+    role: string;
+    roles: string[];
+    nom_user: string;
+    prenom_user: string;
+    centre_id: string;
+    email: string;
+    telephone: string;
+  }>({ 
     login: '', 
     password: '', 
     role: 'OPERATEUR_VERIFICATION', 
+    roles: ['OPERATEUR_VERIFICATION'],
     nom_user: '', 
     prenom_user: '',
     centre_id: '',
@@ -46,19 +134,43 @@ export default function AgentsPage() {
     telephone: ''
   });
 
+  const toggleRole = (role: string) => {
+    const currentRoles = [...formData.roles];
+    const index = currentRoles.indexOf(role);
+    if (index > -1) {
+      if (currentRoles.length > 1) {
+        currentRoles.splice(index, 1);
+      } else {
+        toast.error("Au moins un rôle est requis.");
+        return;
+      }
+    } else {
+      currentRoles.push(role);
+    }
+    setFormData({ ...formData, roles: currentRoles, role: currentRoles[0] });
+  };
+
   useEffect(() => { 
-    loadData();
+    const cache = useCacheStore.getState().agentsCache;
+    let hasCache = false;
+    if (cache.cachedAt && cache.list.length > 0) {
+      setUsers(cache.list);
+      setLoading(false);
+      hasCache = true;
+    }
+    loadData(hasCache);
   }, [userContext?.site_id, activeSiteId]);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silent?: boolean) => {
+    const isSilent = !!silent;
+    if (!isSilent) setLoading(true);
     try { 
       const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
       
-      // Pass siteId to backend - filtering happens in SQL, no type mismatch possible
       const users = await window.api.users.getAll(siteIdToUse || undefined);
       console.log(`[AgentsPage] Loaded ${users.length} users for site_id=${siteIdToUse}`);
       setUsers(users);
+      useCacheStore.getState().setAgentsCache(users);
       
       const c = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
       setCentres(c);
@@ -67,7 +179,39 @@ export default function AgentsPage() {
       console.error('[AgentsPage] loadData error:', e);
       toast.error("Erreur lors du chargement des données");
     }
-    finally { setLoading(false); }
+    finally { if (!isSilent) setLoading(false); }
+  };
+
+  const [isPullingAgents, setIsPullingAgents] = useState(false);
+
+  const handlePullAgents = async () => {
+    if (!navigator.onLine) {
+      toast.error("⚠️ Connexion Internet requise : Veuillez vous connecter pour récupérer les comptes des agents.");
+      return;
+    }
+
+    const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
+    if (!siteIdToUse) {
+      toast.error("Veuillez d'abord sélectionner un site actif.");
+      return;
+    }
+
+    setIsPullingAgents(true);
+    const toastId = toast.loading("☁️ Récupération des comptes agents depuis le cloud...");
+
+    try {
+      const res = await window.api.sync.pullAgents(Number(siteIdToUse), userContext);
+      if (res.success) {
+        toast.success(`✅ Rapatriement réussi : ${res.count} profil(s) d'agent(s) récupéré(s) ou mis à jour.`, { id: toastId, duration: 5000 });
+        await loadData();
+      } else {
+        toast.error(`Échec du rapatriement : ${res.message || 'Erreur inconnue'}`, { id: toastId });
+      }
+    } catch (err: any) {
+      toast.error(`Erreur de connexion cloud : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsPullingAgents(false);
+    }
   };
 
   const stats = useMemo(() => {
@@ -87,6 +231,13 @@ export default function AgentsPage() {
       u.role.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [users, searchTerm]);
+
+  const totalPages = Math.ceil(filteredUsers.length / itemsPerPage);
+  const indexOfFirstItem = (currentPage - 1) * itemsPerPage;
+  const indexOfLastItem = Math.min(currentPage * itemsPerPage, filteredUsers.length);
+  const paginatedUsers = useMemo(() => {
+    return filteredUsers.slice(indexOfFirstItem, currentPage * itemsPerPage);
+  }, [filteredUsers, currentPage, itemsPerPage]);
 
   const handleToggleStatus = async (user: User) => {
     const newStatus = user.statut_actif === 1 ? 0 : 1;
@@ -124,6 +275,7 @@ export default function AgentsPage() {
         const updateData: any = { 
           login: formData.login, 
           role: formData.role, 
+          roles: formData.roles,
           nom_user: formData.nom_user, 
           prenom_user: formData.prenom_user,
           email: formData.email,
@@ -162,6 +314,7 @@ export default function AgentsPage() {
       login: user.login, 
       password: '', 
       role: user.role, 
+      roles: user.roles || [user.role],
       nom_user: user.nom_user, 
       prenom_user: user.prenom_user || '',
       centre_id: user.centre_id?.toString() || '',
@@ -176,14 +329,21 @@ export default function AgentsPage() {
     setIsEditing(false);
     setEditId(null);
     setFormData({ 
-      login: '', password: '', role: 'OPERATEUR_VERIFICATION', 
-      nom_user: '', prenom_user: '', centre_id: '',
-      email: '', telephone: ''
+      login: '', 
+      password: '', 
+      role: 'OPERATEUR_VERIFICATION', 
+      roles: ['OPERATEUR_VERIFICATION'],
+      nom_user: '', 
+      prenom_user: '', 
+      centre_id: '',
+      email: '', 
+      telephone: ''
     });
+    setShowPassword(false);
   };
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingBottom: '6rem' }}>
       {/* Header & Search */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -212,7 +372,16 @@ export default function AgentsPage() {
           <button className="btn btn-primary" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700 }} onClick={() => { closeModal(); setShowModal(true); }}>
             <Plus size={18} /> Nouvel Agent
           </button>
-          <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={loadData}>
+          <button 
+            className="btn btn-outline" 
+            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }} 
+            onClick={handlePullAgents}
+            disabled={isPullingAgents || loading}
+          >
+            <RefreshCw size={16} className={isPullingAgents ? 'animate-spin' : ''} />
+            Récupérer depuis le Cloud
+          </button>
+          <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => loadData()}>
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -248,7 +417,8 @@ export default function AgentsPage() {
           <div style={{ display: 'flex', alignItems: 'center', padding: '16px 24px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
             <div style={{ flex: 2, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>AGENT / LOGIN</div>
             <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>RÔLE / ACCÈS</div>
-            <div style={{ flex: 1.5, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>AFFECTATION</div>
+            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SITE</div>
+            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>CENTRE</div>
             <div style={{ flex: 1.5, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>CONTACT</div>
             <div style={{ flex: 1.5, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>DERNIÈRE CO.</div>
             <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>STATUT</div>
@@ -257,7 +427,7 @@ export default function AgentsPage() {
 
           {/* La liste ou le corps du tableau (si virtualisé ou classique sous forme de lignes) */}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {filteredUsers.map(u => (
+            {paginatedUsers.map(u => (
               <div key={u.id_user} className="table-row-hover" style={{ display: 'flex', alignItems: 'center', padding: '16px 24px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'all 0.2s' }}>
                 
                 {/* AGENT */}
@@ -277,19 +447,23 @@ export default function AgentsPage() {
                 </div>
 
                 {/* RÔLE / ACCÈS */}
-                <div style={{ flex: 1 }}>
-                  <span className={`badge ${u.role === 'SUPER ADMIN' ? 'badge-primary' : 'badge-outline'}`} style={{ fontSize: 10, fontWeight: 800 }}>
-                    {u.role}
-                  </span>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                  {(u.roles || [u.role]).map(r => (
+                    <span key={r} className={`badge ${r === 'SUPER ADMIN' ? 'badge-primary' : 'badge-outline'}`} style={{ fontSize: 9, fontWeight: 800 }}>
+                      {r}
+                    </span>
+                  ))}
                 </div>
 
-                {/* AFFECTATION */}
-                <div style={{ flex: 1.5 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: 'white' }}>
-                      <MapPin size={12} color="var(--accent-primary)" /> {u.centre_nom || 'Libre'}
-                    </div>
-                    <div style={{ fontSize: 11, color: 'var(--text-muted)', paddingLeft: 18 }}>{u.site_nom}</div>
+                {/* SITE */}
+                <div style={{ flex: 1, fontSize: 13, color: 'var(--text-secondary)' }}>
+                  {u.site_nom || 'Non spécifié'}
+                </div>
+
+                {/* CENTRE */}
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: 'white' }}>
+                    <MapPin size={12} color="var(--accent-primary)" /> {u.centre_nom || 'Libre'}
                   </div>
                 </div>
 
@@ -330,6 +504,9 @@ export default function AgentsPage() {
                   </button>
                   {u.role !== 'SUPER ADMIN' && u.id_user !== userContext?.id_user && (
                     <>
+                      <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleOpenResetModal(u)} title="Réinitialiser le mot de passe" style={{ borderColor: 'rgba(251, 191, 36, 0.3)' }}>
+                        <Key size={14} color="#fbbf24" />
+                      </button>
                       <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleToggleStatus(u)} title={u.statut_actif === 1 ? "Désactiver" : "Activer"}>
                         {u.statut_actif === 1 ? <UserX size={14} color="var(--text-muted)" /> : <UserCheck size={14} color="var(--accent-green)" />}
                       </button>
@@ -357,6 +534,66 @@ export default function AgentsPage() {
 
         </div>
       </div>
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          justifyContent: 'space-between', 
+          padding: '16px 24px', 
+          background: 'var(--bg-secondary)', 
+          borderRadius: 16,
+          border: '1px solid rgba(255, 255, 255, 0.05)',
+          marginTop: 16 
+        }}>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+            Affichage de <span style={{ color: 'white', fontWeight: 600 }}>{filteredUsers.length > 0 ? indexOfFirstItem + 1 : 0}</span> à <span style={{ color: 'white', fontWeight: 600 }}>{indexOfLastItem}</span> sur <span style={{ color: 'white', fontWeight: 600 }}>{filteredUsers.length}</span> agents
+          </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <button 
+              type="button"
+              className="btn btn-outline btn-sm" 
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              style={{ 
+                borderRadius: 10, 
+                height: 36, 
+                padding: '0 16px', 
+                opacity: currentPage === 1 ? 0.4 : 1,
+                cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                background: 'transparent',
+                color: 'white'
+              }}
+            >
+              Précédent
+            </button>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Page <span style={{ color: '#fbbf24', fontWeight: 700 }}>{currentPage}</span> sur <span style={{ color: 'white', fontWeight: 600 }}>{totalPages}</span>
+            </span>
+            <button 
+              type="button"
+              className="btn btn-outline btn-sm" 
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              style={{ 
+                borderRadius: 10, 
+                height: 36, 
+                padding: '0 16px', 
+                opacity: currentPage === totalPages ? 0.4 : 1,
+                cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                background: 'transparent',
+                color: 'white'
+              }}
+            >
+              Suivant
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Modal - Modern Premium Style */}
       {showModal && (
@@ -401,57 +638,100 @@ export default function AgentsPage() {
               
               <div style={{ display: 'flex', gap: 20 }}>
                 <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Identifiant (Login)*</label>
+                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Identifiant (Login)<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
                   <div style={{ position: 'relative' }}>
                     <User size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)' }} />
                     <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="ex: agent_abobo" value={formData.login} onChange={e => setFormData({ ...formData, login: e.target.value })} required />
                   </div>
                 </div>
-                <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>{isEditing ? 'Mot de passe (optionnel)' : 'Mot de passe*'}</label>
-                  <div style={{ position: 'relative' }}>
-                    <Lock size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)' }} />
-                    <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="password" placeholder="••••••••" value={formData.password} onChange={e => setFormData({ ...formData, password: e.target.value })} required={!isEditing} />
+                {!isEditing && (
+                  <div className="form-group" style={{ flex: 1 }}>
+                    <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Mot de passe<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
+                    <div style={{ position: 'relative' }}>
+                      <Lock size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)' }} />
+                      <input 
+                        className="form-input" 
+                        style={{ width: '100%', paddingLeft: 44, paddingRight: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} 
+                        type={showPassword ? "text" : "password"} 
+                        placeholder="••••••••" 
+                        value={formData.password} 
+                        onChange={e => setFormData({ ...formData, password: e.target.value })} 
+                        required={!isEditing} 
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        style={{
+                          position: 'absolute',
+                          right: 16,
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: 0
+                        }}
+                      >
+                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: 20 }}>
                 <div className="form-group" style={{ flex: 1 }}>
-                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Nom*</label>
+                  <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Nom<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
                   <div style={{ position: 'relative' }}>
                     <Type size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                    <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="Nom de famille" value={formData.nom_user} onChange={e => setFormData({ ...formData, nom_user: e.target.value })} required />
+                    <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="NOM DE FAMILLE" value={formData.nom_user} onChange={e => setFormData({ ...formData, nom_user: e.target.value.toUpperCase() })} required />
                   </div>
                 </div>
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Prénom</label>
                   <div style={{ position: 'relative' }}>
                     <Type size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-                    <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="Prénoms" value={formData.prenom_user} onChange={e => setFormData({ ...formData, prenom_user: e.target.value })} />
+                    <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="Prénoms" value={formData.prenom_user} onChange={e => setFormData({ ...formData, prenom_user: e.target.value.toUpperCase() })} />
                   </div>
                 </div>
               </div>
 
               <div className="form-group">
-                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Rôle & Permissions</label>
-                <div style={{ position: 'relative' }}>
-                  <Shield size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-purple)', zIndex: 1 }} />
-                  <select className="form-select" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', appearance: 'none', position: 'relative', outline: 'none' }} value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })}>
-                    <option value="OPERATEUR_VERIFICATION">Opérateur de Vérification (Lecture seule)</option>
-                    <option value="OPERATEUR_SAISIE">Opérateur de Saisie (Nouvelle Saisie)</option>
-                    <option value="OPERATEUR_LOGISTIQUE">Opérateur Logistique (Classement à la chaîne)</option>
-                    <option value="OPERATEUR_INVENTAIRE">Opérateur Inventaire (Apurement historique)</option>
-                    <option value="OPERATEUR_QUALITE">Opérateur Qualité &amp; Assainissement</option>
-                    <option value="ADMINISTRATEUR_SITE">Administrateur de Site (Totalité du site)</option>
-                    <option value="ADMIN_CENTRE">Administrateur de Centre (Supervision locale)</option>
-                  </select>
-                  <div style={{ position: 'absolute', right: 16, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-muted)' }}>▼</div>
+                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Permissions & Rôles multiples (Cochez tout ce qui s'applique)<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', 
+                  gap: 12,
+                  background: 'rgba(255, 255, 255, 0.02)',
+                  padding: 16,
+                  borderRadius: 16,
+                  border: '1px solid rgba(255, 255, 255, 0.05)'
+                }}>
+                  {visibleRoles.map(r => (
+                    <label key={r.value} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', color: 'white', fontSize: 13, padding: '4px 0' }}>
+                      <input
+                        type="checkbox"
+                        checked={formData.roles.includes(r.value)}
+                        onChange={() => toggleRole(r.value)}
+                        style={{
+                          accentColor: '#fbbf24',
+                          width: 16,
+                          height: 16,
+                          cursor: 'pointer'
+                        }}
+                      />
+                      <span>{r.label}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
 
               <div className="form-group">
-                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Affectation Centre*</label>
+                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Affectation Centre<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
                 <div style={{ position: 'relative' }}>
                   <Building size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)', zIndex: 1 }} />
                   <select className="form-select" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', appearance: 'none', position: 'relative', outline: 'none' }} value={formData.centre_id} onChange={e => setFormData({ ...formData, centre_id: e.target.value })} required>
@@ -472,6 +752,55 @@ export default function AgentsPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Réinitialisation Mot de passe */}
+      {showResetModal && resetTargetUser && (
+        <div style={{ 
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+          backgroundColor: 'rgba(2, 4, 12, 0.85)', 
+          backdropFilter: 'blur(24px)', 
+          display: 'flex', alignItems: 'center', justifyContent: 'center', 
+          zIndex: 1010,
+          animation: 'fadeIn 0.3s ease'
+        }}>
+          <div 
+            style={{ 
+              background: 'linear-gradient(145deg, rgba(45, 50, 85, 0.95) 0%, rgba(20, 22, 40, 0.98) 100%)', 
+              width: 'min(90vw, 480px)', 
+              padding: '32px 40px', 
+              borderRadius: 24,
+              border: '1px solid rgba(251, 191, 36, 0.25)',
+              boxShadow: '0 40px 80px rgba(0, 0, 0, 0.9), 0 0 40px rgba(251, 191, 36, 0.05)',
+              position: 'relative'
+            }}
+          >
+            <div style={{ position: 'absolute', top: 32, left: 0, width: 6, height: 32, background: '#fbbf24', borderRadius: '0 4px 4px 0' }} />
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+              <div style={{ width: 48, height: 48, borderRadius: 16, background: 'rgba(251, 191, 36, 0.1)', border: '1px solid rgba(251, 191, 36, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Key size={24} color="#fbbf24" />
+              </div>
+              <h3 style={{ margin: 0, fontSize: 22, color: 'white', fontWeight: 800 }}>
+                Réinitialisation
+              </h3>
+            </div>
+            
+            <p style={{ color: 'white', fontSize: 14, lineHeight: 1.6, marginBottom: 24 }}>
+              Voulez-vous réinitialiser le mot de passe de cet agent (<strong style={{ color: '#fbbf24' }}>@{resetTargetUser.login}</strong>) ? 
+              Un mot de passe temporaire <strong style={{ color: '#fbbf24' }}>'cnam@2026'</strong> lui sera attribué.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16 }}>
+              <button type="button" className="btn btn-outline" onClick={handleCloseResetModal} disabled={isResetting} style={{ borderRadius: 12, padding: '0 20px', height: 44, fontWeight: 600, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' }}>
+                Annuler
+              </button>
+              <button type="button" className="btn btn-primary" onClick={handleResetPassword} disabled={isResetting} style={{ borderRadius: 12, padding: '0 24px', height: 44, fontWeight: 800, background: '#fbbf24', color: '#000', border: 'none', transition: 'all 0.3s', display: 'flex', alignItems: 'center', gap: 8 }}>
+                {isResetting ? 'Réinitialisation...' : 'Confirmer'}
+              </button>
+            </div>
           </div>
         </div>
       )}

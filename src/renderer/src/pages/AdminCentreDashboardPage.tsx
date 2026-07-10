@@ -10,6 +10,7 @@ import {
   UserCheck 
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 
 interface CentreStats {
   total: number;
@@ -27,34 +28,167 @@ interface OperatorCadence {
   derniere_activite: string | null;
 }
 
+import { toast } from 'react-hot-toast';
+
 export default function AdminCentreDashboardPage() {
   const { user } = useAuthStore();
   const [stats, setStats] = useState<CentreStats>({ total: 0, en_stock: 0, distribuees: 0, absentes: 0 });
   const [cadence, setCadence] = useState<OperatorCadence[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
+  const [centreName, setCentreName] = useState<string>('');
 
-  const fetchDashboardData = async () => {
-    if (!user?.centre_id || !user?.site_id) return;
+  // Sync state variables
+  const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
+  const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
+  const [bulkProgress, setBulkProgress] = useState<number>(-1);
+  const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+
+  // Anomaly stats state
+  const [strictCount, setStrictCount] = useState<number>(0);
+  const [probableCount, setProbableCount] = useState<number>(0);
+  const [invalidCount, setInvalidCount] = useState<number>(0);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.api?.sync?.onBulkProgress) {
+      const unsubscribe = window.api.sync.onBulkProgress((progress: number) => {
+        setBulkProgress(progress);
+        if (progress >= 100) {
+          setIsBulkUploading(false);
+          setBulkProgress(-1);
+        }
+      });
+      return () => {
+        unsubscribe();
+      };
+    }
+    return undefined;
+  }, []);
+
+  const fetchDashboardData = async (silent?: boolean) => {
+    const isSilent = !!silent;
     try {
-      const statsRes = await window.api.stats.getCentre(user.centre_id, user.site_id);
-      const cadenceRes = await window.api.stats.getCentreOperateurs(user.centre_id);
-      if (statsRes) setStats(statsRes);
-      if (cadenceRes) setCadence(cadenceRes);
+      if (!isSilent) setLoading(true);
+      
+      const siteIdToUse = user?.site_id;
+      const centreIdToUse = user?.centre_id;
+
+      if (siteIdToUse) {
+        // Load centre name if not already set
+        if (!centreName && centreIdToUse) {
+          const centres = await window.api.hierarchy.getCentres(siteIdToUse);
+          const currentCentre = centres.find((c: any) => c.id === centreIdToUse);
+          if (currentCentre) {
+            setCentreName(currentCentre.nom);
+          }
+        }
+
+        // Fetch unsynced cards count for the push button badge
+        const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(siteIdToUse);
+        if (typeof unsyncedRes === 'number') {
+          setDirtyCartesCount(unsyncedRes);
+        }
+      }
+
+      if (centreIdToUse && siteIdToUse) {
+        const statsRes = await window.api.stats.getCentre(centreIdToUse, siteIdToUse);
+        const cadenceRes = await window.api.stats.getCentreOperateurs(centreIdToUse);
+        if (statsRes) setStats(statsRes);
+        if (cadenceRes) setCadence(cadenceRes);
+        useCacheStore.getState().setCentreDashboardCache({
+          stats: statsRes,
+          cadence: cadenceRes
+        });
+      }
       setLastRefreshed(new Date());
     } catch (error) {
       console.error("Erreur lors du chargement des données superviseur:", error);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
+      useAuthStore.getState().setInitialDataLoading(false);
+    }
+  };
+
+  const handleStartBulkUpload = async () => {
+    if (!user?.site_id) return;
+    setIsBulkUploading(true);
+    setBulkProgress(0);
+    const toastId = toast.loading("Initialisation du transfert de masse...");
+    
+    // Donner une chance à React de re-rendre l'IHM et d'afficher le loader/spinner à 0%
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    try {
+      const res = await window.api.sync.startBulk(Number(user.site_id), false, false);
+      if (res.success) {
+        toast.success(res.message, { id: toastId });
+      } else {
+        toast.error(res.message || "Erreur de synchronisation", { id: toastId });
+      }
+      
+      // Mettre à jour les anomalies issues du bilan de retour
+      if (res.strictCount !== undefined) setStrictCount(res.strictCount);
+      if (res.probableCount !== undefined) setProbableCount(res.probableCount);
+      if (res.invalidCount !== undefined) setInvalidCount(res.invalidCount);
+
+      await fetchDashboardData();
+    } catch (err: any) {
+      toast.error(`Échec du transfert : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsBulkUploading(false);
+      setBulkProgress(-1);
+    }
+  };
+
+  const handlePullSiteCards = async () => {
+    if (!user?.site_id) return;
+    setIsPullingCards(true);
+    const toastId = toast.loading('☁️ Récupération des cartes depuis le cloud en cours...');
+    try {
+      const res = await window.api.sync.pullSiteCards(Number(user.site_id), user);
+      if (res.success) {
+        if (res.count > 0) {
+          toast.success(`✅ Récupération réussie ! ${res.count} carte(s) mise(s) à jour ou ajoutée(s).`, { id: toastId, duration: 6000 });
+        } else {
+          toast.success("✅ Vos données locales sont déjà à jour.", { id: toastId, duration: 4000 });
+        }
+        await fetchDashboardData(); 
+      } else {
+        toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 8000 });
+      }
+    } catch (err: any) {
+      toast.error(`Échec de récupération des cartes : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsPullingCards(false);
     }
   };
 
   useEffect(() => {
-    fetchDashboardData();
-    // Auto-refresh toutes les 30 secondes
-    const interval = setInterval(fetchDashboardData, 30000);
+    const cache = useCacheStore.getState().centreDashboardCache;
+    let hasCache = false;
+    if (cache.cachedAt) {
+      if (cache.stats) setStats(cache.stats);
+      if (cache.cadence) setCadence(cache.cadence);
+      setLoading(false);
+      hasCache = true;
+    }
+    fetchDashboardData(hasCache);
+    // Auto-refresh toutes les 30 secondes (silencieusement)
+    const interval = setInterval(() => fetchDashboardData(true), 30000);
     return () => clearInterval(interval);
-  }, [user]);
+  }, [user, user?.site_id, user?.centre_id]);
 
   const formatLastActivity = (isoString: string | null) => {
     if (!isoString) return '—';
@@ -73,7 +207,7 @@ export default function AdminCentreDashboardPage() {
   };
 
   return (
-    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '100%', color: 'var(--text-primary)' }}>
+    <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '100%', overflowY: 'auto', color: 'var(--text-primary)' }}>
       {/* En-tête */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
@@ -81,34 +215,146 @@ export default function AdminCentreDashboardPage() {
             <Building2 size={24} />
             <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Supervision Locale</span>
           </div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, margin: 0, letterSpacing: '-0.02em' }}>Tableau de bord Centre</h1>
+          <h1 style={{ fontSize: 'calc(1.3rem + 0.6vw)', fontWeight: 800, margin: 0, letterSpacing: '-0.02em', lineHeight: 1.2 }}>
+            Centre de {centreName || '...'}
+          </h1>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: 14 }}>
             Suivi opérationnel en temps réel de votre centre d'enrôlement
           </p>
         </div>
         
-        <button 
-          onClick={fetchDashboardData} 
-          disabled={loading}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '10px 16px',
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 12,
-            color: 'var(--text-primary)',
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-          Mettre à jour
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+          <button 
+            onClick={() => fetchDashboardData(false)} 
+            disabled={loading}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              background: 'var(--bg-secondary)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 12,
+              color: 'var(--text-primary)',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+            Mettre à jour
+          </button>
+        </div>
       </div>
+
+      {/* ZONE DE SYNCHRONISATION PREMIUM ISOLÉE POUR L'ADMIN_CENTRE */}
+      {user?.role === 'ADMIN_CENTRE' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'space-between',
+              padding: '16px 24px', 
+              background: 'rgba(15, 23, 42, 0.4)', 
+              border: '1px solid rgba(52, 211, 153, 0.15)', 
+              borderRadius: '16px',
+              gap: 16
+            }}
+          >
+            <div>
+              <span style={{ fontSize: 14, fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <RefreshCw size={16} /> Mode Supervision : Actions de Synchronisation
+              </span>
+              <span style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginTop: 2 }}>
+                Synchronisez les cartes CMU locales de votre centre d'enrôlement avec le Cloud.
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12 }}>
+              <button
+                onClick={() => handleStartBulkUpload()}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(52, 211, 153, 0.3)',
+                  fontWeight: 700,
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  background: 'rgba(6, 78, 59, 0.4)',
+                  color: '#34d399',
+                  transition: 'all 0.2s',
+                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.05)',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#059669';
+                  e.currentTarget.style.color = '#ffffff';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(6, 78, 59, 0.4)';
+                  e.currentTarget.style.color = '#34d399';
+                }}
+              >
+                ↑ Envoyer les modifications ({dirtyCartesCount})
+              </button>
+
+              <button
+                onClick={() => handlePullSiteCards()}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: '10px',
+                  border: '1px solid rgba(148, 163, 184, 0.2)',
+                  fontWeight: 700,
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  background: 'rgba(30, 41, 59, 0.4)',
+                  color: '#e2e8f0',
+                  transition: 'all 0.2s',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#475569';
+                  e.currentTarget.style.color = '#ffffff';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)';
+                  e.currentTarget.style.color = '#e2e8f0';
+                }}
+              >
+                ↓ Récupérer du Cloud
+              </button>
+            </div>
+          </div>
+
+          {/* BANNIÈRE DE RAPPORT D'ANOMALIES EN CAS DE RESTE DIRTY */}
+          {(strictCount > 0 || probableCount > 0 || invalidCount > 0) && (
+            <div 
+              style={{
+                padding: '12px 20px',
+                borderRadius: '12px',
+                background: 'rgba(239, 68, 68, 0.05)',
+                border: '1px dashed rgba(239, 68, 68, 0.3)',
+                color: '#fca5a5',
+                fontSize: '12px',
+                lineHeight: '1.5'
+              }}
+            >
+              ⚠️ <strong>Mise à jour partielle réussie</strong> : Les cartes conformes ont été synchronisées. Cependant, les anomalies locales suivantes bloquent le reste du téléversement :
+              <ul style={{ margin: '6px 0 0 0', paddingLeft: '20px', listStyleType: 'disc' }}>
+                {strictCount > 0 && <li><strong>{strictCount} doublon(s) strict(s)</strong> : Clés uniques identiques déjà enregistrées.</li>}
+                {probableCount > 0 && <li><strong>{probableCount} doublon(s) probable(s)</strong> : Même Identité (Noms, Prénoms, Date de naissance).</li>}
+                {invalidCount > 0 && <li><strong>{invalidCount} date(s) de naissance invalide(s)</strong> : Format différent de AAAA-MM-JJ ou champ vide.</li>}
+              </ul>
+              <span style={{ display: 'block', marginTop: '6px', fontSize: '11px', color: '#fca5a5', opacity: 0.8 }}>
+                💡 Veuillez éditer ces cartes dans l'onglet "Cartes CMU" pour corriger les doublons ou anomalies d'identité avant de relancer l'envoi.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* COMPTEURS STYLE PLEIN SOLEIL */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '20px' }}>
@@ -199,6 +445,8 @@ export default function AdminCentreDashboardPage() {
 
       </div>
 
+
+
       {/* CADENCE ET PERFORMANCES DES OPERATEURS */}
       <div style={{ 
         background: 'var(--bg-secondary)', 
@@ -270,6 +518,58 @@ export default function AdminCentreDashboardPage() {
           </table>
         </div>
       </div>
+
+      {/* Bouclier global anti-clics et curseur de chargement pour AdminCentreDashboardPage */}
+      {(isBulkUploading || isPullingCards) && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          zIndex: 99999,
+          backgroundColor: 'rgba(5, 7, 12, 0.65)',
+          backdropFilter: 'blur(4px)',
+          cursor: 'wait',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          gap: 16,
+          pointerEvents: 'auto'
+        }}>
+          <div style={{ position: 'relative', width: 64, height: 64 }}>
+            <div style={{ 
+              border: '4px solid rgba(255,255,255,0.1)', 
+              borderTop: '4px solid #FFE600', 
+              borderRadius: '50%', 
+              width: '100%', 
+              height: '100%', 
+              animation: 'spin 1s linear infinite' 
+            }} />
+            {isBulkUploading && bulkProgress >= 0 && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+                fontWeight: 800,
+                color: '#eab308'
+              }}>
+                {bulkProgress}%
+              </div>
+            )}
+          </div>
+          <span style={{ color: 'white', fontWeight: 700, fontSize: 14, letterSpacing: '0.5px' }}>
+            {isBulkUploading ? `Transfert de masse vers le Cloud... (${bulkProgress >= 0 ? bulkProgress : 0}%)` : 'Récupération des cartes...'}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

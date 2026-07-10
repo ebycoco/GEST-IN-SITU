@@ -192,13 +192,13 @@ export default function CartesPage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Carte | null>(null);
   const [showDelivery, setShowDelivery] = useState(false);
+  const [pageSize, setPageSize] = useState(25);
   const [exporting, setExporting] = useState(false);
-  const LIMIT = 200;
 
   const { user, activeSiteId } = useAuthStore();
   const listRef = useRef<List>(null);
 
-  const loadData = useCallback(async (off = 0, flt = filters) => {
+  const loadData = useCallback(async (off = 0, flt = filters, currentLimit = pageSize) => {
     setLoading(true);
     try {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -211,7 +211,7 @@ export default function CartesPage() {
       }
 
       const [data, statsData] = await Promise.all([
-        window.api.cartes.getPage(off, LIMIT, finalFilters),
+        window.api.cartes.getPage(off, currentLimit, finalFilters),
         user?.role === 'ADMIN_CENTRE' && user?.centre_id && user?.site_id
           ? window.api.stats.getCentre(user.centre_id, user.site_id)
           : window.api.stats.get(siteIdToUse || undefined)
@@ -228,7 +228,7 @@ export default function CartesPage() {
     } finally { 
       setLoading(false); 
     }
-  }, [filters, user, activeSiteId]);
+  }, [filters, user, activeSiteId, pageSize]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -488,15 +488,45 @@ export default function CartesPage() {
                   fontSize: 13
                 }}
               >
-                <div style={{ color: 'var(--text-muted)' }}>
-                  Affichage de <span style={{ color: 'white', fontWeight: 600 }}>{offset + 1}</span> à <span style={{ color: 'white', fontWeight: 600 }}>{Math.min(offset + LIMIT, total)}</span> sur <span style={{ color: '#a78bfa', fontWeight: 800 }}>{total.toLocaleString('fr')}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ color: 'var(--text-muted)' }}>
+                    Affichage de <span style={{ color: 'white', fontWeight: 600 }}>{offset + 1}</span> à <span style={{ color: 'white', fontWeight: 600 }}>{Math.min(offset + pageSize, total)}</span> sur <span style={{ color: '#a78bfa', fontWeight: 800 }}>{total.toLocaleString('fr')}</span>
+                  </div>
+                  
+                  {/* Sélecteur de nombre de lignes */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Lignes par page :</span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => {
+                        const newSize = Number(e.target.value);
+                        setPageSize(newSize);
+                        loadData(0, filters, newSize);
+                      }}
+                      style={{
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: 8,
+                        color: 'white',
+                        padding: '4px 8px',
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        outline: 'none'
+                      }}
+                    >
+                      <option value={25} style={{ background: '#1e293b' }}>25</option>
+                      <option value={50} style={{ background: '#1e293b' }}>50</option>
+                      <option value={100} style={{ background: '#1e293b' }}>100</option>
+                      <option value={200} style={{ background: '#1e293b' }}>200</option>
+                    </select>
+                  </div>
                 </div>
                 
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button 
                     className="btn btn-secondary btn-sm" 
                     disabled={offset === 0}
-                    onClick={() => loadData(offset - LIMIT)}
+                    onClick={() => loadData(offset - pageSize)}
                     style={{ 
                       width: 34, height: 34, padding: 0, borderRadius: 10, justifyContent: 'center',
                       display: 'flex', alignItems: 'center', opacity: offset === 0 ? 0.4 : 1, transition: 'all 0.2s'
@@ -506,11 +536,11 @@ export default function CartesPage() {
                   </button>
                   <button 
                     className="btn btn-secondary btn-sm" 
-                    disabled={offset + LIMIT >= total}
-                    onClick={() => loadData(offset + LIMIT)}
+                    disabled={offset + pageSize >= total}
+                    onClick={() => loadData(offset + pageSize)}
                     style={{ 
                       width: 34, height: 34, padding: 0, borderRadius: 10, justifyContent: 'center',
-                      display: 'flex', alignItems: 'center', opacity: offset + LIMIT >= total ? 0.4 : 1, transition: 'all 0.2s'
+                      display: 'flex', alignItems: 'center', opacity: offset + pageSize >= total ? 0.4 : 1, transition: 'all 0.2s'
                     }}
                   >
                     <ChevronRight size={16} />

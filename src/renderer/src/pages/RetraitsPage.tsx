@@ -1,26 +1,56 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { BarChart2, TrendingUp, Calendar, Award, RefreshCw } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { BarChart2, TrendingUp, Calendar, Award, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Bar } from 'react-chartjs-2';
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement,
   Title, Tooltip, Legend
 } from 'chart.js';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
 type Period = 'jour' | 'semaine' | 'mois' | 'annee';
 
 const PERIOD_LABELS: Record<Period, string> = {
-  jour:    "Aujourd'hui",
-  semaine: 'Cette semaine',
-  mois:    'Ce mois',
-  annee:   "Cette année",
+  jour:    'Jour',
+  semaine: 'Semaine',
+  mois:    'Mois',
+  annee:   'Année',
 };
 
 const GOLD        = '#FFD700';
 const GOLD_DIM    = 'rgba(255,215,0,0.08)';
 const GOLD_BORDER = 'rgba(255,215,0,0.25)';
+
+/** Formate aujourd'hui en YYYY-MM-DD */
+function todayISO() {
+  const d = new Date();
+  return d.toISOString().slice(0, 10);
+}
+/** Formate le mois courant en YYYY-MM */
+function currentMonthISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+/** Retourne l'année courante en YYYY */
+function currentYearStr() {
+  return String(new Date().getFullYear());
+}
+
+/** Génère la liste des années disponibles (de 2023 à cette année) */
+function buildYearList() {
+  const current = new Date().getFullYear();
+  const years: string[] = [];
+  for (let y = current; y >= 2023; y--) years.push(String(y));
+  return years;
+}
+
+/** Noms des mois en français */
+const MONTH_NAMES = [
+  'Janvier','Février','Mars','Avril','Mai','Juin',
+  'Juillet','Août','Septembre','Octobre','Novembre','Décembre',
+];
 
 export default function RetraitsPage() {
   const user         = useAuthStore(s => s.user);
@@ -36,25 +66,75 @@ export default function RetraitsPage() {
   const [totaux,  setTotaux]  = useState<any>(null);
   const [trend,   setTrend]   = useState<Array<{ label: string; total: number }>>([]);
 
-  const load = useCallback(async () => {
+  // ─── Sélecteurs de date ───────────────────────────────────────────
+  const [selectedDay,   setSelectedDay]   = useState<string>(todayISO());
+  const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthISO());
+  const [selectedYear,  setSelectedYear]  = useState<string>(currentYearStr());
+
+  /**
+   * Calcule le customDate à passer à l'IPC selon la période active.
+   * - 'jour'    → YYYY-MM-DD
+   * - 'mois'    → YYYY-MM
+   * - 'annee'   → YYYY
+   * - 'semaine' → null (les 7 derniers jours glissants, pas de date fixe)
+   */
+  const customDate = useMemo<string | null>(() => {
+    if (period === 'jour')  return selectedDay;
+    if (period === 'mois')  return selectedMonth;
+    if (period === 'annee') return selectedYear;
+    return null; // 'semaine' = toujours glissant
+  }, [period, selectedDay, selectedMonth, selectedYear]);
+
+  /**
+   * Libellé contextuel de la période sélectionnée (pour l'affichage dans les titres)
+   */
+  const periodLabel = useMemo(() => {
+    if (period === 'jour') {
+      const [y, m, d] = selectedDay.split('-');
+      return `${d}/${m}/${y}`;
+    }
+    if (period === 'mois') {
+      const [y, m] = selectedMonth.split('-');
+      return `${MONTH_NAMES[parseInt(m) - 1]} ${y}`;
+    }
+    if (period === 'annee') return `Année ${selectedYear}`;
+    return 'Cette semaine';
+  }, [period, selectedDay, selectedMonth, selectedYear]);
+
+  const load = useCallback(async (silent?: boolean) => {
     if (!siteId) return;
-    setLoading(true);
+    const isSilent = !!silent;
+    if (!isSilent) setLoading(true);
     try {
       const [res, trendData] = await Promise.all([
-        window.api.stats.getRetraits(siteId, centreId, period),
-        window.api.stats.getRetraitsTrend(siteId, centreId, period),
+        window.api.stats.getRetraits(siteId, centreId, period, customDate),
+        window.api.stats.getRetraitsTrend(siteId, centreId, period, customDate),
       ]);
       setRows(res.rows);
       setTotaux(res.totaux);
       setTrend(trendData);
+      useCacheStore.getState().setRetraitsCache(res, trendData);
     } catch (e) {
       console.error('[RetraitsPage] load error', e);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
-  }, [siteId, centreId, period]);
+  }, [siteId, centreId, period, customDate]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const cache = useCacheStore.getState().retraitsCache;
+    let hasCache = false;
+    if (cache.cachedAt) {
+      if (cache.data) {
+        setRows(cache.data.rows);
+        setTotaux(cache.data.totaux);
+      }
+      if (cache.trend) setTrend(cache.trend);
+      setLoading(false);
+      hasCache = true;
+    }
+    load(hasCache);
+  }, [load]);
 
   const kpis = [
     { label: "Aujourd'hui",  value: totaux?.aujourd_hui   ?? 0, icon: '🌅' },
@@ -94,11 +174,130 @@ export default function RetraitsPage() {
     },
   };
 
+  // ─── Helpers navigation date ──────────────────────────────────────
+  const shiftDay = (n: number) => {
+    const d = new Date(selectedDay);
+    d.setDate(d.getDate() + n);
+    setSelectedDay(d.toISOString().slice(0, 10));
+  };
+  const shiftMonth = (n: number) => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + n, 1);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+  const shiftYear = (n: number) => {
+    setSelectedYear(prev => String(parseInt(prev) + n));
+  };
+
+  // ─── Sélecteur de date contextuel ────────────────────────────────
+  const renderDatePicker = () => {
+    if (period === 'semaine') return null; // semaine = toujours glissant
+
+    const inputStyle: React.CSSProperties = {
+      background: 'rgba(255,255,255,0.06)',
+      border: `1px solid ${GOLD_BORDER}`,
+      borderRadius: 8,
+      color: '#e2e8f0',
+      fontSize: 12,
+      fontWeight: 600,
+      padding: '6px 10px',
+      cursor: 'pointer',
+      outline: 'none',
+      colorScheme: 'dark',
+    };
+    const navBtn = (onClick: () => void, icon: React.ReactNode) => (
+      <button
+        onClick={onClick}
+        style={{
+          background: 'rgba(255,215,0,0.1)',
+          border: `1px solid ${GOLD_BORDER}`,
+          borderRadius: 6,
+          color: GOLD,
+          cursor: 'pointer',
+          padding: '4px 8px',
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >{icon}</button>
+    );
+
+    if (period === 'jour') {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: GOLD_DIM, border: `1px solid ${GOLD_BORDER}`, borderRadius: 10, padding: '4px 10px' }}>
+          <Calendar size={13} color={GOLD} style={{ flexShrink: 0 }} />
+          {navBtn(() => shiftDay(-1), <ChevronLeft size={13} />)}
+          <input
+            type="date"
+            value={selectedDay}
+            max={todayISO()}
+            onChange={e => setSelectedDay(e.target.value)}
+            style={inputStyle}
+          />
+          {navBtn(() => shiftDay(1), <ChevronRight size={13} />)}
+        </div>
+      );
+    }
+
+    if (period === 'mois') {
+      const [selY, selM] = selectedMonth.split('-').map(Number);
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: GOLD_DIM, border: `1px solid ${GOLD_BORDER}`, borderRadius: 10, padding: '4px 10px' }}>
+          <Calendar size={13} color={GOLD} style={{ flexShrink: 0 }} />
+          {navBtn(() => shiftMonth(-1), <ChevronLeft size={13} />)}
+          {/* Sélecteur de mois */}
+          <select
+            value={selM}
+            onChange={e => {
+              const newM = String(parseInt(e.target.value)).padStart(2, '0');
+              setSelectedMonth(`${selY}-${newM}`);
+            }}
+            style={inputStyle}
+          >
+            {MONTH_NAMES.map((name, idx) => (
+              <option key={idx + 1} value={idx + 1} style={{ background: '#0d111b' }}>{name}</option>
+            ))}
+          </select>
+          {/* Sélecteur d'année */}
+          <select
+            value={selY}
+            onChange={e => setSelectedMonth(`${e.target.value}-${String(selM).padStart(2, '0')}`)}
+            style={inputStyle}
+          >
+            {buildYearList().map(y => (
+              <option key={y} value={y} style={{ background: '#0d111b' }}>{y}</option>
+            ))}
+          </select>
+          {navBtn(() => shiftMonth(1), <ChevronRight size={13} />)}
+        </div>
+      );
+    }
+
+    if (period === 'annee') {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: GOLD_DIM, border: `1px solid ${GOLD_BORDER}`, borderRadius: 10, padding: '4px 10px' }}>
+          <Calendar size={13} color={GOLD} style={{ flexShrink: 0 }} />
+          {navBtn(() => shiftYear(-1), <ChevronLeft size={13} />)}
+          <select
+            value={selectedYear}
+            onChange={e => setSelectedYear(e.target.value)}
+            style={inputStyle}
+          >
+            {buildYearList().map(y => (
+              <option key={y} value={y} style={{ background: '#0d111b' }}>{y}</option>
+            ))}
+          </select>
+          {navBtn(() => shiftYear(1), <ChevronRight size={13} />)}
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="animate-fade-in" style={{ padding: '24px 32px', display: 'flex', flexDirection: 'column', gap: 24 }}>
 
       {/* HEADER */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <div style={{ background: 'linear-gradient(135deg, #FFD700 0%, #F59E0B 100%)', width: 38, height: 38, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 14px rgba(255,215,0,0.3)' }}>
             <BarChart2 size={20} color="#0d111b" />
@@ -111,30 +310,35 @@ export default function RetraitsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Sélecteur de période */}
-          <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 3, gap: 2, border: `1px solid ${GOLD_BORDER}` }}>
-            {(Object.keys(PERIOD_LABELS) as Period[]).map(p => (
-              <button
-                key={p}
-                onClick={() => setPeriod(p)}
-                style={{
-                  padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
-                  fontSize: 12, fontWeight: 600, transition: 'all .2s',
-                  background: period === p ? GOLD : 'transparent',
-                  color:      period === p ? '#0d111b' : '#94a3b8',
-                }}
-              >
-                {PERIOD_LABELS[p]}
-              </button>
-            ))}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+          {/* Ligne 1 : switcher de période + bouton refresh */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: 10, padding: 3, gap: 2, border: `1px solid ${GOLD_BORDER}` }}>
+              {(Object.keys(PERIOD_LABELS) as Period[]).map(p => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 8, border: 'none', cursor: 'pointer',
+                    fontSize: 12, fontWeight: 600, transition: 'all .2s',
+                    background: period === p ? GOLD : 'transparent',
+                    color:      period === p ? '#0d111b' : '#94a3b8',
+                  }}
+                >
+                  {PERIOD_LABELS[p]}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => load()} disabled={loading}
+              style={{ background: 'transparent', border: `1px solid ${GOLD_BORDER}`, borderRadius: 8, padding: '7px 12px', cursor: 'pointer', color: GOLD, display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
+            </button>
           </div>
-          <button
-            onClick={load} disabled={loading}
-            style={{ background: 'transparent', border: `1px solid ${GOLD_BORDER}`, borderRadius: 8, padding: '7px 12px', cursor: 'pointer', color: GOLD, display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <RefreshCw size={14} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
-          </button>
+
+          {/* Ligne 2 : sélecteur de date contextuel (absent pour 'semaine') */}
+          {renderDatePicker()}
         </div>
       </div>
 
@@ -155,7 +359,7 @@ export default function RetraitsPage() {
       <div style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${GOLD_BORDER}`, borderRadius: 20, padding: '24px 28px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
           <TrendingUp size={16} color={GOLD} />
-          <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Évolution — {PERIOD_LABELS[period]}</span>
+          <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Évolution — {periodLabel}</span>
         </div>
         <div style={{ height: 220 }}>
           {loading
@@ -172,7 +376,7 @@ export default function RetraitsPage() {
         <div style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${GOLD_BORDER}`, borderRadius: 20, padding: '24px 28px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 18 }}>
             <Award size={16} color={GOLD} />
-            <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Classement par Centre — {PERIOD_LABELS[period]}</span>
+            <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Classement par Centre — {periodLabel}</span>
           </div>
           {loading
             ? <div style={{ textAlign: 'center', padding: 32, color: '#64748b' }}>Chargement…</div>
@@ -227,7 +431,7 @@ export default function RetraitsPage() {
         <div style={{ background: GOLD_DIM, border: `1px solid ${GOLD_BORDER}`, borderRadius: 20, padding: '28px 32px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
             <Calendar size={16} color={GOLD} />
-            <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Total de votre Centre — {PERIOD_LABELS[period]}</span>
+            <span style={{ fontWeight: 700, fontSize: 14, color: GOLD }}>Total de votre Centre — {periodLabel}</span>
           </div>
           <div style={{ fontSize: 52, fontWeight: 900, color: GOLD, lineHeight: 1 }}>
             {loading ? '…' : (rows[0]?.total ?? 0).toLocaleString()}

@@ -18,6 +18,7 @@ import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
+import { normalizeDate } from '../../../shared/utils/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface FormState {
@@ -280,7 +281,8 @@ export default function SaisiePage() {
       toast.error('Les champs Nom de famille, Prénom(s) et Lieu de naissance sont obligatoires.');
       return;
     }
-    if (formData.date_de_naissance.length !== 10) {
+    const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
+    if (normalizedBirthDate.length !== 10) {
       toast.error('La date de naissance est invalide ou incomplète.');
       return;
     }
@@ -304,6 +306,8 @@ export default function SaisiePage() {
     try {
       await window.api.cartes.create({
         ...formData,
+        date_de_naissance: normalizedBirthDate,
+        date_naissance: normalizedBirthDate,
         site: activeSiteName,
         centre: activeCentreName,
         site_id: siteIdToUse,
@@ -323,7 +327,10 @@ export default function SaisiePage() {
       setTimeout(() => {
         (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
       }, 100);
-    } catch (err) {
+    } catch (err: any) {
+      if (window.api?.log?.error) {
+        window.api.log.error("SaisiePage: Échec d'enregistrement de la carte CMU", err?.message || String(err));
+      }
       console.error(err);
       toast.error("Erreur lors de l'enregistrement.");
     } finally {
@@ -449,7 +456,10 @@ export default function SaisiePage() {
               <InputWithIcon
                 icon={<User size={16} />}
                 value={formData.prenoms}
-                onChange={updateUpper('prenoms')}
+                onChange={(v) => {
+                  const cleaned = v.toUpperCase().replace(/\s+/g, ' ');
+                  setFormData((prev) => ({ ...prev, prenoms: cleaned }));
+                }}
                 placeholder="Ex: JEAN BAPTISTE"
                 tabIndex={2}
                 required

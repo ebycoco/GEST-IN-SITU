@@ -39,8 +39,18 @@
 .sidebar-title {
   font-size: 15px; font-weight: 700; color: var(--text-white);
   letter-spacing: 0.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  display: block;
 }
-.sidebar-subtitle { font-size: 11px; color: var(--text-muted); }
+.sidebar-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+.sidebar-subtitle { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .sidebar-user {
   padding: 16px 20px;
@@ -179,8 +189,8 @@
   position: relative;
 }
 .topbar * { -webkit-app-region: no-drag; }
-.topbar-left { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
-.topbar-title { font-size: 18px; font-weight: 700; color: var(--text-white); white-space: nowrap; flex-shrink: 0; min-width: max-content; }
+.topbar-left { display: flex; align-items: center; gap: 16px; flex-shrink: 1; min-width: 0; overflow: hidden; }
+.topbar-title { font-size: 18px; font-weight: 700; color: var(--text-white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; min-width: 0; max-width: 100%; }
 
 .topbar-search {
   display: flex; align-items: center; gap: 8px;

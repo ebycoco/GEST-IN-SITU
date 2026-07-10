@@ -40,6 +40,15 @@ export async function initDatabase(): Promise<Database.Database> {
   // Run schema migrations
   runMigrations(db);
 
+  // Purge automatique des Dead Letter Entries expirées (> 7 jours)
+  try {
+    const result = db.prepare("DELETE FROM t_sync_queue WHERE synced = -1 AND created_at < datetime('now', '-7 days')").run();
+    log.info(`[DLQ MAINTENANCE] ${result.changes} anciennes Dead Letter Entries expirées (> 7 jours) purgées.`);
+  } catch (err) {
+    log.error('Échec de la purge de démarrage des Dead Letters:', err);
+  }
+
+
   // Add Regexp support
   db.function('regexp', (pattern: string, text: string) => {
     const re = new RegExp(pattern);

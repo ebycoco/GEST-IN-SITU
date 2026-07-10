@@ -6,6 +6,8 @@ const { createReadStream, openSync, readSync, closeSync } = require('fs');
 const readline = require('readline');
 
 async function run() {
+  const startTime = Date.now();
+  var totalRejected = 0;
   const { dbPath, filePath, agent, totalEstimate, siteId, routingTable } = workerData;
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,6 +94,17 @@ async function run() {
   db.pragma('temp_store = MEMORY');
   db.pragma('foreign_keys = OFF');
 
+  // Mise à jour de la cle_doublon de t_cartes pour inclure num_secu et statut (copie conforme absolue 100%)
+  try {
+    db.prepare(`
+      UPDATE t_cartes 
+      SET cle_doublon = noms || '|' || prenoms || '|' || date_de_naissance || '|' || COALESCE(lieu_de_naissance, '') || '|' || COALESCE(contact, '') || '|' || COALESCE(num_secu, '') || '|' || statut 
+      WHERE site_id = ?
+    `).run(siteId);
+  } catch (err) {
+    console.error('[CSV WORKER] Failed to upgrade t_cartes cle_doublon:', err);
+  }
+
   // Drop and recreate temp table to guarantee a clean and up-to-date schema
   db.exec('DROP TABLE IF EXISTS t_import_temp;');
   db.exec(`
@@ -128,10 +141,19 @@ async function run() {
     '@agent_saisie, @agent_distributeur, @site_id, @centre_id, @cle_doublon, @cle_doublon_flex, @nom_retirant, @num_retirant)'
   );
 
-  const BATCH_SIZE = 5000;
-  const insertManyTx = db.transaction(function(items) {
+  const insertAnomalyStmt = db.prepare(`
+    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description)
+    VALUES (@carte_id, @type_anomalie, @description)
+  `);
+
+  const BATCH_SIZE = 1000;
+  const insertManyTx = db.transaction(function(items, anomalies) {
     for (var i = 0; i < items.length; i++) {
       insertStmt.run(items[i]);
+    }
+    for (var j = 0; j < anomalies.length; j++) {
+      console.log(`[IMPORT DIAGNOSTIC] 💾 Insertion dans t_import_anomalies - Nom: ${anomalies[j].noms} ${anomalies[j].prenoms} | Raison: ${anomalies[j].erreur_message}`);
+      insertAnomalyStmt.run(anomalies[j]);
     }
   });
 
@@ -474,9 +496,20 @@ async function run() {
   var headers = [];
   var colMap = {};       // ← MISSION 1 : carte canonique → index colonne
   var batch = [];
+  var anomaliesBatch = [];
   var lineCount = 0;
   var processedRows = 0;
   var sep = ';';
+
+  function isValidDate(dateStr) {
+    if (!dateStr) return false;
+    const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return false;
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+  }
 
   // Date du jour précalculée une seule fois pour toute la session d'import.
   // Réutilisée comme fallback absolu dans les Chemins A et B.
@@ -556,41 +589,70 @@ async function run() {
 
         var resolved = resolveRouting(getCol(cols, colMap, 'rangement') || '');
 
-        batch.push({
-          noms: noms,
-          prenoms: prenoms,
-          date_de_naissance: ddn,
-          num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
-          lieu_de_naissance: lieuN,
-          contact: contact,
-          lieu_enrolement: removeAccents(getCol(cols, colMap, 'lieu_enrolement') || ''),
-          rangement: resolved.rangement,
-          statut: finalStatut,
-          date_delivrance: dateDelivrance,
-          agent_saisie: agent,
-          agent_distributeur: agentDistributeur,
-          site_id: resolved.site_id,
-          centre_id: resolved.centre_id,
-          cle_doublon: noms + '|' + prenoms + '|' + ddn + '|' + lieuN + '|' + contact,
-          cle_doublon_flex: noms + '|' + prenoms + '|' + ddn + '|' + contact,
-          nom_retirant: nomRetirant,
-          num_retirant: numRetirant
-        });
+        // Validation stricte des dates
+        let dateError = null;
+        if (!isValidDate(ddn)) {
+          dateError = `Date de naissance invalide ou absente : "${ddn || ''}"`;
+        } else if (finalStatut === 'DELIVRE' && dateDelivrance && !isValidDate(dateDelivrance)) {
+          dateError = `Date de délivrance invalide : "${dateDelivrance}"`;
+        }
+
+        if (dateError) {
+          console.log(`[IMPORT DIAGNOSTIC] ❌ Ligne rejetée (Date Invalide) - Nom: ${noms} ${prenoms} | Erreur: ${dateError}`);
+          totalRejected++;
+          anomaliesBatch.push({
+            carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn), // Utilise le num_secu comme identifiant ou un fallback unique
+            type_anomalie: 'DATE_INVALIDE',
+            description: dateError
+          });
+        } else {
+          batch.push({
+            noms: noms,
+            prenoms: prenoms,
+            date_de_naissance: ddn,
+            num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+            lieu_de_naissance: lieuN,
+            contact: contact,
+            lieu_enrolement: removeAccents(getCol(cols, colMap, 'lieu_enrolement') || ''),
+            rangement: resolved.rangement,
+            statut: finalStatut,
+            date_delivrance: dateDelivrance,
+            agent_saisie: agent,
+            agent_distributeur: agentDistributeur,
+            site_id: resolved.site_id,
+            centre_id: resolved.centre_id,
+            cle_doublon: noms + '|' + prenoms + '|' + ddn + '|' + lieuN + '|' + contact + '|' + (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() + '|' + finalStatut,
+            cle_doublon_flex: noms + '|' + prenoms + '|' + ddn + '|' + contact,
+            nom_retirant: nomRetirant,
+            num_retirant: numRetirant
+          });
+        }
 
         processedRows++;
       } catch (lineError) {
+        totalRejected++;
         console.error(`[CSV WORKER] Ligne corrompue détectée à la ligne #${lineCount}: "${line}"`, lineError);
       }
 
-      // Flush du batch EN DEHORS du try-catch per-ligne — synchrone direct, aucune Promise
-      if (batch.length >= BATCH_SIZE) {
-        insertManyTx(batch);
+      // Flush du batch EN DEHORS du try-catch per-ligne
+      if (batch.length + anomaliesBatch.length >= BATCH_SIZE) {
+        insertManyTx(batch, anomaliesBatch);
         batch = [];
+        anomaliesBatch = [];
+
+        // Force GC references clean-up
+        if (global.gc) {
+          global.gc();
+        }
+
         var val = Math.min(Math.round((processedRows / total) * 80), 80);
         if (val !== lastProgressValue) {
           lastProgressValue = val;
           parentPort.postMessage({ type: 'progress', value: val });
         }
+
+        // Micro-pause pour libérer l'Event Loop et permettre au GC d'agir
+        await sleep(5);
       }
     }
     lineCount++;
@@ -599,8 +661,10 @@ async function run() {
     }
   }
 
-  if (batch.length > 0) {
-    insertManyTx(batch);
+  if (batch.length > 0 || anomaliesBatch.length > 0) {
+    insertManyTx(batch, anomaliesBatch);
+    batch = [];
+    anomaliesBatch = [];
   }
 
   parentPort.postMessage({ type: 'progress', value: 82 });
@@ -612,11 +676,6 @@ async function run() {
 
   // Fusion phase - transactions courtes par chunk pour éviter la saturation du WAL
   var now = new Date().toISOString();
-  
-  // Désactiver les triggers de modification de cartes pour éviter de surcharger FTS5 durant la fusion en lot
-  db.exec('DROP TRIGGER IF EXISTS trg_cartes_ai;');
-  db.exec('DROP TRIGGER IF EXISTS trg_cartes_ad;');
-  db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
 
   // Get min and max id_tmp from t_import_temp to execute chunked queries
   const idRow = db.prepare('SELECT MIN(id_tmp) as minId, MAX(id_tmp) as maxId FROM t_import_temp').get();
@@ -698,37 +757,23 @@ async function run() {
 
   parentPort.postMessage({ type: 'progress', value: 98 });
 
-  // Recréer les déclencheurs standards
-  db.exec(`
-    CREATE TRIGGER trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
-  `);
-  db.exec(`
-    CREATE TRIGGER trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-    END;
-  `);
-  db.exec(`
-    CREATE TRIGGER trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
-  `);
-
-  // Reconstruction FTS5 via commande native 'rebuild' — ultra-rapide, pas de DROP/CREATE
-  db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild');");
-
-
   db.prepare('DELETE FROM t_import_temp').run();
   db.close();
+
+  const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
 
   parentPort.postMessage({ type: 'progress', value: 100 });
   parentPort.postMessage({
     type: 'done',
-    result: { updated: totalUpdated, inserted: totalInserted }
+    result: { 
+      updated: totalUpdated, 
+      inserted: totalInserted,
+      rejected: totalRejected,
+      duplicates: Math.max(0, processedRows - totalInserted - totalUpdated),
+      probableDuplicates: 0,
+      duration: durationSeconds,
+      totalProcessed: processedRows
+    }
   });
 }
 

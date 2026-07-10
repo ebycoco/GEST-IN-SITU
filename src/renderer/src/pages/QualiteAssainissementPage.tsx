@@ -7,11 +7,13 @@ import {
 import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 
-type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'SANS_SECU' | 'SANS_RANGEMENT';
+type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'DOUBLONS_PROBABLES' | 'SANS_SECU' | 'SANS_RANGEMENT';
 
 interface QualityStats {
   doublons: number;
+  doublonsProbables: number;
   datesInvalides: number;
   sansSecu: number;
   sansRangement: number;
@@ -114,7 +116,7 @@ export default function QualiteAssainissementPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [stats, setStats] = useState<QualityStats>({ doublons: 0, datesInvalides: 0, sansSecu: 0, sansRangement: 0 });
+  const [stats, setStats] = useState<QualityStats>({ doublons: 0, doublonsProbables: 0, datesInvalides: 0, sansSecu: 0, sansRangement: 0 });
   const [statsLoading, setStatsLoading] = useState(true);
 
   // Édition en ligne
@@ -125,35 +127,48 @@ export default function QualiteAssainissementPage() {
   // Modales
   const [mergeModal, setMergeModal] = useState<{ isOpen: boolean; target: any; source: any } | null>(null);
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; cardId: number; cardName: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [saveModal, setSaveModal] = useState<{ isOpen: boolean; cardId: number; label: string; field: 'date_de_naissance' | 'num_secu' | 'rangement'; value: string; oldVal: string } | null>(null);
 
   const itemsPerPage = 10;
 
   // ─── Chargement des compteurs de qualité ──────────────────────────────
-  const loadStats = useCallback(async () => {
-    setStatsLoading(true);
+  const loadStats = useCallback(async (silent = false) => {
+    if (!silent) setStatsLoading(true);
     try {
-      const [rawDates, rawDoublons, rawSansSecu, rawSansRang] = await Promise.all([
-        window.api.cartes.getInvalidDates(siteIdToUse),
+      const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang] = await Promise.all([
+        window.api.import.getAnomalies(siteIdToUse),
         window.api.cartes.getDoublonsPage(siteIdToUse, 0, 1, ''),
+        window.api.cartes.getDoublonsProbablesPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansNumSecuPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansRangementPage(siteIdToUse, 0, 1, ''),
       ]);
-      setStats({
+      const loadedStats = {
         datesInvalides: (rawDates || []).length,
         doublons: rawDoublons?.total || 0,
+        doublonsProbables: rawDoublonsProbables?.total || 0,
         sansSecu: rawSansSecu?.total || 0,
         sansRangement: rawSansRang?.total || 0,
-      });
+      };
+      setStats(loadedStats);
+      useCacheStore.getState().setQualiteCache(loadedStats);
     } catch (err) {
       console.error('Erreur chargement stats qualité:', err);
     } finally {
-      setStatsLoading(false);
+      if (!silent) setStatsLoading(false);
+      useAuthStore.getState().setInitialDataLoading(false);
     }
   }, [siteIdToUse]);
 
   useEffect(() => {
-    loadStats();
+    const cache = useCacheStore.getState().qualiteCache;
+    let hasCache = false;
+    if (cache.cachedAt && cache.stats) {
+      setStats(cache.stats);
+      setStatsLoading(false);
+      hasCache = true;
+    }
+    loadStats(hasCache);
   }, [loadStats]);
 
   // ─── Réinitialiser la page sur changement ─────────────────────────────
@@ -170,8 +185,12 @@ export default function QualiteAssainissementPage() {
       let res: { rows: any[], total: number };
 
       if (activeTab === 'DATES_INVALIDES') {
-        const raw = await window.api.cartes.getInvalidDates(siteIdToUse);
-        const filtered = (raw || []).filter((r: any) =>
+        const raw = await window.api.import.getAnomalies(siteIdToUse);
+        const mapped = (raw || []).map((r: any) => ({
+          ...r,
+          id_carte: r.id // Mapping id d'anomalie vers id_carte
+        }));
+        const filtered = mapped.filter((r: any) =>
           `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
           (r.num_secu && r.num_secu.includes(searchQuery)) ||
           (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -179,6 +198,8 @@ export default function QualiteAssainissementPage() {
         res = { rows: filtered.slice(offset, offset + itemsPerPage), total: filtered.length };
       } else if (activeTab === 'DOUBLONS') {
         res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+      } else if (activeTab === 'DOUBLONS_PROBABLES') {
+        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       } else if (activeTab === 'SANS_SECU') {
         res = await window.api.cartes.getSansNumSecuPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       } else {
@@ -218,14 +239,15 @@ export default function QualiteAssainissementPage() {
 
   const executeSave = async () => {
     if (!saveModal) return;
-    const { cardId, field, value } = saveModal;
+    const { cardId, field, value, oldVal } = saveModal;
     try {
       setIsResolving(prev => ({ ...prev, [cardId]: true }));
-      if (field === 'date_de_naissance') {
-        await window.api.cartes.updateDate(cardId, value);
-      } else {
-        await window.api.cartes.updateQuickFields(cardId, { [field]: value });
-      }
+      await window.api.qualite.corrigerFormat({
+        id_carte: cardId,
+        champ_corrige: field,
+        valeur_avant: oldVal,
+        valeur_apres: value
+      });
       toast.success('Donnée enregistrée !');
       setEditingId(null);
       setSaveModal(null);
@@ -244,7 +266,8 @@ export default function QualiteAssainissementPage() {
   };
 
   const executeDelete = async () => {
-    if (!deleteModal) return;
+    if (!deleteModal || isDeleting) return;
+    setIsDeleting(true);
     try {
       await window.api.cartes.delete(deleteModal.cardId);
       toast.success('Doublon supprimé !');
@@ -253,6 +276,8 @@ export default function QualiteAssainissementPage() {
       loadStats();
     } catch (err) {
       toast.error('Impossible de supprimer la carte.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -264,13 +289,15 @@ export default function QualiteAssainissementPage() {
     if (!mergeModal) return;
     const { target, source } = mergeModal;
     try {
-      const mergedFields: any = {};
-      if (!target.num_secu && source.num_secu) mergedFields.num_secu = source.num_secu;
-      if ((!target.rangement || target.rangement === 'NON CLASSE') && source.rangement) mergedFields.rangement = source.rangement;
-      if (Object.keys(mergedFields).length > 0) {
-        await window.api.cartes.updateQuickFields(target.id_carte, mergedFields);
-      }
-      await window.api.cartes.delete(source.id_carte);
+      const mergedFields: string[] = [];
+      if (!target.num_secu && source.num_secu) mergedFields.push('num_secu');
+      if ((!target.rangement || target.rangement === 'NON CLASSE') && source.rangement) mergedFields.push('rangement');
+      
+      await window.api.qualite.fusionnerDoublons({
+        id_carte_source: source.id_carte,
+        id_carte_cible: target.id_carte,
+        champs_fusionnes: mergedFields
+      });
       toast.success('Cartes fusionnées avec succès !');
       setMergeModal(null);
       loadTabData();
@@ -280,11 +307,41 @@ export default function QualiteAssainissementPage() {
     }
   };
 
+  const [isSanitizing, setIsSanitizing] = useState(false);
+  const handleBulkSanitize = async () => {
+    let typeIncoherence = '';
+    if (activeTab === 'DATES_INVALIDES') typeIncoherence = 'DATES_INVALIDES';
+    else if (activeTab === 'SANS_SECU') typeIncoherence = 'SANS_SECU';
+    else if (activeTab === 'SANS_RANGEMENT') typeIncoherence = 'SANS_RANGEMENT';
+
+    if (!typeIncoherence) return;
+
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer TOUTES les incohérences de type "${activeTab}" pour ce site ? Cette action est irréversible, supprimera les données non valides et sera auditée.`)) {
+      return;
+    }
+
+    setIsSanitizing(true);
+    try {
+      const res = await window.api.qualite.supprimerIncoherences({
+        type_incoherence: typeIncoherence,
+        site_id: siteIdToUse
+      });
+      toast.success(`Assainissement terminé. ${res.deleted} enregistrement(s) supprimé(s).`);
+      refreshAll();
+    } catch (err) {
+      console.error(err);
+      toast.error("Erreur lors de l'assainissement global.");
+    } finally {
+      setIsSanitizing(false);
+    }
+  };
+
   const totalPages = Math.ceil(totalItems / itemsPerPage);
 
   // Correspondance onglet → compteur
   const tabToStat: Record<ActiveTab, number> = {
     DOUBLONS: stats.doublons,
+    DOUBLONS_PROBABLES: stats.doublonsProbables,
     DATES_INVALIDES: stats.datesInvalides,
     SANS_SECU: stats.sansSecu,
     SANS_RANGEMENT: stats.sansRangement,
@@ -314,18 +371,40 @@ export default function QualiteAssainissementPage() {
             </p>
           </div>
         </div>
-        <button
-          className="btn btn-secondary"
-          onClick={refreshAll}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 12, border: '1px solid var(--border-color)' }}
-        >
-          <RefreshCw size={16} className={isLoading || statsLoading ? 'animate-spin' : ''} />
-          Rafraîchir
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {['DATES_INVALIDES', 'SANS_SECU', 'SANS_RANGEMENT'].includes(activeTab) && tabToStat[activeTab] > 0 && (
+            <button
+              className="btn"
+              disabled={isSanitizing}
+              onClick={handleBulkSanitize}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '12px 20px',
+                borderRadius: 12,
+                background: 'rgba(239,68,68,0.1)',
+                color: '#f87171',
+                border: '1px solid rgba(239,68,68,0.2)'
+              }}
+            >
+              <Trash2 size={16} />
+              Assainir tout ({tabToStat[activeTab]})
+            </button>
+          )}
+          <button
+            className="btn btn-secondary"
+            onClick={refreshAll}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 20px', borderRadius: 12, border: '1px solid var(--border-color)' }}
+          >
+            <RefreshCw size={16} className={isLoading || statsLoading ? 'animate-spin' : ''} />
+            Rafraîchir
+          </button>
+        </div>
       </div>
 
       {/* ══════════════════════ DASHBOARD DE QUALITÉ ════════════════════ */}
-      {/* 3 compteurs principaux + 1 compteur secondaire */}
+      {/* 4 compteurs principaux + 1 sous-compteur block */}
       <div style={{ display: 'flex', gap: 16, marginBottom: 32 }}>
         {/* Compteur 1 — Doublons */}
         <QualityCounter
@@ -336,6 +415,17 @@ export default function QualiteAssainissementPage() {
           sublabel="Fiches identiques à fusionner ou supprimer"
           onClick={() => setActiveTab('DOUBLONS')}
           isActive={activeTab === 'DOUBLONS'}
+        />
+
+        {/* Compteur 1.5 — Doublons Probables */}
+        <QualityCounter
+          label="Doublons Probables"
+          value={statsLoading ? 0 : stats.doublonsProbables}
+          icon={AlertTriangle}
+          accent="#f97316"
+          sublabel="Même identité avec coordonnées ou n° CMU divergentes"
+          onClick={() => setActiveTab('DOUBLONS_PROBABLES')}
+          isActive={activeTab === 'DOUBLONS_PROBABLES'}
         />
 
         {/* Compteur 2 — Dates Invalides */}
@@ -414,16 +504,16 @@ export default function QualiteAssainissementPage() {
               Score d'intégrité de la base :{' '}
             </span>
             <strong style={{ color: 'white', fontSize: 13 }}>
-              {(stats.doublons + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0
+              {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0
                 ? '✅ Aucune anomalie détectée — Base en parfait état !'
-                : `⚠️ ${(stats.doublons + stats.datesInvalides + stats.sansSecu + stats.sansRangement).toLocaleString('fr')} anomalie(s) totale(s) à traiter`
+                : `⚠️ ${(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement).toLocaleString('fr')} anomalie(s) totale(s) à traiter`
               }
             </strong>
           </div>
-          {(stats.doublons + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0 && (
+          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0 && (
             <CheckCircle size={20} style={{ color: '#2ed573', flexShrink: 0 }} />
           )}
-          {(stats.doublons + stats.datesInvalides + stats.sansSecu + stats.sansRangement) > 0 && (
+          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) > 0 && (
             <TrendingDown size={20} style={{ color: '#ffd700', flexShrink: 0 }} />
           )}
         </div>
@@ -433,6 +523,7 @@ export default function QualiteAssainissementPage() {
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', gap: 8, marginBottom: 24 }}>
         {[
           { id: 'DOUBLONS', label: '👥 Doublons Stricts', color: '#eccc68', count: stats.doublons },
+          { id: 'DOUBLONS_PROBABLES', label: '⚠️ Doublons Probables', color: '#f97316', count: stats.doublonsProbables },
           { id: 'DATES_INVALIDES', label: '📅 Dates Invalides', color: '#ff7675', count: stats.datesInvalides },
           { id: 'SANS_SECU', label: '🔑 Sans Num. Sécu', color: '#70a1ff', count: stats.sansSecu },
           { id: 'SANS_RANGEMENT', label: '📦 Sans Rangement', color: '#2ed573', count: stats.sansRangement },
@@ -560,6 +651,77 @@ export default function QualiteAssainissementPage() {
                 </>
               )}
 
+              {/* ── ONGLET DOUBLONS PROBABLES ─────────────────────────── */}
+              {activeTab === 'DOUBLONS_PROBABLES' && (
+                <>
+                  <thead>
+                    <tr>
+                      <th style={{ paddingLeft: 20 }}>Identité Civile suspecte</th>
+                      <th>Rangement</th>
+                      <th>Données divergentes (CMU / Contact)</th>
+                      <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions de Fusion / Suppression</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map((r, i) => {
+                      const nextCard = records[i + 1];
+                      const prevCard = records[i - 1];
+                      
+                      const isSameGroup = (c1: any, c2: any) => 
+                        c1 && c2 && c1.noms === c2.noms && c1.prenoms === c2.prenoms && c1.date_de_naissance === c2.date_de_naissance;
+
+                      const isGroupEnd = !isSameGroup(r, nextCard);
+                      const isGroupStart = !isSameGroup(r, prevCard);
+
+                      return (
+                        <tr key={r.id_carte} style={{
+                          background: 'rgba(249,115,22,0.01)',
+                          borderLeft: '4px solid #f97316',
+                          borderBottom: isGroupEnd ? '3px solid rgba(255,255,255,0.06)' : '1px solid rgba(255,255,255,0.02)'
+                        }}>
+                          <td style={{ paddingLeft: 20 }}>
+                            <div style={{ fontWeight: 800, color: 'white' }}>{r.noms} {r.prenoms}</div>
+                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>DDN: {r.date_de_naissance || '—'} | Lieu: {r.lieu_de_naissance || '—'}</span>
+                          </td>
+                          <td>
+                            <span style={{ fontFamily: 'monospace', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                              {r.rangement || 'NON CLASSE'}
+                            </span>
+                          </td>
+                          <td>
+                            <div style={{ fontSize: 12 }}>
+                              <span style={{ color: 'var(--text-muted)' }}>Sécu : </span>
+                              <strong>{r.num_secu || '—'}</strong>
+                            </div>
+                            <div style={{ fontSize: 11 }}>
+                              <span style={{ color: 'var(--text-muted)' }}>Contact : </span>
+                              <strong>{r.contact}</strong>
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'right', paddingRight: 20 }}>
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                              {isGroupStart && isSameGroup(r, nextCard) && (
+                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, nextCard)}>
+                                  <GitMerge size={14} /> Conserver & Fusionner
+                                </button>
+                              )}
+                              {!isGroupStart && isSameGroup(r, prevCard) && (
+                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, prevCard)}>
+                                  <GitMerge size={14} /> Conserver & Fusionner
+                                </button>
+                              )}
+                              <button className="btn btn-icon" style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.15)', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8 }} onClick={() => handleDeleteCard(r)}>
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </>
+              )}
+
               {/* ── ONGLET DATES INVALIDES ───────────────────────────── */}
               {activeTab === 'DATES_INVALIDES' && (
                 <>
@@ -577,6 +739,11 @@ export default function QualiteAssainissementPage() {
                         <td style={{ paddingLeft: 20 }}>
                           <strong>{r.noms} {r.prenoms}</strong><br />
                           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.num_secu || 'N/A'}</span>
+                          {r.erreur_message && (
+                            <div style={{ fontSize: 11, color: '#ff7675', marginTop: 4, fontWeight: 500 }}>
+                              ⚠️ {r.erreur_message}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <span style={{ color: 'var(--warning-color)', fontWeight: 600, background: 'rgba(243,156,18,0.1)', padding: '4px 8px', borderRadius: 6 }}>
@@ -781,8 +948,8 @@ export default function QualiteAssainissementPage() {
 
       {/* ══════════════════════ MODALE SUPPRESSION ══════════════════════ */}
       {deleteModal?.isOpen && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(5,7,12,0.88)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 24 }} onClick={() => setDeleteModal(null)}>
-          <div style={{ background: '#0b0f19', border: '1px solid rgba(239,68,68,0.25)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)', borderRadius: 20, width: '100%', maxWidth: 480, padding: 32 }} onClick={e => e.stopPropagation()}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(5,7,12,0.88)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 24 }} onClick={() => !isDeleting && setDeleteModal(null)}>
+          <div style={{ background: '#0b0f19', border: '1px solid rgba(239,68,68,0.25)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)', borderRadius: 20, width: '100%', maxWidth: 480, padding: 32, position: 'relative', overflow: 'hidden' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
               <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(239,68,68,0.1)', border: '1px solid #f87171', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
                 <Trash2 size={20} />
@@ -796,9 +963,38 @@ export default function QualiteAssainissementPage() {
               Voulez-vous supprimer définitivement la fiche doublon de <strong style={{ color: 'white' }}>{deleteModal.cardName}</strong> ?
             </p>
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button type="button" className="btn btn-secondary" onClick={() => setDeleteModal(null)} style={{ padding: '10px 18px', borderRadius: 10 }}>Annuler</button>
-              <button type="button" className="btn" onClick={executeDelete} style={{ padding: '10px 22px', borderRadius: 10, background: '#ef4444', color: '#fff', fontWeight: 700, border: 'none', cursor: 'pointer' }}>Confirmer la suppression</button>
+              <button type="button" className="btn btn-secondary" disabled={isDeleting} onClick={() => setDeleteModal(null)} style={{ padding: '10px 18px', borderRadius: 10 }}>Annuler</button>
+              <button type="button" className="btn" disabled={isDeleting} onClick={executeDelete} style={{ padding: '10px 22px', borderRadius: 10, background: isDeleting ? '#555' : '#ef4444', color: '#fff', fontWeight: 700, border: 'none', cursor: isDeleting ? 'not-allowed' : 'pointer' }}>Confirmer la suppression</button>
             </div>
+
+            {/* Bouclier anti-clics local à la modale */}
+            {isDeleting && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                background: 'rgba(11, 15, 25, 0.7)',
+                backdropFilter: 'blur(2px)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: 20,
+                cursor: 'wait',
+                zIndex: 10,
+                pointerEvents: 'auto'
+              }}>
+                <div style={{ 
+                  border: '3px solid rgba(255,255,255,0.1)', 
+                  borderTop: '3px solid #ef4444', 
+                  borderRadius: '50%', 
+                  width: 32, 
+                  height: 32, 
+                  animation: 'spin 1s linear infinite' 
+                }} />
+              </div>
+            )}
           </div>
         </div>
       )}

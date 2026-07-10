@@ -27,7 +27,7 @@ export default function LogistiquePage() {
 
   // Détection de la saisie de recherche (Temps Réel débouclé ou direct)
   const handleSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
+    const val = e.target.value.toUpperCase();
     setSearchQuery(val);
     if (val.trim().length >= 2) {
       try {
@@ -242,7 +242,7 @@ export default function LogistiquePage() {
                 type="text"
                 placeholder="Ex: MAIRIE-A3"
                 value={rangement}
-                onChange={e => setRangement(e.target.value)}
+                onChange={e => setRangement(e.target.value.toUpperCase())}
               />
             </div>
 

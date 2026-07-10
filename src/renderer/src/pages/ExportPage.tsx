@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Download, FileText, Database, ShieldAlert, CheckCircle, RefreshCw, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { useAuthStore } from '../stores/authStore';
+import { useVisibilityBufferedCallback } from '../hooks/useVisibilityBufferedCallback';
 
 export default function ExportPage() {
   const { user, activeSiteId } = useAuthStore();
@@ -27,11 +26,30 @@ export default function ExportPage() {
   const currentSiteName = sites.find(s => s.id === siteIdToUse)?.nom || 'Tous les sites';
 
   useEffect(() => {
+    setLoadingSites(true);
     window.api.hierarchy.getSites()
       .then(setSites)
       .catch(err => console.error(err))
       .finally(() => setLoadingSites(false));
   }, []);
+
+  const handleProgress = useVisibilityBufferedCallback((progress: number) => {
+    if (progress === 100) {
+      setIsGenerating(false);
+      setProgressMessage('');
+      return;
+    }
+    setProgressMessage(`Génération du PDF : ${progress}%...`);
+  });
+
+  // Listen to PDF progress
+  useEffect(() => {
+    if (window.api && window.api.export.onPdfProgress) {
+      const unsubscribe = window.api.export.onPdfProgress(handleProgress);
+      return () => unsubscribe();
+    }
+    return undefined;
+  }, [handleProgress]);
 
   // Fetch unique locations when site context changes
   useEffect(() => {
@@ -70,118 +88,8 @@ export default function ExportPage() {
         res = await window.api.export.excel(filters);
       } else {
         // PDF Generation
-        setProgressMessage("Récupération des lignes à imprimer...");
-        
-        // Fetch raw rows via the new export:getRows IPC bridge
-        const rows = await window.api.export.getRows(filters);
-        
-        if (!rows || rows.length === 0) {
-          toast.error("Aucune donnée ne correspond aux critères sélectionnés.");
-          setIsGenerating(false);
-          setProgressMessage('');
-          return;
-        }
-
-        if (rows.length > 500) {
-          toast.error(
-            `Volume d'impression trop élevé (${rows.length} lignes). Veuillez filtrer par Rangement / Boîte (maximum 500 fiches pour le PDF) ou choisir le format Excel / CSV.`
-          );
-          setIsGenerating(false);
-          setProgressMessage('');
-          return;
-        }
-
-        setProgressMessage("Mise en page et génération du PDF...");
-
-        // Create PDF in landscape format
-        const doc = new jsPDF({
-          orientation: 'landscape',
-          unit: 'mm',
-          format: 'a4'
-        });
-
-        // Document Title & Context metadata
-        doc.setFontSize(18);
-        doc.setTextColor(30, 41, 59); // slate-800
-        doc.text("LISTE DE CONTRÔLE ET D'ÉMARGEMENT - CARTES CMU", 14, 18);
-
-        doc.setFontSize(10);
-        doc.setTextColor(100, 116, 139); // slate-500
-        doc.text(`Site : ${currentSiteName.toUpperCase()}  |  Filtre : ${selectedStatut}  |  Rangement : ${selectedRangement === 'ALL' ? 'Tous' : selectedRangement}`, 14, 25);
-        doc.text(`Date de génération : ${new Date().toLocaleDateString('fr-FR')}  |  Nombre de cartes : ${rows.length}`, 14, 30);
-
-        // Define columns
-        const columns = [
-          { header: 'N°', dataKey: 'index' },
-          { header: 'NOM DE FAMILLE', dataKey: 'noms' },
-          { header: 'PRÉNOM(S)', dataKey: 'prenoms' },
-          { header: 'DATE NAISS.', dataKey: 'date_de_naissance' },
-          { header: 'RANGEMENT', dataKey: 'rangement' },
-          { header: 'CONTACT', dataKey: 'contact' },
-          { header: 'ÉMARGEMENT / SIGNATURE', dataKey: 'emargement' }
-        ];
-
-        // Format data
-        const body = rows.map((r: any, idx: number) => ({
-          index: idx + 1,
-          noms: (r.noms || '').toUpperCase(),
-          prenoms: (r.prenoms || '').toUpperCase(),
-          date_de_naissance: r.date_de_naissance || '—',
-          rangement: r.rangement || 'NON CLASSE',
-          contact: r.contact || '—',
-          emargement: '' // Empty cell for manual signature
-        }));
-
-        autoTable(doc, {
-          columns: columns,
-          body: body,
-          startY: 35,
-          theme: 'grid',
-          styles: {
-            fontSize: 9,
-            cellPadding: 3,
-            textColor: [30, 41, 59],
-            lineColor: [226, 232, 240], // Light slate gray borders
-            lineWidth: 0.2
-          },
-          headStyles: {
-            fillColor: [30, 41, 59], // dark slate-800
-            textColor: [255, 255, 255],
-            fontSize: 9,
-            fontStyle: 'bold'
-          },
-          columnStyles: {
-            index: { cellWidth: 10 },
-            noms: { cellWidth: 45 },
-            prenoms: { cellWidth: 50 },
-            date_de_naissance: { cellWidth: 30 },
-            rangement: { cellWidth: 35 },
-            contact: { cellWidth: 45 },
-            emargement: { cellWidth: 55 } // Wide space for manual signature
-          },
-          didDrawPage: (data) => {
-            // Footer page number
-            const totalPages = doc.getNumberOfPages();
-            doc.setFontSize(8);
-            doc.setTextColor(148, 163, 184);
-            doc.text(
-              `Page ${data.pageNumber} sur ${totalPages}`,
-              doc.internal.pageSize.width - 25,
-              doc.internal.pageSize.height - 10
-            );
-          }
-        });
-
-        // Save PDF file locally
-        doc.save(`LISTE_EMARGEMENT_${currentSiteName.toUpperCase().replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`);
-
-        // If incremental mark as exported
-        if (isIncremental) {
-          const ids = rows.map((r: any) => r.id_carte as number);
-          await window.api.export.marquerExporte(ids);
-        }
-
-        res = { success: true, count: rows.length };
+        setProgressMessage("Lancement de la génération du PDF...");
+        res = await window.api.export.pdf(filters);
       }
 
       if (res && res.success) {

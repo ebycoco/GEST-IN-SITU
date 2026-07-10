@@ -98,17 +98,45 @@ export default function Sidebar() {
   const activeSiteId = useAuthStore((s) => s.activeSiteId);
   const setActiveSiteId = useAuthStore((s) => s.setActiveSiteId);
   const logout = useAuthStore((s) => s.logout);
+  const initialDataLoading = useAuthStore((s) => s.initialDataLoading);
   const navigate = useNavigate();
   
   const [sites, setSites] = useState<any[]>([]);
+  const [sitesLoaded, setSitesLoaded] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
+  const [appVersion, setAppVersion] = useState('1.0.0');
+  const [appName, setAppName] = useState('GESTION CARTES IN-SITU');
+
   useEffect(() => {
-    if (user?.role === 'SUPER ADMIN') {
-      window.api.hierarchy.getSites().then(setSites);
+    if (window.api?.app?.getVersion) {
+      window.api.app.getVersion().then(setAppVersion).catch(console.error);
     }
-  }, [user]);
+    if (window.api?.app?.getName) {
+      window.api.app.getName().then((name) => {
+        if (name) {
+          setAppName(name.toUpperCase().replace(/_/g, '-'));
+        }
+      }).catch(console.error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (window.api?.hierarchy?.getSites) {
+      window.api.hierarchy.getSites()
+        .then((data) => {
+          setSites(data);
+          setSitesLoaded(true);
+        })
+        .catch((err) => {
+          console.error(err);
+          setSitesLoaded(true); // Marquer comme chargé même en cas d'erreur pour ne pas rester bloqué
+        });
+    } else {
+      setSitesLoaded(true); // API absente (ex: dev sans contexte Electron)
+    }
+  }, []);
 
   useEffect(() => {
     const on = () => setIsOnline(true);
@@ -123,7 +151,16 @@ export default function Sidebar() {
     navigate('/login');
   };
 
-  const currentSite = sites.find(s => s.id === activeSiteId);
+  const currentSiteId = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+  const currentSite = sites.find(s => s.id === currentSiteId);
+  const siteName = currentSite ? currentSite.nom : '';
+  // Affiche un libellé de chargement tant que les sites n'ont pas été reçus depuis SQLite,
+  // puis le nom du site s'il est trouvé, ou un libellé neutre si aucun site n'est associé.
+  const displayTitle = !sitesLoaded
+    ? '⏳ Chargement...'
+    : siteName
+      ? `IN-SITU - ${siteName}`
+      : 'IN-SITU';
   const initials = user ? (user.nom_user || user.login).slice(0, 2).toUpperCase() : 'GI';
 
   // Navigation Items Logic
@@ -237,7 +274,22 @@ export default function Sidebar() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div className="sidebar-logo">GI</div>
           <div className="sidebar-text">
-            <div className="sidebar-title">GEST-IN-SITU</div>
+            <div 
+              className="sidebar-title text-sm xl:text-base font-bold uppercase truncate block max-w-full"
+              style={{
+                fontSize: 'clamp(12px, 1.2vw, 15px)',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                display: 'block',
+                maxWidth: '100%'
+              }}
+              title={displayTitle}
+            >
+              {displayTitle}
+            </div>
             <div className="sidebar-subtitle">Cartes CMU</div>
           </div>
         </div>
@@ -297,8 +349,22 @@ export default function Sidebar() {
         {getNavItems().map((item) => {
           const Icon = item.icon;
           return (
-            <NavLink key={item.path} to={item.path} end={item.path === '/dashboard'}
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            <NavLink 
+              key={item.path} 
+              to={initialDataLoading ? "#" : item.path} 
+              end={item.path === '/dashboard'}
+              onClick={(e) => {
+                if (initialDataLoading) {
+                  e.preventDefault();
+                }
+              }}
+              className={({ isActive }) => `nav-item ${isActive && !initialDataLoading ? 'active' : ''}`}
+              style={{
+                opacity: initialDataLoading ? 0.45 : 1,
+                cursor: initialDataLoading ? 'not-allowed' : 'pointer',
+                pointerEvents: initialDataLoading ? 'none' : 'auto',
+                transition: 'all 0.2s ease-in-out'
+              }}
             >
               <Icon size={18} />
               <span className="sidebar-text">{item.label}</span>
@@ -318,6 +384,23 @@ export default function Sidebar() {
           <LogOut size={16} />
           <span className="sidebar-text">Déconnexion</span>
         </button>
+        {!isCollapsed && (
+          <div style={{ 
+            textAlign: 'center', 
+            marginTop: 16, 
+            fontSize: '9px', 
+            color: 'var(--text-muted)', 
+            opacity: 0.5,
+            lineHeight: '1.4',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            maxWidth: '100%'
+          }} title={`GEST-IN-SITU v${appVersion} - © Ebychoco 2026 - Tous droits réservés`}>
+            GEST-IN-SITU v{appVersion}<br />
+            © Ebychoco 2026 - Tous droits réservés
+          </div>
+        )}
       </div>
     </aside>
   );

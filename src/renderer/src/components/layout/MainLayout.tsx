@@ -5,6 +5,24 @@ import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 
 export default function MainLayout() {
+  // ─── ANTI-FREEZE (Couche 3) — Visibility API ─────────────────────────────
+  // Détecte le retour de l'utilisateur après une absence (autre fenêtre,
+  // explorateur, navigateur) et dispatche un signal 'app:focus-restored'.
+  // Les pages avec traitement en cours (import, purge) écoutent ce signal
+  // pour effectuer un flush unique et propre de leur état bufferisé.
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        window.dispatchEvent(new CustomEvent('app:focus-restored'));
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+  // ──────────────────────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {

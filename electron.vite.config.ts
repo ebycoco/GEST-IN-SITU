@@ -36,12 +36,18 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         external: ['better-sqlite3']
       }
+    },
+    esbuild: {
+      drop: ['console', 'debugger']
     }
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: 'dist/preload'
+    },
+    esbuild: {
+      drop: ['console', 'debugger']
     }
   },
   renderer: {
@@ -65,6 +71,9 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: resolve('src/renderer/index.html')
       }
+    },
+    esbuild: {
+      drop: ['console', 'debugger']
     }
   }
   };

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, Edit, Trash2, MapPin, Building2, Save, X, Lock, Unlock, AlertTriangle, ShieldCheck, ChevronRight, Activity, Database } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 
 interface Site { 
   id: number; 
@@ -46,18 +47,26 @@ export default function SitesPage() {
 
   useEffect(() => { 
     setCurrentPage(1);
-    loadData();
+    const cache = useCacheStore.getState().sitesCache;
+    let hasCache = false;
+    if (cache.cachedAt && cache.list.length > 0) {
+      setSites(cache.list);
+      setLoading(false);
+      hasCache = true;
+    }
+    loadData(hasCache);
   }, [userContext?.site_id, activeTab]);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const s = await window.api.hierarchy.getSites();
       setSites(s);
+      useCacheStore.getState().setSitesCache(s);
       const c = await window.api.hierarchy.getCentres(userContext?.role === 'SUPER ADMIN' ? undefined : userContext?.site_id);
       setCentres(c);
     } catch (e) { console.error(e); }
-    finally { setLoading(false); }
+    finally { if (!silent) setLoading(false); }
   };
 
   const handleCreateSite = async (e: React.FormEvent) => {
@@ -118,11 +127,28 @@ export default function SitesPage() {
       toast.error('Veuillez sélectionner un site d\'abord.');
       return;
     }
+
+    if (!centreFormData.numero || !centreFormData.numero.trim()) {
+      toast.error('❌ Le numéro de centre est obligatoire.');
+      return;
+    }
+    const num = parseInt(centreFormData.numero) || 0;
+    if (num < 1 || num > 4) {
+      toast.error('❌ Le numéro de centre doit être compris entre 1 et 4.');
+      return;
+    }
+
+    const isPrincipal = num === 1 || (centreFormData.nom && centreFormData.nom.toUpperCase().includes('PRINCIPAL'));
+    if (!isPrincipal && (!centreFormData.prefixe_rangement || !centreFormData.prefixe_rangement.trim())) {
+      toast.error('❌ Le préfixe de rangement est obligatoire pour les centres secondaires.');
+      return;
+    }
+
     try {
       await window.api.hierarchy.createCentre({
         site_id: finalSiteId,
         nom: centreFormData.nom,
-        numero: parseInt(centreFormData.numero) || 0,
+        numero: num,
         // @ts-ignore
         lieu: centreFormData.lieu,
         prefixe_rangement: centreFormData.prefixe_rangement || undefined
@@ -139,10 +165,27 @@ export default function SitesPage() {
   const handleUpdateCentre = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCentre) return;
+
+    if (!editingCentre.numero || !editingCentre.numero.toString().trim()) {
+      toast.error('❌ Le numéro de centre est obligatoire.');
+      return;
+    }
+    const num = parseInt(editingCentre.numero) || 0;
+    if (num < 1 || num > 4) {
+      toast.error('❌ Le numéro de centre doit être compris entre 1 et 4.');
+      return;
+    }
+
+    const isPrincipal = num === 1 || (editingCentre.nom && editingCentre.nom.toUpperCase().includes('PRINCIPAL'));
+    if (!isPrincipal && (!editingCentre.prefixe_rangement || !editingCentre.prefixe_rangement.trim())) {
+      toast.error('❌ Le préfixe de rangement est obligatoire pour les centres secondaires.');
+      return;
+    }
+
     try {
       await window.api.hierarchy.updateCentre(editingCentre.id, {
         nom: editingCentre.nom,
-        numero: editingCentre.numero,
+        numero: num,
         prefixe_rangement: editingCentre.prefixe_rangement || null
       });
       toast.success('Centre modifié avec succès');
@@ -150,6 +193,17 @@ export default function SitesPage() {
       loadData();
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la modification du centre');
+    }
+  };
+
+  const handleDeleteCentre = async (id: number) => {
+    if (!confirm("Voulez-vous vraiment supprimer ce centre ?")) return;
+    try {
+      await window.api.hierarchy.deleteCentre(id);
+      toast.success("Centre supprimé avec succès");
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message || "Erreur lors de la suppression du centre");
     }
   };
 
@@ -364,10 +418,13 @@ export default function SitesPage() {
                         </div>
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                           <span className="status-badge active">EN SERVICE</span>
-                           <button className="btn-action" onClick={() => setEditingCentre(c)} title="Modifier le Centre"><Edit size={14} /></button>
-                         </div>
+                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <span className="status-badge active">EN SERVICE</span>
+                            <button className="btn-action" onClick={() => setEditingCentre(c)} title="Modifier le Centre"><Edit size={14} /></button>
+                            {!(c.numero === 1 || (c.nom && c.nom.toUpperCase().includes('PRINCIPAL'))) && (
+                              <button className="btn-action" style={{ color: 'var(--accent-red)' }} onClick={() => handleDeleteCentre(c.id)} title="Supprimer ce centre"><Trash2 size={14} /></button>
+                            )}
+                          </div>
                       </td>
                     </tr>
                   ))}

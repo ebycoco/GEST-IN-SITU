@@ -38,23 +38,36 @@ export default function InventairePage() {
     }
   }, []);
 
-  // Déclencheur de recherche à la volée
+  // Déclencheur de recherche explicite
   const performSearch = async () => {
-    if (nomsPrenoms.trim().length >= 2 || dateNaissance.length === 10 || lieuNaissance.trim().length >= 2) {
-      try {
-        const res = await window.api.cartes.searchCombinedInventaire(siteId, nomsPrenoms, dateNaissance, lieuNaissance);
-        setResults(res || []);
-      } catch (err) {
-        console.error('Failed inventaire search:', err);
+    const hasNom = nomsPrenoms.trim().length >= 2;
+    const hasDate = dateNaissance.length === 10;
+    const hasLieu = lieuNaissance.trim().length >= 2;
+
+    if (!hasNom && !hasDate && !hasLieu) {
+      toast.error('Veuillez remplir au moins un critère de recherche valide (Nom/Prénom >= 2 car., Date complète, ou Lieu >= 2 car.).');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const res = await window.api.cartes.searchCombinedInventaire(siteId, nomsPrenoms, dateNaissance, lieuNaissance);
+      setResults(res || []);
+      if (!res || res.length === 0) {
+        toast.error('Aucune carte trouvée pour ces critères.');
       }
-    } else {
-      setResults([]);
+    } catch (err) {
+      console.error('Failed inventaire search:', err);
+      toast.error('Erreur lors de la recherche.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  useEffect(() => {
+  const handleSearchSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     performSearch();
-  }, [nomsPrenoms, dateNaissance, lieuNaissance]);
+  };
 
   // Raccourcis clavier (touches numériques 1, 2, 3...)
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -155,7 +168,7 @@ export default function InventairePage() {
       <div className="premium-card premium-glass" style={{ padding: 32 }}>
         {!selectedCarte ? (
           /* SECTION RECHERCHE COMBINÉE */
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+          <form onSubmit={handleSearchSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr 1fr', gap: 16 }}>
               {/* Nom & Prénoms */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -169,7 +182,7 @@ export default function InventairePage() {
                     type="text"
                     placeholder="Saisir nom & prénoms..."
                     value={nomsPrenoms}
-                    onChange={e => setNomsPrenoms(e.target.value)}
+                    onChange={e => setNomsPrenoms(e.target.value.toUpperCase())}
                   />
                 </div>
               </div>
@@ -194,11 +207,40 @@ export default function InventairePage() {
                     type="text"
                     placeholder="Lieu de naissance..."
                     value={lieuNaissance}
-                    onChange={e => setLieuNaissance(e.target.value)}
+                    onChange={e => setLieuNaissance(e.target.value.toUpperCase())}
                   />
                 </div>
               </div>
             </div>
+
+            {/* BOUTON RECHERCHER PLEIN SOLEIL */}
+            <button
+              type="submit"
+              disabled={loading}
+              className="premium-btn"
+              style={{
+                width: '100%',
+                background: '#ffd700',
+                color: '#000000',
+                fontWeight: 800,
+                fontSize: 14,
+                borderRadius: 12,
+                height: 44,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                border: 'none',
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                textTransform: 'uppercase',
+                boxShadow: '0 4px 12px rgba(255, 215, 0, 0.2)',
+                opacity: loading ? 0.7 : 1
+              }}
+            >
+              <Search size={18} />
+              {loading ? 'Recherche en cours...' : 'Rechercher'}
+            </button>
 
             {/* LEVÉE DE DOUTE CLAVIER */}
             {results.length > 0 && (
@@ -243,7 +285,7 @@ export default function InventairePage() {
                 </div>
               </div>
             )}
-          </div>
+          </form>
         ) : (
           /* FORMULAIRE D'ÉMARGEMENT HISTORIQUE */
           <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -311,7 +353,7 @@ export default function InventairePage() {
                 type="text"
                 placeholder="Ex: KOUASSI KOFFI JEAN"
                 value={nomRetirant}
-                onChange={e => setNomRetirant(e.target.value)}
+                onChange={e => setNomRetirant(e.target.value.toUpperCase())}
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();

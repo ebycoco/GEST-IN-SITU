@@ -103,6 +103,10 @@ class SyncEngine {
   }
 
   private triggerSync(): void {
+    if (this.isSyncing) {
+      log.info("--- Cycle de sync ignoré : le cycle précédent est encore en cours ---");
+      return;
+    }
     this.executeSyncCycle().catch((err) => {
       log.error('Periodic sync cycle failed:', err);
     });
@@ -111,13 +115,20 @@ class SyncEngine {
   private async executeSyncCycle(): Promise<void> {
     if (this.isSyncing) return;
     this.isSyncing = true;
-    
-    log.info('--- Starting Sync Cycle ---');
+
+    log.info('--- Début du cycle de synchronisation Supabase ---');
+    const cycleStart = performance.now();
     try {
       // 1. Upstream (Push local -> cloud)
-      log.info('Executing Upstream phase...');
+      log.info('[SYNC] Initialisation de la phase Upstream (local → Supabase)...');
+      const upstreamStart = performance.now();
       const pushedCount = await runUpstream();
-      log.info(`Upstream phase complete. Pushed ${pushedCount} operations.`);
+      const upstreamDuration = performance.now() - upstreamStart;
+      if (upstreamDuration > 5000) {
+        log.warn(`[LATENCE CLOUD] Phase Upstream a pris ${upstreamDuration.toFixed(2)} ms (seuil 5 s dépassé). Verifier la latence réseau Supabase.`);
+      } else {
+        log.info(`[SYNC] Phase Upstream terminée. ${pushedCount} opération(s) envoyée(s) en ${upstreamDuration.toFixed(2)} ms.`);
+      }
 
       // 2. Récupérer le siteId dynamique (ex: du dernier utilisateur connecté ou le site par défaut)
       const db = getDatabase();
@@ -129,7 +140,7 @@ class SyncEngine {
             WHERE last_login IS NOT NULL 
             ORDER BY last_login DESC LIMIT 1
           `).get() as { site_id?: number } | undefined;
-          
+
           if (lastLoggedUser && lastLoggedUser.site_id) {
             siteId = lastLoggedUser.site_id;
           }
@@ -139,8 +150,9 @@ class SyncEngine {
       }
 
       // 3. Downstream (Pull cloud -> local)
-      log.info(`Executing Downstream phase for siteId ${siteId}...`);
-      
+      log.info(`[SYNC] Initialisation de la phase Downstream (Supabase → local) pour le site ID ${siteId}...`);
+      const downstreamStart = performance.now();
+
       // Rapatrier proactivement les utilisateurs du site avant de traiter les cartes
       try {
         await syncUsersFromCloud(siteId);
@@ -149,15 +161,29 @@ class SyncEngine {
       }
 
       const pulledCount = await runDownstream(siteId);
-      log.info(`Downstream phase complete. Merged ${pulledCount} records.`);
+      const downstreamDuration = performance.now() - downstreamStart;
+      if (downstreamDuration > 5000) {
+        log.warn(`[LATENCE CLOUD] Phase Downstream a pris ${downstreamDuration.toFixed(2)} ms (seuil 5 s dépassé). Verifier la latence réseau Supabase.`);
+      } else {
+        log.info(`[SYNC] Phase Downstream terminée. ${pulledCount} enregistrement(s) fusionné(s) en ${downstreamDuration.toFixed(2)} ms.`);
+      }
 
-      log.info('--- Sync Cycle Completed Successfully ---');
+      const cycleDuration = performance.now() - cycleStart;
+      if (cycleDuration > 5000) {
+        log.warn(`[LATENCE CLOUD] Le cycle de synchronisation Supabase a pris ${cycleDuration.toFixed(2)} ms au total (seuil 5 s dépassé).`);
+      } else {
+        log.info(`--- Cycle de synchronisation Supabase terminé avec succès en ${cycleDuration.toFixed(2)} ms ---`);
+      }
     } catch (e) {
       log.error('Error during sync cycle execution:', e);
       throw e;
     } finally {
       this.isSyncing = false;
     }
+  }
+
+  public isCurrentlySyncing(): boolean {
+    return this.isSyncing;
   }
 }
 

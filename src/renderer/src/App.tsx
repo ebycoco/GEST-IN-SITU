@@ -3,7 +3,7 @@ import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import MainLayout from './components/layout/MainLayout';
 import LoginPage from './pages/LoginPage';
-import DashboardPage from './pages/DashboardPage';
+import DashboardPage from './pages/dashboard';
 import CartesPage from './pages/CartesPage';
 import ImportPage from './pages/ImportPage';
 import SearchPage from './pages/SearchPage';

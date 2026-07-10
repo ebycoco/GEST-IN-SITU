@@ -1,103 +1,217 @@
 import Database from 'better-sqlite3';
 import log from 'electron-log';
-const SCHEMA_VERSION = 18;
+import { hashPassword } from '../auth/local-auth';
+const SCHEMA_VERSION = 31;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
-  log.info(`Database schema version: ${currentVersion}, target: ${SCHEMA_VERSION}`);
+  log.info(`[MIGRATION] Version du schéma actuelle : ${currentVersion}, cible : ${SCHEMA_VERSION}`);
 
-  if (currentVersion < 1) {
-    log.info('Running migration v1: Initial schema');
-    migrateV1(db);
-  }
+  try {
+    if (currentVersion < 1) {
+      log.info('Running migration v1: Initial schema');
+      migrateV1(db);
+      db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      log.info(`New database installation: schema directly set to version ${SCHEMA_VERSION}`);
+      // Filet de sécurité : garantir les colonnes même pour une install neuve
+      migrateV27_safetyNet(db);
+      log.info('All migrations complete');
+      return;
+    }
   
-  if (currentVersion < 2) {
-    log.info('Running migration v2: Ensuring tables');
-    migrateV2(db);
-  }
+    if (currentVersion < 2) {
+      log.info('Running migration v2: Ensuring tables');
+      migrateV2(db);
+    }
 
-  if (currentVersion < 3) {
-    log.info('Running migration v3: Adding retirant columns to temp table');
-    migrateV3(db);
-  }
+    if (currentVersion < 3) {
+      log.info('Running migration v3: Adding retirant columns to temp table');
+      migrateV3(db);
+    }
 
-  if (currentVersion < 4) {
-    log.info('Running migration v4: Adding quotas to sites');
-    migrateV4(db);
-  }
+    if (currentVersion < 4) {
+      log.info('Running migration v4: Adding quotas to sites');
+      migrateV4(db);
+    }
 
-  if (currentVersion < 5) {
-    log.info('Running migration v5: Adding active status to sites');
-    migrateV5(db);
-  }
+    if (currentVersion < 5) {
+      log.info('Running migration v5: Adding active status to sites');
+      migrateV5(db);
+    }
 
-  if (currentVersion < 6) {
-    log.info('Running migration v6: Catch-up site_id columns');
-    migrateV6(db);
-  }
+    if (currentVersion < 6) {
+      log.info('Running migration v6: Catch-up site_id columns');
+      migrateV6(db);
+    }
 
-  if (currentVersion < 7) {
-    log.info('Running migration v7: Final schema consistency check');
-    migrateV7(db);
-  }
+    if (currentVersion < 7) {
+      log.info('Running migration v7: Final schema consistency check');
+      migrateV7(db);
+    }
 
-  if (currentVersion < 8) {
-    log.info('Running migration v8: Adding composite index (site_id, statut) to t_cartes');
-    migrateV8(db);
-  }
+    if (currentVersion < 8) {
+      log.info('Running migration v8: Adding composite index (site_id, statut) to t_cartes');
+      migrateV8(db);
+    }
 
-  if (currentVersion < 9) {
-    log.info('Running migration v9: Migrating date formats from DD/MM/YYYY to YYYY-MM-DD');
-    migrateV9(db);
-  }
+    if (currentVersion < 9) {
+      log.info('Running migration v9: Migrating date formats from DD/MM/YYYY to YYYY-MM-DD');
+      migrateV9(db);
+    }
 
-  if (currentVersion < 10) {
-    log.info('Running migration v10: Updating t_cartes statut_physique check constraint to allow PERDUE');
-    migrateV10(db);
-  }
+    if (currentVersion < 10) {
+      log.info('Running migration v10: Updating t_cartes statut_physique check constraint to allow PERDUE');
+      migrateV10(db);
+    }
 
-  if (currentVersion < 11) {
-    log.info('Running migration v11: Adding prefixe_rangement to t_sites');
-    migrateV11(db);
-  }
+    if (currentVersion < 11) {
+      log.info('Running migration v11: Adding prefixe_rangement to t_sites');
+      migrateV11(db);
+    }
 
-  if (currentVersion < 12) {
-    log.info('Running migration v12: Moving prefixe_rangement to t_centres');
-    migrateV12(db);
-  }
+    if (currentVersion < 12) {
+      log.info('Running migration v12: Moving prefixe_rangement to t_centres');
+      migrateV12(db);
+    }
 
-  if (currentVersion < 13) {
-    log.info('Running migration v13: Adding is_exported column to t_cartes');
-    migrateV13(db);
-  }
+    if (currentVersion < 13) {
+      log.info('Running migration v13: Adding is_exported column to t_cartes');
+      migrateV13(db);
+    }
 
-  if (currentVersion < 14) {
-    log.info('Running migration v14: Adding created_by column to t_cartes and refactoring AJOUTANT role to OPERATEUR_SAISIE');
-    migrateV14(db);
-  }
+    if (currentVersion < 14) {
+      log.info('Running migration v14: Adding created_by column to t_cartes and refactoring AJOUTANT role to OPERATEUR_SAISIE');
+      migrateV14(db);
+    }
 
-  if (currentVersion < 15) {
-    log.info('Running migration v15: Refactoring CONSULTANT role to OPERATEUR_VERIFICATION');
-    migrateV15(db);
-  }
+    if (currentVersion < 15) {
+      log.info('Running migration v15: Refactoring CONSULTANT role to OPERATEUR_VERIFICATION');
+      migrateV15(db);
+    }
 
-  if (currentVersion < 16) {
-    log.info('Running migration v16: Adding OPERATEUR_INVENTAIRE check constraint and role');
-    migrateV16(db);
-  }
+    if (currentVersion < 16) {
+      log.info('Running migration v16: Adding OPERATEUR_INVENTAIRE check constraint and role');
+      migrateV16(db);
+    }
 
-  if (currentVersion < 17) {
-    log.info('Running migration v17: Renaming EDITEUR role to OPERATEUR_QUALITE');
-    migrateV17(db);
-  }
+    if (currentVersion < 17) {
+      log.info('Running migration v17: Renaming EDITEUR role to OPERATEUR_QUALITE');
+      migrateV17(db);
+    }
 
-  if (currentVersion < 18) {
-    log.info('Running migration v18: Renaming ADMINISTRATEUR role to ADMINISTRATEUR_SITE and adding ADMIN_CENTRE');
-    migrateV18(db);
-  }
+    if (currentVersion < 18) {
+      log.info('Running migration v18: Renaming ADMINISTRATEUR role to ADMINISTRATEUR_SITE and adding ADMIN_CENTRE');
+      migrateV18(db);
+    }
 
-  db.pragma(`user_version = ${SCHEMA_VERSION}`);
-  log.info('All migrations complete');
+    if (currentVersion < 19) {
+      log.info('Running migration v19: Creating composite index idx_cartes_identite_civile');
+      migrateV19(db);
+    }
+
+    if (currentVersion < 20) {
+      log.info('Running migration v20: Optimizing indices and logs database performance');
+      migrateV20(db);
+    }
+
+    if (currentVersion < 21) {
+      log.info('Running migration v21: Creating audit_logs table');
+      migrateV21(db);
+    }
+
+    if (currentVersion < 22) {
+      log.info('Running migration v22: Creating t_user_roles table');
+      migrateV22(db);
+    }
+
+    if (currentVersion < 23) {
+      log.info('Running migration v23: Creating local indexes for mass upload optimization (cle_doublon, is_dirty, site_id)');
+      migrateV23(db);
+    }
+
+    if (currentVersion < 24) {
+      log.info('Running migration v24: Creating unique indexes for sync_id on t_cartes and t_users');
+      migrateV24(db);
+    }
+
+    if (currentVersion < 25) {
+      log.info('Running migration v25: Creating t_import_anomalies table');
+      migrateV25(db);
+    }
+
+    if (currentVersion < 26) {
+      log.info('Running migration v26: Indexing date_delivrance and created_at columns');
+      migrateV26(db);
+    }
+
+    if (currentVersion < 27) {
+      log.info('Running migration v27: Adding is_dirty NOT NULL and synced_at columns to t_users for existing field databases');
+      migrateV27(db);
+    }
+
+    if (currentVersion < 28) {
+      log.info('Running migration v28: Ensuring t_import_anomalies structure for stats dashboard');
+      migrateV28(db);
+    }
+
+    if (currentVersion < 29) {
+      log.info('Running migration v29: Ensuring t_import_anomalies and updating t_centres');
+      migrateV29(db);
+    }
+
+    if (currentVersion < 30) {
+      log.info('Running migration v30: Ensuring column numero with default 1 on t_centres');
+      migrateV30(db);
+    }
+
+    if (currentVersion < 31) {
+      log.info('Running migration v31: Ensuring column created_by with index on t_cartes');
+      migrateV31(db);
+    }
+
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+
+    // ─── FILET DE SÉCURITÉ UNIVERSEL ───────────────────────────────────────────
+    // Exécuté après TOUTES les migrations pour corriger les bases corrompues
+    migrateV27_safetyNet(db);
+    // ────────────────────────────────────────────────────────────────────────
+
+    log.info('[MIGRATION] Toutes les migrations terminées avec succès.');
+
+  } catch (migrationError: any) {
+    // ─── CATCH GLOBAL : RECONSTRUCTION D'URGENCE ─────────────────────────────────
+    log.error('[MIGRATION] ÉCHEC CRITIQUE du cycle de migration. Déclenchement de la reconstruction d\'urgence.', migrationError);
+
+    try {
+      // Étape 1 : Sauvegarder la base corrompue
+      const { join } = require('path');
+      const { copyFileSync } = require('fs');
+      const dbPath = (db as any).name as string;
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = join(require('path').dirname(dbPath), `database_backup_emergency_${timestamp}.db`);
+      try {
+        copyFileSync(dbPath, backupPath);
+        log.warn(`[MIGRATION] Sauvegarde d'urgence créée : ${backupPath}`);
+      } catch (backupErr) {
+        log.error('[MIGRATION] Impossible de créer la sauvegarde d\'urgence :', backupErr);
+      }
+
+      // Étape 2 : Réinitialisation forcée du schéma en V31 complet
+      log.warn('[MIGRATION] Tentative de réinstallation complète du schéma V31...');
+      db.pragma('user_version = 0');
+      migrateV1(db);
+      db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      migrateV29(db); // Garantit t_import_anomalies + colonnes t_centres (sans DROP destructeur)
+      migrateV30(db); // Garantit la présence de 'numero' avec DEFAULT 1 sur t_centres
+      migrateV31(db); // Garantit la présence de 'created_by' sur t_cartes
+      migrateV27_safetyNet(db);
+      log.info('[MIGRATION] Reconstruction d\'urgence terminée. Schéma réinstallé en V31.');
+
+    } catch (emergencyError: any) {
+      log.error('[MIGRATION] ÉCHEC TOTAL de la reconstruction d\'urgence. L\'application peut être inutilisable.', emergencyError);
+      throw emergencyError;
+    }
+  }
 }
 
 function migrateV9(db: Database.Database): void {
@@ -228,6 +342,7 @@ function migrateV3(db: Database.Database): void {
 }
 
 function migrateV1(db: Database.Database): void {
+  db.exec('PRAGMA foreign_keys = OFF;');
   db.exec(`
     -- =====================================================
     -- SITES / CENTRES / POSTES (Hiérarchie)
@@ -246,9 +361,11 @@ function migrateV1(db: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       site_id INTEGER NOT NULL,
       nom TEXT NOT NULL,
-      numero INTEGER NOT NULL CHECK(numero BETWEEN 1 AND 4),
+      numero INTEGER DEFAULT 1 CHECK(numero BETWEEN 1 AND 4),
       created_at TEXT DEFAULT (datetime('now')),
       sync_id TEXT,
+      code TEXT,
+      prefixe_rangement TEXT,
       FOREIGN KEY (site_id) REFERENCES t_sites(id)
     );
 
@@ -283,11 +400,21 @@ function migrateV1(db: Database.Database): void {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       sync_id TEXT,
-      is_dirty INTEGER DEFAULT 0,
+      is_dirty INTEGER DEFAULT 0 NOT NULL,
       synced_at TEXT,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
+    );
+
+    -- =====================================================
+    -- ROLES MULTIPLES DES UTILISATEURS
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS t_user_roles (
+      id_user INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+      PRIMARY KEY (id_user, role),
+      FOREIGN KEY (id_user) REFERENCES t_users(id_user) ON DELETE CASCADE
     );
 
     -- =====================================================
@@ -334,6 +461,7 @@ function migrateV1(db: Database.Database): void {
       updated_at TEXT DEFAULT (datetime('now')),
       synced_at TEXT,
       is_dirty INTEGER DEFAULT 0,
+      created_by INTEGER DEFAULT NULL,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
@@ -396,12 +524,23 @@ function migrateV1(db: Database.Database): void {
       sync_id TEXT,
       is_dirty INTEGER DEFAULT 0,
       synced_at TEXT,
+      is_read INTEGER DEFAULT 0,
+      site_id INTEGER DEFAULT 1,
       FOREIGN KEY (id_user) REFERENCES t_users(id_user)
     );
+
 
     CREATE INDEX IF NOT EXISTS idx_logs_date ON t_logs(date_heure);
     CREATE INDEX IF NOT EXISTS idx_logs_action ON t_logs(action);
     CREATE INDEX IF NOT EXISTS idx_logs_user ON t_logs(id_user);
+
+    CREATE TABLE IF NOT EXISTS t_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      utilisateur TEXT,
+      action TEXT,
+      details TEXT,
+      date_creation TEXT DEFAULT (datetime('now'))
+    );
 
     -- =====================================================
     -- TABLE TEMPORAIRE IMPORT
@@ -435,6 +574,17 @@ function migrateV1(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON t_sync_queue(synced, created_at);
 
     -- =====================================================
+    -- TABLE DES ANOMALIES D'IMPORTATION (DLQ)
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS t_import_anomalies (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      carte_id TEXT,
+      type_anomalie TEXT,
+      description TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- =====================================================
     -- APP CONFIG
     -- =====================================================
     CREATE TABLE IF NOT EXISTS t_config (
@@ -450,8 +600,7 @@ function migrateV1(db: Database.Database): void {
     -- Super Admin must create sites and centers manually.
 
     -- Compte Super Admin par défaut (identifiants: superadmin / admin)
-    INSERT OR IGNORE INTO t_users (id_user, login, password_hash, role, nom_user, statut_actif)
-    VALUES (1, 'superadmin', 'admin', 'SUPER ADMIN', 'Super Administrateur', 1);
+    -- NOTE: Le hash est généré dynamiquement par hashPassword() ci-dessous (voir code TypeScript).
 
     -- Config initiale
     INSERT OR IGNORE INTO t_config (key, value) VALUES
@@ -466,6 +615,22 @@ function migrateV1(db: Database.Database): void {
       ('supabase_url', ''),
       ('supabase_anon_key', '');
   `);
+
+  // ── Seed Super Admin avec mot de passe hashé (bcrypt) ─────────────────────
+  // Le hash est généré à l'exécution pour ne jamais stocker de mot de passe en clair.
+  try {
+    const defaultHash = hashPassword('admin');
+    db.prepare(`
+      INSERT OR IGNORE INTO t_users (id_user, login, password_hash, role, nom_user, statut_actif)
+      VALUES (1, 'superadmin', ?, 'SUPER ADMIN', 'Super Administrateur', 1)
+    `).run(defaultHash);
+    log.info('[MIGRATION V1] Compte superadmin créé avec mot de passe hashé (bcrypt).');
+  } catch (e: any) {
+    log.warn('[MIGRATION V1] Impossible de créer le compte superadmin (déjà existant ?) :', e.message);
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
+  db.exec('PRAGMA foreign_keys = ON;');
 
   log.info('Migration v1 complete: All tables, indexes, FTS5, and seed data created');
 }
@@ -685,7 +850,7 @@ function migrateV15(db: Database.Database): void {
         // Supprimer l\'ancienne table
         db.exec('DROP TABLE t_users;');
 
-        // Recréer la table avec la nouvelle contrainte CHECK
+        // Recréer la table avec la nouvelle contrainte CHECK + colonnes is_dirty et synced_at
         db.exec(`
           CREATE TABLE t_users (
             id_user INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -704,7 +869,9 @@ function migrateV15(db: Database.Database): void {
             last_login TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
-            sync_id TEXT
+            sync_id TEXT,
+            is_dirty INTEGER DEFAULT 0,
+            synced_at TEXT
           );
         `);
 
@@ -712,20 +879,22 @@ function migrateV15(db: Database.Database): void {
         db.exec(`
           INSERT INTO t_users (
             id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            is_dirty, synced_at
           )
           SELECT
             id_user, login, password_hash,
             CASE WHEN role = 'CONSULTANT' THEN 'OPERATEUR_VERIFICATION' ELSE role END,
             nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            COALESCE(is_dirty, 0), synced_at
           FROM t_users_backup;
         `);
 
         // Supprimer la table de backup
         db.exec('DROP TABLE t_users_backup;');
 
-        log.info('Migration V15: Reconstructed t_users successfully with OPERATEUR_LOGISTIQUE check constraint');
+        log.info('Migration V15: Reconstructed t_users successfully — is_dirty et synced_at inclus.');
       } catch (e: any) {
         log.error('Migration V15: Failed to reconstruct t_users:', e.message);
         throw e;
@@ -750,7 +919,7 @@ function migrateV16(db: Database.Database): void {
         // Supprimer l\'ancienne table
         db.exec('DROP TABLE t_users;');
 
-        // Recréer la table avec la nouvelle contrainte CHECK
+        // Recréer la table avec la nouvelle contrainte CHECK + colonnes is_dirty et synced_at
         db.exec(`
           CREATE TABLE t_users (
             id_user INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -769,7 +938,9 @@ function migrateV16(db: Database.Database): void {
             last_login TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
-            sync_id TEXT
+            sync_id TEXT,
+            is_dirty INTEGER DEFAULT 0,
+            synced_at TEXT
           );
         `);
 
@@ -777,18 +948,20 @@ function migrateV16(db: Database.Database): void {
         db.exec(`
           INSERT INTO t_users (
             id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            is_dirty, synced_at
           )
           SELECT
             id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            COALESCE(is_dirty, 0), synced_at
           FROM t_users_backup;
         `);
 
         // Supprimer la table de backup
         db.exec('DROP TABLE t_users_backup;');
 
-        log.info('Migration V16: Reconstructed t_users successfully with OPERATEUR_INVENTAIRE check constraint');
+        log.info('Migration V16: Reconstructed t_users successfully — is_dirty et synced_at inclus.');
       } catch (e: any) {
         log.error('Migration V16: Failed to reconstruct t_users:', e.message);
         throw e;
@@ -813,7 +986,7 @@ function migrateV17(db: Database.Database): void {
         // Supprimer l\'ancienne table
         db.exec('DROP TABLE t_users;');
 
-        // Recréer la table avec la nouvelle contrainte CHECK (EDITEUR remplacé par OPERATEUR_QUALITE)
+        // Recréer la table avec EDITEUR renommé en OPERATEUR_QUALITE + colonnes is_dirty et synced_at
         db.exec(`
           CREATE TABLE t_users (
             id_user INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -832,7 +1005,9 @@ function migrateV17(db: Database.Database): void {
             last_login TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
-            sync_id TEXT
+            sync_id TEXT,
+            is_dirty INTEGER DEFAULT 0,
+            synced_at TEXT
           );
         `);
 
@@ -840,25 +1015,27 @@ function migrateV17(db: Database.Database): void {
         db.exec(`
           INSERT INTO t_users (
             id_user, login, password_hash, role, nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            is_dirty, synced_at
           )
           SELECT
             id_user, login, password_hash,
             CASE WHEN role = 'EDITEUR' THEN 'OPERATEUR_QUALITE' ELSE role END,
             nom_user, prenom_user, email, telephone,
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id
+            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id,
+            COALESCE(is_dirty, 0), synced_at
           FROM t_users_backup;
         `);
 
         // Supprimer la table de backup
         db.exec('DROP TABLE t_users_backup;');
 
-        log.info('Migration V17: Reconstructed t_users successfully — EDITEUR renamed to OPERATEUR_QUALITE');
-    } catch (e: any) {
-      log.error('Migration V17: Failed to reconstruct t_users:', e.message);
-      throw e;
-    }
-  })();
+        log.info('Migration V17: Reconstructed t_users successfully — EDITEUR renamed to OPERATEUR_QUALITE, is_dirty et synced_at inclus.');
+      } catch (e: any) {
+        log.error('Migration V17: Failed to reconstruct t_users:', e.message);
+        throw e;
+      }
+    })();
   } finally {
     db.exec('PRAGMA foreign_keys = ON;');
   }
@@ -929,4 +1106,335 @@ function migrateV18(db: Database.Database): void {
   } finally {
     db.exec('PRAGMA foreign_keys = ON;');
   }
+}
+
+function migrateV19(db: Database.Database): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_identite_civile ON t_cartes (noms, prenoms, date_de_naissance, site_id);');
+    log.info('Migration V19: Created composite index idx_cartes_identite_civile successfully');
+  } catch (e: any) {
+    log.error('Migration V19 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV20(db: Database.Database): void {
+  try {
+    // 1. Indexation t_cartes
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_statut_physique ON t_cartes (site_id, statut);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_cle_doublon ON t_cartes (cle_doublon);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_noms_prenoms_ddn ON t_cartes (noms, prenoms, date_de_naissance);');
+    
+    // 2. Ajout de la colonne is_read sur t_logs
+    try {
+      db.exec('ALTER TABLE t_logs ADD COLUMN is_read INTEGER DEFAULT 0;');
+      log.info('Migration V20: Column is_read added to t_logs');
+    } catch (e) {
+      log.warn('Migration V20: Column is_read might already exist in t_logs');
+    }
+    
+    // 3. Indexation t_logs
+    db.exec('CREATE INDEX IF NOT EXISTS idx_logs_is_read ON t_logs (is_read);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_logs_action ON t_logs (action);');
+    
+    // 4. Initialisation : Mettre is_read = 1 pour les anciennes notifications marquées lues dans valeur_apres
+    db.exec(`
+      UPDATE t_logs 
+      SET is_read = 1 
+      WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') 
+        AND (valeur_apres NOT LIKE '%"read":false%' AND valeur_apres NOT LIKE '%"read": false%')
+    `);
+    
+    log.info('Migration V20 complete successfully');
+  } catch (err: any) {
+    log.error('Migration V20 failed:', err);
+    throw err;
+  }
+}
+
+function migrateV21(db: Database.Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operator_id TEXT,
+        action_type TEXT CHECK(action_type IN ('CONNEXION', 'DECONNEXION', 'RETRAIT', 'IMPORT_CARTE', 'VALIDATION')),
+        details TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    log.info('Migration V21: Created table audit_logs successfully');
+  } catch (e: any) {
+    log.error('Migration V21 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV22(db: Database.Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_user_roles (
+        id_user INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+        PRIMARY KEY (id_user, role),
+        FOREIGN KEY (id_user) REFERENCES t_users(id_user) ON DELETE CASCADE
+      );
+    `);
+    log.info('Migration V22: Created table t_user_roles successfully');
+  } catch (e: any) {
+    log.error('Migration V22 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV23(db: Database.Database): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_t_cartes_cle_doublon ON t_cartes(cle_doublon);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_t_cartes_is_dirty ON t_cartes(is_dirty);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_t_cartes_site_id ON t_cartes(site_id);');
+    log.info('Migration V23: Created indexes idx_t_cartes_cle_doublon, idx_t_cartes_is_dirty, and idx_t_cartes_site_id successfully');
+  } catch (e: any) {
+    log.error('Migration V23 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV24(db: Database.Database): void {
+  try {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);');
+    log.info('Migration V24: Created unique indexes on sync_id successfully');
+  } catch (e: any) {
+    log.error('Migration V24 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV25(db: Database.Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_import_anomalies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        noms TEXT,
+        prenoms TEXT,
+        date_de_naissance TEXT,
+        date_delivrance TEXT,
+        num_secu TEXT,
+        lieu_de_naissance TEXT,
+        contact TEXT,
+        lieu_enrolement TEXT,
+        rangement TEXT,
+        statut TEXT,
+        erreur_message TEXT,
+        date_import TEXT DEFAULT CURRENT_TIMESTAMP,
+        site_id INTEGER
+      );
+    `);
+    log.info('Migration V25: Created table t_import_anomalies successfully');
+  } catch (e: any) {
+    log.error('Migration V25 failed:', e.message);
+    throw e;
+  }
+}
+
+function migrateV26(db: Database.Database): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_t_cartes_date_delivrance ON t_cartes(date_delivrance);');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_t_cartes_created_at ON t_cartes(created_at);');
+    log.info('Migration V26: Created indexes on date_delivrance and created_at successfully');
+  } catch (e: any) {
+    log.error('Migration V26 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V27 : Ajout de is_dirty (NOT NULL) et synced_at sur t_users
+// Cible les bases de terrain créées avant l'introduction de ces colonnes
+// (antérieures à la V15 ou ayant subi une reconstruction partielle).
+// =====================================================
+function migrateV27(db: Database.Database): void {
+  /**
+   * Stratégie ALTER TABLE idempotente :
+   * SQLite ne supporte pas `ADD COLUMN IF NOT EXISTS`, donc on attrape
+   * silencieusement l'erreur "duplicate column name" pour garantir
+   * l'idempotence de cette migration sur toutes les bases terrain.
+   */
+  const safeAlter = (table: string, col: string, definition: string): void => {
+    try {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${definition};`);
+      log.info(`[MIGRATION V27] Colonne '${col}' ajoutée à '${table}'.`);
+    } catch (e: any) {
+      if (e?.message?.includes('duplicate column name')) {
+        log.info(`[MIGRATION V27] Colonne '${col}' déjà présente sur '${table}' — ignoré.`);
+      } else {
+        // Toute autre erreur est remontée pour ne pas masquer un problème réel
+        throw e;
+      }
+    }
+  };
+
+  try {
+    // Ajout de is_dirty : marqueur de synchronisation (0 = synchronisé, 1 = modifié localement)
+    safeAlter('t_users', 'is_dirty', 'INTEGER DEFAULT 0 NOT NULL');
+    // Ajout de synced_at : horodatage ISO de la dernière synchronisation Supabase réussie
+    safeAlter('t_users', 'synced_at', 'TEXT');
+
+    // Initialiser is_dirty = 0 pour tous les enregistrements existants afin
+    // d'éviter des valeurs NULL résiduelles sur des bases très anciennes.
+    db.exec(`UPDATE t_users SET is_dirty = 0 WHERE is_dirty IS NULL;`);
+
+    log.info('[MIGRATION V27] Colonnes is_dirty et synced_at garanties sur t_users — migration terminée.');
+  } catch (e: any) {
+    log.error('[MIGRATION V27] Échec :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V28 : Création ou réparation de t_import_anomalies
+// Indispensable pour éviter que stats:get échoue en production.
+// =====================================================
+function migrateV28(db: Database.Database): void {
+  try {
+    // Supprimer l'ancienne table si elle a été créée avec l'ancien schéma temporaire
+    // pour éviter des conflits de colonnes
+    db.exec('DROP TABLE IF EXISTS t_import_anomalies;');
+    
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_import_anomalies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        carte_id TEXT,
+        type_anomalie TEXT,
+        description TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    log.info('Migration V28: Table t_import_anomalies ensured successfully.');
+  } catch (e: any) {
+    log.error('Migration V28 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V29 : Création t_import_anomalies et ajout de colonnes dans t_centres
+// =====================================================
+function migrateV29(db: Database.Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_import_anomalies (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        carte_id TEXT,
+        type_anomalie TEXT,
+        description TEXT,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    log.info('Migration V29: Table t_import_anomalies ensured.');
+
+    const tableInfo = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
+    const hasColumn = (colName: string) => tableInfo.some(col => col.name === colName);
+
+    if (!hasColumn('code')) {
+      db.exec("ALTER TABLE t_centres ADD COLUMN code TEXT;");
+      log.info("Migration V29: Column 'code' added to t_centres.");
+    }
+    if (!hasColumn('prefixe_rangement')) {
+      db.exec("ALTER TABLE t_centres ADD COLUMN prefixe_rangement TEXT;");
+      log.info("Migration V29: Column 'prefixe_rangement' added to t_centres.");
+    }
+  } catch (e: any) {
+    log.error('Migration V29 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V30 : Sécurisation de la colonne numero de t_centres
+// =====================================================
+function migrateV30(db: Database.Database): void {
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
+    const hasColumn = tableInfo.some(col => col.name === 'numero');
+
+    if (!hasColumn) {
+      db.exec("ALTER TABLE t_centres ADD COLUMN numero INTEGER DEFAULT 1 CHECK(numero BETWEEN 1 AND 4);");
+      log.info("Migration V30: Column 'numero' added to t_centres.");
+    } else {
+      log.info("Migration V30: Column 'numero' already exists on t_centres.");
+    }
+  } catch (e: any) {
+    log.error('Migration V30 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V31 : Ajout de la colonne created_by et de son index sur t_cartes
+// =====================================================
+function migrateV31(db: Database.Database): void {
+  try {
+    const tableInfo = db.prepare("PRAGMA table_info(t_cartes)").all() as { name: string }[];
+    const hasColumn = tableInfo.some(col => col.name === 'created_by');
+
+    if (!hasColumn) {
+      db.exec("ALTER TABLE t_cartes ADD COLUMN created_by INTEGER DEFAULT NULL;");
+      log.info("Migration V31: Column 'created_by' added to t_cartes.");
+    } else {
+      log.info("Migration V31: Column 'created_by' already exists on t_cartes.");
+    }
+    
+    // Indexation
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
+    log.info("Migration V31: Index 'idx_cartes_created_by' guaranteed.");
+  } catch (e: any) {
+    log.error('Migration V31 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// FILET DE SÉCURITÉ UNIVERSEL (exécuté après chaque cycle de migration)
+// Garantit la présence des colonnes critiques sur toutes les bases de terrain,
+// même celles corrompues entre deux versions de migration.
+// =====================================================
+function migrateV27_safetyNet(db: Database.Database): void {
+  log.info('[SAFETY NET] Vérification et correction des colonnes critiques...');
+
+  const safeAlter = (table: string, col: string, definition: string) => {
+    try {
+      const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      const hasColumn = tableInfo.some(c => c.name === col);
+      if (!hasColumn) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${definition};`);
+        log.info(`[SAFETY NET] Colonne '${col}' ajoutée à '${table}'.`);
+      }
+    } catch (e: any) {
+      log.warn(`[SAFETY NET] Impossible de vérifier/ajouter la colonne '${col}' sur '${table}' :`, e.message);
+    }
+  };
+
+  // t_users : colonnes de synchronisation
+  safeAlter('t_users', 'is_dirty', 'INTEGER DEFAULT 0');
+  safeAlter('t_users', 'synced_at', 'TEXT');
+
+  // t_logs : colonnes de notification et de site
+  safeAlter('t_logs', 'is_read', 'INTEGER DEFAULT 0');
+  safeAlter('t_logs', 'site_id', 'INTEGER DEFAULT 1');
+
+  // t_cartes : colonne d'export et created_by
+  safeAlter('t_cartes', 'is_exported', 'INTEGER DEFAULT 0');
+  safeAlter('t_cartes', 'created_by', 'INTEGER DEFAULT NULL');
+  try {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
+  } catch (indexErr: any) {
+    log.warn("[SAFETY NET] Impossible de créer l'index idx_cartes_created_by :", indexErr.message);
+  }
+
+  // t_centres : colonnes code et prefixe_rangement (V29)
+  safeAlter('t_centres', 'code', 'TEXT');
+  safeAlter('t_centres', 'prefixe_rangement', 'TEXT');
+
+  log.info('[SAFETY NET] Vérification des colonnes critiques terminée.');
 }
