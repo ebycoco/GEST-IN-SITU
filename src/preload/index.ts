@@ -351,14 +351,10 @@ const api = {
       ipcRenderer.invoke('app:exportLogs'),
     checkFirstLaunch: (): Promise<{ isFirstLaunch: boolean }> => 
       ipcRenderer.invoke('app:checkFirstLaunch'),
-    checkRemoteVersion: (): Promise<{ success: boolean; version_minimale?: string; url_telechargement?: string; is_active?: boolean; reason?: string }> => 
-      ipcRenderer.invoke('app:checkRemoteVersion'),
     openExternal: (url: string): Promise<{ success: boolean; error?: string }> => 
       ipcRenderer.invoke('app:openExternal', url),
     openExternalUrl: (url: string): void => 
       ipcRenderer.send('app:openExternalUrl', url),
-    updateRemoteVersion: (payload: { is_active: boolean; version_minimale: string; url_telechargement: string }): Promise<{ success: boolean; error?: string }> => 
-      ipcRenderer.invoke('app:updateRemoteVersion', payload),
   },
 
 
@@ -521,14 +517,6 @@ const api = {
       ipcRenderer.on('updater:error', listener);
       return () => ipcRenderer.removeListener('updater:error', listener);
     },
-  },
-  // Enforcer
-  enforcer: {
-    onUpdateRequired: (callback: (info: { currentVersion: string; minVersion: string; latestVersion: string; releaseNotes: string }) => void) => {
-      const listener = (_: any, info: any) => callback(info);
-      ipcRenderer.on('enforcer:update-required', listener);
-      return () => ipcRenderer.removeListener('enforcer:update-required', listener);
-    }
   }
 };
 

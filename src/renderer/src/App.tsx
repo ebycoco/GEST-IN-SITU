@@ -25,7 +25,6 @@ import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
-import { UpdateRequiredBlocker } from './components/UpdateRequiredBlocker';
 
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
@@ -60,7 +59,6 @@ function ProtectedRoute({ children, requiredRoles }: { children: React.ReactElem
 
 export default function App() {
   const checkAuth = useAuthStore(s => s.checkAuth);
-  const [updateInfo, setUpdateInfo] = useState<any>(null);
 
   useEffect(() => {
     checkAuth();
@@ -74,25 +72,30 @@ export default function App() {
       });
     });
 
-    const unsubEnforcer = window.api?.enforcer?.onUpdateRequired?.((info: any) => {
-      setUpdateInfo(info);
-    });
+
 
     const unsubSessionExpired = window.api?.auth?.onSessionExpired?.(() => {
       useAuthStore.getState().logout();
       alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
     });
 
+    const unsubUpdateDownloaded = window.api?.updater?.onUpdateDownloaded?.(() => {
+      import('react-hot-toast').then(({ toast }) => {
+        toast.success('Une mise à jour est prête ! Elle sera appliquée au prochain redémarrage de GEST-IN-SITU.', {
+          duration: 10000,
+        });
+      });
+    });
+
     return () => {
       if (unsubWarning) unsubWarning();
-      if (unsubEnforcer) unsubEnforcer();
       if (unsubSessionExpired) unsubSessionExpired();
+      if (unsubUpdateDownloaded) unsubUpdateDownloaded();
     };
   }, [checkAuth]);
 
   return (
     <>
-      {updateInfo && <UpdateRequiredBlocker info={updateInfo} />}
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
       <HashRouter>

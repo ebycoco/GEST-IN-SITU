@@ -790,7 +790,7 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
 
   const cleanedQuery = queryNomsPrenoms.trim();
   if (cleanedQuery) {
-    where += ' AND (noms || " " || prenoms LIKE ? OR prenoms || " " || noms LIKE ?)';
+    where += " AND (noms || ' ' || prenoms LIKE ? OR prenoms || ' ' || noms LIKE ?)";
     params.push(`%${cleanedQuery}%`, `%${cleanedQuery}%`);
   }
 

@@ -96,37 +96,7 @@ export default function LoginPage() {
   const [setupStatus, setSetupStatus] = useState<'idle' | 'pulling' | 'success' | 'failed'>('idle');
   const [setupMessage, setSetupMessage] = useState('');
 
-  // États pour le contrôle de version obligatoire
-  const [appVersion, setAppVersion] = useState('');
-  const [isObsolete, setIsObsolete] = useState(false);
-  const [requiredVersion, setRequiredVersion] = useState('');
-  const [downloadUrl, setDownloadUrl] = useState('');
 
-  // Helper pour comparer deux chaînes de versions SemVer (ex: "2.3.1" < "2.3.1")
-  const isVersionLower = (local: string, required: string): boolean => {
-    if (!local || !required) return false; // Ne pas bloquer si les versions ne sont pas encore chargées
-    const cleanLocal = local.trim();
-    const cleanRequired = required.trim();
-
-    if (cleanLocal === cleanRequired) {
-      return false; // Même version -> PAS DE BLOCAGE
-    }
-
-    const parse = (v: string) => v.split('.').map(x => parseInt(x, 10) || 0);
-    const [lMajor, lMinor, lPatch] = parse(cleanLocal);
-    const [rMajor, rMinor, rPatch] = parse(cleanRequired);
-
-    if (lMajor !== rMajor) return lMajor < rMajor;
-    if (lMinor !== rMinor) return lMinor < rMinor;
-    return lPatch < rPatch;
-  };
-
-  useEffect(() => {
-    // 0. Récupérer la version locale réelle de l'application
-    if (window.api?.app?.getVersion) {
-      window.api.app.getVersion().then(setAppVersion).catch(console.error);
-    }
-  }, []);
 
   useEffect(() => {
     // 1. Détection premier démarrage
@@ -142,43 +112,14 @@ export default function LoginPage() {
       }).catch(console.error);
     }
 
-    // 2. Contrôle de version à distance via Supabase (si en ligne)
-    if (window.navigator.onLine && window.api?.app?.checkRemoteVersion) {
-      window.api.app.checkRemoteVersion().then((res) => {
-        if (res && res.success && res.version_minimale) {
-          setRequiredVersion(res.version_minimale);
-          setDownloadUrl(res.url_telechargement || '');
-          // Comparaison SemVer uniquement si le blocage obligatoire est activé (is_active === true)
-          if (res.is_active && isVersionLower(appVersion, res.version_minimale)) {
-            setIsObsolete(true);
-            toast.error(`Mise à jour obligatoire requise : v${res.version_minimale}`);
-          } else {
-            setIsObsolete(false);
-          }
-        }
-      }).catch(console.error);
-    }
-
     // 3. Écouteurs de connectivité
     const handleOnline = () => {
       setIsOnline(true);
       if (isFirstLaunch && setupStatus !== 'success' && setupStatus !== 'pulling') {
         triggerFirstLaunchSetup();
       }
-      // Re-tenter le check version en cas de reconnexion
-      if (window.api?.app?.checkRemoteVersion && !requiredVersion) {
-        window.api.app.checkRemoteVersion().then((res) => {
-          if (res && res.success && res.version_minimale) {
-            setRequiredVersion(res.version_minimale);
-            setDownloadUrl(res.url_telechargement || '');
-            if (res.is_active && isVersionLower(appVersion, res.version_minimale)) {
-              setIsObsolete(true);
-            } else {
-              setIsObsolete(false);
-            }
-          }
-        }).catch(console.error);
-      }
+      // Re-tenter en cas de reconnexion
+
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -204,8 +145,7 @@ export default function LoginPage() {
       window.removeEventListener('offline', handleOffline);
       if (unsubscribeSync) unsubscribeSync();
     };
-  }, [isFirstLaunch, setupStatus, appVersion, requiredVersion]);
-
+  }, [isFirstLaunch, setupStatus]);
   const triggerFirstLaunchSetup = async () => {
     setSetupStatus('pulling');
     setSetupMessage("🟡 Connexion établie — Téléchargement et configuration de la base de données...");
@@ -233,18 +173,6 @@ export default function LoginPage() {
     }
   };
 
-  const handleDownloadUpdate = () => {
-    if (downloadUrl) {
-      if (window.api?.app?.openExternal) {
-        window.api.app.openExternal(downloadUrl).catch(console.error);
-      } else {
-        toast.error("API openExternal non disponible.");
-      }
-    } else {
-      toast.error("URL de téléchargement introuvable.");
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!login.trim() || !password.trim()) {
@@ -256,28 +184,6 @@ export default function LoginPage() {
     if (success) {
       const user = useAuthStore.getState().user;
       
-      // [PASSE-DROIT ULTRA-RESTREINT]
-      // Le bypass du blocage de version est réservé exclusivement au compte matériel "root"
-      // ou à un profil possédant explicitement le rôle "SUPER ADMIN".
-      const isUserAdmin = 
-        login.trim() === 'root' || 
-        user?.role === 'SUPER ADMIN';
-      
-      if (isObsolete) {
-        if (isUserAdmin) {
-          // Bypass complet : désactivation de la barrière visuelle de blocage et acceptation
-          setIsObsolete(false);
-          console.log("[LOGIN BYPASS] Connexion d'urgence autorisée pour l'administrateur :", login.trim());
-        } else {
-          toast.error("Votre profil n'est pas autorisé à outrepasser la mise à jour obligatoire.");
-          // Déconnexion immédiate
-          if (window.api?.auth?.logout) {
-            window.api.auth.logout(login.trim()).catch(console.error);
-          }
-          return;
-        }
-      }
-
       if (user?.roles && user.roles.length > 1) {
         setAvailableRoles(user.roles);
         setShowRoleModal(true);
@@ -344,49 +250,6 @@ export default function LoginPage() {
             </div>
           )}
           {/* ───────────────────────────────────────────── */}
-
-          {/* ─── BANDEAU DE MISE À JOUR OBLIGATOIRE ─── */}
-          {isObsolete && (
-            <div 
-              style={{
-                padding: '14px 16px',
-                borderRadius: '12px',
-                fontSize: '13px',
-                fontWeight: 700,
-                lineHeight: '1.5',
-                backgroundColor: 'rgba(239, 68, 68, 0.2)',
-                color: '#f9a8d4',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
-                textAlign: 'center',
-                animation: 'pulse 2s infinite'
-              }}
-            >
-              <div style={{ marginBottom: 10, color: '#fca5a5' }}>
-                📢 Une mise à jour importante obligatoire (v{requiredVersion}) est requise pour continuer à utiliser l'application.
-              </div>
-              <button
-                type="button"
-                onClick={handleDownloadUpdate}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  borderRadius: '8px',
-                  border: 'none',
-                  backgroundColor: '#ef4444',
-                  color: 'white',
-                  fontWeight: 'bold',
-                  cursor: 'pointer',
-                  fontSize: '12px',
-                  transition: 'background-color 0.2s'
-                }}
-                onMouseOver={(e) => (e.currentTarget.style.backgroundColor = '#dc2626')}
-                onMouseOut={(e) => (e.currentTarget.style.backgroundColor = '#ef4444')}
-              >
-                Télécharger la mise à jour
-              </button>
-            </div>
-          )}
-          {/* ───────────────────────────────────────── */}
 
           <div className="form-group">
             <label className="form-label">Identifiant</label>
@@ -461,7 +324,7 @@ export default function LoginPage() {
         </div>
 
         <p style={{ textAlign: 'center', marginTop: 24, fontSize: 11, color: 'var(--text-muted)' }}>
-          GEST-IN-SITU v{appVersion} - © Ebychoco 2026 - Tous droits réservés
+          GEST-IN-SITU - © Ebychoco 2026 - Tous droits réservés
         </p>
       </div>
 
