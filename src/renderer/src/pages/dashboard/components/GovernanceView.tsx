@@ -37,6 +37,7 @@ export function GovernanceView({
   const [confirmStatusModal, setConfirmStatusModal] = useState<{ isOpen: boolean, site: any | null }>({ isOpen: false, site: null });
   const [showSyncConfirmModal, setShowSyncConfirmModal] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
   const isOnline = useOnlineStatus();
   const [newSite, setNewSite] = useState({
     nom: '',
@@ -46,6 +47,12 @@ export function GovernanceView({
     adminLogin: '',
     adminPass: ''
   });
+
+  useEffect(() => {
+    if (window.api?.app?.getVersion) {
+      window.api.app.getVersion().then(setAppVersion).catch(console.error);
+    }
+  }, []);
 
   const handleCreateSite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -680,13 +687,17 @@ export function GovernanceView({
         </div>
       )}
 
-      {/* Footer Signature */}
-      <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 20, fontSize: 11, color: 'var(--text-muted)', opacity: 0.6 }}>
-        GEST-IN-SITU - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
-      </div>
+      <footer style={{
+        textAlign: 'center',
+        padding: '12px 20px',
+        fontSize: '11px',
+        color: 'var(--text-muted)',
+        opacity: 0.6,
+        borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+        marginTop: '24px'
+      }}>
+        GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
+      </footer>
     </div>
   );
 }
-
-
-
