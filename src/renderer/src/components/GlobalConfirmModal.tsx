@@ -13,6 +13,7 @@ export const GlobalConfirmModal: React.FC = () => {
     isDanger?: boolean;
     requirePassword?: boolean;
     actionName?: string;
+    isAlert?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -130,28 +131,30 @@ export const GlobalConfirmModal: React.FC = () => {
               opacity: loading ? 0.7 : 1
             }}
           >
-            {loading ? "Vérification..." : "Confirmer"}
+            {loading ? "Vérification..." : options.isAlert ? "OK" : "Confirmer"}
           </button>
-          <button
-            disabled={loading}
-            onClick={() => {
-              setIsOpen(false);
-              confirmService.resolve(false);
-            }}
-            className="btn-outline"
-            style={{
-              flex: 1,
-              padding: '12px',
-              borderRadius: 10,
-              fontWeight: 700,
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              background: 'transparent',
-              color: 'white',
-              cursor: loading ? 'not-allowed' : 'pointer'
-            }}
-          >
-            Annuler
-          </button>
+          {!options.isAlert && (
+            <button
+              disabled={loading}
+              onClick={() => {
+                setIsOpen(false);
+                confirmService.resolve(false);
+              }}
+              className="btn-outline"
+              style={{
+                flex: 1,
+                padding: '12px',
+                borderRadius: 10,
+                fontWeight: 700,
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'transparent',
+                color: 'white',
+                cursor: loading ? 'not-allowed' : 'pointer'
+              }}
+            >
+              Annuler
+            </button>
+          )}
         </div>
       </div>
     </div>

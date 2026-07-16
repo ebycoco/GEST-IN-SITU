@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   AlertTriangle
 } from 'lucide-react';
+import { useOnlineStatus } from '../../../hooks/useOnlineStatus';
 import { toast } from 'react-hot-toast';
 
 interface GovernanceViewProps {
@@ -20,6 +21,7 @@ interface GovernanceViewProps {
   isForceSyncing: boolean;
   forceSyncResult: any;
   handleForceGlobalSync: () => Promise<void>;
+  loading?: boolean;
 }
 
 export function GovernanceView({
@@ -35,6 +37,7 @@ export function GovernanceView({
   const [confirmStatusModal, setConfirmStatusModal] = useState<{ isOpen: boolean, site: any | null }>({ isOpen: false, site: null });
   const [showSyncConfirmModal, setShowSyncConfirmModal] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
+  const isOnline = useOnlineStatus();
   const [newSite, setNewSite] = useState({
     nom: '',
     code: '',
@@ -159,6 +162,7 @@ export function GovernanceView({
           onClick={() => setShowSyncConfirmModal(true)}
           disabled={isForceSyncing}
           style={{
+            position: 'relative',
             display: 'flex',
             alignItems: 'center',
             gap: 12,
@@ -195,6 +199,16 @@ export function GovernanceView({
                 <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
               </svg>
               Synchronisation Forcée du Réseau
+              <span style={{
+                position: 'absolute',
+                top: -4,
+                right: -4,
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                background: isOnline ? '#2ecc71' : '#e74c3c',
+                border: '2px solid #FFE600'
+              }}></span>
             </>
           )}
         </button>

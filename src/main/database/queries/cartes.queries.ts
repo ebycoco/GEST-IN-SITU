@@ -25,6 +25,32 @@ function normalizeContact(contactStr: string): string {
   return cleaned;
 }
 
+// Cache pour optimiser la pagination (les requêtes COUNT(*) peuvent être lourdes sur de grandes tables)
+const paginationCountCache = new Map<string, { count: number; timestamp: number }>();
+const COUNT_CACHE_TTL = 10000; // 10 secondes
+
+function getCachedCount(db: any, query: string, params: any): number {
+  const cacheKey = query + JSON.stringify(params);
+  const now = Date.now();
+  const cached = paginationCountCache.get(cacheKey);
+  
+  if (cached && (now - cached.timestamp < COUNT_CACHE_TTL)) {
+    return cached.count;
+  }
+  
+  const result = (Array.isArray(params) 
+    ? db.prepare(query).get(...params) 
+    : db.prepare(query).get(params)) as { count: number };
+  
+  // Nettoyage basique pour éviter une fuite de mémoire (limite empirique à 500 requêtes en cache)
+  if (paginationCountCache.size > 500) {
+    paginationCountCache.clear();
+  }
+  
+  paginationCountCache.set(cacheKey, { count: result.count, timestamp: now });
+  return result.count;
+}
+
 export function getCartesPage(offset: number, limit: number, filters?: Record<string, string>) {
   const db = getDatabase()!;
   let where = 'WHERE is_dirty != -1';
@@ -42,11 +68,12 @@ export function getCartesPage(offset: number, limit: number, filters?: Record<st
     params.q = `%${q}%`;
   }
 
-  const totalResult = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(params) as { count: number };
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const totalCount = getCachedCount(db, countQuery, params);
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT @limit OFFSET @offset`)
     .all({ ...params, limit, offset });
 
-  return { rows, total: totalResult.count, offset, limit };
+  return { rows, total: totalCount, offset, limit };
 }
 
 export function searchCartesFTS(query: string, limit = 100, filters?: Record<string, string>) {
@@ -636,8 +663,8 @@ export function getSansNumSecuPage(siteId: number, offset: number, limit: number
     params.push(`%${query}%`, `%${query}%`, `%${query}%`);
   }
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
-  const total = totalRow?.count || 0;
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const total = getCachedCount(db, countQuery, params) || 0;
   
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
@@ -654,8 +681,8 @@ export function getSansRangementPage(siteId: number, offset: number, limit: numb
     params.push(`%${query}%`, `%${query}%`, `%${query}%`);
   }
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
-  const total = totalRow?.count || 0;
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const total = getCachedCount(db, countQuery, params) || 0;
 
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
@@ -672,8 +699,8 @@ export function getSansNomPage(siteId: number, offset: number, limit: number, qu
     params.push(`%${query}%`, `%${query}%`, `%${query}%`);
   }
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
-  const total = totalRow?.count || 0;
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const total = getCachedCount(db, countQuery, params) || 0;
 
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
@@ -690,8 +717,8 @@ export function getSansPrenomPage(siteId: number, offset: number, limit: number,
     params.push(`%${query}%`, `%${query}%`, `%${query}%`);
   }
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
-  const total = totalRow?.count || 0;
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const total = getCachedCount(db, countQuery, params) || 0;
 
   const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
 

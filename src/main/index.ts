@@ -174,33 +174,30 @@ app.whenReady().then(async () => {
     log.error('Échec de la correction automatique des sync_ids:', err);
   }
 
-  // ─── PRELOAD BLOQUANT DES COMPTES UTILISATEURS ────────────────────────────
-  // CRITIQUE (premier démarrage) : la fenêtre de Login ne doit s'ouvrir
-  // qu'après que t_users est peuplée depuis Supabase.
-  // Sans cet await, l'utilisateur frappe ses identifiants alors que l'INSERT
-  // asynchrone n'a pas encore abouti → erreur "Identifiants incorrects" au
-  // premier lancement sur base SQLite fraîche.
-  //
-  // Stratégie de résilience :
-  //   - Si Supabase est joignable    → comptes synchronisés, login immédiat ✓
-  //   - Si Supabase est inaccessible → catch silencieux, l'app s'ouvre avec
-  //     les comptes locaux déjà présents (redémarrages ultérieurs) ✓
-  // ──────────────────────────────────────────────────────────────────────────
-  try {
-    log.info('[INIT] Démarrage du preload synchrone des utilisateurs depuis Supabase...');
-    await preloadUsersFromCloud();
+  // Create main window IMMÉDIATEMENT (non bloquant)
+  electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
+  createWindow();
+
+  // État global pour savoir si on est en train de preload
+  let isPreloadingUsers = true;
+
+  // Handler IPC pour que le Renderer puisse interroger l'état au montage
+  ipcMain.handle('auth:isPreloadingUsers', () => isPreloadingUsers);
+
+  // Lancement du preload en arrière-plan sans bloquer
+  preloadUsersFromCloud().then(() => {
     log.info('[INIT] Preload initial terminé — les comptes locaux sont prêts pour le Login.');
-  } catch (preloadError: any) {
+    isPreloadingUsers = false;
+    if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
+  }).catch((preloadError: any) => {
     log.error(
-      '[INIT] Échec du preload critique au démarrage (Supabase inaccessible ?) :',
+      '[INIT] Échec du preload au démarrage (Supabase inaccessible ?) :',
       preloadError?.message ?? preloadError
     );
     log.warn('[INIT] Ouverture du Login avec les comptes locaux existants (mode dégradé).');
-  }
-
-  // Create main window — uniquement après que t_users est garantie peuplée
-  electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
-  createWindow();
+    isPreloadingUsers = false;
+    if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
+  });
 
   // Register IPC handlers
   if (mainWindow) {

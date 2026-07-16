@@ -13,6 +13,10 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { useVisibilityBufferedCallback } from '../hooks/useVisibilityBufferedCallback';
+import { useOnlineStatus } from '../hooks/useOnlineStatus';
+import { useCloudActionGuard } from '../hooks/useCloudActionGuard';
+import { OnlineBadge } from '../components/OnlineBadge';
 
 interface CentreStats {
   total: number;
@@ -33,6 +37,16 @@ interface OperatorCadence {
 
 import { toast } from 'react-hot-toast';
 
+const SkeletonValue = () => (
+  <div style={{
+    width: 80,
+    height: 38,
+    background: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    animation: 'pulse 1.5s infinite'
+  }} />
+);
+
 export default function AdminCentreDashboardPage() {
   const { user } = useAuthStore();
   const [stats, setStats] = useState<CentreStats>({ total: 0, en_stock: 0, distribuees: 0, absentes: 0 });
@@ -44,6 +58,8 @@ export default function AdminCentreDashboardPage() {
   // Sync state variables
   const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
   const [downstreamProgress, setDownstreamProgress] = useState<number>(-1);
+  const [showSyncConfirmModal, setShowSyncConfirmModal] = useState<boolean>(false);
+  const cloudGuard = useCloudActionGuard();
   const [isSyncingUsers, setIsSyncingUsers] = useState<boolean>(false);
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
   const [bulkProgress, setBulkProgress] = useState<number>(-1);
@@ -166,10 +182,11 @@ export default function AdminCentreDashboardPage() {
   };
 
   const handleStartBulkUpload = async () => {
-    if (!user?.site_id) return;
-    setIsBulkUploading(true);
-    setBulkProgress(0);
-    const toastId = toast.loading("Initialisation du transfert de masse...");
+    return cloudGuard(async () => {
+      if (!user?.site_id) return;
+      setIsBulkUploading(true);
+      setBulkProgress(0);
+      const toastId = toast.loading("Initialisation du transfert de masse...");
     
     // Donner une chance à React de re-rendre l'IHM et d'afficher le loader/spinner à 0%
     await new Promise(resolve => setTimeout(resolve, 50));
@@ -194,12 +211,14 @@ export default function AdminCentreDashboardPage() {
       setIsBulkUploading(false);
       setBulkProgress(-1);
     }
+    });
   };
 
   const handlePullSiteCards = async () => {
-    if (!user?.site_id) return;
-    setIsPullingCards(true);
-    const toastId = toast.loading('☁️ Récupération des cartes depuis le cloud en cours...');
+    return cloudGuard(async () => {
+      if (!user?.site_id) return;
+      setIsPullingCards(true);
+      const toastId = toast.loading('☁️ Récupération des cartes depuis le cloud en cours...');
     try {
       const res = await window.api.sync.pullSiteCards(Number(user.site_id), user);
       if (res.success) {
@@ -217,6 +236,7 @@ export default function AdminCentreDashboardPage() {
     } finally {
       setIsPullingCards(false);
     }
+    });
   };
 
   const handleSyncUsers = async () => {
@@ -371,8 +391,9 @@ export default function AdminCentreDashboardPage() {
                   padding: '12px 24px', 
                   borderRadius: 12, 
                   fontWeight: 700,
-                  cursor: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-                  opacity: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 0.5 : 1,
+                  cursor: (isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
+                  position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -386,22 +407,24 @@ export default function AdminCentreDashboardPage() {
               >
                 <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
                 {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+                <OnlineBadge />
               </button>
 
               <button 
                 onClick={handleStartBulkUpload} 
-                disabled={isBulkUploading || !isOnline || dirtyCartesCount === 0}
+                disabled={isBulkUploading || dirtyCartesCount === 0}
                 className="btn-plein-soleil" 
                 style={{ 
                   padding: '12px 24px', 
                   borderRadius: 12, 
                   fontWeight: 700,
-                  backgroundColor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
-                  color: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
+                  backgroundColor: (isBulkUploading || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
+                  color: (isBulkUploading || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
                   border: '1px solid #FFE600',
-                  cursor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
-                  opacity: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 0.5 : 1,
+                  cursor: (isBulkUploading || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isBulkUploading || dirtyCartesCount === 0) ? 0.5 : 1,
                   boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
+                  position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -413,6 +436,7 @@ export default function AdminCentreDashboardPage() {
               >
                 <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
                 {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+                <OnlineBadge />
               </button>
             </div>
           </div>
@@ -462,8 +486,8 @@ export default function AdminCentreDashboardPage() {
               <CreditCard size={18} />
             </div>
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>
-            {stats.en_stock.toLocaleString()}
+          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)', minHeight: 38 }}>
+            {loading ? <SkeletonValue /> : stats.en_stock.toLocaleString()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Cartes prêtes à la distribution</div>
         </div>
@@ -483,8 +507,8 @@ export default function AdminCentreDashboardPage() {
               <CheckCircle size={18} />
             </div>
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>
-            {stats.distribuees.toLocaleString()}
+          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)', minHeight: 38 }}>
+            {loading ? <SkeletonValue /> : stats.distribuees.toLocaleString()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Cartes remises aux assurés</div>
         </div>

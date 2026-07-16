@@ -32,6 +32,13 @@ const api = {
       const listener = (_: any, warningMessage: string) => callback(warningMessage);
       ipcRenderer.on('auth:warning', listener);
       return () => ipcRenderer.removeListener('auth:warning', listener);
+    },
+    isPreloadingUsers: (): Promise<boolean> => 
+      ipcRenderer.invoke('auth:isPreloadingUsers'),
+    onPreloadStatus: (callback: (isPreloading: boolean) => void) => {
+      const listener = (_: any, isPreloading: boolean) => callback(isPreloading);
+      ipcRenderer.on('auth:preload-status', listener);
+      return () => ipcRenderer.removeListener('auth:preload-status', listener);
     }
   },
   // Cartes
@@ -52,6 +59,8 @@ const api = {
       ipcRenderer.invoke('cartes:getById', id),
     create: (data: Partial<ICarte>): Promise<{ id: number; sync_id: string }> => 
       ipcRenderer.invoke('cartes:create', data),
+    updateCarte: (id: number, data: Partial<ICarte>, currentUser?: any): Promise<{ id: number; sync_id: string; changes?: number }> => 
+      ipcRenderer.invoke('cmu:updateCarte', id, data, currentUser),
     update: (id: number, data: Partial<ICarte>): Promise<{ changes: number }> => 
       ipcRenderer.invoke('cartes:update', id, data),
     delete: (id: number): Promise<{ changes: number }> => 

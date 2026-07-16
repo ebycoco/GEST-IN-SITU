@@ -42,6 +42,7 @@ import AgentSaisieLayout from './pages/AgentSaisie/AgentSaisieLayout';
 import SaisieOverview from './pages/AgentSaisie/views/Overview';
 import NouvelleSaisieView from './pages/AgentSaisie/views/NouvelleSaisieView';
 import HistoriqueView from './pages/AgentSaisie/views/HistoriqueView';
+import EditSaisieView from './pages/AgentSaisie/views/EditSaisieView';
 
 // Agent de Qualité
 import AgentQualiteLayout from './pages/AgentQualite/AgentQualiteLayout';
@@ -77,9 +78,15 @@ export default function App() {
       setUpdateInfo(info);
     });
 
+    const unsubSessionExpired = window.api?.auth?.onSessionExpired?.(() => {
+      useAuthStore.getState().logout();
+      alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
+    });
+
     return () => {
       if (unsubWarning) unsubWarning();
       if (unsubEnforcer) unsubEnforcer();
+      if (unsubSessionExpired) unsubSessionExpired();
     };
   }, [checkAuth]);
 
@@ -120,6 +127,7 @@ export default function App() {
               <Route index element={<SaisieOverview />} />
               <Route path="nouvelle" element={<NouvelleSaisieView />} />
               <Route path="historique" element={<HistoriqueView />} />
+              <Route path="edit/:id" element={<EditSaisieView />} />
             </Route>
 
             {/* Routes Opérateur Logistique & Inventaire (Hub 3-en-1) */}

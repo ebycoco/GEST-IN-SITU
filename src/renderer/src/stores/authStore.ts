@@ -103,12 +103,3 @@ export const useAuthStore = create<AuthState>((set) => ({
   }
 }));
 
-// Écouteur de session expirée/usurpée à l'échelle de l'application
-if (typeof window !== 'undefined' && window.api?.auth?.onSessionExpired) {
-  window.api.auth.onSessionExpired(() => {
-    useAuthStore.getState().logout();
-    // Le toast sera levé ou un message d'alerte s'affichera
-    alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
-  });
-}
-

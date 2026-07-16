@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
 import { useVisibilityBufferedCallback } from '../../../hooks/useVisibilityBufferedCallback';
 import { useSyncDownstreamStore } from '../../../stores/syncDownstreamStore';
+import { useCloudActionGuard } from '../../../hooks/useCloudActionGuard';
 
 export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: () => Promise<void>) {
   const [isForceSyncing, setIsForceSyncing] = useState<boolean>(false);
@@ -9,6 +10,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
   const [isSiteSyncing, setIsSiteSyncing] = useState<boolean>(false);
   const [isSyncingAgents, setIsSyncingAgents] = useState<boolean>(false);
   const [isPullingCardsLocalState, setIsPullingCardsLocal] = useState<boolean>(false);
+
+  const cloudGuard = useCloudActionGuard();
 
   // ── Store global du téléchargement — visible sur toutes les pages ──────────
   const {
@@ -82,7 +85,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
   }, [handleDownstreamProgress]);
 
   const handleStartBulkUpload = async (forceProbable = false, forceInvalid = false) => {
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    return cloudGuard(async () => {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
       toast.error("Veuillez d'abord sélectionner un site actif.");
       return { success: false, message: "Aucun site actif." };
@@ -112,6 +116,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
       setIsBulkUploading(false);
       setBulkProgress(-1);
     }
+    });
   };
 
   /**
@@ -131,7 +136,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
   };
 
   const handleForceGlobalSync = async () => {
-    setIsForceSyncing(true);
+    return cloudGuard(async () => {
+      setIsForceSyncing(true);
     const toastId = toast.loading('☁️ Synchronisation globale cloud de tous les sites en cours...');
     try {
       const res = await window.api.sync.forceGlobal();
@@ -149,15 +155,12 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     } finally {
       setIsForceSyncing(false);
     }
+    });
   };
 
   const handleForceAgentsSync = async () => {
-    if (!navigator.onLine) {
-      toast.error("⚠️ Connexion Internet requise : Veuillez vous connecter pour envoyer les comptes des agents sur Supabase.");
-      return;
-    }
-
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    return cloudGuard(async () => {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
       toast.error("Aucun site actif sélectionné pour la synchronisation.");
       return;
@@ -178,15 +181,12 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     } finally {
       setIsSyncingAgents(false);
     }
+    });
   };
 
   const handleForceSiteSync = async () => {
-    if (!navigator.onLine) {
-      toast.error("⚠️ Connexion Internet requise : Veuillez vous connecter pour envoyer les comptes des agents sur Supabase.");
-      return;
-    }
-
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    return cloudGuard(async () => {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
       toast.error("Aucun site actif sélectionné pour la synchronisation.");
       return;
@@ -211,21 +211,18 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     } finally {
       setIsSiteSyncing(false);
     }
+    });
   };
 
   const handlePullSiteCards = async (isAutomatic = false) => {
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    return cloudGuard(async () => {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
       if (!isAutomatic) toast.error("Aucun site actif sélectionné pour la récupération.");
       return;
     }
 
     if (isAutomatic && !window.navigator.onLine) {
-      return;
-    }
-
-    if (!isAutomatic && !window.navigator.onLine) {
-      toast.error("⚠️ Connexion Internet requise : Veuillez vous connecter pour récupérer les cartes depuis le cloud.");
       return;
     }
 
@@ -272,6 +269,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         clearDownstream();
       }
     }
+    });
   };
 
   const [isClearingCloud, setIsClearingCloud] = useState<boolean>(false);
@@ -295,7 +293,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
   }, [handlePurgeCloudProgress]);
 
   const handleClearCloudDatabase = async () => {
-    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    return cloudGuard(async () => {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
       toast.error("Veuillez d'abord sélectionner un site actif.");
       return;
@@ -340,6 +339,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
       setIsClearingCloud(false);
       setPurgeCloudProgress(-1);
     }
+    });
   };
 
   return {

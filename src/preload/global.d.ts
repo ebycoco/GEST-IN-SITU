@@ -10,6 +10,8 @@ declare global {
         registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
         onSessionExpired: (callback: () => void) => () => void;
         onAuthWarning: (callback: (warningMessage: string) => void) => () => void;
+        isPreloadingUsers: () => Promise<boolean>;
+        onPreloadStatus: (callback: (isPreloading: boolean) => void) => () => void;
       };
       stats: {
         get: (siteId?: number, centreId?: number) => Promise<any>;
@@ -35,6 +37,7 @@ declare global {
         search: (query: string, limit?: number, filters?: any) => Promise<any[]>;
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
+        updateCarte: (id: number, data: any, currentUser?: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
         delivrer: (id: number, data: any, currentUser?: any) => Promise<boolean>;

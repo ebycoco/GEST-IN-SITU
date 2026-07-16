@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { FixedSizeList as List } from 'react-window';
 import { 
   CreditCard, Filter, Plus, Truck, 
@@ -180,6 +180,20 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
       </div>
     </div>
   );
+}, (prevProps, nextProps) => {
+  const prevData = prevProps.data;
+  const nextData = nextProps.data;
+  
+  if (prevData.cartes[prevProps.index] !== nextData.cartes[nextProps.index]) return false;
+  if (prevData.userRole !== nextData.userRole) return false;
+  
+  const carteId = prevData.cartes[prevProps.index]?.id_carte;
+  const wasSelected = prevData.selected?.id_carte === carteId;
+  const isSelected = nextData.selected?.id_carte === carteId;
+  
+  if (wasSelected !== isSelected) return false;
+  
+  return true;
 });
 
 export default function CartesPage() {
@@ -197,8 +211,13 @@ export default function CartesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [exporting, setExporting] = useState(false);
 
-  const { user, activeSiteId } = useAuthStore();
+  const user = useAuthStore(state => state.user);
+  const activeSiteId = useAuthStore(state => state.activeSiteId);
   const listRef = useRef<List>(null);
+
+  const itemData = useMemo(() => ({
+    cartes, selected, setSelected, setShowDelivery, userRole: user?.role
+  }), [cartes, selected, user?.role]);
 
   const loadData = useCallback(async (off = 0, flt = filters, currentLimit = pageSize) => {
     setLoading(true);
@@ -520,7 +539,7 @@ export default function CartesPage() {
                   itemSize={68} 
                   width="100%"
                   className="custom-scrollbar"
-                  itemData={{ cartes, selected, setSelected, setShowDelivery, userRole: user?.role }}
+                  itemData={itemData}
                 >
                   {MemoRow}
                 </List>
