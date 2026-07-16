@@ -248,11 +248,36 @@ export async function processOutboxPending(): Promise<{ processed: number; error
             }
           }
         } else {
+          // Fonction locale de mapping pour t_cartes (reprise de upstream.ts)
+          function mapCardPayload(c: any): any {
+            if (!c.site_id) throw new Error("Erreur de validation de la carte : site_id manquant.");
+            return {
+              sync_id: c.sync_id, noms: c.noms, prenoms: c.prenoms || '',
+              date_naissance: c.date_de_naissance || null, lieu_naissance: c.lieu_de_naissance || null,
+              num_secu: c.num_secu || null, lieu_enrolement: c.lieu_enrolement || null, contact: c.contact || null,
+              rangement: c.rangement || null, statut: c.statut || 'EN STOCK', statut_physique: c.statut_physique || 'OK',
+              date_delivrance: c.date_delivrance || null, agent_saisie: c.agent_saisie || null,
+              agent_distributeur: c.agent_distributeur || null, centre_retrait: c.centre_retrait || null,
+              nom_retirant: c.nom_retirant || null, num_retirant: c.num_retirant || null,
+              cle_doublon: c.cle_doublon || null, cle_doublon_flex: c.cle_doublon_flex || null,
+              agent_signalement_absence: c.agent_signalement_absence || null,
+              date_signalement_absence: c.date_signalement_absence || null,
+              date_resolution_absence: c.date_resolution_absence || null,
+              agent_resolution_absence: c.agent_resolution_absence || null,
+              note_resolution: c.note_resolution || null, notif_lue: c.notif_lue ?? 1,
+              id_site: c.site_id, id_centre: c.centre_id || null, id_poste: c.poste_id || null,
+              qr_code_data: c.qr_code_data || null, is_exported: c.is_exported || 0,
+              created_by: c.created_by || null, updated_at: c.updated_at || new Date().toISOString()
+            };
+          }
+
+          const finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
+
           // INSERT ou UPDATE → upsert idempotent sur sync_id
-          log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(payload));
+          log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(finalPayload));
           let { error } = await supabase
             .from(entry.table_name)
-            .upsert(payload, { onConflict: 'sync_id' });
+            .upsert(finalPayload, { onConflict: 'sync_id' });
 
           if (error && ['t_sites', 't_centres', 't_postes', 't_users'].includes(entry.table_name) && error.message.includes('duplicate key value violates unique constraint')) {
             const pk = entry.table_name === 't_users' ? 'id_user' : 'id';
