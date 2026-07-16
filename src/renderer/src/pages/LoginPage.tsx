@@ -330,7 +330,7 @@ export default function LoginPage() {
         </div>
 
         <p style={{ textAlign: 'center', marginTop: 24, fontSize: 11, color: 'var(--text-muted)' }}>
-          GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco 2026 - Tous droits réservés
+          GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
         </p>
       </div>
 
