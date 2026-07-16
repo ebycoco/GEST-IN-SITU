@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { OnlineBadge } from '../../components/OnlineBadge';
+
 import { Outlet, NavLink } from 'react-router-dom';
 import { Database, Globe, LayoutDashboard, Search, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
@@ -29,8 +31,8 @@ export default function AgentVerificationLayout() {
     handleStartBulkUpload
   } = useForceSyncActions(user, activeSiteId, loadStats);
 
-  const pullDisabled = isPullingCards || !isOnline || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || !isOnline || dirtyCartesCount === 0;
+  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>

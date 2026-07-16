@@ -22,7 +22,7 @@ import { useAuthStore } from '../stores/authStore';
 import { normalizeDate } from '../../../shared/utils/date';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface FormState {
+export interface FormState {
   noms: string;
   prenoms: string;
   date_de_naissance: string;
@@ -208,12 +208,24 @@ const GRID3: React.CSSProperties = {
 };
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
-export default function SaisiePage() {
+export interface SaisiePageProps {
+  initialData?: FormState;
+  mode?: 'create' | 'edit';
+  onSubmitOverride?: (data: FormState) => Promise<void>;
+}
+
+export default function SaisiePage({ initialData, mode = 'create', onSubmitOverride }: SaisiePageProps = {}) {
   const { user, activeSiteId, selectedCentreId } = useAuthStore();
-  const [formData, setFormData] = useState<FormState>(INITIAL_STATE);
+  const [formData, setFormData] = useState<FormState>(initialData || INITIAL_STATE);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const firstInputRef = useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    if (initialData) {
+      setFormData(initialData);
+    }
+  }, [initialData]);
 
   const [sites, setSites] = useState<any[]>([]);
   const [centres, setCentres] = useState<any[]>([]);
@@ -310,7 +322,7 @@ export default function SaisiePage() {
     setIsSaving(true);
     setSaved(false);
     try {
-      await window.api.cartes.create({
+      const finalData = {
         ...formData,
         date_de_naissance: normalizedBirthDate,
         date_naissance: normalizedBirthDate,
@@ -322,20 +334,30 @@ export default function SaisiePage() {
         centre_id: selectedCentreId,
         statut: 'EN STOCK',
         statut_physique: 'OK',
-      });
-      toast.success('✅ Carte enregistrée avec succès !');
+      };
+
+      if (onSubmitOverride) {
+        await onSubmitOverride(finalData as unknown as FormState);
+        toast.success('✅ Carte mise à jour avec succès !');
+      } else {
+        await window.api.cartes.create(finalData);
+        toast.success('✅ Carte enregistrée avec succès !');
+      }
+
       setSaved(true);
-      setFormData({
-        ...INITIAL_STATE,
-        site: activeSiteName,
-        centre: activeCentreName,
-      });
-      setTimeout(() => {
-        (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
-      }, 100);
+      if (mode === 'create') {
+        setFormData({
+          ...INITIAL_STATE,
+          site: activeSiteName,
+          centre: activeCentreName,
+        });
+        setTimeout(() => {
+          (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
+        }, 100);
+      }
     } catch (err: any) {
       if (window.api?.log?.error) {
-        window.api.log.error("SaisiePage: Échec d'enregistrement de la carte CMU", err?.message || String(err));
+        window.api.log.error(`SaisiePage: Échec d'enregistrement de la carte CMU (${mode})`, err?.message || String(err));
       }
       console.error(err);
       toast.error("Erreur lors de l'enregistrement.");
@@ -443,10 +465,10 @@ export default function SaisiePage() {
               WebkitTextFillColor: 'transparent',
             }}
           >
-            Nouvelle Saisie de Carte CMU
+            {mode === 'edit' ? 'Modification de Carte CMU' : 'Nouvelle Saisie de Carte CMU'}
           </h2>
           <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-            Enregistrement manuel · Champs marqués{' '}
+            {mode === 'edit' ? 'Édition manuelle' : 'Enregistrement manuel'} · Champs marqués{' '}
             <strong style={{ color: '#f97316' }}>*</strong> obligatoires
           </p>
         </div>
@@ -772,12 +794,12 @@ export default function SaisiePage() {
                     display: 'inline-block',
                   }}
                 />
-                Enregistrement…
+                {mode === 'edit' ? 'Mise à jour…' : 'Enregistrement…'}
               </>
             ) : (
               <>
                 <Save size={18} />
-                Enregistrer la carte
+                {mode === 'edit' ? 'Mettre à jour la carte' : 'Enregistrer la carte'}
               </>
             )}
           </button>

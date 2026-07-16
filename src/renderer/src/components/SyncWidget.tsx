@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { RefreshCw, Cloud, CloudOff, CloudLightning } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useCloudActionGuard } from '../hooks/useCloudActionGuard';
 
 export default function SyncWidget() {
   const [syncStatus, setSyncStatus] = useState<{
@@ -14,6 +15,7 @@ export default function SyncWidget() {
   });
 
   const [isSyncing, setIsSyncing] = useState(false);
+  const cloudGuard = useCloudActionGuard();
 
   // Charger le statut initial
   useEffect(() => {
@@ -39,8 +41,9 @@ export default function SyncWidget() {
   }, []);
 
   const handleForceSync = async () => {
-    if (isSyncing) return;
-    if (syncStatus.state !== 'ONLINE') {
+    return cloudGuard(async () => {
+      if (isSyncing) return;
+      if (syncStatus.state !== 'ONLINE') {
       toast.error("Impossible de forcer la synchronisation : l'appareil est hors-ligne.");
       return;
     }
@@ -63,6 +66,7 @@ export default function SyncWidget() {
     } finally {
       setIsSyncing(false);
     }
+    });
   };
 
   const getStatusColor = () => {

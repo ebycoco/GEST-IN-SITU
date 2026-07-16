@@ -381,7 +381,7 @@ export default function SyncStatusDashboard() {
           {/* Bouton de synchronisation globale */}
           <button 
             className="btn-sync-soleil"
-            disabled={isSyncing || !isOnline}
+            disabled={isSyncing }
             onClick={handleForceSync}
           >
             <RefreshCw size={16} className={isSyncing ? 'spin-animation' : ''} />

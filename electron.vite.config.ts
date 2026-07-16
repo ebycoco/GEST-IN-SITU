@@ -48,7 +48,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     esbuild: {
-      drop: ['console', 'debugger']
+      drop: mode === 'production' ? ['console', 'debugger'] : []
     }
   },
   preload: {
@@ -57,7 +57,7 @@ export default defineConfig(({ mode }) => {
       outDir: 'dist/preload'
     },
     esbuild: {
-      drop: ['console', 'debugger']
+      drop: mode === 'production' ? ['console', 'debugger'] : []
     }
   },
   renderer: {
@@ -83,7 +83,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     esbuild: {
-      drop: ['console', 'debugger']
+      drop: mode === 'production' ? ['console', 'debugger'] : []
     }
   }
   };

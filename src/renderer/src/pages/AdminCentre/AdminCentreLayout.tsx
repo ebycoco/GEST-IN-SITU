@@ -123,8 +123,8 @@ export default function AdminCentreLayout() {
     }
   };
 
-  const pullDisabled = isPullingCards || !isOnline || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || !isOnline || dirtyCartesCount === 0;
+  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -151,9 +151,9 @@ export default function AdminCentreLayout() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <button 
               onClick={handleSyncUsers} 
-              disabled={isSyncingUsers || !isOnline}
+              disabled={isSyncingUsers }
               className="btn-outline" 
-              style={{ ...syncBtnStyle, cursor: (isSyncingUsers || !isOnline) ? 'not-allowed' : 'pointer', opacity: (isSyncingUsers || !isOnline) ? 0.5 : 1 }}
+              style={{ ...syncBtnStyle, cursor: (isSyncingUsers ) ? 'not-allowed' : 'pointer', opacity: (isSyncingUsers ) ? 0.5 : 1 }}
             >
               <RefreshCw size={18} style={{ animation: isSyncingUsers ? 'spin 1.5s linear infinite' : 'none' }} />
               {isSyncingUsers ? '...' : 'UTILISATEURS'}

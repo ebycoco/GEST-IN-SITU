@@ -1,6 +1,7 @@
 /* --- LOGIN PAGE --- */
 .login-page {
-  height: 100vh; display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  padding: 16px;
   background: var(--bg-primary);
   background-image: radial-gradient(ellipse at 20% 50%, rgba(108,99,255,0.08) 0%, transparent 50%),
                     radial-gradient(ellipse at 80% 20%, rgba(78,205,196,0.06) 0%, transparent 50%);
@@ -13,6 +14,16 @@
 .login-logo { text-align: center; margin-bottom: 32px; }
 .login-logo h1 { font-size: clamp(20px, 5vw, 28px); font-weight: 800; color: var(--text-white); margin-top: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .login-logo p { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+@media (max-width: 480px) {
+  .login-card {
+    padding: 24px;
+    border-radius: var(--radius-lg);
+  }
+  .login-logo {
+    margin-bottom: 24px;
+  }
+}
 
 /* --- DATA TABLE IN CARD --- */
 .data-table { width: 100%; border-collapse: separate; border-spacing: 0; }

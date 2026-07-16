@@ -304,14 +304,14 @@ export default function VerificationSearchPage() {
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
             <button 
               onClick={handlePullSiteCards} 
-              disabled={isPullingCards || !isOnline || cloudCartesCount === 0}
+              disabled={isPullingCards || cloudCartesCount === 0}
               className="btn-outline" 
               style={{ 
                 padding: '12px 24px', 
                 borderRadius: 12, 
                 fontWeight: 700,
-                cursor: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-                opacity: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 0.5 : 1,
+                cursor: (isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
@@ -327,17 +327,17 @@ export default function VerificationSearchPage() {
 
             <button 
               onClick={handleStartBulkUpload} 
-              disabled={isBulkUploading || !isOnline || dirtyCartesCount === 0}
+              disabled={isBulkUploading || dirtyCartesCount === 0}
               className="btn-plein-soleil" 
               style={{ 
                 padding: '12px 24px', 
                 borderRadius: 12, 
                 fontWeight: 700,
-                backgroundColor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
-                color: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
+                backgroundColor: (isBulkUploading || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
+                color: (isBulkUploading || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
                 border: '1px solid #FFE600',
-                cursor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
-                opacity: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 0.5 : 1,
+                cursor: (isBulkUploading || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isBulkUploading || dirtyCartesCount === 0) ? 0.5 : 1,
                 boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
                 display: 'flex',
                 alignItems: 'center',

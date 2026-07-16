@@ -70,19 +70,6 @@ export default function DashboardPage() {
 
 
 
-  if (loading) {
-    return (
-      <div className="dashboard-premium animate-fade-in" style={{ padding: '0 24px' }}>
-        <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 24 }}>
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} className="skeleton skeleton-kpi" style={{ height: 140, borderRadius: 16, background: 'rgba(255,255,255,0.03)', animation: 'pulse 1.5s infinite' }} />
-          ))}
-        </div>
-        <div className="skeleton skeleton-chart" style={{ marginTop: 24, height: 400, borderRadius: 16, background: 'rgba(255,255,255,0.03)', animation: 'pulse 1.5s infinite' }} />
-      </div>
-    );
-  }
-
   if (isGovernanceView) {
     return (
       <GovernanceView
@@ -92,6 +79,7 @@ export default function DashboardPage() {
         isForceSyncing={isForceSyncing}
         forceSyncResult={forceSyncResult}
         handleForceGlobalSync={handleForceGlobalSync}
+        loading={loading}
       />
     );
   }
@@ -108,6 +96,7 @@ export default function DashboardPage() {
         isBulkUploading={isBulkUploading}
         handleStartBulkUpload={handleStartBulkUpload}
         handlePullSiteCards={handlePullSiteCards}
+        loading={loading}
       />
     );
   }
@@ -142,6 +131,7 @@ export default function DashboardPage() {
       handlePullSiteCards={handlePullSiteCards}
       handleStartBulkUpload={handleStartBulkUpload}
       handleClearCloudDatabase={handleClearCloudDatabase}
+      loading={loading}
     />
   );
 }

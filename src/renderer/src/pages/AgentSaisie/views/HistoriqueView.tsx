@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { History, Search, Edit2, AlertCircle, FileText } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
+import { useNavigate } from 'react-router-dom';
 
 export default function HistoriqueView() {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [saisies, setSaisies] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -106,11 +108,10 @@ export default function HistoriqueView() {
                         <button 
                           title="Modifier"
                           className="btn-outline"
-                          style={{ padding: '6px 12px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: 'white', cursor: 'pointer' }}
-                          onClick={() => {
-                            // Implémentation de la modification
-                            alert("Bientôt disponible : ouverture du formulaire de modification pour la carte ID: " + saisie.id_carte);
-                          }}
+                          style={{ padding: '6px 12px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: 'white', cursor: 'pointer', transition: 'background 0.2s' }}
+                          onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                          onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                          onClick={() => navigate('/agent-saisie/edit/' + saisie.id_carte, { state: { carte: saisie } })}
                         >
                           <Edit2 size={14} /> Modifier
                         </button>

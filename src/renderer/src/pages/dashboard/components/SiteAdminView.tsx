@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { OnlineBadge } from '../../../components/OnlineBadge';
+
 import { useNavigate } from 'react-router-dom';
 import { 
   CreditCard, 
@@ -44,6 +46,7 @@ interface SiteAdminViewProps {
   isBulkUploading?: boolean;
   bulkProgress?: number;
   downstreamProgress?: number;
+  loading?: boolean;
   handleForceSiteSync: () => Promise<void>;
   handleForceAgentsSync: () => Promise<void>;
   handlePullSiteCards?: () => Promise<void>;
@@ -915,15 +918,15 @@ export function SiteAdminView({
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                   <button
                     onClick={() => handleStartBulkUploadClick(false, false)}
-                    disabled={isBulkUploading || !isOnline || totalSyncableCards === 0}
+                    disabled={isBulkUploading || totalSyncableCards === 0}
                     style={{
                       flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                       padding: '11px 18px', borderRadius: 12, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                      background: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #34d399, #059669)',
-                      color: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 'var(--text-muted)' : 'white',
-                      opacity: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 0.5 : 1,
+                      background: (isBulkUploading || totalSyncableCards === 0) ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #34d399, #059669)',
+                      color: (isBulkUploading || totalSyncableCards === 0) ? 'var(--text-muted)' : 'white',
+                      opacity: (isBulkUploading || totalSyncableCards === 0) ? 0.5 : 1,
                       transition: 'all 0.2s',
-                      boxShadow: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 'none' : '0 4px 12px rgba(52, 211, 153, 0.25)',
+                      boxShadow: (isBulkUploading || totalSyncableCards === 0) ? 'none' : '0 4px 12px rgba(52, 211, 153, 0.25)',
                     }}
                   >
                     <RefreshCw size={16} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
@@ -932,13 +935,13 @@ export function SiteAdminView({
 
                   <button
                     onClick={() => handlePullSiteCards()}
-                    disabled={isPullingCards || isBackgroundPulling || !isOnline}
+                    disabled={isPullingCards || isBackgroundPulling }
                     style={{
                       flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                       padding: '11px 18px', borderRadius: 12, border: '1px solid rgba(52, 211, 153, 0.3)', fontWeight: 700, fontSize: 13, cursor: 'pointer',
                       background: 'transparent',
-                      color: (isPullingCards || isBackgroundPulling || !isOnline) ? 'var(--text-muted)' : '#34d399',
-                      opacity: (isPullingCards || isBackgroundPulling || !isOnline) ? 0.5 : 1,
+                      color: (isPullingCards || isBackgroundPulling ) ? 'var(--text-muted)' : '#34d399',
+                      opacity: (isPullingCards || isBackgroundPulling ) ? 0.5 : 1,
                       transition: 'all 0.2s',
                     }}
                   >
@@ -983,15 +986,15 @@ export function SiteAdminView({
                     <div>
                       <button 
                         onClick={() => handleStartBulkUploadClick(false, false)} 
-                        disabled={isBulkUploading || !isOnline || totalSyncableCards === 0}
+                        disabled={isBulkUploading || totalSyncableCards === 0}
                         className="btn-primary" 
                         style={{ 
                           padding: '12px 24px', 
                           borderRadius: 12, 
                           fontWeight: 700,
-                          backgroundColor: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-                          cursor: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 'not-allowed' : 'pointer',
-                          opacity: (isBulkUploading || !isOnline || totalSyncableCards === 0) ? 0.5 : 1,
+                          backgroundColor: (isBulkUploading || totalSyncableCards === 0) ? 'var(--bg-secondary)' : 'var(--accent-primary)',
+                          cursor: (isBulkUploading || totalSyncableCards === 0) ? 'not-allowed' : 'pointer',
+                          opacity: (isBulkUploading || totalSyncableCards === 0) ? 0.5 : 1,
                           boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3)',
                           display: 'flex',
                           alignItems: 'center',
@@ -1172,17 +1175,17 @@ export function SiteAdminView({
                     <div>
                       <button 
                         onClick={handleForceAgentsSync} 
-                        disabled={isSyncingAgents || !isOnline || dirtyUsersCount === 0}
+                        disabled={isSyncingAgents || dirtyUsersCount === 0}
                         className="btn-plein-soleil" 
                         style={{ 
                           padding: '12px 24px', 
                           borderRadius: 12, 
                           fontWeight: 700,
-                          backgroundColor: (isSyncingAgents || !isOnline || dirtyUsersCount === 0) ? '#555555' : '#FFE600',
-                          color: (isSyncingAgents || !isOnline || dirtyUsersCount === 0) ? '#ffffff' : '#000000',
+                          backgroundColor: (isSyncingAgents || dirtyUsersCount === 0) ? '#555555' : '#FFE600',
+                          color: (isSyncingAgents || dirtyUsersCount === 0) ? '#ffffff' : '#000000',
                           border: '1px solid #FFE600',
-                          cursor: (isSyncingAgents || !isOnline || dirtyUsersCount === 0) ? 'not-allowed' : 'pointer',
-                          opacity: (isSyncingAgents || !isOnline || dirtyUsersCount === 0) ? 0.5 : 1,
+                          cursor: (isSyncingAgents || dirtyUsersCount === 0) ? 'not-allowed' : 'pointer',
+                          opacity: (isSyncingAgents || dirtyUsersCount === 0) ? 0.5 : 1,
                           boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
                           display: 'flex',
                           alignItems: 'center',
@@ -1252,7 +1255,7 @@ export function SiteAdminView({
                   </p>
                   <button 
                     onClick={handleClearCloudDatabaseClick} 
-                    disabled={isClearingCloud || !isOnline || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
+                    disabled={isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
                     className="btn-danger" 
                     style={{ 
                       padding: '12px 24px', 
@@ -1260,8 +1263,8 @@ export function SiteAdminView({
                       borderRadius: 12, 
                       fontWeight: 700, 
                       boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)', 
-                      cursor: (isClearingCloud || !isOnline || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
-                      opacity: (isClearingCloud || !isOnline || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
+                      cursor: (isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
+                      opacity: (isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
                     }}
                   >
                     <Trash2 size={18} /> 

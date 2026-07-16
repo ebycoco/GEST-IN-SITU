@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
-import { Shield, Eye, EyeOff, Loader } from 'lucide-react';
+import { Shield, Eye, EyeOff, Loader, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
@@ -10,6 +10,17 @@ export default function LoginPage() {
   const [showPwd, setShowPwd] = useState(false);
   const { login: doLogin, isLoading, setActiveRole } = useAuthStore();
   const navigate = useNavigate();
+
+  const [isPreloading, setIsPreloading] = useState(false);
+
+  useEffect(() => {
+    if (window.api.auth.isPreloadingUsers) {
+      window.api.auth.isPreloadingUsers().then(setIsPreloading).catch(console.error);
+    }
+    if (window.api.auth.onPreloadStatus) {
+      return window.api.auth.onPreloadStatus(setIsPreloading);
+    }
+  }, []);
 
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [availableRoles, setAvailableRoles] = useState<string[]>([]);
@@ -402,13 +413,30 @@ export default function LoginPage() {
           <button 
             type="submit" 
             className="btn btn-primary" 
-            disabled={isLoading || (isFirstLaunch && setupStatus !== 'success')}
+            disabled={isLoading || (isFirstLaunch && setupStatus !== 'success') || isPreloading}
             style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
           >
-            {isLoading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-            {isLoading ? 'Connexion...' : 'Se connecter'}
+            {isLoading || isPreloading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+            {isPreloading ? 'Synchronisation des comptes...' : isLoading ? 'Connexion...' : 'Se connecter'}
           </button>
         </form>
+
+        {/* Message informatif pour les zones isolées */}
+        <div style={{
+          marginTop: 20,
+          padding: '12px',
+          borderRadius: '8px',
+          backgroundColor: 'rgba(255, 255, 255, 0.02)',
+          border: '1px solid rgba(255, 255, 255, 0.05)',
+          display: 'flex',
+          gap: 12,
+          alignItems: 'flex-start'
+        }}>
+          <Info size={16} style={{ color: '#9ca3af', flexShrink: 0, marginTop: 2 }} />
+          <p style={{ margin: 0, fontSize: '12px', color: '#9ca3af', lineHeight: 1.5 }}>
+            <strong>Astuce :</strong> Si vous prévoyez de travailler en zone sans connexion, assurez-vous d'avoir ouvert l'application au moins une fois avec une connexion internet pour synchroniser vos accès.
+          </p>
+        </div>
 
         {/* Zone discrète d'importation technique */}
         <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
