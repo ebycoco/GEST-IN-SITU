@@ -27,6 +27,11 @@ const api = {
       const listener = () => callback();
       ipcRenderer.on('auth:session-expired', listener);
       return () => ipcRenderer.removeListener('auth:session-expired', listener);
+    },
+    onAuthWarning: (callback: (warningMessage: string) => void) => {
+      const listener = (_: any, warningMessage: string) => callback(warningMessage);
+      ipcRenderer.on('auth:warning', listener);
+      return () => ipcRenderer.removeListener('auth:warning', listener);
     }
   },
   // Cartes
@@ -474,6 +479,48 @@ const api = {
     ipcRenderer.on('sync:updated-data', listener);
     return () => ipcRenderer.removeListener('sync:updated-data', listener);
   },
+  // Auto Updater
+  updater: {
+    check: (): Promise<{ success: boolean; result?: any; error?: string }> =>
+      ipcRenderer.invoke('updater:check'),
+    download: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('updater:download'),
+    install: (): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('updater:install'),
+    onUpdateAvailable: (callback: (info: any) => void) => {
+      const listener = (_: any, info: any) => callback(info);
+      ipcRenderer.on('updater:update-available', listener);
+      return () => ipcRenderer.removeListener('updater:update-available', listener);
+    },
+    onUpdateNotAvailable: (callback: (info: any) => void) => {
+      const listener = (_: any, info: any) => callback(info);
+      ipcRenderer.on('updater:update-not-available', listener);
+      return () => ipcRenderer.removeListener('updater:update-not-available', listener);
+    },
+    onDownloadProgress: (callback: (progress: any) => void) => {
+      const listener = (_: any, progress: any) => callback(progress);
+      ipcRenderer.on('updater:download-progress', listener);
+      return () => ipcRenderer.removeListener('updater:download-progress', listener);
+    },
+    onUpdateDownloaded: (callback: (info: any) => void) => {
+      const listener = (_: any, info: any) => callback(info);
+      ipcRenderer.on('updater:update-downloaded', listener);
+      return () => ipcRenderer.removeListener('updater:update-downloaded', listener);
+    },
+    onError: (callback: (error: string) => void) => {
+      const listener = (_: any, error: string) => callback(error);
+      ipcRenderer.on('updater:error', listener);
+      return () => ipcRenderer.removeListener('updater:error', listener);
+    },
+  },
+  // Enforcer
+  enforcer: {
+    onUpdateRequired: (callback: (info: { currentVersion: string; minVersion: string; latestVersion: string; releaseNotes: string }) => void) => {
+      const listener = (_: any, info: any) => callback(info);
+      ipcRenderer.on('enforcer:update-required', listener);
+      return () => ipcRenderer.removeListener('enforcer:update-required', listener);
+    }
+  }
 };
 
 contextBridge.exposeInMainWorld('api', api);

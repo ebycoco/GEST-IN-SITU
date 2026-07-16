@@ -204,3 +204,13 @@ GRANT ALL ON public.t_users    TO anon, authenticated, service_role;
 GRANT ALL ON public.t_cartes   TO anon, authenticated, service_role;
 GRANT ALL ON public.t_logs     TO anon, authenticated, service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+DROP TABLE IF EXISTS public.t_app_version CASCADE;
+CREATE TABLE public.t_app_version (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    min_version VARCHAR(20) NOT NULL,
+    latest_version VARCHAR(20) NOT NULL,
+    release_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+INSERT INTO public.t_app_version (min_version, latest_version, release_notes) VALUES ('2.4.2', '2.4.2', 'Version initiale avec auto-updater.');

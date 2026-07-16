@@ -15,11 +15,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "prebuild": "electron-vite build",
-    "make:win": "electron-vite build && electron-forge make --platform win32",
-    "make:mac": "electron-vite build && electron-forge make --platform darwin",
-    "make": "electron-vite build && electron-forge make",
-    "publish": "electron-forge publish",
+    "build:win": "electron-vite build && electron-builder --win -c.extraMetadata.main=dist/main/index.js",
+    "release": "electron-vite build && electron-builder --win --publish always -c.extraMetadata.main=dist/main/index.js",
     "lint": "eslint src/",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -51,14 +48,6 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
-    "@electron-forge/cli": "^7.6.0",
-    "@electron-forge/maker-deb": "^7.6.0",
-    "@electron-forge/maker-dmg": "^7.6.0",
-    "@electron-forge/maker-squirrel": "^7.6.0",
-    "@electron-forge/maker-zip": "^7.6.0",
-    "@electron-forge/plugin-auto-unpack-natives": "^7.6.0",
-    "@electron-forge/publisher-github": "^7.6.0",
-    "@electron/rebuild": "^3.7.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.12",
     "@types/lodash.debounce": "^4.0.9",
@@ -66,15 +55,15 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/react-window": "^1.8.8",
+    "@types/semver": "^7.7.1",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "chalk": "^5.6.2",
     "electron": "^34.5.8",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.0",
     "vite": "^5.4.11",
     "vitest": "^2.1.0"
-  },
-  "config": {
-    "forge": "./forge.config.cjs"
   }
 }

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { Database, Globe, AlertTriangle, Users, Calendar, Fingerprint, LayoutDashboard } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
@@ -8,6 +8,8 @@ import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const location = useLocation();
+  const isOverview = location.pathname === '/agent-qualite' || location.pathname === '/agent-qualite/';
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -107,7 +109,7 @@ export default function AgentQualiteLayout() {
 
         {/* Sous-navigation Modulaire */}
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          <NavLink to="/agent-qualite" end className="tab-link" style={getNavLinkStyle}>
+          <NavLink to="/agent-qualite" end className="tab-link" style={() => getNavLinkStyle({ isActive: isOverview })}>
             <LayoutDashboard size={16} /> Vue d'ensemble
           </NavLink>
           <NavLink to="/agent-qualite/doublons" className="tab-link" style={getNavLinkStyle}>

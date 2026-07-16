@@ -6,9 +6,10 @@ declare global {
       auth: {
         login: (login: string, mdp: string) => Promise<any>;
         logout: (login?: string) => Promise<boolean>;
-        updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean }>;
-        registerSuperAdmin: (data: any) => Promise<any>;
+        updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean; message?: string }>;
+        registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
         onSessionExpired: (callback: () => void) => () => void;
+        onAuthWarning: (callback: (warningMessage: string) => void) => () => void;
       };
       stats: {
         get: (siteId?: number, centreId?: number) => Promise<any>;
@@ -211,6 +212,19 @@ declare global {
         pullAgents: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;
         syncUsersFromSupabase: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;
         forceAgents: (siteId: number) => Promise<{ success: boolean; count: number; message?: string }>;
+      };
+      updater: {
+        check: () => Promise<{ success: boolean; result?: any; error?: string }>;
+        download: () => Promise<{ success: boolean; error?: string }>;
+        install: () => Promise<{ success: boolean; error?: string }>;
+        onUpdateAvailable: (callback: (info: any) => void) => () => void;
+        onUpdateNotAvailable: (callback: (info: any) => void) => () => void;
+        onDownloadProgress: (callback: (progress: any) => void) => () => void;
+        onUpdateDownloaded: (callback: (info: any) => void) => () => void;
+        onError: (callback: (error: string) => void) => () => void;
+      };
+      enforcer: {
+        onUpdateRequired: (callback: (info: { currentVersion: string; minVersion: string; latestVersion: string; releaseNotes: string }) => void) => () => void;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };
