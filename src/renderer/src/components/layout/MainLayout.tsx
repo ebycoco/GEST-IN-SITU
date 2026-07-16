@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import Sidebar from './Sidebar';
@@ -6,6 +6,14 @@ import TopBar from './TopBar';
 import { useSyncDownstreamStore } from '../../stores/syncDownstreamStore';
 
 export default function MainLayout() {
+  const [appVersion, setAppVersion] = useState('');
+
+  useEffect(() => {
+    if (window.api?.app?.getVersion) {
+      window.api.app.getVersion().then(setAppVersion).catch(console.error);
+    }
+  }, []);
+
   // ─── ANTI-FREEZE (Couche 3) — Visibility API ─────────────────────────────
   // Détecte le retour de l'utilisateur après une absence (autre fenêtre,
   // explorateur, navigateur) et dispatche un signal 'app:focus-restored'.
@@ -72,7 +80,7 @@ export default function MainLayout() {
           borderTop: '1px solid rgba(255, 255, 255, 0.05)',
           marginTop: 'auto'
         }}>
-          GEST-IN-SITU - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
+          GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
         </footer>
       </div>
 
