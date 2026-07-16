@@ -1,0 +1,40 @@
+
+La méthode professionnelle consiste à avancer dossier par dossier (ou bloc par bloc). Voici la feuille de route idéale pour ton projet :
+
+Bloc 1 : Le Cœur et la Sécurité (src/main/index.ts, src/main/main.ts)
+
+Bloc 2 : Le Moteur de Synchronisation (src/main/sync/ ou équivalent)
+
+Bloc 3 : La Communication et les Données (src/main/ipc/, requêtes SQLite)
+
+Bloc 4 : L'Interface Graphique (le dossier src/renderer/ ou tes composants UI)
+
+-----------------------------------------------------
+
+
+PROMPT D'EXÉCUTION — OPÉRATION BALAYAGE GLOBAL (ALLIANCE AGENT 9 & AGENT 10)
+
+[CONSIGNE IMPÉRATIVE DE SÉCURITÉ MATÉRIELLE]
+- INTERDICTION ABSOLUE de lancer la commande 'npm run build' ou 'npm run make' (Alerte 8 Go RAM). Utilise uniquement 'npx tsc --noEmit' pour valider les fichiers modifiés.
+- TOUTES VOS RÉPONSES DOIVENT ÊTRE EXCLUSIVEMENT EN FRANÇAIS.
+
+[MISSION : NETTOYAGE INTÉGRAL DU PROJET]
+Agent 9 et Agent 10, vous êtes déployés en duo pour auditer et refactoriser l'intégralité du projet GEST-IN-SITU V2. Nous procédons de manière méthodique, zone par zone.
+
+Aujourd'hui, votre cible est le Bloc 2 : Le Moteur de Synchronisation (src/main/sync/ ou équivalent)
+
+[RÔLE DE L'AGENT 9 - AUDIT INTRAITEBLE]
+- Analyse tous les fichiers de cette zone.
+- Traque les failles de sécurité, les variables non gérées, les risques de crashs ou de blocages de processus.
+- Transmets immédiatement tes points critiques à l'Agent 10.
+
+[RÔLE DE L'AGENT 10 - SPEED & RAM BOOSTER]
+- Prends les rapports de l'Agent 9 et réécris le code de cette zone.
+- Applique le 'RAM Shield' : optimise les structures de données pour qu'elles consomment un minimum de mémoire vive.
+- Applique le 'Speed Boost' : optimise les boucles et les interactions SQLite pour garantir 0 freeze UI.
+- Respecte scrupuleusement le Clean Code et le typage TypeScript strict.
+
+[LIVRABLE ATTENDU]
+Présentez un rapport unifié en français :
+1. Les points faibles corrigés dans cette zone.
+2. Le code final réécrit, optimisé et prêt à être intégré.

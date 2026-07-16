@@ -104,50 +104,51 @@ export function GovernanceView({
 
   return (
     <div className="dashboard-premium animate-fade-in">
-      <div className="kpi-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 24, marginBottom: 24 }}>
-        <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 16 }}>
-          <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #6c63ff, #4834d4)', width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Globe size={28} color="white" />
+      <div className="kpi-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 24, marginBottom: 32 }}>
+        <div className="premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 20 }}>
+          <div style={{ background: 'linear-gradient(135deg, rgba(108, 99, 255, 0.2), rgba(72, 52, 212, 0.2))', border: '1px solid rgba(108, 99, 255, 0.3)', width: 58, height: 58, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Globe size={30} color="#818cf8" />
           </div>
           <div>
-            <div className="kpi-value-lg" style={{ fontSize: 28, fontWeight: 900, color: 'white' }}>{gs.total_sites}</div>
-            <div className="kpi-label-muted" style={{ fontSize: 13, color: 'var(--text-muted)' }}>Sites Déployés</div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1 }}>{gs.total_sites}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>Sites Déployés</div>
           </div>
         </div>
         
-        <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 16 }}>
-          <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #27ae60, #2ecc71)', width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <PowerIcon size={28} color="white" />
+        <div className="premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 20 }}>
+          <div style={{ background: 'linear-gradient(135deg, rgba(39, 174, 96, 0.2), rgba(46, 204, 113, 0.2))', border: '1px solid rgba(46, 204, 113, 0.3)', width: 58, height: 58, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <PowerIcon size={30} color="#6ee7b7" />
           </div>
           <div>
-            <div className="kpi-value-lg" style={{ fontSize: 28, fontWeight: 900, color: 'white' }}>{gs.active_sites}</div>
-            <div className="kpi-label-muted" style={{ fontSize: 13, color: 'var(--text-muted)' }}>Sites Actifs</div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1 }}>{gs.active_sites}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>Sites Actifs</div>
           </div>
         </div>
         
-        <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 16 }}>
-          <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #f39c12, #e67e22)', width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <CreditCard size={28} color="white" />
+        <div className="premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 20 }}>
+          <div style={{ background: 'linear-gradient(135deg, rgba(243, 156, 18, 0.2), rgba(230, 126, 34, 0.2))', border: '1px solid rgba(243, 156, 18, 0.3)', width: 58, height: 58, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <CreditCard size={30} color="#fcd34d" />
           </div>
           <div>
-            <div className="kpi-value-lg" style={{ fontSize: 28, fontWeight: 900, color: 'white' }}>{gs.total_cartes.toLocaleString('fr')}</div>
-            <div className="kpi-label-muted" style={{ fontSize: 13, color: 'var(--text-muted)' }}>Cartes Globales</div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1 }}>{gs.total_cartes.toLocaleString('fr')}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>Cartes Globales</div>
           </div>
         </div>
         
-        <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 16 }}>
-          <div className="kpi-premium-icon" style={{ background: 'linear-gradient(135deg, #3498db, #2980b9)', width: 54, height: 54, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <Users size={28} color="white" />
+        <div className="premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 20 }}>
+          <div style={{ background: 'linear-gradient(135deg, rgba(52, 152, 219, 0.2), rgba(41, 128, 185, 0.2))', border: '1px solid rgba(52, 152, 219, 0.3)', width: 58, height: 58, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <Users size={30} color="#7dd3fc" />
           </div>
           <div>
-            <div className="kpi-value-lg" style={{ fontSize: 28, fontWeight: 900, color: 'white' }}>{gs.total_agents}</div>
-            <div className="kpi-label-muted" style={{ fontSize: 13, color: 'var(--text-muted)' }}>Agents Réseau</div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1 }}>{gs.total_agents}</div>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 4, letterSpacing: '0.05em', textTransform: 'uppercase', fontWeight: 600 }}>Agents Réseau</div>
           </div>
         </div>
       </div>
 
       <div style={{
         display: 'flex',
+        flexWrap: 'wrap',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 16,
@@ -222,45 +223,50 @@ export function GovernanceView({
         )}
       </div>
 
-      <div className="premium-card premium-glass" style={{ padding: 0, borderRadius: 16 }}>
-        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 24px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(108, 99, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(108, 99, 255, 0.2)' }}>
-              <Globe size={20} color="var(--accent-primary)" />
+      <div className="premium-glass" style={{ padding: 0, borderRadius: 20, overflow: 'hidden' }}>
+        <div className="card-header" style={{ background: 'rgba(0,0,0,0.2)', display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', padding: '24px 28px', borderBottom: '1px solid rgba(255,255,255,0.05)', gap: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ width: 44, height: 44, borderRadius: 12, background: 'linear-gradient(135deg, rgba(108, 99, 255, 0.15), rgba(72, 52, 212, 0.15))', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(108, 99, 255, 0.25)', flexShrink: 0 }}>
+              <Globe size={22} color="#818cf8" />
             </div>
             <div>
-              <span className="card-title" style={{ fontSize: 16, marginBottom: 2, fontWeight: 700, color: 'white' }}>Gestion des Sites</span>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Gouvernance et déploiement de l'infrastructure</div>
+              <span className="card-title" style={{ fontSize: 18, marginBottom: 4, fontWeight: 800, color: 'white', letterSpacing: '0.01em' }}>Gestion des Sites</span>
+              <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>Gouvernance et déploiement de l'infrastructure</div>
             </div>
           </div>
           <button 
             className="btn-primary" 
             style={{ 
-              padding: '10px 20px', 
-              borderRadius: 12, 
+              padding: '12px 24px', 
+              borderRadius: 14, 
               display: 'flex', 
               alignItems: 'center', 
-              gap: 8,
-              boxShadow: '0 4px 15px rgba(108, 99, 255, 0.3)',
-              fontWeight: 700,
+              gap: 10,
+              background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
+              boxShadow: '0 8px 20px rgba(79, 70, 229, 0.35)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              fontWeight: 800,
+              fontSize: 14,
+              letterSpacing: '0.02em',
+              transition: 'all 0.3s ease',
               cursor: 'pointer'
             }}
             onClick={() => setShowCreateModal(true)}
           >
-            <Plus size={18} /> Nouveau Site
+            <Plus size={20} /> NOUVEAU SITE
           </button>
         </div>
         
-        <div className="card-body" style={{ padding: 0 }}>
-          <table className="data-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <div style={{ overflowX: 'auto', width: '100%' }}>
+          <table className="data-table data-table-premium" style={{ width: '100%', minWidth: '800px', borderCollapse: 'collapse' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left' }}>
-                <th style={{ padding: '16px 24px', color: 'var(--text-muted)' }}>Infrastructure / Site</th>
-                <th style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>Administrateur</th>
-                <th style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>Centres</th>
-                <th style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>Total Cartes</th>
-                <th style={{ padding: '16px 12px', color: 'var(--text-muted)' }}>État / Statut</th>
-                <th style={{ textAlign: 'right', paddingRight: 24, width: 220, color: 'var(--text-muted)' }}>Actions</th>
+              <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', textAlign: 'left', background: 'rgba(0,0,0,0.1)' }}>
+                <th style={{ padding: '20px 28px', color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Infrastructure / Site</th>
+                <th style={{ padding: '20px 16px', color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Administrateur</th>
+                <th style={{ padding: '20px 16px', color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Centres</th>
+                <th style={{ padding: '20px 16px', color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Total Cartes</th>
+                <th style={{ padding: '20px 16px', color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>État / Statut</th>
+                <th style={{ textAlign: 'right', padding: '20px 28px', width: 220, color: '#64748b', fontSize: 12, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -294,7 +300,7 @@ export function GovernanceView({
                     </span>
                   </td>
                   <td style={{ textAlign: 'right', paddingRight: 24, whiteSpace: 'nowrap' }}>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       <button 
                         title="Réinitialiser le mot de passe"
                         onClick={() => setResetPassModal({ isOpen: true, site, newPass: '' })}
@@ -310,25 +316,26 @@ export function GovernanceView({
                           transition: 'all 0.2s ease'
                         }}
                       >
-                        <Key size={14} /> Mdp.
+                        <Key size={14} /> 
                       </button>
                       <button 
                         title={site.is_active ? "Suspendre l'infrastructure" : "Activer l'infrastructure"}
                         onClick={() => setConfirmStatusModal({ isOpen: true, site })}
                         style={{
-                          background: site.is_active ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
+                          background: site.is_active ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.15))' : 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.15))',
                           border: `1px solid ${site.is_active ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
                           color: site.is_active ? '#fca5a5' : '#6ee7b7',
-                          padding: '8px 14px',
-                          borderRadius: '10px',
+                          padding: '10px 18px',
+                          borderRadius: '12px',
                           display: 'flex', alignItems: 'center', gap: '8px',
                           cursor: 'pointer',
-                          fontSize: '12px', fontWeight: 700,
-                          transition: 'all 0.2s ease'
+                          fontSize: '12px', fontWeight: 800,
+                          transition: 'all 0.2s ease',
+                          boxShadow: site.is_active ? '0 4px 12px rgba(239, 68, 68, 0.1)' : '0 4px 12px rgba(16, 185, 129, 0.1)'
                         }}
                       >
                         {site.is_active ? <Power size={14} /> : <RefreshCw size={14} />}
-                        {site.is_active ? "Suspendre" : "Activer"}
+                        {site.is_active ? "SUSPENDRE" : "ACTIVER"}
                       </button>
                     </div>
                   </td>
@@ -349,30 +356,31 @@ export function GovernanceView({
       {showCreateModal && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000,
-          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          background: 'rgba(5, 7, 15, 0.8)', backdropFilter: 'blur(16px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          animation: 'fadeIn 0.3s ease'
         }}>
-          <div style={{
-            background: '#0f111a', 
-            border: '1px solid #1e2235',
+          <div className="animate-scale-in" style={{
+            background: 'rgba(15, 17, 26, 0.85)', 
+            border: '1px solid rgba(255, 255, 255, 0.1)',
             width: '100%', maxWidth: 520, 
             borderRadius: 28,
-            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)',
-            padding: '32px'
+            boxShadow: '0 40px 80px -20px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255,255,255,0.05)',
+            padding: '36px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 28 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 32 }}>
               <div style={{ display: 'flex', gap: 16 }}>
                 <div style={{
-                  width: 48, height: 48, borderRadius: 14,
+                  width: 52, height: 52, borderRadius: 16,
                   background: 'linear-gradient(135deg, #4f46e5 0%, #3730a3 100%)',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)'
+                  boxShadow: '0 8px 20px rgba(79, 70, 229, 0.4)'
                 }}>
-                  <Plus size={24} color="white" />
+                  <Plus size={26} color="white" />
                 </div>
                 <div>
-                  <h3 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: 'white', letterSpacing: '-0.01em' }}>Déploiement Nouveau Site</h3>
-                  <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#64748b' }}>Configurez les paramètres de la zone géographique</p>
+                  <h3 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: 'white', letterSpacing: '-0.01em' }}>Déploiement Nouveau Site</h3>
+                  <p style={{ margin: '6px 0 0 0', fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>Configurez les paramètres de la zone géographique</p>
                 </div>
               </div>
               <button 
@@ -513,13 +521,14 @@ export function GovernanceView({
       {resetPassModal.isOpen && resetPassModal.site && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000,
-          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          background: 'rgba(5, 7, 15, 0.8)', backdropFilter: 'blur(16px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          animation: 'fadeIn 0.3s ease'
         }}>
-          <div className="animate-slide-up" style={{
-            background: '#0f111a', border: '1px solid #1e2235',
-            width: '100%', maxWidth: 400, borderRadius: 24, padding: '32px',
-            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)'
+          <div className="animate-scale-in" style={{
+            background: 'rgba(15, 17, 26, 0.85)', border: '1px solid rgba(255, 255, 255, 0.1)',
+            width: '100%', maxWidth: 420, borderRadius: 28, padding: '36px',
+            boxShadow: '0 40px 80px -20px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255,255,255,0.05)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
               <div style={{ width: 48, height: 48, borderRadius: 14, background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -550,13 +559,14 @@ export function GovernanceView({
       {confirmStatusModal.isOpen && confirmStatusModal.site && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1000,
-          background: 'rgba(8, 10, 20, 0.9)', backdropFilter: 'blur(10px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          background: 'rgba(5, 7, 15, 0.8)', backdropFilter: 'blur(16px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          animation: 'fadeIn 0.3s ease'
         }}>
-          <div className="animate-slide-up" style={{
-            background: '#0f111a', border: '1px solid #1e2235',
-            width: '100%', maxWidth: 400, borderRadius: 24, padding: '32px',
-            boxShadow: '0 30px 60px -12px rgba(0, 0, 0, 0.7)'
+          <div className="animate-scale-in" style={{
+            background: 'rgba(15, 17, 26, 0.85)', border: '1px solid rgba(255, 255, 255, 0.1)',
+            width: '100%', maxWidth: 420, borderRadius: 28, padding: '36px',
+            boxShadow: '0 40px 80px -20px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255,255,255,0.05)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
               <div style={{ width: 48, height: 48, borderRadius: 14, background: confirmStatusModal.site.is_active ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -582,13 +592,15 @@ export function GovernanceView({
       {showSyncConfirmModal && (
         <div style={{
           position: 'fixed', inset: 0, zIndex: 1010,
-          background: 'rgba(8, 10, 20, 0.92)', backdropFilter: 'blur(12px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+          background: 'rgba(5, 7, 15, 0.92)', backdropFilter: 'blur(16px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+          animation: 'fadeIn 0.3s ease'
         }}>
-          <div className="animate-slide-up" style={{
-            background: '#1A1400', border: '3px solid #FFE600',
-            width: '100%', maxWidth: 450, borderRadius: 28, padding: '36px',
-            boxShadow: '0 30px 70px -10px rgba(0, 0, 0, 0.95), 0 0 40px rgba(255, 230, 0, 0.15)'
+          <div className="animate-scale-in" style={{
+            background: 'linear-gradient(180deg, rgba(26, 20, 0, 0.95), rgba(15, 12, 0, 0.98))', 
+            border: '2px solid rgba(255, 230, 0, 0.5)',
+            width: '100%', maxWidth: 480, borderRadius: 32, padding: '40px',
+            boxShadow: '0 40px 100px -20px rgba(0, 0, 0, 0.95), 0 0 60px rgba(255, 230, 0, 0.15), inset 0 0 0 1px rgba(255, 230, 0, 0.2)'
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24 }}>
               <div style={{ width: 54, height: 54, borderRadius: 16, background: 'rgba(255, 230, 0, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255, 230, 0, 0.3)' }}>
@@ -737,17 +749,17 @@ function VersionControlPanel() {
   }
 
   return (
-    <div className="premium-card premium-glass" style={{ padding: 24, borderRadius: 16, marginTop: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(108, 99, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(108, 99, 255, 0.2)' }}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <div className="premium-glass" style={{ padding: 28, borderRadius: 20, marginTop: 32, borderTop: '3px solid rgba(108, 99, 255, 0.6)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 24, flexWrap: 'wrap' }}>
+        <div style={{ width: 44, height: 44, borderRadius: 12, background: 'linear-gradient(135deg, rgba(108, 99, 255, 0.15), rgba(72, 52, 212, 0.15))', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(108, 99, 255, 0.25)', flexShrink: 0 }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         </div>
         <div>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: 'white' }}>Contrôle de Version Distante (Supabase)</h3>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Bloquez les versions obsolètes sur le terrain et forcez les mises à jour</div>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: 'white', letterSpacing: '0.01em' }}>Contrôle de Version Distante (Supabase)</h3>
+          <div style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500, marginTop: 2 }}>Bloquez les versions obsolètes sur le terrain et forcez les mises à jour</div>
         </div>
       </div>
 

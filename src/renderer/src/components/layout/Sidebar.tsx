@@ -3,95 +3,10 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
-  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2
+  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 
-const getNavItemsForRole = (role?: string) => {
-  if (!role) return [];
-
-  const baseItems = [
-    { label: 'Mon Profil', icon: UserCircle, path: '/profile' },
-  ];
-
-  if (role === 'SUPER ADMIN' || role === 'ADMINISTRATEUR_SITE') {
-    const adminItems = [
-      { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
-      { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-      { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
-      { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
-      { label: 'Classement Logistique', icon: Package, path: '/logistique' },
-      { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
-      { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
-      { label: 'Importation', icon: Upload, path: '/import' },
-      { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
-    ];
-
-    if (role === 'SUPER ADMIN') {
-      adminItems.push({ label: 'Infrastructures', icon: MapPin, path: '/sites' });
-    }
-
-    return [
-      ...adminItems,
-      { label: 'Agents', icon: Users, path: '/agents' },
-      { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
-      { label: 'Journaux', icon: FileText, path: '/logs' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'OPERATEUR_QUALITE') {
-    return [
-      { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
-      { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-      { label: 'Recherche', icon: Search, path: '/search' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'OPERATEUR_SAISIE') {
-    return [
-      { label: 'Tableau de bord', icon: Activity, path: '/dashboard' },
-      { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
-      { label: 'Recherche', icon: Search, path: '/search' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'OPERATEUR_LOGISTIQUE') {
-    return [
-      { label: 'Classement Logistique', icon: Package, path: '/logistique' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'OPERATEUR_INVENTAIRE') {
-    return [
-      { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'OPERATEUR_VERIFICATION') {
-    return [
-      { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
-      ...baseItems
-    ];
-  }
-
-  if (role === 'ADMIN_CENTRE') {
-    return [
-      { label: 'Tableau de bord Centre', icon: LayoutDashboard, path: '/centre/dashboard' },
-      { label: 'Suivi des Retraits',     icon: BarChart2,        path: '/retraits' },
-      { label: 'Cartes CMU',             icon: CreditCard,       path: '/cartes' },
-      { label: 'Recherche CMU',          icon: Search,           path: '/verification/recherche' },
-      { label: 'Journaux',               icon: FileText,         path: '/logs' },
-      ...baseItems,
-    ];
-  }
-
-  return baseItems;
-};
 
 export default function Sidebar() {
   const user = useAuthStore((s) => s.user);
@@ -172,59 +87,46 @@ export default function Sidebar() {
       { label: 'Mon Profil', icon: UserCircle, path: '/profile' },
     ];
 
-    if (user.role === 'SUPER ADMIN') {
-      const items = [...baseItems];
-      items.push({ label: 'Infrastructures', icon: MapPin, path: '/sites' });
-
-      // Si un site est sélectionné, on débloque tout
-      if (activeSiteId) {
-        items.splice(1, 0, 
-          { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-          { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
-          { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
-          { label: 'Classement Logistique', icon: Package, path: '/logistique' },
-          { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
-          { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
-          { label: 'Importation', icon: Upload, path: '/import' },
-          { label: 'Exportation', icon: Download, path: '/export' },
-          { label: 'File d\'attente', icon: Clock, path: '/admin/queue' }
-        );
-        items.push(
-          { label: 'Agents', icon: Users, path: '/agents' },
-          { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
-          { label: 'Journaux', icon: FileText, path: '/logs' }
-        );
+    if (user.role === 'SUPER ADMIN' || user.role === 'ADMINISTRATEUR_SITE') {
+      if (user.role === 'SUPER ADMIN' && !activeSiteId) {
+        return [
+          { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
+          { label: 'Infrastructures', icon: MapPin, path: '/sites' },
+          { label: 'Maintenance System', icon: Shield, path: '/maintenance' },
+          ...baseItems.filter(i => i.path === '/profile')
+        ];
       }
-      return items;
-    }
 
-    if (user.role === 'ADMINISTRATEUR_SITE') {
       return [
+        { isHeader: true, label: '📊 PILOTAGE & MONITORING' },
         { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
+        { label: 'Monitoring Sync', icon: Activity, path: '/sync/status' },
+        { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
+        
+        { isHeader: true, label: '🛠️ OPÉRATIONS CMU' },
         { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
-        { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
-        { label: 'Classement Logistique', icon: Package, path: '/logistique' },
-        { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
-        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
-        { label: 'Importation', icon: Upload, path: '/import' },
-        { label: 'Exportation', icon: Download, path: '/export' },
-        { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
+        { label: 'Recherche CMU', icon: Search, path: '/agent-verification/recherche' },
+        { label: 'Nouvelle Saisie', icon: FileText, path: '/agent-saisie/nouvelle' },
+        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/agent-qualite' },
+        { label: 'Inventaire & Logistique', icon: Package, path: '/inventaire' },
+        
+        { isHeader: true, label: '⚙️ SYSTÈME & DONNÉES' },
         { label: 'Infrastructures', icon: MapPin, path: '/sites' },
         { label: 'Agents', icon: Users, path: '/agents' },
-        { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
+        { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
+        { label: 'Importation', icon: Upload, path: '/import' },
+        { label: 'Exportation', icon: Download, path: '/export' },
         { label: 'Journaux', icon: FileText, path: '/logs' },
+        ...(user.role === 'SUPER ADMIN' ? [{ label: 'Maintenance System', icon: Shield, path: '/maintenance' }] : []),
+        
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
 
     if (user.role === 'ADMIN_CENTRE') {
       return [
-        { label: 'Tableau de bord', icon: LayoutDashboard, path: '/centre/dashboard' },
-        { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
-        { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
-        { label: 'Journaux', icon: FileText, path: '/logs' },
+        { label: 'Portail Supervision', icon: Building2, path: '/admin-centre' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
@@ -232,35 +134,26 @@ export default function Sidebar() {
     // Autres rôles...
     if (user.role === 'OPERATEUR_QUALITE') {
       return [
-        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/qualite' },
+        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/agent-qualite' },
         { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
-        { label: 'Recherche', icon: Search, path: '/verification/recherche' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
     if (user.role === 'OPERATEUR_SAISIE') {
       return [
-        { label: 'Tableau de bord', icon: Activity, path: '/dashboard' },
-        { label: 'Nouvelle Saisie', icon: FileText, path: '/saisie' },
-        { label: 'Recherche', icon: Search, path: '/verification/recherche' },
+        { label: 'Portail Saisie', icon: FileText, path: '/agent-saisie' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
-    if (user.role === 'OPERATEUR_LOGISTIQUE') {
+    if (user.role === 'OPERATEUR_LOGISTIQUE' || user.role === 'OPERATEUR_INVENTAIRE') {
       return [
-        { label: 'Classement Logistique', icon: Package, path: '/logistique' },
-        ...baseItems.filter(i => i.path === '/profile')
-      ];
-    }
-    if (user.role === 'OPERATEUR_INVENTAIRE') {
-      return [
-        { label: 'Apurement Inventaire', icon: Clock, path: '/inventaire' },
+        { label: 'Inventaire & Logistique', icon: Package, path: '/inventaire' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
     if (user.role === 'OPERATEUR_VERIFICATION') {
       return [
-        { label: 'Recherche CMU', icon: Search, path: '/verification/recherche' },
+        { label: 'Portail Vérification', icon: Search, path: '/agent-verification' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
@@ -270,12 +163,12 @@ export default function Sidebar() {
 
   return (
     <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
-      <div className="sidebar-header" style={{ display: 'flex', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', width: '100%' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div className="sidebar-logo">GI</div>
-          <div className="sidebar-text">
+      <div className="sidebar-header" style={{ display: 'flex', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', width: '100%', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
+          <div className="sidebar-logo" style={{ flexShrink: 0 }}>GI</div>
+          <div className="sidebar-text" style={{ minWidth: 0, flex: 1, display: isCollapsed ? 'none' : 'block' }}>
             <div 
-              className="sidebar-title text-sm xl:text-base font-bold uppercase truncate block max-w-full"
+              className="sidebar-title"
               style={{
                 fontSize: 'clamp(12px, 1.2vw, 15px)',
                 fontWeight: 700,
@@ -284,7 +177,7 @@ export default function Sidebar() {
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
                 display: 'block',
-                maxWidth: '100%'
+                width: '100%'
               }}
               title={displayTitle}
             >
@@ -293,7 +186,7 @@ export default function Sidebar() {
             <div className="sidebar-subtitle">Cartes CMU</div>
           </div>
         </div>
-        <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(!isCollapsed)}>
+        <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(!isCollapsed)} style={{ flexShrink: 0 }}>
           {isCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
         </button>
       </div>
@@ -346,7 +239,29 @@ export default function Sidebar() {
             ⚠️ Sélectionnez un site ci-dessus pour activer les modules de gestion (Cartes, Saisie, Agents, Import...).
           </div>
         )}
-        {getNavItems().map((item) => {
+        {getNavItems().map((item: any) => {
+          if (item.isHeader) {
+            return (
+              <div 
+                key={item.label} 
+                className="sidebar-group-title sidebar-text"
+                style={{
+                  marginTop: 16,
+                  marginBottom: 8,
+                  padding: '0 20px',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: 'var(--accent-primary)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                  opacity: 0.9
+                }}
+              >
+                {item.label}
+              </div>
+            );
+          }
+
           const Icon = item.icon;
           return (
             <NavLink 

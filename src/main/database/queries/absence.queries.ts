@@ -2,16 +2,24 @@ import { getDatabase } from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import log from 'electron-log';
 
-export function signalerAbsence(id: number, agent: string, currentUser?: { role: string; site_id?: number; id_user?: number }) {
+export function signalerAbsence(id: number, agentLogin: string, agentInfo: string, commentaire: string = '', currentUser?: { role: string; site_id?: number; id_user?: number; centre_id?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   let query = `
     UPDATE t_cartes SET statut_physique = 'ABSENT',
-      agent_signalement_absence = @agent, date_signalement_absence = @now,
+      agent_signalement_absence = @agentLogin, date_signalement_absence = @now,
+      note_signalement_absence = @commentaire, escalade_niveau = 'CENTRE',
       updated_at = @now, is_dirty = 1
-    WHERE id_carte = @id
   `;
-  const params: any = { agent, now, id };
+  const params: any = { agentLogin, now, commentaire, id };
+  
+  if (currentUser?.centre_id) {
+    query += `, centre_id = @centre_id`;
+    params.centre_id = currentUser.centre_id;
+  }
+  
+  query += ` WHERE id_carte = @id`;
+  
   if (currentUser && currentUser.role !== 'SUPER ADMIN') {
     query += ' AND site_id = @site_id';
     params.site_id = currentUser.site_id;
@@ -24,9 +32,9 @@ export function signalerAbsence(id: number, agent: string, currentUser?: { role:
   const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
   if (card) {
     const siteId = card.site_id;
-    const message = `🚨 [SIGNALEMENT - ABSENCE] La carte de ${card.noms} ${card.prenoms} est signalée absente par ${agent}.`;
+    const message = `🚨 [SIGNALEMENT - ABSENCE] La carte de ${card.noms} ${card.prenoms} est signalée absente par ${agentInfo}. ${commentaire ? 'Note: ' + commentaire : ''}`;
     const userId = currentUser?.id_user || null;
-    const userLogin = agent;
+    const userLogin = agentLogin;
     const logPayload = JSON.stringify({ read: false, id_carte: id });
 
     try {
@@ -78,12 +86,24 @@ export function getAgentAbsences(agent: string, siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
+export function getSignalementsResolus(agent: string, siteId?: number): any[] {
+  const db = getDatabase()!;
+  let query = "SELECT * FROM t_cartes WHERE agent_signalement_absence = ? AND escalade_niveau = 'RESOLU'";
+  const params: any[] = [agent];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND site_id = ?';
+    params.push(Number(siteId));
+  }
+  query += ' ORDER BY updated_at DESC';
+  return db.prepare(query).all(...params);
+}
+
 export function resoudreAbsence(id: number, data: { status: string; agent: string; note: string; rangement: string }, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   let query = `
     UPDATE t_cartes 
-    SET statut_physique = @status, rangement = @rangement, updated_at = @now, is_dirty = 1
+    SET statut_physique = @status, rangement = @rangement, escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
     WHERE id_carte = @id
   `;
   const params: any = { status: data.status, rangement: data.rangement ? data.rangement.toUpperCase().trim() : null, now, id };
@@ -258,4 +278,70 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
 
     return result;
   })();
+}
+
+export function getAbsencesCentre(centreId: number): any[] {
+  const db = getDatabase()!;
+  return db.prepare(`
+    SELECT c.*, 
+           u.nom_user || ' ' || u.prenom_user as agent_nom_complet,
+           u.role as agent_role
+    FROM t_cartes c
+    LEFT JOIN t_users u ON c.agent_signalement_absence = u.login
+    WHERE c.statut_physique = 'ABSENT' 
+      AND c.escalade_niveau = 'CENTRE' 
+      AND c.centre_id = ? 
+    ORDER BY c.date_signalement_absence DESC
+  `).all(centreId);
+}
+
+export function getAbsencesSite(siteId?: number): any[] {
+  const db = getDatabase()!;
+  let query = `
+    SELECT c.*,
+           u.nom_user || ' ' || u.prenom_user as agent_nom_complet,
+           u.role as agent_role
+    FROM t_cartes c
+    LEFT JOIN t_users u ON c.agent_signalement_absence = u.login
+    WHERE c.statut_physique = 'ABSENT' 
+      AND c.escalade_niveau = 'SITE'
+  `;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND c.site_id = ?';
+    params.push(Number(siteId));
+  }
+  query += ' ORDER BY c.date_signalement_absence DESC';
+  return db.prepare(query).all(...params);
+}
+
+export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number }) {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
+  
+  let query = `
+    UPDATE t_cartes 
+    SET escalade_niveau = 'SITE', updated_at = @now, is_dirty = 1
+    WHERE id_carte = @id AND statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE'
+  `;
+  const params: any = { now, id };
+  const result = db.prepare(query).run(params);
+  
+  if (result.changes > 0) {
+    const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    if (card) {
+      const siteId = card.site_id;
+      const agent = currentUser?.login || 'ADMIN_CENTRE';
+      const message = `⚠️ [ESCALADE] La carte de ${card.noms} ${card.prenoms} a été escaladée à l'Administrateur Site par ${agent}.`;
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+          VALUES (?, ?, 'CARTE_ABSENTE_ESCALADEE', ?, ?, ?, 1, ?)
+        `).run(currentUser?.id_user || null, agent, message, JSON.stringify({ read: false, id_carte: id }), uuidv4(), siteId);
+      } catch (err) {
+        log.error('Failed to log CARTE_ABSENTE_ESCALADEE:', err);
+      }
+    }
+  }
+  return result;
 }

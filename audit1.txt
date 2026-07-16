@@ -1,0 +1,175 @@
+ok. voici l'audit: 
+Listed directory GEST_IN-SITU_CARTE_ABOBO_V2
+Viewed meory.md:1-19
+Listed directory .factory
+Viewed 0_orchestrator_master.md:1-34
+Listed directory src
+Listed directory main
+Listed directory sync
+Listed directory database
+Listed directory queries
+Listed directory ipc
+Listed directory src
+Listed directory shared
+Viewed upstream.ts:1-96
+Viewed downstream.ts:1-474
+Searched for "sync_id"
+Searched for "sync_id"
+Viewed schema.ts:1-300
+Viewed schema.ts:301-600
+Viewed schema.ts:601-900
+Viewed schema.ts:901-1059
+Searched for "transaction"
+Viewed sync.queries.ts:1-189
+Viewed connection.ts:1-73
+Searched for ".on("
+Searched for "window.api"
+Searched for "progress"
+Viewed useForceSyncActions.ts:1-253
+Viewed AdminCentreDashboardPage.tsx:50-100
+Viewed authStore.ts:80-105
+Listed directory preload
+Viewed index.ts:1-200
+Viewed index.ts:201-358
+Searched for "onDatabaseUpdated"
+Viewed TopBar.tsx:145-175
+Viewed TopBar.tsx:176-200
+Viewed MainLayout.tsx:15-57
+Viewed ExportPage.tsx:25-60
+Searched for "onProgress"
+Searched for "progress"
+Listed directory pages
+Viewed ImportPage.tsx:60-120
+Viewed ImportPage.tsx:121-200
+Searched for "isValidDate"
+Viewed bulk-uploader.ts:80-120
+Viewed bulk-uploader.ts:190-212
+Viewed import.queries.ts:1-153
+Viewed cartes.queries.ts:1-100
+Viewed cartes.queries.ts:101-200
+Searched for "role"
+Searched for "role"
+Viewed handlers.ts:1-200
+Viewed handlers.ts:201-400
+Viewed handlers.ts:401-650
+Searched for "db:purge"
+Searched for "purge"
+Searched for "db:"
+Viewed handlers.ts:1100-1334
+Searched for "emergency"
+Searched for "db:purge"
+Viewed handlers.ts:900-1100
+Listed directory workers
+Ran command: `npx tsc --noEmit`
+Listed directory components
+Used tool: manage_task
+Viewed stats.queries.ts:1-300
+Used tool: manage_task
+Viewed stats.queries.ts:301-463
+Used tool: manage_task
+
+Voici le rapport d'audit technique global et diagnostic critique de l'application **GEST_IN-SITU_V2**. Ce diagnostic couvre le Main Process, les IPC Handlers, la base de données SQLite (185 000+ lignes), les services de synchronisation et le Frontend React.
+
+---
+
+# RAPPORT D'AUDIT TECHNIQUE ET DIAGNOSTIC DE SANTÉ
+
+## 1. ARCHITECTURE DES TRANSACTIONS ET SUPABASE
+
+### **[ANOMALIE 1.1] : Requêtes réseau séquentielles bloquantes dans l'Upstream**
+* **Fichier cible** : [`src/main/sync/upstream.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/sync/upstream.ts)
+* **Description** : Dans `runUpstream()`, la boucle `for (const op of pendingOps)` traite les opérations une par une en effectuant un `await supabase.from(targetTable).upsert(...)` ou `.delete(...)`. 
+* **[IMPACT VITESSE/STABILITÉ]** : Si 50 opérations sont en attente, l'application fait 50 appels réseau séquentiels. Sur une machine 8 Go RAM avec une connexion 3G/4G ivoirienne instable, cela augmente drastiquement le temps d'exécution, multiplie les risques de timeouts et génère des faux positifs de déconnexion.
+* **[SOLUTION PROPOSÉE]** : Regrouper les opérations par table et par type d'opération (INSERT/UPDATE) pour effectuer des **upserts en masse (bulk upserts)** via Supabase en un seul appel réseau par lot, au lieu de requêtes unitaires.
+
+### **[ANOMALIE 1.2] : Compilation SQL répétitive (`db.prepare`) dans les boucles de synchronisation**
+* **Fichier cible** : [`src/main/sync/downstream.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/sync/downstream.ts)
+* **Description** : Dans `runDownstreamChunk()`, la méthode `db.prepare('SELECT * FROM t_cartes WHERE sync_id = ?')` est appelée **à l'intérieur** de la boucle de traitement de 500 cartes. De plus, `insertLocalCard` et `updateLocalCard` préparent également leurs requêtes d'insertion/mise à jour à chaque appel unitaire dans la boucle.
+* **[IMPACT VITESSE/STABILITÉ]** : La méthode `db.prepare` compile la requête SQL. Compiler 500 fois des requêtes au sein d'une boucle consomme inutilement du CPU, allonge le blocage du thread principal SQLite et peut provoquer un gel temporaire de l'IHM (Freeze UI).
+* **[SOLUTION PROPOSÉE]** : Préparer les statements SQL (`selectStmt`, `insertStmt`, `updateStmt`) **une seule fois à l'extérieur de la boucle**, puis appeler `.run()` ou `.get()` sur ces instances préparées au sein de la boucle.
+
+### **[ANOMALIE 1.3] : Absence d'index sur la clé de synchronisation `sync_id`**
+* **Fichier cible** : [`src/main/database/schema.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/schema.ts)
+* **Description** : Les requêtes de réconciliation de données (downstream et upstream) recherchent systématiquement les lignes par `sync_id` (ex: `SELECT * FROM t_cartes WHERE sync_id = ?`). Cependant, aucun index n'a été créé sur la colonne `sync_id` dans la table `t_cartes` ou `t_users`.
+* **[IMPACT VITESSE/STABILITÉ]** : SQLite doit effectuer un **Full Table Scan** (balayage complet) des 185 000 lignes pour chaque carte à synchroniser. Avec un lot de 500 cartes, l'application fait 500 scans complets, ce qui sature le disque dur et le processeur, figeant l'application pendant plusieurs secondes.
+* **[SOLUTION PROPOSÉE]** : Ajouter une migration SQL pour créer des index uniques :
+  ```sql
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);
+  ```
+
+### **[ANOMALIE 1.4] : Multiplications des transactions d'écriture individuelles (Upstream)**
+* **Fichier cible** : [`src/main/database/queries/sync.queries.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/queries/sync.queries.ts)
+* **Description** : Dans [`upstream.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/sync/upstream.ts), `queries.markRecordsAsSynced([queueId])` et `queries.updateRecordIsDirtyStatus(...)` sont appelés séparément pour chaque enregistrement réussi. Ces deux fonctions ouvrent chacune leur propre transaction SQLite explicite via `db.transaction(...)()`.
+* **[IMPACT VITESSE/STABILITÉ]** : Pour 50 cartes poussées, 100 micro-transactions SQLite d'écriture sont validées sur le disque. Chaque transaction nécessite un vidage physique (fsync). Cela ralentit considérablement le traitement de l'upstream et use prématurément le stockage matériel.
+* **[SOLUTION PROPOSÉE]** : Traiter la mise à jour des états de synchronisation locale par lots (batching) au sein d'une **unique transaction globale** après le succès de la synchronisation du bloc de cartes.
+
+---
+
+## 2. GESTION DE LA MÉMOIRE (ALERTE 8 GO RAM)
+
+### **[ANOMALIE 2.1] : Traitement en mémoire de fichiers volumineux lors de l'import**
+* **Fichier cible** : [`src/main/database/queries/import.queries.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/queries/import.queries.ts)
+* **Description** : La fonction `importBatch` prend en paramètre un tableau `rows` complet de données Excel/CSV parsées et les insère en bloc. Si le fichier d'import contient des dizaines de milliers de lignes, tout le tableau d'objets JavaScript est stocké en mémoire vive d'un seul coup.
+* **[IMPACT VITESSE/STABILITÉ]** : Risque d'erreur de dépassement de mémoire (Out Of Memory / Heap Limit) de Node.js d'Electron, causant le crash brutal du processus principal sur une machine limitée à 8 Go de RAM.
+* **[SOLUTION PROPOSÉE]** : Segmenter l'importation au niveau du parseur en lisant le fichier par flux (stream) et en insérant les données par blocs (chunks) de 1 000 lignes maximum, libérant périodiquement la RAM via le Garbage Collector.
+
+---
+
+## 3. SÉCURITÉ ET INTÉGRITÉ DES DONNÉES
+
+### **[ANOMALIE 3.1] : Absence de validation des dates à l'insertion locale (Import & Saisie manuelle)**
+* **Fichiers cibles** : [`src/main/database/queries/import.queries.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/queries/import.queries.ts) et [`src/main/database/queries/cartes.queries.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/queries/cartes.queries.ts) (méthode `createCarte`)
+* **Description** : La fonction `isValidDate` validant le format ISO `YYYY-MM-DD` est localisée uniquement dans le module d'upload de masse [`bulk-uploader.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/sync/bulk-uploader.ts) pour filtrer les erreurs de synchro vers Supabase. Elle n'est jamais appelée lors de la saisie manuelle d'une carte ni lors de l'import Excel initial.
+* **[IMPACT VITESSE/STABILITÉ]** : Des dates malformées (ex: `12/05/1990` ou texte corrompu) sont écrites en SQLite local. Ces cartes deviennent impossibles à synchroniser avec Supabase (car bloquées par les contraintes strictes PostgreSQL) et provoquent des incohérences dans les requêtes d'analyse du Dashboard.
+* **[SOLUTION PROPOSÉE]** : Intégrer une validation systématique du format de date via la fonction `isValidDate` ou la nettoyer via `cleanBirthDate` à chaque insertion locale (import temporaire, création manuelle et mise à jour).
+
+### **[ANOMALIE 3.2] : Faille critique de contournement RBAC (Contrôle d'accès) dans les handlers IPC**
+* **Fichier cible** : [`src/main/ipc/handlers.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/ipc/handlers.ts)
+* **Description** : Les actions sensibles comme la suppression d'audits (`audit:delete`) vérifient les droits de l'utilisateur en lisant l'objet `currentUser` passé **en argument par le Renderer** (`const role = currentUser?.role`).
+* **[IMPACT VITESSE/STABILITÉ]** : Cette architecture de sécurité est factice. N'importe quel utilisateur ou script malveillant peut ouvrir les DevTools Chromium d'Electron et exécuter `window.api.audit.delete(id, { role: 'SUPER ADMIN' })` pour supprimer les journaux d'audit de sécurité sans aucune restriction.
+* **[SOLUTION PROPOSÉE]** : Le Main Process ne doit jamais faire confiance aux rôles fournis par le Renderer. Il doit valider le rôle de l'utilisateur actif en récupérant l'identité et le statut en base de données locale à partir d'un jeton de session crypté ou de la session active gérée côté Main Process.
+
+### **[ANOMALIE 3.3] : Actions destructrices exposées sans aucune vérification d'habilitation**
+* **Fichier cible** : [`src/main/ipc/handlers.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/ipc/handlers.ts)
+* **Description** : Les handlers `db:purge`, `db:emergency-purge`, `maintenance:clearAll`, `maintenance:clearDatabaseCartes` et `maintenance:fullReset` exécutent des suppressions globales de données sans exiger de mot de passe administrateur ou valider les rôles du demandeur dans le Main Process.
+* **[IMPACT VITESSE/STABILITÉ]** : Risque critique de perte ou de sabotage de données. Une simple commande depuis la console JavaScript suffit à vider l'intégralité des 185 000 cartes CMU locales et distantes.
+* **[SOLUTION PROPOSÉE]** : Exiger une double validation matérielle (saisie du mot de passe Super Admin) résolue et vérifiée exclusivement dans le Main Process avant d'autoriser l'exécution de ces requêtes.
+
+---
+
+## 4. COHÉRENCE DU PACKAGING WINDOWS 11
+
+### **[ANOMALIE 4.1] : Risque de blocage du Worker d'importation dans l'ASAR**
+* **Fichier cible** : [`src/main/ipc/handlers.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/ipc/handlers.ts)
+* **Description** : Le Worker Thread est instancié via `const workerPath = join(__dirname, 'workers', 'import-worker.js');`.
+* **[IMPACT VITESSE/STABILITÉ]** : Lors du packaging final d'Electron, si les fichiers du dossier `workers/` ou le binaire de `better-sqlite3` sont archivés au format compressé `.asar`, Windows ne pourra pas exécuter le script dans un thread séparé (les Workers Threads Node.js ne peuvent pas lire nativement à l'intérieur d'une archive ASAR virtuelle). Cela provoquera un crash immédiat lors de la tentative d'import de fichier chez le client.
+* **[SOLUTION PROPOSÉE]** : S'assurer que le script de configuration du build (`forge.config.cjs` ou `electron-builder`) définit explicitement `asarUnpack: ["**/workers/**", "**/better-sqlite3/**"]` pour extraire ces fichiers lors de l'installation chez le client.
+
+---
+
+## 5. EXPÉRIENCE UTILISATEUR ET RÉACTIVITÉ (FREEZE UI)
+
+### **[ANOMALIE 5.1] : Scans de table lourds (`date(...)` et `strftime(...)`) dans les statistiques**
+* **Fichier cible** : [`src/main/database/queries/stats.queries.ts`](file:///d:/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/src/main/database/queries/stats.queries.ts)
+* **Description** : Les indicateurs de performance (KPI) du Dashboard utilisent des fonctions de date sur les colonnes textuelles (ex: `date(date_delivrance, 'localtime') = date('now', 'localtime')`).
+* **[IMPACT VITESSE/STABILITÉ]** : L'utilisation de fonctions SQL sur des colonnes désactive l'utilisation des index. Pour calculer les statistiques journalières, SQLite parcourt les 185 000 lignes une par une et évalue la fonction `date()` pour chacune, entraînant des latences massives (de 1 à 3 secondes) à chaque chargement du Dashboard.
+* **[SOLUTION PROPOSÉE]** : 
+  1. Utiliser des comparaisons de chaînes directes avec des index (ex: `date_delivrance >= ?` en passant la date ISO précalculée en JavaScript).
+  2. Indexer la colonne `date_delivrance` pour maximiser la vitesse de calcul des retraits.
+
+---
+
+## Prochaines étapes
+
+Pourriez-vous analyser ce rapport d'audit technique et me donner votre validation ou vos directives sur les axes prioritaires afin de concevoir le **Plan d'implémentation** associé ?
+
+Le diagnostic TypeScript (`npx tsc --noEmit`) s'est exécuté avec **succès** et ne rapporte aucune erreur de typage ou de syntaxe TypeScript dans le projet.
+
+Le code est donc sain sur le plan de la compilation statique, ce qui nous permet de nous concentrer pleinement sur les optimisations de performance, la gestion de la mémoire sous contrainte de 8 Go de RAM, la correction des failles de sécurité RBAC des handlers IPC, et l'architecture des transactions SQLite/Supabase.
+
+Comment souhaitez-vous procéder ? Souhaitez-vous que nous rédigions le **Plan d'implémentation** pour corriger ces anomalies de manière chirurgicale ?
+
+
+nous venons de faite phase 1
+il reste quel phase?

@@ -2,7 +2,8 @@ export interface IUser {
   id_user: number;
   login: string;
   password_hash?: string;
-  role: 'SUPER ADMIN' | 'ADMINISTRATEUR_SITE' | 'ADMIN_CENTRE' | 'OPERATEUR_SAISIE' | 'OPERATEUR_VERIFICATION' | 'CONSULTANT';
+  role: 'SUPER ADMIN' | 'ADMINISTRATEUR_SITE' | 'ADMIN_CENTRE' | 'OPERATEUR_SAISIE' | 'OPERATEUR_VERIFICATION' | 'CONSULTANT' | 'OPERATEUR_LOGISTIQUE' | 'OPERATEUR_QUALITE' | 'OPERATEUR_INVENTAIRE' | string;
+  roles?: string[];
   nom_user: string;
   prenom_user: string;
   email?: string;

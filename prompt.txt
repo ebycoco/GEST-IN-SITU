@@ -1,0 +1,15 @@
+PHASE 1 : PLAN D'IMPLÉMENTATION — [ÉCRIS ICI LE NOM DE TA TÂCHE] (AGENT 0)
+
+ATTENTION CONSIGNES STRICTES ET SUPRÊMES :
+1. RÈGLE ZÉRO D'ABORD : Tu as l'obligation absolue d'ouvrir le dossier '.factory' et de lire l'intégralité du fichier '0_orchestrator_master.md' AVANT de concevoir le plan ou de toucher au code. Confirme-le en tête de réponse.
+2. APPLICATION DES COMPÉTENCES : Applique strictement la Section 8 (Charte d'Immunité - Niveau Expert uniquement) et la Section 9 (Optimisation asynchrone / Mode Low-Memory pour préserver la RAM).
+3. INTERDICTION DE BUILD AUTOMATIQUE : Rappel de la Section 6, il est formellement interdit d'exécuter 'npm run build' ou toute commande de compilation. Reste en audit passif.
+4. PAS D'ÉCRITURE DE CODE IMMÉDIATE : Génère UNIQUEMENT le plan d'action détaillé et attends mon "Feu vert".
+
+MISSION :
+[Explique ici en quelques mots ce que tu veux que l'application fasse. Ex: "Je veux ajouter un bouton pour exporter les cartes en PDF pour le site d'Abobo."]
+
+[CRITÈRES PARTICULIERS]
+- [Ajoute ici tes préférences si nécessaire, sinon supprime cette ligne]
+
+Présente le plan de Phase 1 et prépare la structure pour le futur rapport linéaire Agent par Agent (0 à 7). J'attends ton retour pour donner le Feu vert.

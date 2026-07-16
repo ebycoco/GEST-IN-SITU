@@ -34,6 +34,9 @@ export default function DashboardPage() {
     siteLogistiqueStats,
     dirtyCartesCount,
     dirtyUsersCount,
+    cloudCartesCount,
+    totalCloudCartesCount,
+    detailedSyncStats,
     loadGlobalData,
     loadStats
   } = useDashboardStats(user, activeSiteId, isGovernanceView);
@@ -44,9 +47,13 @@ export default function DashboardPage() {
     isSiteSyncing,
     isSyncingAgents,
     isPullingCards,
+    isBackgroundPulling,
     isBulkUploading,
     bulkProgress,
+    downstreamProgress,
+    downstreamInfo,
     isClearingCloud,
+    purgeCloudProgress,
     handleForceGlobalSync,
     handleForceSiteSync,
     handleForceAgentsSync,
@@ -55,17 +62,13 @@ export default function DashboardPage() {
     handleClearCloudDatabase
   } = useForceSyncActions(user, activeSiteId, loadStats);
 
-  // Synchronisation proactive au montage (uniquement si connecté, une fois par session)
-  useEffect(() => {
-    const hasPulled = sessionStorage.getItem('hasPulledThisSession');
-    if (hasPulled === null) {
-      sessionStorage.setItem('hasPulledThisSession', 'true');
-      const isSiteAdmin = user?.role === 'ADMINISTRATEUR_SITE' || (user?.role === 'SUPER ADMIN' && activeSiteId);
-      if (isSiteAdmin && navigator.onLine) {
-        handlePullSiteCards(true);
-      }
-    }
-  }, [activeSiteId, user]);
+
+  // ⚠️ Le pull automatique au montage a été supprimé.
+  // Il est désormais géré exclusivement par le SyncEngine (triggerAutoDownstream),
+  // déclenché 10 secondes après le login côté Main Process.
+  // Supprimer cet useEffect évite le double downstream concurrent → "database is locked".
+
+
 
   if (loading) {
     return (
@@ -98,6 +101,13 @@ export default function DashboardPage() {
       <OperatorView
         operatorTodayCount={operatorTodayCount}
         operatorRecentSaisies={operatorRecentSaisies}
+        dirtyCartesCount={dirtyCartesCount}
+        cloudCartesCount={cloudCartesCount}
+        isOnline={isOnline}
+        isPullingCards={isPullingCards && !isBackgroundPulling}
+        isBulkUploading={isBulkUploading}
+        handleStartBulkUpload={handleStartBulkUpload}
+        handlePullSiteCards={handlePullSiteCards}
       />
     );
   }
@@ -110,16 +120,23 @@ export default function DashboardPage() {
       siteLogistiqueStats={siteLogistiqueStats}
       dirtyCartesCount={dirtyCartesCount}
       dirtyUsersCount={dirtyUsersCount}
+      cloudCartesCount={cloudCartesCount}
+      totalCloudCartesCount={totalCloudCartesCount}
+      detailedSyncStats={detailedSyncStats}
       isOnline={isOnline}
       user={user}
       activeSiteId={activeSiteId}
       loadStats={loadStats}
       isSiteSyncing={isSiteSyncing}
       isSyncingAgents={isSyncingAgents}
-      isPullingCards={isPullingCards}
+      isPullingCards={isPullingCards && !isBackgroundPulling}
+      isBackgroundPulling={isBackgroundPulling}
       isBulkUploading={isBulkUploading}
       bulkProgress={bulkProgress}
+      downstreamProgress={downstreamProgress}
+      downstreamInfo={downstreamInfo}
       isClearingCloud={isClearingCloud}
+      purgeCloudProgress={purgeCloudProgress}
       handleForceSiteSync={handleForceSiteSync}
       handleForceAgentsSync={handleForceAgentsSync}
       handlePullSiteCards={handlePullSiteCards}

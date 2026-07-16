@@ -4,6 +4,7 @@ interface User {
   id_user: number;
   login: string;
   role: string;
+  roles?: string[];
   nom_user?: string;
   prenom_user?: string;
   site_id?: number;
@@ -22,6 +23,7 @@ interface AuthState {
   setSelectedCentreId: (id: number | null) => void;
   setActiveSiteId: (id: number | null) => void;
   setInitialDataLoading: (loading: boolean) => void;
+  setActiveRole: (role: string) => void;
   checkAuth: () => Promise<void>;
 }
 
@@ -87,6 +89,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
   setInitialDataLoading: (loading) => {
     set({ initialDataLoading: loading });
+  },
+  setActiveRole: (role) => {
+    set((state) => {
+      if (state.user) {
+        return { user: { ...state.user, role } };
+      }
+      return state;
+    });
   },
   checkAuth: async () => {
     // Vérification de session locale (actuellement non implémentée/vide)

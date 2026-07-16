@@ -21,6 +21,9 @@ interface GroupedOps {
  * Maps SQLite card schema to PostgreSQL Supabase schema.
  */
 function mapCardPayload(c: any): any {
+  if (!c.site_id) {
+    throw new Error("Erreur de validation de la carte : site_id manquant.");
+  }
   return {
     sync_id: c.sync_id,
     noms: c.noms,
@@ -47,7 +50,7 @@ function mapCardPayload(c: any): any {
     agent_resolution_absence: c.agent_resolution_absence || null,
     note_resolution: c.note_resolution || null,
     notif_lue: c.notif_lue ?? 1,
-    id_site: c.site_id || 1,
+    id_site: c.site_id,
     id_centre: c.centre_id || null,
     id_poste: c.poste_id || null,
     qr_code_data: c.qr_code_data || null,
@@ -62,6 +65,18 @@ function mapCardPayload(c: any): any {
  * Retourne le nombre d'opérations synchronisées avec succès.
  */
 export async function runUpstream(): Promise<number> {
+  const db = getDatabase();
+  if (db) {
+    try {
+      const outboxCount = db.prepare('SELECT COUNT(*) as count FROM t_outbox').get() as { count: number };
+      log.info(`[Upstream][DIAGNOSTIC] Nombre total de lignes dans t_outbox : ${outboxCount.count}`);
+      const pendingOutboxCount = db.prepare("SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING'").get() as { count: number };
+      log.info(`[Upstream][DIAGNOSTIC] Nombre de lignes PENDING dans t_outbox : ${pendingOutboxCount.count}`);
+    } catch (err: any) {
+      log.error('[Upstream][DIAGNOSTIC] Erreur lors de la lecture de t_outbox :', err);
+    }
+  }
+
   const batchSize = 200;
   const pendingOps = queries.getNextSyncBatches(batchSize) as PendingOp[];
 
@@ -141,6 +156,11 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
   for (const op of chunk) {
     try {
       let rawPayload = JSON.parse(op.payload);
+      if (tableName === 't_sites') {
+        if (rawPayload.is_permanent !== undefined) {
+          rawPayload.is_permanent = Boolean(rawPayload.is_permanent);
+        }
+      }
       const mappedPayload = tableName === 't_cartes' ? mapCardPayload(rawPayload) : rawPayload;
       payloadsToUpsert.push(mappedPayload);
       validOps.push(op);
@@ -156,9 +176,27 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
 
   try {
     console.log(`🌐 [SUPABASE UPLOAD] Envoi de ${payloadsToUpsert.length} lignes vers la table ${tableName} sur Supabase...`);
-    const { error } = await supabase
+    let { error } = await supabase
       .from(tableName)
       .upsert(payloadsToUpsert, { onConflict: 'sync_id' });
+
+    if (error && chunk.length === 1 && ['t_sites', 't_centres', 't_postes', 't_users'].includes(tableName) && error.message.includes('duplicate key value violates unique constraint')) {
+      const pk = tableName === 't_users' ? 'id_user' : 'id';
+      if (payloadsToUpsert[0][pk]) {
+        console.warn(`[SUPABASE UPLOAD FALLBACK] Conflit détecté sur ${tableName}. Tentative d'UPDATE via ${pk}...`);
+        const { error: updateError } = await supabase
+          .from(tableName)
+          .update(payloadsToUpsert[0])
+          .eq(pk, payloadsToUpsert[0][pk]);
+        
+        if (!updateError) {
+          console.log(`🌐 [SUPABASE UPLOAD FALLBACK SUCCESS] Update réussi pour ${tableName}.`);
+          error = null; // Clear the error so processing continues
+        } else {
+          console.error(`❌ [SUPABASE UPLOAD FALLBACK ERROR] Update échoué: ${updateError.message}`);
+        }
+      }
+    }
 
     if (error) {
       console.error(`❌ [SUPABASE UPLOAD ERROR] Échec de l'upload pour la table ${tableName} : ${error.message}`);
@@ -179,22 +217,27 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
           }
 
           // 2. Mettre à jour le statut is_dirty des enregistrements sources
-          const pkName = tableName === 't_users' ? 'id_user' : 'id_carte';
+          const pkName = tableName === 't_users' ? 'id_user' : (tableName === 't_cartes' ? 'id_carte' : 'id');
+          const tableInfo = db.prepare(`PRAGMA table_info(${tableName})`).all() as { name: string }[];
+          const hasIsDirty = tableInfo.some(c => c.name === 'is_dirty');
+
           for (const op of validOps) {
             try {
-              const payloadObj = JSON.parse(op.payload);
-              const lastUpdatedAtLocal = payloadObj.updated_at || new Date().toISOString();
+              if (hasIsDirty) {
+                const payloadObj = JSON.parse(op.payload);
+                const lastUpdatedAtLocal = payloadObj.updated_at || new Date().toISOString();
 
-              const currentRecord = db.prepare(`
-                SELECT updated_at, is_dirty FROM ${tableName} WHERE ${pkName} = ?
-              `).get(op.record_id) as { updated_at?: string; is_dirty?: number } | undefined;
+                const currentRecord = db.prepare(`
+                  SELECT updated_at, is_dirty FROM ${tableName} WHERE ${pkName} = ?
+                `).get(op.record_id) as { updated_at?: string; is_dirty?: number } | undefined;
 
-              if (currentRecord && currentRecord.updated_at === lastUpdatedAtLocal) {
-                db.prepare(`
-                  UPDATE ${tableName} 
-                  SET is_dirty = 0, synced_at = datetime('now')
-                  WHERE ${pkName} = ?
-                `).run(op.record_id);
+                if (currentRecord && currentRecord.updated_at === lastUpdatedAtLocal) {
+                  db.prepare(`
+                    UPDATE ${tableName} 
+                    SET is_dirty = 0, synced_at = datetime('now')
+                    WHERE ${pkName} = ?
+                  `).run(op.record_id);
+                }
               }
             } catch (e) {
               log.error(`Upstream local status update error for ${tableName} (Record ID: ${op.record_id}):`, e);

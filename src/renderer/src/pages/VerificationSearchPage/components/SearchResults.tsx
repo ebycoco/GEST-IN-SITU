@@ -116,8 +116,9 @@ export function SearchResults({
 
                 {/* Identity Info */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ fontSize: 20, fontWeight: 900, color: 'white', letterSpacing: '-0.01em', textTransform: 'uppercase' }}>
-                    {carte.noms} {carte.prenoms}
+                  <div style={{ fontSize: 20, fontWeight: 900, color: 'white', letterSpacing: '-0.01em', textTransform: 'uppercase', display: 'flex', gap: '8px' }}>
+                    <span>{carte.noms}</span> 
+                    <span style={{ color: 'var(--text-muted)' }}>{carte.prenoms}</span>
                   </div>
                   
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px 24px' }}>
@@ -135,6 +136,12 @@ export function SearchResults({
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
                         <ShieldCheck size={14} />
                         N° CMU : {carte.num_secu}
+                      </div>
+                    )}
+                    {carte.lieu_enrolement && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
+                        <MapPin size={14} />
+                        Enrôlement : {carte.lieu_enrolement}
                       </div>
                     )}
                   </div>

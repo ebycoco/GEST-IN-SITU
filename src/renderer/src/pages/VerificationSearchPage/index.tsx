@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, MapPin, AlertTriangle, Loader, X } from 'lucide-react';
+import { Search, MapPin, AlertTriangle, Loader, X, Database, Globe, CheckCircle } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
+import { useLocation } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 // Hooks
 import { useVerificationStats } from './hooks/useVerificationStats';
@@ -12,12 +14,15 @@ import { SearchForm } from './components/SearchForm';
 import { SearchResults } from './components/SearchResults';
 import { DeliveryModal } from './components/DeliveryModal';
 import { StatsPanel } from './components/StatsPanel';
+import { ResolusTab } from './components/ResolusTab';
+import { NonResolusTab } from './components/NonResolusTab';
 
 export default function VerificationSearchPage() {
   const user = useAuthStore((s) => s.user);
   const selectedCentreId = useAuthStore((s) => s.selectedCentreId);
   const activeSiteId = useAuthStore((s) => s.activeSiteId);
   const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN';
+  const isSyncAdmin = isAdmin || user?.role === 'ADMIN_CENTRE';
 
   const [cardsCount, setCardsCount] = useState<number | null>(null);
   const [isCountLoading, setIsCountLoading] = useState(true);
@@ -27,6 +32,106 @@ export default function VerificationSearchPage() {
   const [userCentre, setUserCentre] = useState<any>(null);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
   const setSelectedCentreId = useAuthStore((s) => s.setSelectedCentreId);
+
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const tabFromUrl = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<'RECHERCHE' | 'RESOLUS' | 'NON_RESOLUS'>(
+    tabFromUrl === 'resolus' ? 'RESOLUS' : tabFromUrl === 'non_resolus' ? 'NON_RESOLUS' : 'RECHERCHE'
+  );
+  
+  const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
+
+  useEffect(() => {
+    if (tabFromUrl === 'resolus') {
+      setActiveTab('RESOLUS');
+    } else if (tabFromUrl === 'non_resolus') {
+      setActiveTab('NON_RESOLUS');
+    } else {
+      setActiveTab('RECHERCHE');
+    }
+  }, [tabFromUrl]);
+
+  // Sync state variables
+  const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
+  const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
+  const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
+  const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const fetchSyncStats = async () => {
+    if (user?.site_id) {
+      try {
+        const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(user.site_id);
+        if (typeof unsyncedRes === 'number') {
+          setDirtyCartesCount(unsyncedRes);
+        }
+        const cloudCount = await window.api.sync.getCloudCartesCount(user.site_id);
+        if (typeof cloudCount === 'number') {
+          setCloudCartesCount(cloudCount);
+        }
+      } catch (e) {
+        console.error('Failed to fetch stats', e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    fetchSyncStats();
+    const interval = setInterval(fetchSyncStats, 30000);
+    return () => clearInterval(interval);
+  }, [user?.site_id]);
+
+  const handleStartBulkUpload = async () => {
+    if (!user?.site_id) return;
+    setIsBulkUploading(true);
+    const toastId = toast.loading("Initialisation de l'envoi des modifications...");
+    try {
+      const res = await window.api.sync.startBulk(Number(user.site_id), false, false);
+      if (res.success) {
+        toast.success(res.message, { id: toastId });
+      } else {
+        toast.error(res.message || "Erreur lors de l'envoi", { id: toastId });
+      }
+      await fetchSyncStats();
+    } catch (err: any) {
+      toast.error(`Échec de l'envoi : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsBulkUploading(false);
+    }
+  };
+
+  const handlePullSiteCards = async () => {
+    if (!user?.site_id) return;
+    setIsPullingCards(true);
+    const toastId = toast.loading('☁️ Récupération des cartes depuis le cloud...');
+    try {
+      const res = await window.api.sync.pullSiteCards(Number(user.site_id), user);
+      if (res.success) {
+        if (res.count > 0) {
+          toast.success(`✅ Récupération réussie ! ${res.count} carte(s) mise(s) à jour.`, { id: toastId, duration: 6000 });
+        } else {
+          toast.success("✅ Vos données locales sont déjà à jour.", { id: toastId, duration: 4000 });
+        }
+      } else {
+        toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 8000 });
+      }
+    } catch (err: any) {
+      toast.error(`Échec de récupération des cartes : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsPullingCards(false);
+    }
+  };
 
   const nomInputRef = useRef<HTMLInputElement>(null);
 
@@ -191,9 +296,60 @@ export default function VerificationSearchPage() {
         <h1 style={{ fontSize: 32, fontWeight: 800, marginBottom: 8, letterSpacing: '-0.02em' }}>
           Recherche de Carte <span style={{ color: 'var(--accent-primary)' }}>CMU</span>
         </h1>
-        <p style={{ fontSize: 16, color: 'var(--text-muted)', maxWidth: 600, margin: '0 auto' }}>
+        <p style={{ fontSize: 16, color: 'var(--text-muted)', maxWidth: 600, margin: '0 auto', marginBottom: 24 }}>
           Système de vérification de disponibilité et d'emplacement physique pour les opérateurs de vérification.
         </p>
+        {!isSyncAdmin && (
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+            <button 
+              onClick={handlePullSiteCards} 
+              disabled={isPullingCards || !isOnline || cloudCartesCount === 0}
+              className="btn-outline" 
+              style={{ 
+                padding: '12px 24px', 
+                borderRadius: 12, 
+                fontWeight: 700,
+                cursor: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 0.5 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                background: 'rgba(255, 255, 255, 0.03)',
+                color: 'white',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
+              {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+            </button>
+
+            <button 
+              onClick={handleStartBulkUpload} 
+              disabled={isBulkUploading || !isOnline || dirtyCartesCount === 0}
+              className="btn-plein-soleil" 
+              style={{ 
+                padding: '12px 24px', 
+                borderRadius: 12, 
+                fontWeight: 700,
+                backgroundColor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
+                color: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
+                border: '1px solid #FFE600',
+                cursor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 0.5 : 1,
+                boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease-in-out',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+              {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount})` : ''}`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Sélecteur de centre de travail interne pour la recherche Admin */}
@@ -233,41 +389,103 @@ export default function VerificationSearchPage() {
         </div>
       )}
 
-      {/* Formulaire de recherche */}
-      <SearchForm
-        searchMode={searchMode}
-        setSearchMode={setSearchMode}
-        nomComplet={nomComplet}
-        setNomComplet={setNomComplet}
-        ddn={ddn}
-        setDdn={setDdn}
-        lieuNaissance={lieuNaissance}
-        setLieuNaissance={setLieuNaissance}
-        contact={contact}
-        setContact={setContact}
-        searchContactQuery={searchContactQuery}
-        setSearchContactQuery={setSearchContactQuery}
-        isSearching={isSearching}
-        handleSearch={handleSearch}
-        handleContactSearch={handleContactSearch}
-        handleClear={handleClear}
-        formatPhoneString={formatPhoneString}
-        nomInputRef={nomInputRef}
-        resultsCount={results.length}
-      />
+      {/* TABS */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 32, borderBottom: '1px solid var(--border-color)', paddingBottom: 16 }}>
+        <button
+          onClick={() => setActiveTab('RECHERCHE')}
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
+            background: activeTab === 'RECHERCHE' ? 'rgba(79, 70, 229, 0.1)' : 'transparent',
+            color: activeTab === 'RECHERCHE' ? 'var(--accent-primary)' : 'var(--text-secondary)',
+            border: `1px solid ${activeTab === 'RECHERCHE' ? 'rgba(79, 70, 229, 0.3)' : 'transparent'}`,
+            fontWeight: activeTab === 'RECHERCHE' ? 800 : 600,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            display: 'flex', alignItems: 'center', gap: 8
+          }}
+        >
+          <Search size={18} />
+          Recherche Manuelle
+        </button>
+        <button
+          onClick={() => setActiveTab('NON_RESOLUS')}
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
+            background: activeTab === 'NON_RESOLUS' ? 'rgba(239, 68, 68, 0.1)' : 'transparent',
+            color: activeTab === 'NON_RESOLUS' ? '#ef4444' : 'var(--text-secondary)',
+            border: `1px solid ${activeTab === 'NON_RESOLUS' ? 'rgba(239, 68, 68, 0.3)' : 'transparent'}`,
+            fontWeight: activeTab === 'NON_RESOLUS' ? 800 : 600,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            display: 'flex', alignItems: 'center', gap: 8
+          }}
+        >
+          <AlertTriangle size={18} />
+          Signalements Non Résolus
+        </button>
+        <button
+          onClick={() => setActiveTab('RESOLUS')}
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
+            background: activeTab === 'RESOLUS' ? 'rgba(39, 174, 96, 0.1)' : 'transparent',
+            color: activeTab === 'RESOLUS' ? '#27ae60' : 'var(--text-secondary)',
+            border: `1px solid ${activeTab === 'RESOLUS' ? 'rgba(39, 174, 96, 0.3)' : 'transparent'}`,
+            fontWeight: activeTab === 'RESOLUS' ? 800 : 600,
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            display: 'flex', alignItems: 'center', gap: 8
+          }}
+        >
+          <CheckCircle size={18} />
+          Historique Résolus
+        </button>
+      </div>
 
-      {/* Tableau des résultats */}
-      <SearchResults
-        results={results}
-        hasSearched={hasSearched}
-        selectedCentreId={selectedCentreId}
-        user={user}
-        userCentre={userCentre}
-        setSelectedCarte={setSelectedCarte}
-        setShowReportModal={setShowReportModal}
-        setModalStep={setModalStep}
-        isAgentAuthorisedForCard={isAgentAuthorisedForCard}
-      />
+      {activeTab === 'RECHERCHE' && (
+        <>
+          {/* Formulaire de recherche */}
+          <SearchForm
+            searchMode={searchMode}
+            setSearchMode={setSearchMode}
+            nomComplet={nomComplet}
+            setNomComplet={setNomComplet}
+            ddn={ddn}
+            setDdn={setDdn}
+            lieuNaissance={lieuNaissance}
+            setLieuNaissance={setLieuNaissance}
+            contact={contact}
+            setContact={setContact}
+            searchContactQuery={searchContactQuery}
+            setSearchContactQuery={setSearchContactQuery}
+            isSearching={isSearching}
+            handleSearch={handleSearch}
+            handleContactSearch={handleContactSearch}
+            handleClear={handleClear}
+            formatPhoneString={formatPhoneString}
+            nomInputRef={nomInputRef}
+            resultsCount={results.length}
+          />
+
+          {/* Tableau des résultats */}
+          <SearchResults
+            results={results}
+            hasSearched={hasSearched}
+            selectedCentreId={selectedCentreId}
+            user={user}
+            userCentre={userCentre}
+            setSelectedCarte={setSelectedCarte}
+            setShowReportModal={setShowReportModal}
+            setModalStep={setModalStep}
+            isAgentAuthorisedForCard={isAgentAuthorisedForCard}
+          />
+        </>
+      )}
+
+      {activeTab === 'NON_RESOLUS' && <NonResolusTab />}
+      {activeTab === 'RESOLUS' && <ResolusTab />}
 
       {/* Bandeau Stats */}
       <StatsPanel stats={stats} cardsToday={cardsToday} />

@@ -86,7 +86,7 @@ async function run() {
     return { site_id: siteId, centre_id: null, rangement: upper };
   }
 
-  const db = new Database(dbPath);
+  const db = new Database(dbPath, { timeout: 60000 });
   db.pragma('busy_timeout = 60000');
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
@@ -142,8 +142,8 @@ async function run() {
   );
 
   const insertAnomalyStmt = db.prepare(`
-    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description)
-    VALUES (@carte_id, @type_anomalie, @description)
+    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description, noms, prenoms, date_de_naissance, num_secu, contact, site_id, erreur_message)
+    VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message)
   `);
 
   const BATCH_SIZE = 1000;
@@ -601,9 +601,16 @@ async function run() {
           console.log(`[IMPORT DIAGNOSTIC] ❌ Ligne rejetée (Date Invalide) - Nom: ${noms} ${prenoms} | Erreur: ${dateError}`);
           totalRejected++;
           anomaliesBatch.push({
-            carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn), // Utilise le num_secu comme identifiant ou un fallback unique
+            carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn),
             type_anomalie: 'DATE_INVALIDE',
-            description: dateError
+            description: dateError,
+            noms: noms,
+            prenoms: prenoms,
+            date_de_naissance: ddn,
+            num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+            contact: contact,
+            site_id: siteId,
+            erreur_message: dateError
           });
         } else {
           batch.push({

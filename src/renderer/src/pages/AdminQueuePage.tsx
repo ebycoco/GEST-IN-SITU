@@ -23,11 +23,17 @@ export default function AdminQueuePage() {
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? undefined;
-      const [absents, lost] = await Promise.all([
-        window.api.cartes.getAbsences(siteIdToUse),
-        window.api.cartes.getHistoriquePertes(siteIdToUse)
-      ]);
+      let absents = [];
+      if (user?.role === 'ADMIN_CENTRE') {
+        absents = await window.api.cartes.getAbsencesCentre(user.centre_id!);
+      } else {
+        const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? undefined;
+        absents = await window.api.cartes.getAbsencesSite(siteIdToUse);
+      }
+      
+      const siteIdToUseLost = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? undefined;
+      const lost = await window.api.cartes.getHistoriquePertes(siteIdToUseLost);
+      
       setAbsentRecords(absents || []);
       setLostRecords(lost || []);
     } catch (err) {
@@ -84,6 +90,20 @@ export default function AdminQueuePage() {
     } catch (err) {
       console.error('[handleDeclareLost]', err);
       toast.error("Erreur lors de la déclaration de perte.");
+    } finally {
+      setIsResolving(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleEscaladeSite = async (id: number) => {
+    try {
+      setIsResolving(prev => ({ ...prev, [id]: true }));
+      await window.api.cartes.escaladerAuSite(id, user ? { id_user: user.id_user, login: user.login, site_id: user.site_id } : undefined);
+      toast.success("Carte escaladée à l'administrateur du site avec succès.");
+      loadAllData();
+    } catch (err) {
+      console.error('[handleEscaladeSite]', err);
+      toast.error("Erreur lors de l'escalade au site.");
     } finally {
       setIsResolving(prev => ({ ...prev, [id]: false }));
     }
@@ -324,8 +344,14 @@ export default function AdminQueuePage() {
                     <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Rangement théorique initial</div>
                     <div style={{ fontWeight: 700, color: '#ef4444', fontSize: 15 }}>{r.rangement || 'Non classé'}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                      Signalé par : <strong style={{ color: 'var(--text-secondary)' }}>{r.agent_signalement_absence || 'Inconnu'}</strong>
+                      Signalé par : <strong style={{ color: 'var(--text-secondary)' }}>{r.agent_nom_complet ? `${r.agent_nom_complet} (${r.agent_role || 'Agent'})` : (r.agent_signalement_absence || 'Inconnu')}</strong>
                     </div>
+                    {r.note_signalement_absence && (
+                      <div style={{ marginTop: 8, padding: '8px', background: 'rgba(255, 215, 0, 0.05)', borderRadius: 8, border: '1px solid rgba(255, 215, 0, 0.1)' }}>
+                        <span style={{ color: '#FFD700', fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 2 }}>COMMENTAIRE</span>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: 12 }}>{r.note_signalement_absence}</div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Right Column: Actions */}
@@ -396,6 +422,30 @@ export default function AdminQueuePage() {
                     >
                       {resolving ? <RefreshCw size={16} className="animate-spin" /> : 'Déclarer Introuvable'}
                     </button>
+                    {user?.role === 'ADMIN_CENTRE' && (
+                      <button 
+                        onClick={() => handleEscaladeSite(r.id_carte)}
+                        disabled={resolving}
+                        style={{ 
+                          padding: '12px 24px', 
+                          background: 'transparent', 
+                          color: '#f97316', 
+                          border: '1px solid rgba(249, 115, 22, 0.4)', 
+                          borderRadius: 12, 
+                          fontWeight: 700, 
+                          fontSize: 14,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          opacity: resolving ? 0.5 : 1,
+                          transition: 'all 0.15s ease'
+                        }}
+                        className="hover-scale"
+                      >
+                        {resolving ? <RefreshCw size={16} className="animate-spin" /> : 'Escalader au Site'}
+                      </button>
+                    )}
                   </div>
                 </div>
               );

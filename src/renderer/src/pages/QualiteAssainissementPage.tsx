@@ -1,15 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   ShieldCheck, CheckCircle, AlertTriangle, Edit3, Save,
   RefreshCw, Search, Database, Award, Trash2, GitMerge,
-  Hash, Sparkles, Calendar, KeyRound, Package, TrendingDown
+  Hash, Sparkles, Calendar, KeyRound, Package, TrendingDown, ShieldAlert
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { confirmService } from '../components/confirmService';
 
-type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'DOUBLONS_PROBABLES' | 'SANS_SECU' | 'SANS_RANGEMENT';
+type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'DOUBLONS_PROBABLES' | 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM';
 
 interface QualityStats {
   doublons: number;
@@ -17,6 +19,8 @@ interface QualityStats {
   datesInvalides: number;
   sansSecu: number;
   sansRangement: number;
+  sansNom: number;
+  sansPrenom: number;
 }
 
 // ─── Compteur Plein Soleil ──────────────────────────────────────────────────
@@ -36,6 +40,7 @@ function QualityCounter({
       onClick={onClick}
       style={{
         flex: 1,
+        minWidth: 240,
         background: isActive
           ? `linear-gradient(135deg, ${accent}22 0%, ${accent}0a 100%)`
           : 'rgba(255,255,255,0.01)',
@@ -116,7 +121,7 @@ export default function QualiteAssainissementPage() {
   const [totalItems, setTotalItems] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [stats, setStats] = useState<QualityStats>({ doublons: 0, doublonsProbables: 0, datesInvalides: 0, sansSecu: 0, sansRangement: 0 });
+  const [stats, setStats] = useState<QualityStats>({ doublons: 0, doublonsProbables: 0, datesInvalides: 0, sansSecu: 0, sansRangement: 0, sansNom: 0, sansPrenom: 0 });
   const [statsLoading, setStatsLoading] = useState(true);
 
   // Édition en ligne
@@ -128,7 +133,7 @@ export default function QualiteAssainissementPage() {
   const [mergeModal, setMergeModal] = useState<{ isOpen: boolean; target: any; source: any } | null>(null);
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; cardId: number; cardName: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [saveModal, setSaveModal] = useState<{ isOpen: boolean; cardId: number; label: string; field: 'date_de_naissance' | 'num_secu' | 'rangement'; value: string; oldVal: string } | null>(null);
+  const [saveModal, setSaveModal] = useState<{ isOpen: boolean; cardId: number; label: string; field: 'date_de_naissance' | 'num_secu' | 'rangement' | 'noms' | 'prenoms'; value: string; oldVal: string } | null>(null);
 
   const itemsPerPage = 10;
 
@@ -136,12 +141,14 @@ export default function QualiteAssainissementPage() {
   const loadStats = useCallback(async (silent = false) => {
     if (!silent) setStatsLoading(true);
     try {
-      const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang] = await Promise.all([
+      const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang, rawSansNom, rawSansPrenom] = await Promise.all([
         window.api.import.getAnomalies(siteIdToUse),
         window.api.cartes.getDoublonsPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getDoublonsProbablesPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansNumSecuPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansRangementPage(siteIdToUse, 0, 1, ''),
+        window.api.cartes.getSansNomPage(siteIdToUse, 0, 1, ''),
+        window.api.cartes.getSansPrenomPage(siteIdToUse, 0, 1, ''),
       ]);
       const loadedStats = {
         datesInvalides: (rawDates || []).length,
@@ -149,6 +156,8 @@ export default function QualiteAssainissementPage() {
         doublonsProbables: rawDoublonsProbables?.total || 0,
         sansSecu: rawSansSecu?.total || 0,
         sansRangement: rawSansRang?.total || 0,
+        sansNom: rawSansNom?.total || 0,
+        sansPrenom: rawSansPrenom?.total || 0,
       };
       setStats(loadedStats);
       useCacheStore.getState().setQualiteCache(loadedStats);
@@ -159,6 +168,19 @@ export default function QualiteAssainissementPage() {
       useAuthStore.getState().setInitialDataLoading(false);
     }
   }, [siteIdToUse]);
+
+  const location = useLocation();
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    let tabParam = params.get('tab');
+    if (!tabParam) tabParam = params.get('anomalie');
+    if (tabParam) {
+      const formattedTab = tabParam.toUpperCase() as ActiveTab;
+      if (['DATES_INVALIDES', 'DOUBLONS', 'DOUBLONS_PROBABLES', 'SANS_SECU', 'SANS_RANGEMENT', 'SANS_NOM', 'SANS_PRENOM'].includes(formattedTab)) {
+        setActiveTab(formattedTab);
+      }
+    }
+  }, [location.search]);
 
   useEffect(() => {
     const cache = useCacheStore.getState().qualiteCache;
@@ -202,6 +224,10 @@ export default function QualiteAssainissementPage() {
         res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       } else if (activeTab === 'SANS_SECU') {
         res = await window.api.cartes.getSansNumSecuPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+      } else if (activeTab === 'SANS_NOM') {
+        res = await window.api.cartes.getSansNomPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+      } else if (activeTab === 'SANS_PRENOM') {
+        res = await window.api.cartes.getSansPrenomPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       } else {
         res = await window.api.cartes.getSansRangementPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       }
@@ -231,7 +257,7 @@ export default function QualiteAssainissementPage() {
     setSaveModal({ isOpen: true, cardId: card.id_carte, label: `${card.noms} ${card.prenoms}`, field: 'date_de_naissance', value: editValue, oldVal: card.date_de_naissance || '(Vide)' });
   };
 
-  const handleSaveField = (card: any, field: 'num_secu' | 'rangement') => {
+  const handleSaveField = (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms') => {
     if (!editValue.trim()) { toast.error('La valeur ne peut pas être vide.'); return; }
     if (field === 'num_secu' && editValue.trim().length !== 13) { toast.error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.'); return; }
     setSaveModal({ isOpen: true, cardId: card.id_carte, label: `${card.noms} ${card.prenoms}`, field, value: editValue, oldVal: card[field] || '(Vide)' });
@@ -316,7 +342,14 @@ export default function QualiteAssainissementPage() {
 
     if (!typeIncoherence) return;
 
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer TOUTES les incohérences de type "${activeTab}" pour ce site ? Cette action est irréversible, supprimera les données non valides et sera auditée.`)) {
+    const isConfirmed = await confirmService.confirm({
+      title: "Supprimer les incohérences",
+      message: `Êtes-vous sûr de vouloir supprimer TOUTES les incohérences de type "${activeTab}" pour ce site ? Cette action est irréversible, supprimera les données non valides et sera auditée.`,
+      isDanger: true,
+      requirePassword: true,
+      actionName: `Assainissement en masse de type ${activeTab}`
+    });
+    if (!isConfirmed) {
       return;
     }
 
@@ -345,6 +378,8 @@ export default function QualiteAssainissementPage() {
     DATES_INVALIDES: stats.datesInvalides,
     SANS_SECU: stats.sansSecu,
     SANS_RANGEMENT: stats.sansRangement,
+    SANS_NOM: stats.sansNom,
+    SANS_PRENOM: stats.sansPrenom,
   };
 
   return (
@@ -405,7 +440,7 @@ export default function QualiteAssainissementPage() {
 
       {/* ══════════════════════ DASHBOARD DE QUALITÉ ════════════════════ */}
       {/* 4 compteurs principaux + 1 sous-compteur block */}
-      <div style={{ display: 'flex', gap: 16, marginBottom: 32 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 32 }}>
         {/* Compteur 1 — Doublons */}
         <QualityCounter
           label="Doublons Stricts"
@@ -440,7 +475,7 @@ export default function QualiteAssainissementPage() {
         />
 
         {/* Compteur 3 — CMU Incomplets (Sans Sécu + Sans Rangement) */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Sous-compteur Sans Sécu */}
           <button
             onClick={() => setActiveTab('SANS_SECU')}
@@ -487,6 +522,55 @@ export default function QualiteAssainissementPage() {
             </div>
           </button>
         </div>
+
+        {/* Compteur 4 — Noms Incomplets (Sans Nom + Sans Prénom) */}
+        <div style={{ flex: 1, minWidth: 240, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Sous-compteur Sans Nom */}
+          <button
+            onClick={() => setActiveTab('SANS_NOM')}
+            style={{
+              flex: 1,
+              background: activeTab === 'SANS_NOM' ? 'rgba(236,72,153,0.08)' : 'rgba(255,255,255,0.01)',
+              border: activeTab === 'SANS_NOM' ? '1.5px solid rgba(236,72,153,0.3)' : '1px solid rgba(255,255,255,0.06)',
+              borderRadius: 16, padding: '16px 20px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(236,72,153,0.1)', border: '1px solid rgba(236,72,153,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ec4899' }}>
+                <ShieldAlert size={16} />
+              </div>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: statsLoading ? 'var(--text-muted)' : (stats.sansNom > 0 ? '#ec4899' : '#2ed573'), lineHeight: 1, letterSpacing: '-1px', fontVariantNumeric: 'tabular-nums' }}>
+                  {statsLoading ? '…' : stats.sansNom.toLocaleString('fr')}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 2 }}>Sans Nom</div>
+              </div>
+            </div>
+          </button>
+
+          {/* Sous-compteur Sans Prénom */}
+          <button
+            onClick={() => setActiveTab('SANS_PRENOM')}
+            style={{
+              flex: 1,
+              background: activeTab === 'SANS_PRENOM' ? 'rgba(20,184,166,0.08)' : 'rgba(255,255,255,0.01)',
+              border: activeTab === 'SANS_PRENOM' ? '1.5px solid rgba(20,184,166,0.3)' : '1px solid rgba(255,255,255,0.06)',
+              borderRadius: 16, padding: '16px 20px', cursor: 'pointer', textAlign: 'left', transition: 'all 0.2s'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(20,184,166,0.1)', border: '1px solid rgba(20,184,166,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#14b8a6' }}>
+                <ShieldAlert size={16} />
+              </div>
+              <div>
+                <div style={{ fontSize: 22, fontWeight: 900, color: statsLoading ? 'var(--text-muted)' : (stats.sansPrenom > 0 ? '#14b8a6' : '#2ed573'), lineHeight: 1, letterSpacing: '-1px', fontVariantNumeric: 'tabular-nums' }}>
+                  {statsLoading ? '…' : stats.sansPrenom.toLocaleString('fr')}
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', marginTop: 2 }}>Sans Prénom</div>
+              </div>
+            </div>
+          </button>
+        </div>
       </div>
 
       {/* Score de qualité global */}
@@ -504,29 +588,31 @@ export default function QualiteAssainissementPage() {
               Score d'intégrité de la base :{' '}
             </span>
             <strong style={{ color: 'white', fontSize: 13 }}>
-              {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0
+              {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement + stats.sansNom + stats.sansPrenom) === 0
                 ? '✅ Aucune anomalie détectée — Base en parfait état !'
-                : `⚠️ ${(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement).toLocaleString('fr')} anomalie(s) totale(s) à traiter`
+                : `⚠️ ${(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement + stats.sansNom + stats.sansPrenom).toLocaleString('fr')} anomalie(s) totale(s) à traiter`
               }
             </strong>
           </div>
-          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) === 0 && (
+          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement + stats.sansNom + stats.sansPrenom) === 0 && (
             <CheckCircle size={20} style={{ color: '#2ed573', flexShrink: 0 }} />
           )}
-          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement) > 0 && (
+          {(stats.doublons + stats.doublonsProbables + stats.datesInvalides + stats.sansSecu + stats.sansRangement + stats.sansNom + stats.sansPrenom) > 0 && (
             <TrendingDown size={20} style={{ color: '#ffd700', flexShrink: 0 }} />
           )}
         </div>
       )}
 
       {/* ══════════════════════ SYSTÈME D'ONGLETS ═══════════════════════ */}
-      <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', gap: 8, marginBottom: 24 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)', gap: 8, marginBottom: 24 }}>
         {[
           { id: 'DOUBLONS', label: '👥 Doublons Stricts', color: '#eccc68', count: stats.doublons },
           { id: 'DOUBLONS_PROBABLES', label: '⚠️ Doublons Probables', color: '#f97316', count: stats.doublonsProbables },
           { id: 'DATES_INVALIDES', label: '📅 Dates Invalides', color: '#ff7675', count: stats.datesInvalides },
           { id: 'SANS_SECU', label: '🔑 Sans Num. Sécu', color: '#70a1ff', count: stats.sansSecu },
           { id: 'SANS_RANGEMENT', label: '📦 Sans Rangement', color: '#2ed573', count: stats.sansRangement },
+          { id: 'SANS_NOM', label: '👤 Sans Nom', color: '#ec4899', count: stats.sansNom },
+          { id: 'SANS_PRENOM', label: '👤 Sans Prénom', color: '#14b8a6', count: stats.sansPrenom },
         ].map(tab => (
           <button
             key={tab.id}
@@ -868,6 +954,56 @@ export default function QualiteAssainissementPage() {
                             </div>
                           ) : (
                             <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r.rangement || ''); }}>
+                              <Edit3 size={14} style={{ marginRight: 6 }} /> Affecter
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </>
+              )}
+
+              {/* ── ONGLETS SANS NOM / SANS PRENOM ───────────────────────────── */}
+              {(activeTab === 'SANS_NOM' || activeTab === 'SANS_PRENOM') && (
+                <>
+                  <thead>
+                    <tr>
+                      <th style={{ paddingLeft: 20 }}>Assuré / N° Sécu</th>
+                      <th>Contact</th>
+                      <th>{activeTab === 'SANS_NOM' ? 'Saisie Nom' : 'Saisie Prénom'}</th>
+                      <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {records.map(r => (
+                      <tr key={r.id_carte}>
+                        <td style={{ paddingLeft: 20 }}>
+                          <strong>{r.noms || '(Sans Nom)'} {r.prenoms || '(Sans Prénom)'}</strong><br />
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
+                        </td>
+                        <td><span>{r.contact || '—'}</span></td>
+                        <td>
+                          {editingId === r.id_carte ? (
+                            <input type="text" className="form-input"
+                              style={{ width: 160, height: 36, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value.toUpperCase())}
+                            />
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Non renseigné</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', paddingRight: 20 }}>
+                          {editingId === r.id_carte ? (
+                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                              <button className="btn btn-primary" onClick={() => handleSaveField(r, activeTab === 'SANS_NOM' ? 'noms' : 'prenoms')} disabled={isResolving[r.id_carte]}>
+                                {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+                              </button>
+                              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
+                            </div>
+                          ) : (
+                            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(activeTab === 'SANS_NOM' ? (r.noms || '') : (r.prenoms || '')); }}>
                               <Edit3 size={14} style={{ marginRight: 6 }} /> Affecter
                             </button>
                           )}

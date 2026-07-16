@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, MapPin, Building2, Save, X, Lock, Unlock, AlertTriangle, ShieldCheck, ChevronRight, Activity, Database } from 'lucide-react';
+import { Plus, Edit, Trash2, MapPin, Building2, Save, X, Lock, Unlock, AlertTriangle, ShieldCheck, ChevronRight, Activity, Database, CloudDownload, CloudUpload, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { confirmService } from '../components/confirmService';
 
 interface Site { 
   id: number; 
@@ -11,6 +12,8 @@ interface Site {
   max_centres: number; 
   is_active: number; 
   created_at: string; 
+  expiry_date: string | null;
+  is_permanent: number;
 }
 
 export default function SitesPage() {
@@ -40,10 +43,15 @@ export default function SitesPage() {
     max_centres: 4,
     adminNom: '',
     adminLogin: '',
-    adminPassword: ''
+    adminPassword: '',
+    expiry_date: '',
+    is_permanent: false
   });
   const [adminPassword, setAdminPassword] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  
+  const [isPullingCentres, setIsPullingCentres] = useState(false);
+  const [isPushingCentres, setIsPushingCentres] = useState(false);
 
   useEffect(() => { 
     setCurrentPage(1);
@@ -80,6 +88,8 @@ export default function SitesPage() {
         nom: siteFormData.nom,
         code: siteFormData.code,
         max_centres: siteFormData.max_centres,
+        expiry_date: siteFormData.is_permanent ? null : (siteFormData.expiry_date || null),
+        is_permanent: siteFormData.is_permanent ? 1 : 0,
         admin: {
           nom: siteFormData.adminNom || `Admin ${siteFormData.nom}`,
           login: siteFormData.adminLogin,
@@ -94,7 +104,9 @@ export default function SitesPage() {
         max_centres: 4,
         adminNom: '',
         adminLogin: '',
-        adminPassword: ''
+        adminPassword: '',
+        expiry_date: '',
+        is_permanent: false
       });
       loadData();
     } catch (err: any) {
@@ -109,7 +121,10 @@ export default function SitesPage() {
       await window.api.hierarchy.updateSite(editingSite.id, {
         nom: editingSite.nom,
         code: editingSite.code,
-        max_centres: editingSite.max_centres
+        max_centres: editingSite.max_centres,
+        expiry_date: editingSite.is_permanent ? null : (editingSite.expiry_date || null),
+        is_permanent: editingSite.is_permanent ? 1 : 0,
+        is_active: editingSite.is_active
       });
       toast.success('Modifications enregistrées');
       setEditingSite(null);
@@ -197,7 +212,16 @@ export default function SitesPage() {
   };
 
   const handleDeleteCentre = async (id: number) => {
-    if (!confirm("Voulez-vous vraiment supprimer ce centre ?")) return;
+    const centreToDel = centres.find(c => c.id === id);
+    const isConfirmed = await confirmService.confirm({
+      title: "Supprimer le centre",
+      message: "Voulez-vous vraiment supprimer ce centre ?",
+      isDanger: true,
+      requirePassword: true,
+      actionName: `Suppression du centre ${centreToDel?.nom || id}`
+    });
+    if (!isConfirmed) return;
+
     try {
       await window.api.hierarchy.deleteCentre(id);
       toast.success("Centre supprimé avec succès");
@@ -242,6 +266,41 @@ export default function SitesPage() {
     }
   };
 
+  const handlePullCentres = async () => {
+    if (!userContext?.site_id) return;
+    setIsPullingCentres(true);
+    try {
+      const result = await window.api.hierarchy.pullCentres(userContext.site_id, userContext);
+      if (result.success) {
+        toast.success(result.message || `${result.count} centres téléchargés avec succès.`);
+        loadData();
+      } else {
+        toast.error(result.message || 'Erreur lors du téléchargement des centres.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Une erreur est survenue lors du téléchargement.');
+    } finally {
+      setIsPullingCentres(false);
+    }
+  };
+
+  const handlePushCentres = async () => {
+    if (!userContext?.site_id) return;
+    setIsPushingCentres(true);
+    try {
+      const result = await window.api.hierarchy.forceCentres(userContext.site_id, userContext);
+      if (result.success) {
+        toast.success(result.message || `${result.count} centres envoyés au Cloud avec succès.`);
+        loadData();
+      } else {
+        toast.error(result.message || 'Erreur lors de l\'envoi des centres.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Une erreur est survenue lors de l\'envoi.');
+    } finally {
+      setIsPushingCentres(false);
+    }
+  };
 
   if (userContext?.role !== 'SUPER ADMIN' && userContext?.role !== 'ADMINISTRATEUR_SITE') {
     return (
@@ -259,7 +318,7 @@ export default function SitesPage() {
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, height: '100%', padding: '24px 32px' }}>
       
       {/* Header Professionnel */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ background: 'linear-gradient(135deg, var(--accent-primary) 0%, #6366f1 100%)', width: 36, height: 36, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 12px rgba(79, 70, 229, 0.3)' }}>
@@ -291,6 +350,34 @@ export default function SitesPage() {
             </div>
           )}
           
+          {userContext?.role !== 'SUPER ADMIN' && activeTab === 'CENTRES' && (
+            <>
+              <button 
+                className="btn btn-secondary" 
+                onClick={handlePullCentres}
+                disabled={isPullingCentres || loading}
+                title="Télécharger les centres depuis le Cloud"
+              >
+                <CloudDownload size={18} className={isPullingCentres ? 'animate-bounce' : ''} />
+                Télécharger les centres
+              </button>
+              
+              <button 
+                className="btn btn-primary"
+                style={{ background: 'var(--accent-primary)' }}
+                onClick={handlePushCentres}
+                disabled={isPushingCentres || loading}
+                title="Envoyer les centres vers le Cloud"
+              >
+                <CloudUpload size={18} className={isPushingCentres ? 'animate-bounce' : ''} />
+                Envoyer les centres
+              </button>
+              <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => loadData()}>
+                <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
+              </button>
+            </>
+          )}
+
           <button 
             className="btn btn-primary btn-lg" 
             disabled={userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4)}
@@ -338,6 +425,7 @@ export default function SitesPage() {
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {activeTab === 'SITES' ? (
             <>
+              <div className="table-container" style={{ overflowX: 'auto', width: '100%' }}>
               <table className="table-premium">
                 <thead>
                   <tr>
@@ -346,6 +434,7 @@ export default function SitesPage() {
                     <th>DÉSIGNATION DU SITE</th>
                     <th>CAPACITÉ</th>
                     <th>DÉPLOIEMENT</th>
+                    <th>LICENCE</th>
                     <th style={{ textAlign: 'right' }}>ACTIONS</th>
                   </tr>
                 </thead>
@@ -368,6 +457,17 @@ export default function SitesPage() {
                       </td>
                       <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                       <td>
+                        {s.is_permanent === 1 ? (
+                          <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 600 }}>PERMANENTE</span>
+                        ) : s.expiry_date ? (
+                          <span style={{ color: new Date(s.expiry_date) < new Date() ? 'var(--accent-red)' : 'var(--text-muted)', fontSize: 12 }}>
+                            {new Date(s.expiry_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Non définie</span>
+                        )}
+                      </td>
+                      <td>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button className="btn-action" onClick={() => setEditingSite(s)} title="Paramètres"><Edit size={14} /></button>
                           {s.is_active ? (
@@ -382,9 +482,11 @@ export default function SitesPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </>
           ) : (
             <>
+              <div className="table-container" style={{ overflowX: 'auto', width: '100%' }}>
               <table className="table-premium">
                 <thead>
                   <tr>
@@ -398,7 +500,7 @@ export default function SitesPage() {
                 </thead>
                 <tbody>
                   {centres.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
-                    <tr key={c.id}>
+                    <tr key={c.sync_id || c.id}>
                       <td><span className="id-badge">ID-{c.numero.toString().padStart(2, '0')}</span></td>
                       <td style={{ fontWeight: 700 }}>{c.nom}</td>
                       <td>{c.lieu || 'Zone non définie'}</td>
@@ -430,6 +532,7 @@ export default function SitesPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             </>
           )}
         </div>
@@ -485,6 +588,23 @@ export default function SitesPage() {
               </div>
               
               <div className="input-group-premium" style={{ marginTop: 20 }}>
+                <label>Statut du Site</label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8, padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.05)' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', width: '100%' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={editingSite.is_active === 1}
+                      onChange={e => setEditingSite({ ...editingSite, is_active: e.target.checked ? 1 : 0 })}
+                      style={{ width: 18, height: 18, accentColor: editingSite.is_active ? 'var(--accent-green)' : 'var(--accent-red)' }}
+                    />
+                    <span style={{ fontSize: 14, fontWeight: 600, color: editingSite.is_active ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                      {editingSite.is_active ? 'SITE OPÉRATIONNEL (Accès Autorisé)' : 'SITE BLOQUÉ (Accès Suspendu)'}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div className="input-group-premium" style={{ marginTop: 20 }}>
                 <label>Quota maximum de centres</label>
                 <div className="input-wrapper">
                   <Building2 size={16} className="field-icon" />
@@ -498,6 +618,38 @@ export default function SitesPage() {
                   />
                 </div>
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>Définit le nombre de centres physiques autorisés pour ce site.</p>
+              </div>
+
+              <div style={{ marginTop: 24, padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12, border: '1px dashed rgba(255,255,255,0.1)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, color: 'var(--accent-primary)' }}>
+                  <ShieldCheck size={18} />
+                  <span style={{ fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Configuration Licence</span>
+                </div>
+                
+                <div className="input-group-premium" style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={editingSite.is_permanent === 1}
+                      onChange={e => setEditingSite({ ...editingSite, is_permanent: e.target.checked ? 1 : 0 })}
+                      style={{ width: 16, height: 16, accentColor: 'var(--accent-primary)' }}
+                    />
+                    <span style={{ fontSize: 14 }}>Licence Permanente (Illimitée)</span>
+                  </label>
+                </div>
+
+                {editingSite.is_permanent === 0 && (
+                  <div className="input-group-premium">
+                    <label>Date d'expiration</label>
+                    <input 
+                      className="input-p" 
+                      type="date" 
+                      value={editingSite.expiry_date ? editingSite.expiry_date.split('T')[0] : ''}
+                      onChange={e => setEditingSite({ ...editingSite, expiry_date: e.target.value ? new Date(e.target.value).toISOString() : null })}
+                      required
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="modal-footer">
@@ -599,6 +751,39 @@ export default function SitesPage() {
                   <label>Quota de Centres</label>
                   <input className="input-p" type="number" value={siteFormData.max_centres} onChange={e => setSiteFormData({ ...siteFormData, max_centres: parseInt(e.target.value) })} min={1} required />
                 </div>
+              </div>
+
+              {/* SECTION LICENCE */}
+              <div style={{ marginTop: 24, padding: 16, background: 'rgba(255,255,255,0.03)', borderRadius: 12, border: '1px dashed rgba(255,255,255,0.1)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, color: 'var(--accent-primary)' }}>
+                  <ShieldCheck size={18} />
+                  <span style={{ fontWeight: 700, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Configuration Licence</span>
+                </div>
+                
+                <div className="input-group-premium" style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={siteFormData.is_permanent}
+                      onChange={e => setSiteFormData({ ...siteFormData, is_permanent: e.target.checked })}
+                      style={{ width: 16, height: 16, accentColor: 'var(--accent-primary)' }}
+                    />
+                    <span style={{ fontSize: 14 }}>Licence Permanente (Illimitée)</span>
+                  </label>
+                </div>
+
+                {!siteFormData.is_permanent && (
+                  <div className="input-group-premium">
+                    <label>Date d'expiration</label>
+                    <input 
+                      className="input-p" 
+                      type="date" 
+                      value={siteFormData.expiry_date ? siteFormData.expiry_date.split('T')[0] : ''}
+                      onChange={e => setSiteFormData({ ...siteFormData, expiry_date: e.target.value ? new Date(e.target.value).toISOString() : '' })}
+                      required
+                    />
+                  </div>
+                )}
               </div>
 
               {/* SECTION ADMINISTRATEUR */}
@@ -756,6 +941,10 @@ export default function SitesPage() {
                   </span>
                 </div>
               </div>
+              <div className="input-group-premium" style={{ marginTop: 16 }}>
+                <label>Lieu (Optionnel)</label>
+                <input className="input-p" type="text" value={editingCentre.lieu || ''} onChange={e => setEditingCentre({...editingCentre, lieu: e.target.value.toUpperCase()})} placeholder="Ex: ABIDJAN, YAMOUSSOUKRO..." />
+              </div>
               <div className="modal-footer">
                 <button type="button" className="btn-secondary" onClick={() => setEditingCentre(null)}>Annuler</button>
                 <button type="submit" className="btn-execute btn-primary">ENREGISTRER</button>
@@ -843,7 +1032,7 @@ export default function SitesPage() {
 
         /* MODAL PREMIUM */
         .modal-overlay-premium { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(5, 7, 15, 0.85); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 9999; animation: fadeIn 0.3s; }
-        .modal-content-premium { background: #131722; width: 95%; max-width: 450px; border-radius: 24px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 32px 64px -12px rgba(0, 0, 0, 0.6); overflow: hidden; position: relative; }
+        .modal-content-premium { background: #131722; width: 95%; max-width: 450px; max-height: 90vh; border-radius: 24px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 32px 64px -12px rgba(0, 0, 0, 0.6); overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; }
         .modal-content-premium.danger { border-top: 4px solid #ef4444; }
         .modal-content-premium.secure { border-top: 4px solid var(--accent-primary); }
         

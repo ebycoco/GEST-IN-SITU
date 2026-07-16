@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download } from 'lucide-react';
+import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download, CloudDownload } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import toast from 'react-hot-toast';
 
@@ -92,6 +92,37 @@ export default function ProfilePage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const [autoDownstream, setAutoDownstream] = useState(false);
+  const [isLoadingSyncPref, setIsLoadingSyncPref] = useState(true);
+
+  React.useEffect(() => {
+    if (user?.login) {
+      window.api.sync.getAutoDownstream(user.login).then(val => {
+        setAutoDownstream(val);
+        setIsLoadingSyncPref(false);
+      }).catch(err => {
+        console.error("Failed to fetch auto downstream preference", err);
+        setIsLoadingSyncPref(false);
+      });
+    }
+  }, [user?.login]);
+
+  const handleToggleAutoDownstream = async () => {
+    if (!user?.login) return;
+    try {
+      const newVal = !autoDownstream;
+      const res = await window.api.sync.setAutoDownstream(user.login, newVal);
+      if (res.success) {
+        setAutoDownstream(newVal);
+        toast.success(`Récupération automatique ${newVal ? 'activée' : 'désactivée'}.`);
+      } else {
+        toast.error("Erreur lors de l'enregistrement de la préférence.");
+      }
+    } catch (e: any) {
+      toast.error(`Erreur système : ${e.message}`);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -232,30 +263,32 @@ export default function ProfilePage() {
                 Exporter les logs de diagnostic
               </button>
 
-              <button
-                type="button"
-                onClick={handleExportDatabase}
-                disabled={isExportingDb}
-                className="btn btn-secondary text-xs"
-                style={{
-                  width: '100%',
-                  borderRadius: 12,
-                  padding: '10px 16px',
-                  fontWeight: 700,
-                  backgroundColor: 'rgba(99, 102, 241, 0.05)',
-                  border: '1px solid rgba(99, 102, 241, 0.2)',
-                  color: 'white',
-                  cursor: isExportingDb ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  transition: 'all 0.2s'
-                }}
-              >
-                <Download size={16} color="#818cf8" />
-                {isExportingDb ? 'Exportation...' : 'Exporter la base locale'}
-              </button>
+              {(isSuperAdmin || user?.role === 'ADMINISTRATEUR_SITE') && (
+                <button
+                  type="button"
+                  onClick={handleExportDatabase}
+                  disabled={isExportingDb}
+                  className="btn btn-secondary text-xs"
+                  style={{
+                    width: '100%',
+                    borderRadius: 12,
+                    padding: '10px 16px',
+                    fontWeight: 700,
+                    backgroundColor: 'rgba(99, 102, 241, 0.05)',
+                    border: '1px solid rgba(99, 102, 241, 0.2)',
+                    color: 'white',
+                    cursor: isExportingDb ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    transition: 'all 0.2s'
+                  }}
+                >
+                  <Download size={16} color="#818cf8" />
+                  {isExportingDb ? 'Exportation...' : 'Exporter la base locale'}
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -414,6 +447,56 @@ export default function ProfilePage() {
               </div>
             </form>
           )}
+        </div>
+
+        {/* Carte Préférences de Synchronisation */}
+        <div className="card" style={{ background: 'var(--premium-glass)', border: '1px solid rgba(255,255,255,0.05)', padding: 32, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(99, 102, 241, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <CloudDownload size={20} color="var(--accent-primary)" />
+            </div>
+            <h3 style={{ margin: 0, fontSize: 18, color: 'white', fontWeight: 800 }}>Préférences de Synchronisation</h3>
+          </div>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+              <div>
+                <h4 style={{ margin: 0, fontSize: 14, color: 'white', fontWeight: 600 }}>Récupération Automatique</h4>
+                <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.5 }}>
+                  Dès la connexion, l'application récupère automatiquement les cartes depuis le cloud. Cette option est sauvegardée pour cet utilisateur.
+                </p>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: isLoadingSyncPref ? 'not-allowed' : 'pointer', opacity: isLoadingSyncPref ? 0.5 : 1 }}>
+                <div style={{
+                  position: 'relative',
+                  width: 44,
+                  height: 24,
+                  backgroundColor: autoDownstream ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.1)',
+                  borderRadius: 24,
+                  transition: 'background-color 0.3s'
+                }}>
+                  <div style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: autoDownstream ? 22 : 2,
+                    width: 20,
+                    height: 20,
+                    backgroundColor: 'white',
+                    borderRadius: '50%',
+                    transition: 'left 0.3s, transform 0.3s',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                  }} />
+                </div>
+                <input 
+                  type="checkbox" 
+                  checked={autoDownstream} 
+                  onChange={handleToggleAutoDownstream} 
+                  disabled={isLoadingSyncPref}
+                  style={{ display: 'none' }} 
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
       </div>

@@ -26,6 +26,8 @@ CREATE TABLE public.t_sites (
     max_centres INTEGER DEFAULT 4,
     sync_id     TEXT UNIQUE,
     created_at  TIMESTAMPTZ DEFAULT NOW(),
+    expiry_date TIMESTAMPTZ,
+    is_permanent BOOLEAN DEFAULT FALSE,
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 

@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
-const SCHEMA_VERSION = 31;
+
+export const SCHEMA_VERSION = 40;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -169,6 +170,46 @@ export function runMigrations(db: Database.Database): void {
       migrateV31(db);
     }
 
+    if (currentVersion < 32) {
+      log.info('Running migration v32: Creating t_outbox table for offline-first Outbox Pattern');
+      migrateV32(db);
+    }
+
+    if (currentVersion < 34) {
+      log.info('Running migration v34: Creating indexes for stats:get performance optimization');
+      migrateV34(db);
+    }
+
+    if (currentVersion < 35) {
+      log.info('Running migration v35: Replace V34 index with Covering index for DP, add KPI index');
+      migrateV35(db);
+    }
+
+    if (currentVersion < 36) {
+      log.info('Running migration v36: Add index for distribParJour query optimization');
+      migrateV36(db);
+    }
+
+    if (currentVersion < 37) {
+      log.info('Running migration v37: Adding note_signalement_absence and escalade_niveau to t_cartes');
+      migrateV37(db);
+    }
+
+    if (currentVersion < 38) {
+      log.info('Running migration v38: Add index for strict duplicates query optimization');
+      migrateV38(db);
+    }
+
+    if (currentVersion < 39) {
+      log.info('Running migration v39: Add contact_retirant column to t_cartes');
+      migrateV39(db);
+    }
+
+    if (currentVersion < 40) {
+      log.info('Running migration v40: Add expiry_date and is_permanent columns to t_sites');
+      migrateV40(db);
+    }
+
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
 
     // ─── FILET DE SÉCURITÉ UNIVERSEL ───────────────────────────────────────────
@@ -196,16 +237,25 @@ export function runMigrations(db: Database.Database): void {
         log.error('[MIGRATION] Impossible de créer la sauvegarde d\'urgence :', backupErr);
       }
 
-      // Étape 2 : Réinitialisation forcée du schéma en V31 complet
-      log.warn('[MIGRATION] Tentative de réinstallation complète du schéma V31...');
+      // Étape 2 : Réinitialisation forcée du schéma en V38 complet
+      log.warn('[MIGRATION] Tentative de réinstallation complète du schéma V38...');
       db.pragma('user_version = 0');
       migrateV1(db);
       db.pragma(`user_version = ${SCHEMA_VERSION}`);
       migrateV29(db); // Garantit t_import_anomalies + colonnes t_centres (sans DROP destructeur)
       migrateV30(db); // Garantit la présence de 'numero' avec DEFAULT 1 sur t_centres
       migrateV31(db); // Garantit la présence de 'created_by' sur t_cartes
+      migrateV32(db); // Garantit la présence de t_outbox (Outbox Pattern offline-first)
+      migrateV33(db); // Garantit les colonnes d'identité dans t_import_anomalies
+      migrateV34(db); // Optimisation des requêtes stats:get
+      migrateV35(db); // Covering index for DP, KPI index
+      migrateV36(db); // Optimisation de la requête distribParJour
+      migrateV37(db); // Signalement absence et escalade
+      migrateV38(db); // Index de performance pour les doublons stricts
+      migrateV39(db); // Add contact_retirant column to t_cartes
+      migrateV40(db); // Add expiry_date and is_permanent to t_sites
       migrateV27_safetyNet(db);
-      log.info('[MIGRATION] Reconstruction d\'urgence terminée. Schéma réinstallé en V31.');
+      log.info('[MIGRATION] Reconstruction d\'urgence terminée. Schéma réinstallé en V38.');
 
     } catch (emergencyError: any) {
       log.error('[MIGRATION] ÉCHEC TOTAL de la reconstruction d\'urgence. L\'application peut être inutilisable.', emergencyError);
@@ -354,7 +404,9 @@ function migrateV1(db: Database.Database): void {
       is_active INTEGER DEFAULT 1,
       max_centres INTEGER DEFAULT 4,
       created_at TEXT DEFAULT (datetime('now')),
-      sync_id TEXT
+      sync_id TEXT,
+      expiry_date TEXT,
+      is_permanent INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS t_centres (
@@ -366,6 +418,7 @@ function migrateV1(db: Database.Database): void {
       sync_id TEXT,
       code TEXT,
       prefixe_rangement TEXT,
+      lieu TEXT,
       FOREIGN KEY (site_id) REFERENCES t_sites(id)
     );
 
@@ -392,7 +445,7 @@ function migrateV1(db: Database.Database): void {
       email TEXT,
       telephone TEXT,
       statut_actif INTEGER DEFAULT 1,
-      site_id INTEGER DEFAULT 1,
+      site_id INTEGER,
       centre_id INTEGER,
       poste_id INTEGER,
       avatar_url TEXT,
@@ -445,6 +498,8 @@ function migrateV1(db: Database.Database): void {
       statut_physique TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE')),
       agent_signalement_absence TEXT,
       date_signalement_absence TEXT,
+      note_signalement_absence TEXT,
+      escalade_niveau TEXT DEFAULT 'CENTRE' CHECK(escalade_niveau IN ('CENTRE', 'SITE', 'RESOLU')),
       date_resolution_absence TEXT,
       agent_resolution_absence TEXT,
       note_resolution TEXT,
@@ -482,6 +537,12 @@ function migrateV1(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_cartes_sync ON t_cartes(is_dirty, synced_at);
     CREATE INDEX IF NOT EXISTS idx_cartes_updated ON t_cartes(updated_at);
     CREATE INDEX IF NOT EXISTS idx_cartes_contact ON t_cartes(contact);
+    CREATE INDEX IF NOT EXISTS idx_cartes_site_statut ON t_cartes(site_id, statut);
+    CREATE INDEX IF NOT EXISTS idx_cartes_stats_dp_v2 ON t_cartes(site_id, noms, prenoms, date_de_naissance, cle_doublon);
+    CREATE INDEX IF NOT EXISTS idx_cartes_stats_kpi ON t_cartes(site_id, statut, statut_physique, num_secu, rangement);
+    CREATE INDEX IF NOT EXISTS idx_cartes_site_date_delivrance ON t_cartes(site_id, date_delivrance);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);
 
     -- =====================================================
     -- FTS5 : Recherche instantanée full-text
@@ -557,7 +618,7 @@ function migrateV1(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_import_temp_cle ON t_import_temp(cle_doublon);
 
     -- =====================================================
-    -- SYNC QUEUE (File d'attente offline)
+    -- SYNC QUEUE (File d'attente offline — cartes CMU)
     -- =====================================================
     CREATE TABLE IF NOT EXISTS t_sync_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -574,14 +635,40 @@ function migrateV1(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_sync_queue_pending ON t_sync_queue(synced, created_at);
 
     -- =====================================================
+    -- OUTBOX (Entités structurelles : sites, centres, users)
+    -- UUID PRIMARY KEY garantit l'idempotence lors des tentatives
+    -- multiples de synchronisation (Offline-First Pattern).
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS t_outbox (
+      id          TEXT    PRIMARY KEY,
+      table_name  TEXT    NOT NULL,
+      operation   TEXT    NOT NULL CHECK(operation IN ('INSERT','UPDATE')),
+      payload     TEXT    NOT NULL,
+      created_at  TEXT    DEFAULT (datetime('now')),
+      status      TEXT    NOT NULL DEFAULT 'PENDING'
+                          CHECK(status IN ('PENDING','SYNCED','ERROR')),
+      error_msg   TEXT,
+      attempts    INTEGER DEFAULT 0
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_outbox_status ON t_outbox(status, created_at);
+
+    -- =====================================================
     -- TABLE DES ANOMALIES D'IMPORTATION (DLQ)
     -- =====================================================
     CREATE TABLE IF NOT EXISTS t_import_anomalies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      carte_id TEXT,
-      type_anomalie TEXT,
-      description TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      carte_id        TEXT,
+      type_anomalie   TEXT,
+      description     TEXT,
+      noms            TEXT,
+      prenoms         TEXT,
+      date_de_naissance TEXT,
+      num_secu        TEXT,
+      contact         TEXT,
+      site_id         INTEGER,
+      erreur_message  TEXT,
+      created_at      TEXT DEFAULT (datetime('now'))
     );
 
     -- =====================================================
@@ -660,6 +747,16 @@ function migrateV2(db: Database.Database): void {
       cle_doublon TEXT, cle_doublon_flex TEXT
     );
   `);
+}
+
+function migrateV38(db: Database.Database): void {
+  try {
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_cle_doublon ON t_cartes(site_id, cle_doublon);');
+    log.info('Migration V38: Created index idx_cartes_site_cle_doublon');
+  } catch (e) {
+    log.error('Migration V38 failed:', e);
+    throw e;
+  }
 }
 
 function migrateV10(db: Database.Database): void {
@@ -1395,6 +1492,68 @@ function migrateV31(db: Database.Database): void {
 }
 
 // =====================================================
+// MIGRATION V32 : Création de la table t_outbox (Outbox Pattern offline-first)
+// UUID TEXT PRIMARY KEY garantit l'idempotence : un même record ne peut
+// être enfilé qu'une seule fois, même en cas de double appel.
+// =====================================================
+function migrateV32(db: Database.Database): void {
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_outbox (
+        id          TEXT    PRIMARY KEY,
+        table_name  TEXT    NOT NULL,
+        operation   TEXT    NOT NULL CHECK(operation IN ('INSERT','UPDATE')),
+        payload     TEXT    NOT NULL,
+        created_at  TEXT    DEFAULT (datetime('now')),
+        status      TEXT    NOT NULL DEFAULT 'PENDING'
+                            CHECK(status IN ('PENDING','SYNCED','ERROR')),
+        error_msg   TEXT,
+        attempts    INTEGER DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_outbox_status ON t_outbox(status, created_at);
+    `);
+    log.info("Migration V32: Table 't_outbox' et index 'idx_outbox_status' garantis.");
+  } catch (e: any) {
+    log.error('Migration V32 failed:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V33 : Enrichissement de t_import_anomalies avec les données d'identité
+// Permet à l'onglet "Dates Invalides" d'afficher Nom, Prénom, Contact de l'assuré.
+// Utilise safe ALTER TABLE (idempotent) car DROP TABLE V28 a effacé les colonnes V25.
+// =====================================================
+function migrateV33(db: Database.Database): void {
+  log.info('[MIGRATION V33] Enrichissement de t_import_anomalies...');
+
+  const safeAlter = (col: string, definition: string): void => {
+    try {
+      const tableInfo = db.prepare('PRAGMA table_info(t_import_anomalies)').all() as { name: string }[];
+      const hasColumn = tableInfo.some(c => c.name === col);
+      if (!hasColumn) {
+        db.exec(`ALTER TABLE t_import_anomalies ADD COLUMN ${col} ${definition};`);
+        log.info(`[MIGRATION V33] Colonne '${col}' ajoutée à t_import_anomalies.`);
+      } else {
+        log.info(`[MIGRATION V33] Colonne '${col}' déjà présente — ignoré.`);
+      }
+    } catch (e: any) {
+      log.warn(`[MIGRATION V33] Impossible d'ajouter la colonne '${col}' :`, e.message);
+    }
+  };
+
+  safeAlter('noms', 'TEXT');
+  safeAlter('prenoms', 'TEXT');
+  safeAlter('date_de_naissance', 'TEXT');
+  safeAlter('num_secu', 'TEXT');
+  safeAlter('contact', 'TEXT');
+  safeAlter('site_id', 'INTEGER');
+  safeAlter('erreur_message', 'TEXT');
+
+  log.info('[MIGRATION V33] Table t_import_anomalies enrichie avec succès.');
+}
+
+// =====================================================
 // FILET DE SÉCURITÉ UNIVERSEL (exécuté après chaque cycle de migration)
 // Garantit la présence des colonnes critiques sur toutes les bases de terrain,
 // même celles corrompues entre deux versions de migration.
@@ -1432,9 +1591,176 @@ function migrateV27_safetyNet(db: Database.Database): void {
     log.warn("[SAFETY NET] Impossible de créer l'index idx_cartes_created_by :", indexErr.message);
   }
 
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);");
+  } catch (indexErr: any) {
+    log.warn("[SAFETY NET] Impossible de créer les index de synchronisation :", indexErr.message);
+  }
+
   // t_centres : colonnes code et prefixe_rangement (V29)
   safeAlter('t_centres', 'code', 'TEXT');
   safeAlter('t_centres', 'prefixe_rangement', 'TEXT');
 
+  // t_import_anomalies : colonnes d'identité (V33)
+  safeAlter('t_import_anomalies', 'noms', 'TEXT');
+  safeAlter('t_import_anomalies', 'prenoms', 'TEXT');
+  safeAlter('t_import_anomalies', 'date_de_naissance', 'TEXT');
+  safeAlter('t_import_anomalies', 'num_secu', 'TEXT');
+  safeAlter('t_import_anomalies', 'contact', 'TEXT');
+  safeAlter('t_import_anomalies', 'site_id', 'INTEGER');
+  safeAlter('t_import_anomalies', 'erreur_message', 'TEXT');
+
   log.info('[SAFETY NET] Vérification des colonnes critiques terminée.');
+}
+
+// =====================================================
+// MIGRATION V34 : Optimisation de la requête stats:get
+// Création d'index composés pour soulager les GROUP BY
+// sur les doublons stricts et probables.
+// =====================================================
+function migrateV34(db: Database.Database): void {
+  try {
+    // Optimise "doublons_probables" : WHERE site_id = ? GROUP BY noms, prenoms, date_de_naissance
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_stats_doublons_probables ON t_cartes(site_id, noms, prenoms, date_de_naissance);');
+    // Optimise "doublons_stricts" : WHERE site_id = ? GROUP BY cle_doublon
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_stats_cle_doublon ON t_cartes(site_id, cle_doublon);');
+    
+    log.info('[MIGRATION V34] Index d\'optimisation pour stats:get créés avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V34] Échec lors de la création des index d\'optimisation :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V35 : Remplacement de l'index V34 par un Covering Index 
+// complet pour éviter le gel du thread principal. 
+// L'index V34 exigeait encore un "table lookup" pour extraire "cle_doublon"
+// =====================================================
+function migrateV35(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V35] Démarrage de la migration V35...');
+    
+    // Covering index parfait pour la requête des doublons probables
+    // SQLite n'a plus besoin d'accéder à la table principale.
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_stats_dp_v2 ON t_cartes(site_id, noms, prenoms, date_de_naissance, cle_doublon);');
+    
+    // Covering index parfait pour la requête des KPI globaux
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_stats_kpi ON t_cartes(site_id, statut, statut_physique, num_secu, rangement);');
+    
+    log.info('[MIGRATION V35] Nouveaux index couvrants (Covering Index) créés avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V35] Échec lors de la création des index couvrants :', e.message);
+    throw e;
+  }
+}
+
+function migrateV36(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V36] Démarrage de la migration V36...');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_date_delivrance ON t_cartes(site_id, date_delivrance);');
+    log.info('[MIGRATION V36] Index idx_cartes_site_date_delivrance created.');
+  } catch (e: any) {
+    log.error('[MIGRATION V36] Failed to create index:', e.message);
+    throw e;
+  }
+}
+
+function migrateV37(db: Database.Database): void {
+
+  try {
+
+    log.info('[MIGRATION V37] Demarrage de la migration V37...');
+
+    const tableInfo = db.pragma('table_info(t_cartes)') as any[];
+
+    const hasNoteSignalement = tableInfo.some((col: any) => col.name === 'note_signalement_absence');
+
+    if (!hasNoteSignalement) {
+
+      db.exec('ALTER TABLE t_cartes ADD COLUMN note_signalement_absence TEXT;');
+
+      log.info('[MIGRATION V37] Colonne note_signalement_absence ajoutee.');
+
+    }
+
+    const hasEscaladeNiveau = tableInfo.some((col: any) => col.name === 'escalade_niveau');
+
+    if (!hasEscaladeNiveau) {
+
+      db.exec("ALTER TABLE t_cartes ADD COLUMN escalade_niveau TEXT DEFAULT 'CENTRE' CHECK(escalade_niveau IN ('CENTRE', 'SITE', 'RESOLU'));");
+
+      log.info('[MIGRATION V37] Colonne escalade_niveau ajoutee.');
+
+    }
+
+  } catch (e: any) {
+
+    log.error('[MIGRATION V37] Failed to alter table:', e.message);
+
+    throw e;
+
+  }
+
+}
+
+
+
+function migrateV39(db: Database.Database): void {
+
+  try {
+
+    log.info('[MIGRATION V39] Ajout de la colonne contact_retirant a t_cartes...');
+
+    const tableInfo = db.pragma('table_info(t_cartes)') as any[];
+
+    const hasContactRetirant = tableInfo.some((col: any) => col.name === 'contact_retirant');
+
+    if (!hasContactRetirant) {
+
+      db.exec('ALTER TABLE t_cartes ADD COLUMN contact_retirant TEXT;');
+
+      log.info('[MIGRATION V39] Colonne contact_retirant ajoutee.');
+
+    } else {
+
+      log.info('[MIGRATION V39] Colonne contact_retirant deja presente, migration ignoree.');
+
+    }
+
+  } catch (e: any) {
+
+    log.error('[MIGRATION V39] Failed to alter table:', e.message);
+
+    throw e;
+
+  }
+
+}
+
+function migrateV40(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V40] Ajout de expiry_date et is_permanent a t_sites...');
+    const tableInfo = db.pragma('table_info(t_sites)') as any[];
+    
+    const hasExpiryDate = tableInfo.some((col: any) => col.name === 'expiry_date');
+    if (!hasExpiryDate) {
+      db.exec('ALTER TABLE t_sites ADD COLUMN expiry_date TEXT;');
+      log.info('[MIGRATION V40] Colonne expiry_date ajoutee.');
+    } else {
+      log.info('[MIGRATION V40] Colonne expiry_date deja presente, migration ignoree.');
+    }
+
+    const hasIsPermanent = tableInfo.some((col: any) => col.name === 'is_permanent');
+    if (!hasIsPermanent) {
+      db.exec('ALTER TABLE t_sites ADD COLUMN is_permanent INTEGER DEFAULT 0;');
+      log.info('[MIGRATION V40] Colonne is_permanent ajoutee.');
+    } else {
+      log.info('[MIGRATION V40] Colonne is_permanent deja presente, migration ignoree.');
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V40] Failed to alter table t_sites:', e.message);
+    throw e;
+  }
 }

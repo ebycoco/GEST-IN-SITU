@@ -9,6 +9,7 @@ import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { initDatabase, getDatabase } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
+import { ensureSyncIds } from './database/queries/hierarchy.queries';
 import { initAutoUpdater } from './updater';
 import { initBackupScheduler } from './backup';
 import log from 'electron-log';
@@ -165,6 +166,13 @@ app.whenReady().then(async () => {
   await initDatabase();
   log.info('Database initialized');
 
+  try {
+    ensureSyncIds();
+    log.info('Vérification et génération des sync_ids terminées.');
+  } catch (err) {
+    log.error('Échec de la correction automatique des sync_ids:', err);
+  }
+
   // ─── PRELOAD BLOQUANT DES COMPTES UTILISATEURS ────────────────────────────
   // CRITIQUE (premier démarrage) : la fenêtre de Login ne doit s'ouvrir
   // qu'après que t_users est peuplée depuis Supabase.
@@ -200,6 +208,10 @@ app.whenReady().then(async () => {
     setupNotifications();
     setupTheme();
     
+    // Injection de la référence fenêtre dans le SyncEngine pour permettre
+    // l'envoi de notifications IPC discrètes vers le Renderer (footer "sync en cours").
+    syncEngine.setMainWindow(mainWindow);
+
     // Allumage du moteur de synchronisation automatique et moniteur réseau
     syncEngine.init();
   }

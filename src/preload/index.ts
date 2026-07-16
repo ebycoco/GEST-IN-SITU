@@ -53,12 +53,22 @@ const api = {
       ipcRenderer.invoke('cartes:delete', id),
     delivrer: (id: number, data: IDeliveryData, currentUser?: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('cartes:delivrer', id, data, currentUser),
-    signalerAbsence: (id: number, agent: string): Promise<any> => 
-      ipcRenderer.invoke('cartes:signalerAbsence', id, agent),
+    transferer: (id: number, data: { centre_id: number; rangement?: string; agent_transfert: string }, currentUser?: Partial<IUser>): Promise<any> => 
+      ipcRenderer.invoke('cartes:transferer', id, data, currentUser),
+    signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any): Promise<any> => 
+      ipcRenderer.invoke('cartes:signalerAbsence', id, agentLogin, agentInfo, commentaire, currentUser),
     getAbsences: (siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAbsences', siteId),
+    getAbsencesCentre: (centreId: number): Promise<ICarte[]> => 
+      ipcRenderer.invoke('cartes:getAbsencesCentre', centreId),
+    getAbsencesSite: (siteId?: number): Promise<ICarte[]> => 
+      ipcRenderer.invoke('cartes:getAbsencesSite', siteId),
+    escaladerAuSite: (id: number, currentUser?: Partial<IUser>): Promise<any> => 
+      ipcRenderer.invoke('cartes:escaladerAuSite', id, currentUser),
     getAgentAbsences: (agent: string, siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAgentAbsences', agent, siteId),
+    getSignalementsResolus: (agent: string, siteId?: number): Promise<ICarte[]> => 
+      ipcRenderer.invoke('cartes:getSignalementsResolus', agent, siteId),
     resoudreAbsence: (
       id: number, 
       data: { status: string; agent: string; note: string; rangement: string }
@@ -80,6 +90,10 @@ const api = {
       ipcRenderer.invoke('cartes:getDoublonsProbablesPage', siteId, offset, limit, query),
     getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
       ipcRenderer.invoke('cartes:getSansNumSecuPage', siteId, offset, limit, query),
+    getSansNomPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansNomPage', siteId, offset, limit, query),
+    getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansPrenomPage', siteId, offset, limit, query),
     getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
       ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query),
     updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }): Promise<any> => 
@@ -100,6 +114,8 @@ const api = {
       fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }
     ): Promise<any> => 
       ipcRenderer.invoke('cartes:updateApurementHistorique', id, fields),
+    inventairePhysiqueScan: (identifiant: string, rangement: string): Promise<any> =>
+      ipcRenderer.invoke('cartes:inventairePhysiqueScan', identifiant, rangement),
   },
   logistique: {
     recevoirLot: (payload: { lot_id: string; quantite: number; centre_origine: string }): Promise<{ success: boolean }> =>
@@ -131,18 +147,22 @@ const api = {
       ipcRenderer.invoke('stats:getAgentToday', userId),
     getAgentRecentSaisies: (userId: number, limit?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('stats:getAgentRecentSaisies', userId, limit),
-    getSiteSaisieToday: (siteId: number, centreId?: number): Promise<any[]> => 
-      ipcRenderer.invoke('stats:getSiteSaisieToday', siteId, centreId),
-    getSiteQualiteToday: (siteId: number, centreId?: number): Promise<any[]> => 
-      ipcRenderer.invoke('stats:getSiteQualiteToday', siteId, centreId),
-    getSiteLogistiqueToday: (siteId: number, centreId?: number): Promise<any[]> => 
-      ipcRenderer.invoke('stats:getSiteLogistiqueToday', siteId, centreId),
+    getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
+      ipcRenderer.invoke('stats:getSiteSaisieToday', siteId, centreId, agentId, dateStr),
+    getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
+      ipcRenderer.invoke('stats:getSiteQualiteToday', siteId, centreId, agentId, dateStr),
+    getSiteLogistiqueToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
+      ipcRenderer.invoke('stats:getSiteLogistiqueToday', siteId, centreId, agentId, dateStr),
+    getActivitiesByAgentAndDate: (siteId: number, centreId?: number | null, agentId?: number | null, dateStr?: string | null): Promise<any> => 
+      ipcRenderer.invoke('stats:getActivitiesByAgentAndDate', siteId, centreId, agentId, dateStr),
     getRetraits: (siteId: number, centreId: number | null, period: 'jour' | 'semaine' | 'mois' | 'annee', customDate?: string | null): Promise<{ rows: any[]; totaux: any }> => 
       ipcRenderer.invoke('stats:getRetraits', siteId, centreId, period, customDate ?? null),
     getRetraitsTrend: (siteId: number, centreId: number | null, period: 'jour' | 'semaine' | 'mois' | 'annee', customDate?: string | null): Promise<Array<{ label: string; total: number }>> => 
       ipcRenderer.invoke('stats:getRetraitsTrend', siteId, centreId, period, customDate ?? null),
     getUnsyncedCardsCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedCardsCount', siteId),
+    getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number }> => 
+      ipcRenderer.invoke('stats:getDetailedSyncStats', siteId),
     getUnsyncedUsersCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedUsersCount', siteId),
   },
@@ -194,8 +214,10 @@ const api = {
   },
   // Users
   users: {
-    getAll: (siteId?: number): Promise<IUser[]> => 
-      ipcRenderer.invoke('users:getAll', siteId),
+    getAll: (siteId?: number, centreId?: number): Promise<IUser[]> => 
+      ipcRenderer.invoke('users:getAll', siteId, centreId),
+    getProfile: (login: string): Promise<any> => 
+      ipcRenderer.invoke('users:getProfile', login),
     create: (data: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('users:create', data),
     update: (id: number, data: Partial<IUser>): Promise<{ changes: number }> => 
@@ -250,10 +272,12 @@ const api = {
       ipcRenderer.invoke('hierarchy:deleteSite', id),
     resetAdminPassword: (siteId: number, pass: string): Promise<any> => 
       ipcRenderer.invoke('hierarchy:resetAdminPassword', siteId, pass),
-    verifyPassword: (password: string): Promise<boolean> => 
-      ipcRenderer.invoke('hierarchy:verifyPassword', password),
+    verifyPassword: (password: string, actionName?: string, login?: string): Promise<boolean> => 
+      ipcRenderer.invoke('hierarchy:verifyPassword', password, login),
     getCentres: (siteId?: number): Promise<any[]> => 
       ipcRenderer.invoke('hierarchy:getCentres', siteId),
+    getCentreById: (id: number): Promise<any> => 
+      ipcRenderer.invoke('hierarchy:getCentreById', id),
     createCentre: (data: any): Promise<any> => 
       ipcRenderer.invoke('hierarchy:createCentre', data),
     updateCentre: (id: number, data: any): Promise<any> => 
@@ -262,6 +286,10 @@ const api = {
       ipcRenderer.invoke('centre:delete', id),
     getPostes: (centreId?: number): Promise<any[]> => 
       ipcRenderer.invoke('hierarchy:getPostes', centreId),
+    pullCentres: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
+      ipcRenderer.invoke('sync:pullCentres', siteId, currentUser),
+    forceCentres: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
+      ipcRenderer.invoke('sync:forceCentres', siteId, currentUser),
   },
   // Config
   config: {
@@ -345,8 +373,16 @@ const api = {
   sync: {
     getStatus: (): Promise<any> => 
       ipcRenderer.invoke('sync:getStatus'),
+    getCloudCartesCount: (siteId: number): Promise<number> => 
+      ipcRenderer.invoke('sync:getCloudCartesCount', siteId),
+    getTotalCloudCartesCount: (siteId: number): Promise<number> => 
+      ipcRenderer.invoke('sync:getTotalCloudCartesCount', siteId),
     force: (): Promise<any> => 
       ipcRenderer.invoke('sync:force'),
+    getAutoDownstream: (login: string): Promise<boolean> =>
+      ipcRenderer.invoke('sync:getAutoDownstream', login),
+    setAutoDownstream: (login: string, enabled: boolean): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:setAutoDownstream', login, enabled),
     onStatusChanged: (callback: (status: any) => void) => {
       const listener = (_: any, status: any) => callback(status);
       ipcRenderer.on('sync:status-changed', listener);
@@ -369,6 +405,8 @@ const api = {
       ipcRenderer.on('sync:bulk-progress', listener);
       return () => ipcRenderer.removeListener('sync:bulk-progress', listener);
     },
+    cancelBulk: (currentUser?: any): Promise<{ success: boolean; message: string }> =>
+      ipcRenderer.invoke('sync:cancelBulk', currentUser),
     getUnreadCount: (siteId?: number): Promise<number> => 
       ipcRenderer.invoke('sync:getUnreadCount', siteId),
     getUnreadList: (siteId?: number): Promise<ILog[]> => 
@@ -385,8 +423,27 @@ const api = {
       ipcRenderer.invoke('sync:pullSiteCards', siteId, currentUser),
     pullAgents: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
       ipcRenderer.invoke('sync:pullAgents', siteId, currentUser),
-    forceAgents: (siteId: number): Promise<void> => 
+    syncUsersFromSupabase: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> =>
+      ipcRenderer.invoke('admin:syncUsersFromSupabase', siteId, currentUser),
+    forceAgents: (siteId: number): Promise<{ success: boolean; count: number; message?: string }> => 
       ipcRenderer.invoke('sync:forceAgents', siteId),
+    /**
+     * Écoute les événements du cycle downstream automatique (toutes les 2h post-login).
+     * Permet d'afficher une notification discrète dans le footer de l'UI.
+     *
+     * @param callback - Fonction appelée à chaque événement du cycle automatique.
+     * @returns Fonction de nettoyage à appeler au démontage du composant.
+     */
+    onAutoDownstream: (callback: (event: any) => void) => {
+      const listener = (_: any, event: any) => callback(event);
+      ipcRenderer.on('sync:auto-downstream', listener);
+      return () => ipcRenderer.removeListener('sync:auto-downstream', listener);
+    },
+    onDownstreamProgress: (callback: (p: number) => void) => {
+      const listener = (_: any, p: number) => callback(p);
+      ipcRenderer.on('sync:downstream-progress', listener);
+      return () => ipcRenderer.removeListener('sync:downstream-progress', listener);
+    },
   },
   // Maintenance
   maintenance: {
@@ -395,9 +452,22 @@ const api = {
     clearDatabaseCartes: (siteId?: number, currentUser?: any): Promise<{ success: boolean; count: number }> => 
       ipcRenderer.invoke('maintenance:clearDatabaseCartes', siteId, currentUser),
     clearCloudCartes: (siteId: number, currentUser?: any): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('maintenance:clearCloudCartes', siteId, currentUser),
+      ipcRenderer.invoke('maintenance:clearCloudCartes', siteId, true, currentUser),
     fullReset: (currentUser?: any): Promise<void> => 
       ipcRenderer.invoke('maintenance:fullReset', currentUser),
+    getLogs: (limit?: number, offset?: number, searchTerm?: string, filterLevel?: string): Promise<{logs: any[], total: number}> =>
+      ipcRenderer.invoke('maintenance:getLogs', limit, offset, searchTerm, filterLevel),
+    clearLogs: (password: string, currentUser?: any): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('maintenance:clearLogs', password, currentUser),
+    exportLogs: (): Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }> =>
+      ipcRenderer.invoke('maintenance:exportLogs'),
+    analyzeUploadedLogs: (): Promise<{ success: boolean; problemDescription?: string; detailedExplanation?: string; prompt?: string; error?: string }> =>
+      ipcRenderer.invoke('maintenance:analyzeUploadedLogs'),
+    onPurgeCloudProgress: (callback: (p: number) => void) => {
+      const listener = (_event: any, p: number) => callback(p);
+      ipcRenderer.on('db:purge-cloud-progress', listener);
+      return () => ipcRenderer.removeListener('db:purge-cloud-progress', listener);
+    },
   },
   onDatabaseUpdated: (callback: (data: any) => void) => {
     const listener = (_event: any, data: any) => callback(data);

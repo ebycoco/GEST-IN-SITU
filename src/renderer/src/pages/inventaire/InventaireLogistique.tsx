@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Package, ArrowRight, ShieldAlert, AlertTriangle, Key } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useAuthStore } from '../stores/authStore';
+import { useAuthStore } from '../../stores/authStore';
 
-export default function LogistiquePage() {
+export default function InventaireLogistique() {
   const { user } = useAuthStore();
   const siteId = user?.site_id || 1;
 
@@ -120,7 +120,7 @@ export default function LogistiquePage() {
       </div>
 
       {/* Main card */}
-      <div className="premium-card premium-glass" style={{ padding: 32 }}>
+      <div className="glass-card" style={{ padding: 32 }}>
         {!selectedCarte ? (
           /* SECTION RECHERCHE */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>

@@ -48,6 +48,9 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
   // Le check initial est également retardé de 10 secondes pour laisser le temps
   // à la fenêtre de s'afficher complètement avant toute requête réseau bloquante.
   setTimeout(() => {
+    // Désactivé car non supporté nativement par Inno Setup (génère une erreur ENOENT app-update.yml).
+    // Les mises à jour sont vérifiées via Supabase.
+    /*
     try {
       autoUpdater.checkForUpdates().catch((err: Error) => {
         log.warn('Vérification de mise à jour impossible (non critique) :', err.message);
@@ -56,10 +59,13 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
       const message = err instanceof Error ? err.message : String(err);
       log.warn('Vérification de mise à jour impossible (non critique) :', message);
     }
+    */
   }, 10_000); // Délai de 10 secondes après le démarrage
 
   // Check toutes les 4 heures
   setInterval(() => {
+    // Désactivé
+    /*
     try {
       autoUpdater.checkForUpdates().catch((err: Error) => {
         log.warn('Vérification périodique de mise à jour impossible (non critique) :', err.message);
@@ -68,5 +74,6 @@ export function initAutoUpdater(mainWindow: BrowserWindow): void {
       const message = err instanceof Error ? err.message : String(err);
       log.warn('Vérification périodique de mise à jour impossible (non critique) :', message);
     }
+    */
   }, 4 * 60 * 60 * 1000);
 }

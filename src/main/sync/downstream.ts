@@ -1,9 +1,12 @@
 import log from 'electron-log';
 import { getSupabaseClient } from './supabase-client';
-import { getDatabase } from '../database/connection';
+import { getDatabase, getDbPath } from '../database/connection';
 import { logAction } from '../database/queries';
-import { BrowserWindow } from 'electron';
+import { logAudit } from '../utils/audit';
+import { BrowserWindow, app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
+import { Worker } from 'worker_threads';
+import { join } from 'path';
 
 function cleanBirthDate(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null;
@@ -104,7 +107,8 @@ function normalizeContact(contactStr: string | null | undefined): string {
  */
 export async function runDownstream(siteId: number, force: boolean = false): Promise<number> {
   if (!siteId || isNaN(Number(siteId))) {
-    throw new Error("siteId invalide ou manquant.");
+    log.warn("[SYNC] runDownstream appelé sans siteId valide. Synchronisation des cartes ignorée.");
+    return 0;
   }
 
   const supabase = getSupabaseClient();
@@ -115,7 +119,7 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     log.info(`[SYNC] Rapatriement du site courant (${siteId}) depuis Supabase...`);
     const { data: siteDataList, error: siteError } = await supabase
       .from('t_sites')
-      .select('id, nom, code, is_active, max_centres, created_at, sync_id')
+      .select('id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent')
       .eq('id', siteId);
 
     if (siteError || !siteDataList || siteDataList.length === 0) {
@@ -125,8 +129,8 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     const siteData = siteDataList[0];
 
     db.prepare(`
-      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id)
-      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id)
+      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
     `).run({
       id: siteData.id,
       nom: siteData.nom,
@@ -134,7 +138,9 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
       is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
       max_centres: siteData.max_centres || 4,
       created_at: siteData.created_at || new Date().toISOString(),
-      sync_id: siteData.sync_id || null
+      sync_id: siteData.sync_id || null,
+      expiry_date: siteData.expiry_date || null,
+      is_permanent: siteData.is_permanent ? 1 : 0
     });
     log.info(`[SYNC] Site ${siteId} ("${siteData.nom}") mis à jour localement avec succès.`);
   } catch (err: any) {
@@ -148,7 +154,7 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     log.info(`[SYNC] Rapatriement des centres opérationnels pour le site ${siteId} depuis Supabase...`);
     const { data: centresData, error: centresError } = await supabase
       .from('t_centres')
-      .select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu')
+      .select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, lieu')
       .eq('site_id', siteId);
 
     if (centresError) {
@@ -168,7 +174,7 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
             created_at: c.created_at || new Date().toISOString(),
             sync_id: c.sync_id || null,
             prefixe_rangement: c.prefixe_rangement || null,
-            code: c.code || null,
+            code: null,
             lieu: c.lieu || null
           });
         }
@@ -185,56 +191,137 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
   log.info(`[SYNC] Démarrage du pull pour site : ${siteId}`);
   log.info(`Downstream: Starting full sync for site ${siteId} in Low-Memory chunked mode (Force: ${force}).`);
 
+  // Si on force la synchronisation, on réinitialise le watermark local AVANT de commencer les chunks.
+  // De cette façon, les chunks pourront progresser normalement en lisant et mettant à jour le t_config.
+  if (force) {
+    try {
+      db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync', '1970-01-01T00:00:00Z')`).run();
+      db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_id', '00000000-0000-0000-0000-000000000000')`).run();
+    } catch (e) {
+      log.error(`[SYNC] Erreur lors du reset du watermark (force = true) :`, e);
+    }
+  }
+
+  let totalToPull = 0;
+  try {
+    let initialWatermark = '1970-01-01T00:00:00Z';
+    let initialLastSyncId = '00000000-0000-0000-0000-000000000000';
+    const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+    if (configRow && configRow.value) {
+      initialWatermark = configRow.value;
+    }
+    const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
+    if (configRowId && configRowId.value) {
+      initialLastSyncId = configRowId.value;
+    }
+    const { count } = await supabase.from('t_cartes')
+      .select('*', { count: 'exact', head: true })
+      .or(`updated_at.gt.${initialWatermark},and(updated_at.eq.${initialWatermark},sync_id.gt.${initialLastSyncId})`)
+      .eq('id_site', siteId);
+    if (count) totalToPull = count;
+    log.info(`[SYNC] Total exact count returned by Supabase for downstream: ${totalToPull}`);
+  } catch (err) {
+    log.error(`[SYNC] Erreur lors du calcul du count downstream :`, err);
+  }
+
+  // Émission du progrès initial avec objet enrichi
+  let currentProgress = 0;
+  const emitProgress = (pct: number, merged: number, total: number) => {
+    BrowserWindow.getAllWindows().forEach(w =>
+      w.webContents.send('sync:downstream-progress', { progress: pct, merged, total })
+    );
+  };
+  if (totalToPull > 0) {
+    emitProgress(0, 0, totalToPull);
+  }
+
   while (hasMore) {
-    const chunkProcessed = await runDownstreamChunk(siteId, force);
+    const chunkProcessed = await runDownstreamChunk(siteId);
     totalMerged += chunkProcessed;
 
     if (chunkProcessed < 500) {
       hasMore = false;
     } else {
       log.info(`Downstream: Chunk of 500 processed. Yielding CPU & RAM...`);
-      // Pause asynchrone de 50ms pour laisser respirer Windows et le garbage collector (Sec 9)
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Pause asynchrone de 300ms pour laisser respirer Windows, le garbage collector et les requêtes de l'interface (Sec 9)
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+
+    if (totalToPull > 0) {
+      let progress = Math.round((totalMerged / totalToPull) * 100);
+      if (progress >= 100 && hasMore) {
+        progress = 99; // Ne jamais afficher 100% tant que c'est pas vraiment fini
+      } else if (progress > 100) {
+        progress = 100;
+      }
+      currentProgress = progress;
+      emitProgress(currentProgress, totalMerged, totalToPull);
+    } else if (hasMore) {
+      // Si on n'a pas de totalToPull, on simule une progression qui bloque à 99%
+      currentProgress = 99;
+      emitProgress(99, totalMerged, 0);
     }
   }
 
+  // Émission finale : 100% réel
+  emitProgress(100, totalMerged, totalToPull > 0 ? totalToPull : totalMerged);
+
   log.info(`Downstream: Sync completed. Total merged: ${totalMerged} records.`);
+
+  // 🔔 Notification unique finale — émise UNE SEULE FOIS avec le vrai total
+  if (totalMerged > 0) {
+    try {
+      const db = getDatabase()!;
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+        VALUES (NULL, 'SYSTEM', 'SYNC_UPDATE', ?, '{"read": false}', ?, 1, ?)
+      `).run(`${totalMerged} cartes synchronisées depuis le Cloud.`, uuidv4(), siteId);
+    } catch (err) {
+      log.error('Failed to record downstream log:', err);
+    }
+    BrowserWindow.getAllWindows().forEach(w =>
+      w.webContents.send('sync:updated-data', { count: totalMerged })
+    );
+  }
+
   return totalMerged;
 }
 
 /**
- * Traite un unique lot (chunk) de 500 cartes maximum de Supabase.
+ * Traite un unique lot (chunk) de 500 cartes maximum de Supabase via Worker.
  */
-async function runDownstreamChunk(siteId: number, force: boolean = false): Promise<number> {
+async function runDownstreamChunk(siteId: number): Promise<number> {
   const db = getDatabase()!;
   
   // 1. Récupération du watermark local dans t_config
   let watermark = '1970-01-01T00:00:00Z';
-  if (!force) {
-    const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
-    if (configRow && configRow.value) {
-      watermark = configRow.value;
-    }
+  let lastSyncId = '00000000-0000-0000-0000-000000000000';
+
+  const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+  if (configRow && configRow.value) {
+    watermark = configRow.value;
+  }
+  const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
+  if (configRowId && configRowId.value) {
+    lastSyncId = configRowId.value;
   }
 
-  log.info(`Downstream Chunk: Fetching updates on t_cartes from Supabase since ${watermark} for site ${siteId}...`);
-  log.info(`⏳ [SUPABASE] Récupération des cartes modifiées pour le site ${siteId}...`);
+  log.info(`Downstream Chunk: Fetching updates on t_cartes from Supabase since ${watermark} (sync_id > ${lastSyncId}) for site ${siteId}...`);
   const supabase = getSupabaseClient();
 
-  // 2. Requête Supabase avec AbortController et Timeout de 10 secondes
+  // 2. Requête Supabase avec AbortController
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, 10000);
+  const timeoutId = setTimeout(() => { controller.abort(); }, 10000);
 
   let cloudCards: any[] | null = null;
   try {
     const { data, error } = await supabase
       .from('t_cartes')
       .select('*')
-      .gt('updated_at', watermark)
+      .or(`updated_at.gt.${watermark},and(updated_at.eq.${watermark},sync_id.gt.${lastSyncId})`)
       .eq('id_site', siteId)
       .order('updated_at', { ascending: true })
+      .order('sync_id', { ascending: true })
       .limit(500)
       .abortSignal(controller.signal);
 
@@ -248,133 +335,69 @@ async function runDownstreamChunk(siteId: number, force: boolean = false): Promi
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
-      log.warn("⚠️ [SUPABASE] Requête downstream interrompue : Timeout de 10s dépassé. Passage en mode dégradé.");
-      log.warn(`[SUPABASE] Downstream timeout for site ${siteId}. Aborted. Passing in degraded mode.`);
-      return 0; // Mode dégradé : on retourne 0 carte traitée sans crasher
+      log.warn("⚠️ [SUPABASE] Requête downstream interrompue : Timeout. Passage en mode dégradé.");
+      return 0; 
     }
     throw err;
   }
-
-  log.info(`✅ [SUPABASE] ${cloudCards?.length || 0} cartes récupérées avec succès depuis le cloud.`);
 
   if (!cloudCards || cloudCards.length === 0) {
     return 0;
   }
 
-  log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud to merge.`);
+  log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud. Sending to Worker...`);
 
-  let processedCount = 0;
-  let latestUpdatedAt = watermark;
-
-  // Préparation des requêtes SQL une seule fois hors transaction/boucle pour éviter les compiles répétitifs
-  const selectStmt = db.prepare('SELECT * FROM t_cartes WHERE sync_id = ?');
-  const insertStmt = db.prepare(`
-    INSERT INTO t_cartes (
-      noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
-      lieu_enrolement, contact, rangement, statut, date_delivrance,
-      agent_saisie, nom_retirant, num_retirant, agent_distributeur,
-      centre_retrait, cle_doublon, cle_doublon_flex, statut_physique,
-      site_id, centre_id, poste_id, qr_code_data, sync_id,
-      created_at, updated_at, synced_at, is_dirty
-    ) VALUES (
-      :noms, :prenoms, :date_de_naissance, :lieu_de_naissance, :num_secu,
-      :lieu_enrolement, :contact, :rangement, :statut, :date_delivrance,
-      :agent_saisie, :nom_retirant, :num_retirant, :agent_distributeur,
-      :centre_retrait, :cle_doublon, :cle_doublon_flex, :statut_physique,
-      :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
-      :created_at, :updated_at, :updated_at, 0
-    )
-  `);
-  const updateStmt = db.prepare(`
-    UPDATE t_cartes
-    SET noms = :noms, prenoms = :prenoms, date_de_naissance = :date_de_naissance,
-        lieu_de_naissance = :lieu_de_naissance, num_secu = :num_secu,
-        lieu_enrolement = :lieu_enrolement, contact = :contact, rangement = :rangement,
-        statut = :statut, date_delivrance = :date_delivrance, agent_saisie = :agent_saisie,
-        nom_retirant = :nom_retirant, num_retirant = :num_retirant,
-        agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
-        cle_doublon = :cle_doublon, cle_doublon_flex = :cle_doublon_flex,
-        statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
-        qr_code_data = :qr_code_data, updated_at = :updated_at, synced_at = :updated_at,
-        is_dirty = 0
-    WHERE id_carte = :idCarte
-  `);
-  const updateWatermarkStmt = db.prepare(`
-    INSERT OR REPLACE INTO t_config (key, value)
-    VALUES ('last_downstream_sync', ?)
-  `);
-
-  // ─── FILET DE SÉCURITÉ FK (t_cartes) ────────────────────────────────────────
-  // Désactivation temporaire des contraintes de clés étrangères le temps de la
-  // transaction downstream. Au premier démarrage, Supabase renvoie des centre_id /
-  // poste_id qui ne sont pas encore dans t_centres / t_postes locaux (base fraîche).
-  // Sans ce guard, SQLite lève un FOREIGN KEY constraint failed fatal.
-  // La réactivation est garantie dans le bloc finally, même en cas d'exception.
-  // ─────────────────────────────────────────────────────────────────────────────
-  db.exec('PRAGMA foreign_keys = OFF;');
-  try {
-    db.transaction(() => {
-      for (const card of cloudCards) {
-        const syncId = card.sync_id;
-        if (!syncId) continue;
-
-        // Conserver le timestamp de mise à jour pour faire progresser le watermark
-        if (card.updated_at && card.updated_at > latestUpdatedAt) {
-          latestUpdatedAt = card.updated_at;
-        }
-
-        // Chercher si la carte existe localement par son sync_id (Requête compilée réutilisée)
-        const localCard = selectStmt.get(syncId) as any;
-
-        if (!localCard) {
-          // Cas A : La carte n'existe pas en local -> INSERT direct (Requête compilée réutilisée)
-          insertLocalCard(insertStmt, card);
-          processedCount++;
-        } else if (localCard.is_dirty === 1) {
-          // Cas B : Si la carte existe mais a 'is_dirty === 1' ➡️ SKIP (on protège le travail local)
-          log.info(`[SYNC PULL] Skip de la carte ${syncId} car elle est modifiée localement (is_dirty = 1).`);
-        } else {
-          // Cas C : Si la carte existe et n'est pas modifiée ➡️ UPDATE uniquement si 'updated_at' du Cloud est strictement supérieur au 'updated_at' local
-          const localTime = new Date(localCard.updated_at || 0).getTime();
-          const cloudTime = new Date(card.updated_at || 0).getTime();
-
-          if (cloudTime > localTime) {
-            // Requête compilée réutilisée
-            updateLocalCard(updateStmt, localCard.id_carte, card);
-            processedCount++;
-          }
-        }
-      }
-
-      // 4. Mettre à jour le watermark local (Requête compilée réutilisée)
-      updateWatermarkStmt.run(latestUpdatedAt);
-    })();
-  } finally {
-    // Réactivation inconditionnelle des contraintes FK après la transaction
-    db.exec('PRAGMA foreign_keys = ON;');
-  }
-
-  log.info(`✅ [SYNC SUCCESS] ${cloudCards.length} cartes enregistrées/fusionnées en local.`);
-
-  if (processedCount > 0) {
+  // 3. Délégation au Worker pour l'insertion SQLite (zéro gel UI)
+  return new Promise((resolve, reject) => {
+    let sqlitePath: string;
     try {
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-        VALUES (NULL, 'SYSTEM', 'SYNC_UPDATE', ?, '{"read": false}', ?, 1, ?)
-      `).run(`${processedCount} cartes synchronisées depuis le Cloud.`, uuidv4(), siteId);
-
-      const windows = BrowserWindow.getAllWindows();
-      if (windows.length > 0) {
-        windows[0].webContents.send('sync:updated-data', {
-          count: processedCount
-        });
-      }
-    } catch (err) {
-      log.error('Failed to record downstream update notification:', err);
+      sqlitePath = require.resolve('better-sqlite3');
+    } catch {
+      sqlitePath = 'better-sqlite3';
     }
-  }
 
-  return cloudCards.length;
+    const workerPath = join(__dirname, 'workers', 'download-worker.js');
+    const worker = new Worker(workerPath, {
+      workerData: { dbPath: getDbPath(), sqlitePath }
+    });
+
+    let chunkSuccessCount: number | null = null;
+    let chunkError: Error | null = null;
+
+    worker.on('message', (msg) => {
+      if (msg.type === 'log') {
+        if (msg.level === 'error') log.error(msg.message);
+        else log.info(msg.message);
+      } else if (msg.type === 'chunk-done') {
+        log.info(`✅ [SYNC SUCCESS] ${cloudCards!.length} cartes traitées (fusionnées: ${msg.processed}) par le worker.`);
+        chunkSuccessCount = cloudCards!.length;
+        worker.postMessage({ type: 'close' });
+      } else if (msg.type === 'error') {
+        log.error(`[DownloadWorker] Erreur: ${msg.message}`);
+        chunkError = new Error(msg.message);
+        worker.postMessage({ type: 'close' });
+      }
+    });
+
+    worker.on('error', (err) => {
+      log.error(`[DownloadWorker] Fatal error:`, err);
+      reject(err);
+    });
+
+    worker.on('exit', (code) => {
+      if (code !== 0) log.warn(`[DownloadWorker] Exited with code ${code}`);
+      if (chunkError) reject(chunkError);
+      else resolve(chunkSuccessCount || 0);
+    });
+
+    worker.postMessage({
+      type: 'write-chunk',
+      cloudCards,
+      watermark,
+      lastSyncId,
+      siteId
+    });
+  });
 }
 
 /**
@@ -401,7 +424,7 @@ function insertLocalCard(insertStmt: any, card: any): void {
     cle_doublon: card.cle_doublon || null,
     cle_doublon_flex: card.cle_doublon_flex || null,
     statut_physique: card.statut_physique || 'OK',
-    site_id: Number(card.id_site || card.site_id || card.siteId || 1),
+    site_id: card.id_site || card.site_id || card.siteId ? Number(card.id_site || card.site_id || card.siteId) : null,
     centre_id: card.id_centre || card.centre_id || null,
     poste_id: card.id_poste || card.poste_id || null,
     qr_code_data: card.qr_code_data || null,
@@ -560,7 +583,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
   try {
     const { data: siteDataList, error: siteError } = await supabase
       .from('t_sites')
-      .select('id, nom, code, is_active, max_centres, created_at, sync_id')
+      .select('id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent')
       .eq('id', siteId);
 
     if (siteError || !siteDataList || siteDataList.length === 0) {
@@ -570,8 +593,8 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     const siteData = siteDataList[0];
 
     db.prepare(`
-      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id)
-      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id)
+      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
     `).run({
       id: siteData.id,
       nom: siteData.nom,
@@ -579,7 +602,9 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
       is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
       max_centres: siteData.max_centres || 4,
       created_at: siteData.created_at || new Date().toISOString(),
-      sync_id: siteData.sync_id || null
+      sync_id: siteData.sync_id || null,
+      expiry_date: siteData.expiry_date || null,
+      is_permanent: siteData.is_permanent ? 1 : 0
     });
     log.info(`[syncUsersFromCloud] Site parent ${siteId} assuré localement.`);
   } catch (err: any) {
@@ -710,6 +735,22 @@ export async function preloadUsersFromCloud(): Promise<void> {
     }
     const supabase = getSupabaseClient();
 
+    // Vérification de la présence des tables critiques dans SQLite
+    const checkTableExists = (tableName: string): boolean => {
+      try {
+        const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(tableName);
+        return !!row;
+      } catch (e) {
+        return false;
+      }
+    };
+
+    for (const table of ['t_sites', 't_centres', 't_users']) {
+      if (!checkTableExists(table)) {
+        logAudit('SYSTEM', 'SYS_INIT_TABLE_MISSING', { table });
+      }
+    }
+
     // --- ÉTAPE PRÉALABLE : RÉCUPÉRATION DE TOUS LES SITES ---
     // On télécharge d'abord tous les sites pour éviter les violations de clés étrangères
     // sur site_id pour n'importe quel compte utilisateur inséré.
@@ -717,15 +758,18 @@ export async function preloadUsersFromCloud(): Promise<void> {
       log.info('Preload: Rapatriement préliminaire de tous les sites depuis Supabase...');
       const { data: sitesData, error: sitesError } = await supabase
         .from('t_sites')
-        .select('id, nom, code, is_active, max_centres, created_at, sync_id');
+        .select('id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent');
 
       if (sitesError) {
         log.error('Preload: Impossible de pré-charger les sites parents :', sitesError.message);
-      } else if (sitesData && sitesData.length > 0) {
+        logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: sitesError.message });
+      } else if (!sitesData || sitesData.length === 0) {
+        logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: 'Données non récupérées ou vides' });
+      } else {
         db.transaction(() => {
           const insertSiteStmt = db.prepare(`
-            INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id)
-            VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id)
+            INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+            VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
           `);
           for (const s of sitesData) {
             insertSiteStmt.run({
@@ -735,14 +779,18 @@ export async function preloadUsersFromCloud(): Promise<void> {
               is_active: s.is_active !== undefined ? s.is_active : 1,
               max_centres: s.max_centres || 4,
               created_at: s.created_at || new Date().toISOString(),
-              sync_id: s.sync_id || null
+              sync_id: s.sync_id || null,
+              expiry_date: s.expiry_date || null,
+              is_permanent: s.is_permanent ? 1 : 0
             });
           }
         })();
         log.info(`Preload: ${sitesData.length} sites parents assurés localement.`);
+        logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_sites', count: sitesData.length });
       }
     } catch (siteErr: any) {
       log.error('Preload: Exception lors de la récupération préliminaire des sites parents :', siteErr.message || siteErr);
+      logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: siteErr.message || String(siteErr) });
     }
 
     // --- ÉTAPE PRÉALABLE 2 : RÉCUPÉRATION DE TOUS LES CENTRES ---
@@ -752,11 +800,14 @@ export async function preloadUsersFromCloud(): Promise<void> {
       log.info('Preload: Rapatriement préliminaire de tous les centres depuis Supabase...');
       const { data: centresData, error: centresError } = await supabase
         .from('t_centres')
-        .select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu');
+        .select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, lieu');
 
       if (centresError) {
         log.error('Preload: Impossible de pré-charger les centres parents :', centresError.message);
-      } else if (centresData && centresData.length > 0) {
+        logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: centresError.message });
+      } else if (!centresData || centresData.length === 0) {
+        logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: 'Données non récupérées' });
+      } else {
         db.transaction(() => {
           const insertCentreStmt = db.prepare(`
             INSERT OR REPLACE INTO t_centres (id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu)
@@ -771,15 +822,17 @@ export async function preloadUsersFromCloud(): Promise<void> {
               created_at: c.created_at || new Date().toISOString(),
               sync_id: c.sync_id || null,
               prefixe_rangement: c.prefixe_rangement || null,
-              code: c.code || null,
+              code: null,
               lieu: c.lieu || null
             });
           }
         })();
         log.info(`Preload: ${centresData.length} centres parents assurés localement.`);
+        logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_centres', count: centresData.length });
       }
     } catch (centreErr: any) {
       log.error('Preload: Exception lors de la récupération préliminaire des centres parents :', centreErr.message || centreErr);
+      logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: centreErr.message || String(centreErr) });
     }
     
     const { data: cloudUsers, error } = await supabase
@@ -789,12 +842,14 @@ export async function preloadUsersFromCloud(): Promise<void> {
     if (error) {
       log.error(`Preload error querying t_users on Supabase: ${error.message}`);
       log.error(`❌ [SUPABASE] Échec du préchargement des utilisateurs : ${error.message}`);
+      logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_users', error: error.message });
       return;
     }
 
     if (!cloudUsers || cloudUsers.length === 0) {
       log.warn('Preload: Supabase a retourné 0 utilisateur. Si des comptes existent bien sur Supabase, vérifier les politiques RLS (Row Level Security) sur la table t_users — elles peuvent filtrer les résultats sans générer d\'erreur visible.');
       log.warn('⚠️ [SUPABASE] La table t_users renvoie 0 ligne. Si des comptes existent sur Supabase, vérifier les règles RLS (Row Level Security) : une politique trop restrictive renvoie [] sans erreur.');
+      logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_users', error: 'Données non récupérées ou vides (vérifier RLS)' });
       return;
     }
 
@@ -803,8 +858,8 @@ export async function preloadUsersFromCloud(): Promise<void> {
     db.exec('PRAGMA foreign_keys = OFF;');
     try {
       db.transaction(() => {
-        const insertOrReplaceStmt = db.prepare(`
-          INSERT OR REPLACE INTO t_users (
+        const insertStmt = db.prepare(`
+          INSERT INTO t_users (
             login, password_hash, role, nom_user, prenom_user, email, telephone, 
             statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, 
             created_at, updated_at, sync_id, is_dirty
@@ -813,6 +868,19 @@ export async function preloadUsersFromCloud(): Promise<void> {
             @statut_actif, @site_id, @centre_id, @poste_id, @avatar_url, @last_login, 
             @created_at, @updated_at, @sync_id, 0
           )
+          ON CONFLICT(login) DO UPDATE SET
+            password_hash = excluded.password_hash,
+            role = excluded.role,
+            nom_user = excluded.nom_user,
+            prenom_user = excluded.prenom_user,
+            email = excluded.email,
+            telephone = excluded.telephone,
+            statut_actif = excluded.statut_actif,
+            site_id = COALESCE(t_users.site_id, excluded.site_id),
+            centre_id = COALESCE(t_users.centre_id, excluded.centre_id),
+            sync_id = COALESCE(t_users.sync_id, excluded.sync_id),
+            updated_at = excluded.updated_at
+          WHERE t_users.is_dirty = 0
         `);
 
         // Validation des rôles également dans preload pour éviter les violations de contrainte CHECK
@@ -828,7 +896,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
             log.warn(`⚠️ [PRELOAD] Compte "${u.login}" ignoré : rôle "${u.role}" non reconnu.`);
             continue;
           }
-          insertOrReplaceStmt.run({
+          insertStmt.run({
             login: u.login,
             password_hash: u.password_hash,
             role: u.role,
@@ -837,7 +905,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
             email: u.email || null,
             telephone: u.telephone || null,
             statut_actif: u.statut_actif !== undefined ? u.statut_actif : 1,
-            site_id: u.site_id !== undefined && u.site_id !== null ? u.site_id : 1,
+            site_id: u.site_id !== undefined && u.site_id !== null ? u.site_id : null,
             centre_id: u.centre_id || null,
             poste_id: u.poste_id || null,
             avatar_url: u.avatar_url || null,
@@ -848,7 +916,8 @@ export async function preloadUsersFromCloud(): Promise<void> {
           });
         }
       })();
-      log.info(`Preload: ${cloudUsers.length} utilisateurs synchronisés (INSERT OR REPLACE) avec succès.`);
+      log.info(`Preload: ${cloudUsers.length} utilisateurs synchronisés (INSERT ON CONFLICT) avec succès.`);
+      logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_users', count: cloudUsers.length });
     } finally {
       db.exec('PRAGMA foreign_keys = ON;');
       log.info('Preload: Contraintes de clés étrangères (foreign_keys) réactivées.');
@@ -857,4 +926,27 @@ export async function preloadUsersFromCloud(): Promise<void> {
     log.error('Preload: Exception attrapée lors de la synchronisation des utilisateurs (mode hors-ligne ou erreur réseau) :', err.message || err);
   }
 }
+
+/**
+ * Exécute le bootstrap initial global (SyncInitiale) uniquement si t_users est vide.
+ */
+export async function runSyncInitiale(): Promise<boolean> {
+  const db = getDatabase();
+  if (!db) return false;
+
+  try {
+    const userCountRow = db.prepare("SELECT COUNT(*) as count FROM t_users").get() as { count: number };
+    if (userCountRow.count === 0) {
+      log.info("[SYS_BOOTSTRAP_INIT] Table t_users vide. Lancement de la SyncInitiale (téléchargement global des sites, centres et utilisateurs)...");
+      logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_users', message: 'Base de données vide au démarrage' });
+      await preloadUsersFromCloud();
+      log.info("[SYS_BOOTSTRAP_INIT] SyncInitiale terminée avec succès.");
+      return true;
+    }
+  } catch (err: any) {
+    log.error("[SYS_BOOTSTRAP_INIT] Exception lors de la SyncInitiale :", err.message || err);
+  }
+  return false;
+}
+
 
