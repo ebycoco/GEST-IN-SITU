@@ -7,6 +7,14 @@ export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
   (autoUpdater.logger as any).transports.file.level = 'info';
   autoUpdater.autoDownload = false;
 
+  // Déclenchement automatique et autonome de la recherche de mise à jour 10s après le démarrage
+  setTimeout(() => {
+    log.info('[AutoUpdater] Recherche automatique de mise à jour lancée...');
+    autoUpdater.checkForUpdates().catch((err: any) => {
+      log.error('[AutoUpdater] Erreur lors de la recherche automatique:', err);
+    });
+  }, 10000);
+
   ipcMain.handle('updater:check', async () => {
     try {
       log.info('[AutoUpdater] Checking for updates...');

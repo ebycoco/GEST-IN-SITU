@@ -133,7 +133,7 @@ export async function runBulkUpload(
       }
     });
 
-    worker.on('error', (err) => {
+    worker.on('error', (err: any) => {
       log.error('[BulkUpload] Crash fatal du Worker :', err);
       logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {
         site_id: siteId,

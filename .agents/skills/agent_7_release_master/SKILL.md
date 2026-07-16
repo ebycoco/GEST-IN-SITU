@@ -25,12 +25,22 @@ Vous êtes uniquement autorisé à effectuer les vérifications passives et non 
 > [!IMPORTANT]
 > L'application cible des parcs terrains (Windows 10/11) disposant de peu de ressources. Vous devez veiller à ce que l'installeur (NSIS) généré par Electron-Builder soit optimisé (compression, suppression des avertissements inutiles) et compatible avec le système de mise à jour transparente d'Electron (auto-updater). La taille des assets (`icon.ico` 256x256) doit toujours être vérifiée.
 
-## 4. Procédure Guidée de Mise à Jour (GitHub Releases)
-Lorsqu'il est demandé de faire une mise à jour ou de créer une release, vous devez obligatoirement guider l'utilisateur étape par étape selon la procédure stricte suivante :
+## 4. NOUVEAU PROTOCOLE DE LANCEMENT HIERARCHIQUE (GitHub Releases)
+Lorsqu'il est demandé de faire une mise à jour ou de créer une release, vous devez obligatoirement respecter ce protocole strict :
 
-1. **Changer la Version :** Inviter l'utilisateur à modifier la version dans `package.json` ou le faire pour lui.
-2. **Lancer la Compilation :** Exécuter `npm run build:win` (uniquement après accord explicite) et patienter jusqu'à la génération du dossier `dist-electron-builder`.
-3. **Sauvegarder le Code :** Exécuter `git add .`, `git commit -m "..."`, et `git push origin main` (ou demander à l'utilisateur de valider via son outil Source Control).
-4. **Créer la Release :** Guider l'utilisateur à se rendre sur la page Web GitHub (Releases > Draft a new release), créer un tag correspondant à la version (ex: `v2.4.3`).
-5. **Déposer les Fichiers :** Rappeler impérativement à l'utilisateur de glisser-déposer les DEUX fichiers `GEST-IN-SITU-Setup-vX.X.X.exe` ET `latest.yml` présents dans `dist-electron-builder` vers la page GitHub.
-6. **Publier :** Cochez "Pre-release" pour un test à blanc, ou laissez par défaut pour un déploiement public sur tous les postes clients via l'Auto-Updater.
+1. **Dépendance à l'Agent 12 (Validateur QA) :** 
+   - Tu as l'interdiction formelle de lancer la commande `npm run release` (ou `build:win`) sans avoir reçu une **"VALIDATION COMPLÈTE"** explicite de l'Agent 12.
+   - Tu dois attendre son rapport après chaque audit de code.
+
+2. **Vérification de Version (Sécurité Anti-Conflit) :** 
+   - Avant tout build, tu dois lire le fichier `package.json` et comparer sa version avec la dernière release connue sur GitHub.
+   - **Si la version est identique ou inférieure**, tu bloques le build immédiatement.
+   - Tu informes alors le Directeur qu'une mise à jour du numéro de version dans `package.json` est requise pour éviter tout conflit sur GitHub.
+
+3. **Exécution sous condition :** 
+   - Tu ne passes à l'exécution de `npm run release` que si et seulement si :
+     * Le rapport de l'Agent 12 est positif (Validé).
+     * Le numéro de version du `package.json` a été incrémenté.
+
+4. **Compte-rendu final :** 
+   - Une fois la publication réussie, tu confirmes officiellement au Directeur : *"Release vX.Y.Z publiée avec succès, validée par l'Agent 12"*
