@@ -96,7 +96,13 @@ export default function LoginPage() {
   const [setupStatus, setSetupStatus] = useState<'idle' | 'pulling' | 'success' | 'failed'>('idle');
   const [setupMessage, setSetupMessage] = useState('');
 
+  const [appVersion, setAppVersion] = useState('');
 
+  useEffect(() => {
+    if (window.api?.app?.getVersion) {
+      window.api.app.getVersion().then(setAppVersion).catch(console.error);
+    }
+  }, []);
 
   useEffect(() => {
     // 1. Détection premier démarrage
@@ -324,7 +330,7 @@ export default function LoginPage() {
         </div>
 
         <p style={{ textAlign: 'center', marginTop: 24, fontSize: 11, color: 'var(--text-muted)' }}>
-          GEST-IN-SITU - © Ebychoco 2026 - Tous droits réservés
+          GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco 2026 - Tous droits réservés
         </p>
       </div>
 
