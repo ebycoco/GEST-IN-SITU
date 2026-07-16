@@ -61,6 +61,19 @@ export default function MainLayout() {
         <div className="page-content">
           <Outlet />
         </div>
+        
+        {/* Footer global présent sur toutes les pages */}
+        <footer style={{
+          textAlign: 'center',
+          padding: '12px 20px',
+          fontSize: '11px',
+          color: 'var(--text-muted)',
+          opacity: 0.6,
+          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+          marginTop: 'auto'
+        }}>
+          GEST-IN-SITU - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
+        </footer>
       </div>
 
       {/* Bannière discrète globale — visible sur toutes les pages pendant le téléchargement */}
