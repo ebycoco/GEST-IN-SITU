@@ -9,6 +9,9 @@ publish:
   provider: github
   owner: ebycoco
   repo: GEST-IN-SITU
+  releaseType: release
+releaseInfo:
+  releaseNotesFile: release-notes.md
 win:
   target: nsis
   icon: resources/icon.ico

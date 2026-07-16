@@ -164,10 +164,8 @@ declare global {
         getDbPath: () => Promise<string>;
         exportLogs: () => Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }>;
         checkFirstLaunch: () => Promise<{ isFirstLaunch: boolean }>;
-        checkRemoteVersion: () => Promise<{ success: boolean; version_minimale?: string; url_telechargement?: string; is_active?: boolean; reason?: string }>;
         openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
         openExternalUrl: (url: string) => void;
-        updateRemoteVersion: (payload: { is_active: boolean; version_minimale: string; url_telechargement: string }) => Promise<{ success: boolean; error?: string }>;
       };
       database: {
         getCardsCount: () => Promise<number>;
@@ -225,9 +223,6 @@ declare global {
         onDownloadProgress: (callback: (progress: any) => void) => () => void;
         onUpdateDownloaded: (callback: (info: any) => void) => () => void;
         onError: (callback: (error: string) => void) => () => void;
-      };
-      enforcer: {
-        onUpdateRequired: (callback: (info: { currentVersion: string; minVersion: string; latestVersion: string; releaseNotes: string }) => void) => () => void;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };

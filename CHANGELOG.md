@@ -4,6 +4,18 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-07-16
+
+### Corrigé
+- **Inventaire Physique :** Correction de l'erreur SQL `no such column` lors de la recherche combinée d'inventaire.
+- **Enforcer :** Suppression définitive des reliquats de blocage de version Supabase et libération de l'UI.
+- **Auto-Updater :** Compatibilité rétablie avec les dépôts publics pour l'auto-updater.
+
+## [2.5.0] - 2026-07-16
+
+### Supprimé
+- **Contrôle de Version Distante (Supabase) :** Retrait complet de la mécanique de blocage forcé des versions obsolètes via Supabase (interface Governance, bandeau Login, handlers IPC et APIs). La gestion des mises à jour est désormais entièrement déléguée au gestionnaire autonome natif (`electron-updater`) de manière silencieuse et non-bloquante au démarrage.
+
 ## [2.4.0] - 2026-07-15
 
 ### Ajouté

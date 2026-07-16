@@ -8,25 +8,32 @@ Voici mon accès token de GitHub:
 
 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
 
+********************************************************************************************************************
 
-[VALIDATION DU PLAN DE MISE À JOUR]
+Agent 12, agis en tant que validateur hiérarchique supérieur. Effectue un audit complet du code que nous venons de modifier. Vérifie :
 
-Salut Agent, voici mes réponses aux questions soulevées dans le plan d'implémentation :
+La logique fonctionnelle (absence de bugs évidents).
 
-1. Mise à jour de la stack de build : 
-   - Je valide l'abandon d'Inno Setup et d'Electron Forge au profit d'Electron-Builder (NSIS). Je veux un système standard, robuste et compatible nativement avec electron-updater.
+La compatibilité avec notre pipeline (Auto-updater, notifications, build).
 
-2. Hébergement des binaires :
-   - Nous utiliserons GitHub Releases pour héberger les fichiers d'installation (.exe). Configure le système pour qu'il soit lié à mon dépôt GitHub.
+L'intégrité de la version dans package.json.
 
-3. Questions métier :
-   - Statut "Licence Permanente" par défaut : Non, par sécurité, le statut doit être 'is_permanent = false' par défaut pour tout nouveau site créé.
-   - Alerte préventive : Oui, je veux qu'une notification 'auth:warning' s'affiche dans le tableau de bord de l'admin du centre si sa licence expire dans moins de 30 jours.
+Si tout est parfait, émets le signal : 'VALIDATION COMPLÈTE'. Si tu détectes un risque, bloque le build et explique-moi pourquoi.
 
-[ORDRE D'EXÉCUTION]
-- Le plan est validé. Tu peux maintenant commencer l'implémentation.
-- Priorité 1 : Configuration d'electron-builder.yml et installation des dépendances.
-- Priorité 2 : Création du module 'auto-updater.ts' et intégration de la logique de blocage (Enforcer) dans le Main Process.
-- Priorité 3 : Mise à jour de la logique de login dans 'users.queries.ts' avec la gestion des erreurs de blocage.
+**********************************************************************************************************************************************
 
-Tu peux générer le code pour la phase 1 et 2 dès maintenant.
+Agent 7, j'ai reçu la 'VALIDATION COMPLÈTE' de l'Agent 12. Nous sommes prêts pour la release. Suis ce protocole strict :
+
+Délégation au Versioning (Agent 11) : Contacte immédiatement l'Agent 11. Demande-lui d'analyser les changements récents et de procéder à l'incrémentation de version dans package.json et au journal des modifications dans CHANGELOG.md selon les règles SemVer.
+
+Attente de confirmation : N'initie aucune autre action tant que l'Agent 11 n'a pas confirmé : 'Version incrémentée à [X.Y.Z] et CHANGELOG mis à jour'.
+
+Exécution sécurisée (Build & Publish) : Une fois la confirmation reçue, lance le processus : npm run release.
+
+Gestion des incidents :
+
+En cas d'erreur réseau (timeout, token GH_TOKEN manquant), voici mon accès token de GitHub: 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
+
+En cas d'erreur de verrouillage Windows (file access), force la suppression du dossier dist-electron-builder, nettoie les processus résiduels, et retente une unique fois la commande npm run release.
+
+Rapport final : Une fois terminé, confirme le succès en affichant la version publiée et le lien vers la release GitHub, ou fournis un diagnostic complet en cas d'échec.
