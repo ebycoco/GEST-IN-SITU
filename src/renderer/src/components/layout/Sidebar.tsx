@@ -311,9 +311,9 @@ export default function Sidebar() {
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             maxWidth: '100%'
-          }} title={`GEST-IN-SITU v${appVersion} - © Ebychoco 2026 - Tous droits réservés`}>
+          }} title={`GEST-IN-SITU v${appVersion} - © Ebychoco ${new Date().getFullYear()} - Tous droits réservés`}>
             GEST-IN-SITU v{appVersion}<br />
-            © Ebychoco 2026 - Tous droits réservés
+            © Ebychoco {new Date().getFullYear()} - Tous droits réservés
           </div>
         )}
       </div>

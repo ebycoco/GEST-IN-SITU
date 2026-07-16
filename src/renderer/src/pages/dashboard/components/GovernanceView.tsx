@@ -682,7 +682,7 @@ export function GovernanceView({
 
       {/* Footer Signature */}
       <div style={{ textAlign: 'center', marginTop: 40, paddingBottom: 20, fontSize: 11, color: 'var(--text-muted)', opacity: 0.6 }}>
-        GEST-IN-SITU v2.3.1 - © Ebychoco 2026 - Tous droits réservés
+        GEST-IN-SITU - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
       </div>
     </div>
   );
