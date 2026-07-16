@@ -192,6 +192,8 @@ export default function CartesPage() {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Carte | null>(null);
   const [showDelivery, setShowDelivery] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [centres, setCentres] = useState<any[]>([]);
   const [pageSize, setPageSize] = useState(25);
   const [exporting, setExporting] = useState(false);
 
@@ -231,6 +233,17 @@ export default function CartesPage() {
   }, [filters, user, activeSiteId, pageSize]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    if (user?.role !== 'ADMIN_CENTRE' && user?.role !== 'OPERATEUR_SAISIE') {
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      if (siteIdToUse) {
+        window.api.hierarchy.getCentres(siteIdToUse)
+          .then(data => setCentres(data || []))
+          .catch(console.error);
+      }
+    }
+  }, [user, activeSiteId]);
 
   const handleFilterChange = (key: string, value: string) => {
     const newF = { ...filters, [key]: value };
@@ -335,7 +348,7 @@ export default function CartesPage() {
           {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (
             <button 
               className="btn" 
-              onClick={() => navigate('/saisie')}
+              onClick={() => navigate('/agent-saisie/nouvelle')}
               style={{ 
                 borderRadius: 12, padding: '0 20px', height: 42, 
                 background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
@@ -397,15 +410,54 @@ export default function CartesPage() {
         </select>
 
         <button 
-          className="btn btn-outline" 
+          className={`btn btn-outline ${showFilters ? 'active' : ''}`}
+          onClick={() => setShowFilters(!showFilters)}
           style={{ 
             borderRadius: 12, width: 40, height: 40, padding: 0, justifyContent: 'center',
-            background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)'
+            background: showFilters ? 'rgba(139, 92, 246, 0.15)' : 'rgba(255,255,255,0.02)', 
+            border: showFilters ? '1px solid rgba(139, 92, 246, 0.3)' : '1px solid rgba(255,255,255,0.05)',
+            color: showFilters ? '#a78bfa' : 'inherit'
           }}
         >
           <Filter size={16} />
         </button>
       </div>
+
+      {showFilters && (
+        <div className="animate-fade-in" style={{ 
+          padding: 16, borderRadius: 16, display: 'flex', gap: 16, alignItems: 'center', 
+          background: 'rgba(255,255,255,0.01)', border: '1px solid rgba(255,255,255,0.04)',
+          backdropFilter: 'blur(10px)'
+        }}>
+          <div className="form-group" style={{ flex: 1, margin: 0 }}>
+            <label className="form-label" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Filtre par Rangement</label>
+            <input 
+              className="form-input" 
+              style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.03)', height: 38 }}
+              placeholder="Ex: BOX-A1"
+              value={filters.rangement || ''}
+              onChange={(e) => handleFilterChange('rangement', e.target.value)}
+            />
+          </div>
+          
+          {user?.role !== 'ADMIN_CENTRE' && user?.role !== 'OPERATEUR_SAISIE' && (
+            <div className="form-group" style={{ flex: 1, margin: 0 }}>
+              <label className="form-label" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--text-muted)' }}>Filtre par Centre</label>
+              <select 
+                className="form-select" 
+                style={{ width: '100%', background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.03)', height: 38, color: 'white' }}
+                value={filters.centre_id || ''}
+                onChange={(e) => handleFilterChange('centre_id', e.target.value)}
+              >
+                <option value="" style={{ background: '#1e293b' }}>Tous les centres</option>
+                {centres.map((c: any) => (
+                  <option key={c.id} value={c.id} style={{ background: '#1e293b' }}>{c.nom}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Main Content Table */}
       <div style={{ flex: 1, display: 'flex', gap: 24 }}>
@@ -634,7 +686,7 @@ export default function CartesPage() {
                   }} 
                   onClick={() => setShowDelivery(true)}
                 >
-                  <Truck size={15} /> Distribuer
+                  <Truck size={15} /> Transférer la carte
                 </button>
               )}
               <button 
@@ -654,10 +706,14 @@ export default function CartesPage() {
 
       {/* Delivery Modal */}
       {showDelivery && selected && (
-        <DeliveryModal 
+        <TransferModal 
           carte={selected} 
-          onClose={() => { setShowDelivery(false); }}
-          onSuccess={() => { setShowDelivery(false); loadData(offset); }} 
+          onClose={() => setShowDelivery(false)}
+          onSuccess={() => {
+            setShowDelivery(false);
+            setSelected(null);
+            loadData(offset, filters, pageSize);
+          }}
         />
       )}
     </div>
@@ -667,7 +723,7 @@ export default function CartesPage() {
 function StatsCard({ label, value, icon: Icon, gradient, borderCol, iconColor, loading }: any) {
   return (
     <div 
-      className="premium-card premium-glass" 
+      className="glass-card" 
       style={{ 
         padding: '16px 20px', 
         display: 'flex', 
@@ -732,28 +788,51 @@ function DetailRow({ label, value, icon: Icon, isStatus }: any) {
   );
 }
 
-function DeliveryModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: () => void; onSuccess: () => void }) {
-  const [nomRetirant, setNomRetirant] = useState('');
-  const [numRetirant, setNumRetirant] = useState('');
+function TransferModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: () => void; onSuccess: () => void }) {
   const [centreRetrait, setCentreRetrait] = useState('');
+  const [rangementUrgence, setRangementUrgence] = useState('');
   const [loading, setLoading] = useState(false);
+  const [centres, setCentres] = useState<any[]>([]);
+  const user = useAuthStore(state => state.user);
+
+  useEffect(() => {
+    if (user?.site_id) {
+      window.api.hierarchy.getCentres(user.site_id)
+        .then(data => setCentres(data || []))
+        .catch(console.error);
+    }
+  }, [user?.site_id]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!nomRetirant.trim()) { toast.error('Le nom du retirant est obligatoire'); return; }
+    if (!centreRetrait) { toast.error('Veuillez sélectionner un centre de destination'); return; }
     
+    if (!navigator.onLine) {
+      toast.error("Cette action requiert une connexion internet active afin de synchroniser immédiatement le transfert avec le cloud.", { duration: 5000 });
+      return;
+    }
+
     setLoading(true);
     try {
-      await window.api.cartes.delivrer(carte.id_carte, {
-        nom_retirant: nomRetirant.toUpperCase(), 
-        num_retirant: numRetirant,
-        agent_distributeur: 'AGENT', 
-        centre_retrait: centreRetrait
+      const selectedCentre = centres.find(c => c.nom === centreRetrait || c.id === Number(centreRetrait));
+      const centreId = selectedCentre ? selectedCentre.id : Number(centreRetrait);
+
+      if (!centreId) {
+        toast.error('Centre invalide.');
+        return;
+      }
+
+      await window.api.cartes.transferer(carte.id_carte, {
+        centre_id: centreId,
+        rangement: rangementUrgence,
+        agent_transfert: user?.login || 'AGENT'
       });
-      toast.success(`Distribution validée pour ${nomRetirant}`);
+      
+      const centreName = selectedCentre?.nom || centreRetrait;
+      toast.success(`Transfert réussi ! Veuillez informer le centre de destination ${centreName} d'effectuer une récupération des cartes depuis le cloud pour voir la carte et pouvoir la délivrer.`, { duration: 8000 });
       onSuccess();
     } catch (e) {
-      toast.error("Erreur lors de la validation.");
+      toast.error("Erreur lors du transfert.");
     } finally {
       setLoading(false);
     }
@@ -772,15 +851,15 @@ function DeliveryModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
         
         <div style={{ padding: '24px 28px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(34, 197, 94, 0.1)', color: '#4ade80', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(139, 92, 246, 0.1)', color: '#8b5cf6', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Truck size={20} />
             </div>
             <div>
-              <h3 style={{ fontSize: 18, fontWeight: 800, color: 'white', margin: 0 }}>Validation Livraison</h3>
-              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>Enregistrement du retrait physique de la carte.</p>
+              <h3 style={{ fontSize: 18, fontWeight: 800, color: 'white', margin: 0 }}>Transfert de Carte</h3>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>Assigner la carte à un autre guichet/centre.</p>
             </div>
           </div>
-          <button style={{ background: 'rgba(255,255,255,0.02)', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 6, borderRadius: 10, display: 'flex' }} onClick={onClose}>
+          <button type="button" style={{ background: 'rgba(255,255,255,0.02)', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 6, borderRadius: 10, display: 'flex' }} onClick={onClose}>
             <X size={18} />
           </button>
         </div>
@@ -802,59 +881,41 @@ function DeliveryModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
                   <Hash size={10} /> {carte.num_secu || '—'}
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-muted)' }}>
-                  <MapPin size={10} /> {carte.rangement || '—'}
-                </div>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label className="form-label" style={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>Identité du Retirant *</label>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <User size={16} style={{ position: 'absolute', left: 14, color: 'var(--text-muted)', opacity: 0.6 }} />
-                <input 
-                  className="form-input" 
-                  style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', height: 44, fontSize: 13 }}
-                  value={nomRetirant} 
-                  onChange={(e) => setNomRetirant(e.target.value)} 
-                  placeholder="Nom complet de la personne qui retire..."
-                  autoFocus 
-                />
-              </div>
-            </div>
-
-            <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label className="form-label" style={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>N° de Pièce d'Identité</label>
-              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                <CreditCard size={16} style={{ position: 'absolute', left: 14, color: 'var(--text-muted)', opacity: 0.6 }} />
-                <input 
-                  className="form-input" 
-                  style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', height: 44, fontSize: 13 }}
-                  value={numRetirant} 
-                  onChange={(e) => setNumRetirant(e.target.value)} 
-                  placeholder="Numéro CNI, Passeport, Attestation..."
-                />
-              </div>
-            </div>
-
-            <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <label className="form-label" style={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>Lieu de Retrait / Guichet</label>
+              <label className="form-label" style={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>Centre de Destination *</label>
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                 <MapPin size={16} style={{ position: 'absolute', left: 14, color: 'var(--text-muted)', opacity: 0.6 }} />
                 <select 
                   className="form-select" 
-                  style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', height: 44, fontSize: 13, appearance: 'none' }}
+                  style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', height: 44, fontSize: 13, appearance: 'none', color: 'white' }}
                   value={centreRetrait} 
                   onChange={(e) => setCentreRetrait(e.target.value)}
+                  required
                 >
-                  <option value="">Sélectionner un guichet...</option>
-                  <option value="GUICHET PRINCIPAL">Guichet Principal</option>
-                  <option value="AGENCE ABOBO NORD">Abobo Nord</option>
-                  <option value="AGENCE ABOBO SUD">Abobo Sud</option>
-                  <option value="CENTRE DE SANTÉ">Centre de Santé</option>
+                  <option value="" style={{ background: '#1e293b' }}>Sélectionner un centre/guichet...</option>
+                  {centres.map((c: any) => (
+                    <option key={c.id} value={c.id} style={{ background: '#1e293b' }}>{c.nom}</option>
+                  ))}
                 </select>
+              </div>
+            </div>
+
+            <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label className="form-label" style={{ textTransform: 'uppercase', letterSpacing: 0.5, fontSize: 11, color: 'var(--text-muted)', fontWeight: 700 }}>Nouveau Rangement (Optionnel)</label>
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                <Info size={16} style={{ position: 'absolute', left: 14, color: 'var(--text-muted)', opacity: 0.6 }} />
+                <input 
+                  className="form-input" 
+                  style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', height: 44, fontSize: 13, color: 'white' }}
+                  value={rangementUrgence} 
+                  onChange={(e) => setRangementUrgence(e.target.value)} 
+                  placeholder="Ex: BOX-5 (Laissez vide pour conserver l'actuel)"
+                />
               </div>
             </div>
           </div>
@@ -867,12 +928,12 @@ function DeliveryModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
               disabled={loading}
               style={{ 
                 flex: 2, borderRadius: 12, height: 44, justifyContent: 'center', 
-                boxShadow: '0 4px 15px rgba(34, 197, 94, 0.2)', background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                boxShadow: '0 4px 15px rgba(139, 92, 246, 0.2)', background: 'linear-gradient(135deg, #8b5cf6, #6366f1)',
                 border: 'none', color: 'white', fontWeight: 800, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer'
               }}
             >
               {loading ? <RefreshCw size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              <span>Confirmer la Livraison</span>
+              <span>Transférer la carte</span>
             </button>
           </div>
         </form>

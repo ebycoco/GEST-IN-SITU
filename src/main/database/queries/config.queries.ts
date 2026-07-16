@@ -37,11 +37,12 @@ export function getCentreOperateurCadence(centreId: number) {
       u.login, 
       u.nom_user, 
       u.prenom_user,
+      u.role as role,
       COUNT(c.id_carte) as verifications_today,
       MAX(c.updated_at) as derniere_activite
     FROM t_users u
     LEFT JOIN t_cartes c ON c.agent_distributeur = u.login AND date(c.date_delivrance) = date('now')
-    WHERE u.centre_id = ? AND u.role = 'OPERATEUR_VERIFICATION'
+    WHERE u.centre_id = ? AND (u.role LIKE 'OPERATEUR_%' OR u.role = 'ADMIN_CENTRE')
     GROUP BY u.id_user
     ORDER BY verifications_today DESC
   `).all(centreId);

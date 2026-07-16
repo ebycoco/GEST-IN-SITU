@@ -1,6 +1,7 @@
 import { ipcMain, dialog, app, BrowserWindow, shell } from 'electron';
 import * as queries from '../database/queries';
-import { getDbPath, getDatabase, getBackupDir, closeDatabase } from '../database/connection';
+import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
+import { hashPassword } from '../auth/local-auth';
 import { createReadStream, openSync, readSync, closeSync, copyFileSync, existsSync, statSync } from 'fs';
 import { join, basename } from 'path';
 import log from 'electron-log';
@@ -14,6 +15,7 @@ import { getSupabaseClient } from '../sync/supabase-client';
 import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin } from '../auth/session-heartbeat';
 import { logAudit } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
+import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 
 const FAILSAFE_ROOT_ID = 999999;
@@ -80,7 +82,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
   // AUTH
-  ipcMain.handle('auth:login', async (_, login: string, password: string) => {
+  ipcMain.handle('auth:login', async (event, login: string, password: string) => {
     try {
       // ── LOGIQUE ROOT FAILSAFE SECURISEE DANS LE MAIN PROCESS ──
       // Le mot de passe ROOT est lu depuis process.env.FAILSAFE_ROOT_PASSWORD.
@@ -114,9 +116,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const user = await queries.authenticateUser(login, password);
+      if (user && user.warning) {
+        event.sender.send('auth:warning', user.warning);
+      }
       if (user && user.sessionToken) {
         startSessionHeartbeat(user.login, user.sessionToken);
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion rÃ©ussie de l'utilisateur ${user.login}.`);
+        if (user.site_id) {
+          try {
+            const db = getDatabase();
+            if (db) {
+              const pref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${user.login}`) as { value: string } | undefined;
+              if (pref && pref.value === 'true') {
+                syncEngine.startAutoDownstreamTimer(user.site_id);
+              }
+            }
+          } catch (prefErr) {
+            log.warn('Failed to read auto_downstream preference:', prefErr);
+          }
+        }
       }
       return user;
     }
@@ -131,6 +149,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('auth:logout', async (_, login: string) => {
     try {
+      syncEngine.stopAutoDownstreamTimer();
       await stopSessionHeartbeat();
       if (login) {
         queries.insertAuditLog(login, 'DECONNEXION', `DÃ©connexion volontaire de l'utilisateur ${login}.`);
@@ -144,7 +163,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('auth:registerSuperAdmin', async (_, data: { login: string; password: string; nom_user: string }) => {
     try {
-      const { getSupabaseClient } = await import('../sync/supabase-client');
       const supabase = getSupabaseClient();
       
       const email = data.login;
@@ -168,7 +186,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.info(`auth:registerSuperAdmin: auth user created with UUID: ${uuid}. Storing in SQLite...`);
 
       const db = getDatabase()!;
-      const { hashPassword } = await import('../auth/local-auth');
       const hash = hashPassword(data.password);
       
       const insertResult = db.prepare(`
@@ -397,6 +414,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:update', e); throw e; }
   });
   ipcMain.handle('cartes:delete', async (_, id, currentUser) => {
+    const userId = currentUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'])) {
+      throw new Error("Accès refusé. Privilèges insuffisants pour supprimer une carte.");
+    }
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try { 
       const res = await queries.deleteCarte(id, currentUser);
@@ -692,6 +713,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('cmu:deleteCarte', async (_, id, reason, currentUser) => {
+    const userId = currentUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'])) {
+      throw new Error("Accès refusé. Privilèges insuffisants pour supprimer une carte.");
+    }
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try {
       const db = getDatabase();
@@ -724,15 +749,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.insertAuditLog(
         currentUser?.login || 'SYSTEM',
         'RETRAIT',
-        `Retrait de la carte ID ${id} par le retirant ${data.nom_retirant} (NÂ° piÃ¨ce: ${data.num_retirant}). Agent distributeur: ${data.agent_distributeur}. Montant: N/A (service gratuit).`
+        `Retrait de la carte ID ${id} par le retirant ${data.nom_retirant} (N° pièce: ${data.num_retirant}). Agent distributeur: ${data.agent_distributeur}. Montant: N/A (service gratuit).`
       );
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
   });
-  ipcMain.handle('cartes:signalerAbsence', async (_, id, agent) => {
+
+  ipcMain.handle('cartes:transferer', async (_, id, data, currentUser) => {
     try {
-      const res = await queries.signalerAbsence(id, agent);
+      const res = await queries.transfererCarte(id, data);
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      if (currentUser?.login) {
+        queries.insertAuditLog(currentUser.login, 'CARTE_TRANSFEREE', `Transfert carte ${id} vers le centre ${data.centre_id}`);
+      }
+      return res;
+    }
+    catch (e) { log.error('IPC Error: cartes:transferer', e); throw e; }
+  });
+  ipcMain.handle('cartes:signalerAbsence', async (_, id, agentLogin, agentInfo, commentaire = '', currentUser?: any) => {
+    try {
+      const res = await queries.signalerAbsence(id, agentLogin, agentInfo, commentaire, currentUser);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_SIGNALEE' });
       }
@@ -744,9 +781,31 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getAbsencesReportees(siteId); }
     catch (e) { log.error('IPC Error: cartes:getAbsences', e); throw e; }
   });
+  ipcMain.handle('cartes:getAbsencesCentre', async (_, centreId: number) => {
+    try { return queries.getAbsencesCentre(centreId); }
+    catch (e) { log.error('IPC Error: cartes:getAbsencesCentre', e); throw e; }
+  });
+  ipcMain.handle('cartes:getAbsencesSite', async (_, siteId?: number) => {
+    try { return queries.getAbsencesSite(siteId); }
+    catch (e) { log.error('IPC Error: cartes:getAbsencesSite', e); throw e; }
+  });
+  ipcMain.handle('cartes:escaladerAuSite', async (_, id: number, currentUser) => {
+    try { 
+      const res = await queries.escaladerAuSite(id, currentUser);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_ESCALADEE' });
+      }
+      return res;
+    }
+    catch (e) { log.error('IPC Error: cartes:escaladerAuSite', e); throw e; }
+  });
   ipcMain.handle('cartes:getAgentAbsences', async (_, agent: string, siteId?: number) => {
     try { return queries.getAgentReportedAbsences(agent, siteId); }
     catch (e) { log.error('IPC Error: cartes:getAgentAbsences', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSignalementsResolus', async (_, agent: string, siteId?: number) => {
+    try { return queries.getSignalementsResolus(agent, siteId); }
+    catch (e) { log.error('IPC Error: cartes:getSignalementsResolus', e); throw e; }
   });
   ipcMain.handle('cartes:resoudreAbsence', async (_, id, data, currentUser) => {
     try {
@@ -816,6 +875,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getSansRangementPage(siteId, offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
   });
+  ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansNomPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansNomPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSansPrenomPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansPrenomPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansPrenomPage', e); throw e; }
+  });
   ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
     try { return queries.updateQuickFields(id, fields); }
     catch (e) { log.error('IPC Error: cartes:updateQuickFields', e); throw e; }
@@ -837,9 +904,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateApurementHistorique', e); throw e; }
   });
 
+  ipcMain.handle('cartes:inventairePhysiqueScan', async (_, identifiant, rangement) => {
+    try { return queries.updateCarteRangementAndStatusRapid(identifiant, rangement); }
+    catch (e) { log.error('IPC Error: cartes:inventairePhysiqueScan', e); throw e; }
+  });
+
+  // â”€â”€â”€ CACHE MEMOIZATION POUR stats:get â”€â”€â”€
+  // Evite les appels concurrents (React StrictMode) et ajoute un TTL de 15s.
+  const STATS_CACHE_TTL_MS = 15000;
+  let statsCache: { [key: string]: { promise: Promise<any>; timestamp: number } } = {};
+
   ipcMain.handle('stats:get', async (_, siteId, centreId?: number) => {
     try {
-      return await new Promise((resolve, reject) => {
+      const cacheKey = `${siteId}_${centreId || 'all'}`;
+      const now = Date.now();
+
+      // Retourner la promesse en cours (rÃ©sout le problÃ¨me des requÃªtes concurrentes)
+      // OU le rÃ©sultat en cache s'il a moins de 15 secondes
+      if (statsCache[cacheKey] && (now - statsCache[cacheKey].timestamp < STATS_CACHE_TTL_MS)) {
+        return await statsCache[cacheKey].promise;
+      }
+
+      const promise = new Promise((resolve, reject) => {
         setImmediate(async () => {
           try {
             const db = getDatabase();
@@ -864,7 +950,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             if (statsDuration > 200) {
               log.warn(`[LENTEUR SQLITE] RequÃªte stats:get a pris ${statsDuration.toFixed(2)} ms (seuil 200 ms dÃ©passÃ©)`);
             }
-            // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             resolve(res);
           } catch (e: any) {
             log.error('Erreur SQL dans stats:get, retour format degrade', e);
@@ -872,6 +958,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           }
         });
       });
+
+      statsCache[cacheKey] = { promise, timestamp: now };
+      return await promise;
     }
     catch (e) {
       log.error('IPC Error: stats:get exception globale', e);
@@ -901,6 +990,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('stats:getUnsyncedCardsCount', async (_, siteId: number) => {
     try { return queries.getUnsyncedCardsCount(siteId); }
     catch (e) { log.error('IPC Error: stats:getUnsyncedCardsCount', e); throw e; }
+  });
+
+  ipcMain.handle('stats:getDetailedSyncStats', async (_, siteId: number) => {
+    try { return queries.getDetailedSyncStats(siteId); }
+    catch (e) { log.error('IPC Error: stats:getDetailedSyncStats', e); throw e; }
   });
   ipcMain.handle('stats:getUnsyncedUsersCount', async (_, siteId: number) => {
     try { return queries.getUnsyncedUsersCount(siteId); }
@@ -1180,6 +1274,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // IMPORT - Process file using Worker Thread (NON-BLOCKING!)
   ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number) => {
     return new Promise((resolve, reject) => {
+      const db = getDatabase();
+      if (db) {
+        const userRecord = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(agent) as { id_user: number } | undefined;
+        if (!userRecord || !verifyUserRole(userRecord.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+          return reject(new Error("Accès refusé. Privilèges insuffisants pour importer des données."));
+        }
+      }
+
       // Resolve the path to better-sqlite3 native module
       let sqlitePath: string;
       try {
@@ -1364,7 +1466,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const rows = queries.getExportRows(filters) as Record<string, unknown>[];
       if (rows.length === 0) return { success: false, reason: 'no_data' };
 
-      const ExcelJS = await import('exceljs');
+      const exceljsModule = await import('exceljs');
+      const ExcelJS = exceljsModule.default || exceljsModule;
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Cartes CMU');
 
@@ -1428,7 +1531,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       await sendProgress(30);
       const { jsPDF } = await import('jspdf');
-      const autoTable = (await import('jspdf-autotable')).default;
+      const autotableModule = await import('jspdf-autotable');
+      const autoTable = (autotableModule as any).default?.default || (autotableModule as any).default || autotableModule;
 
       await sendProgress(50);
 
@@ -1451,7 +1555,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (filters?.site_id) {
         const db = getDatabase();
         if (db) {
-          const siteRow = db.prepare("SELECT nom FROM t_sites WHERE id_site = ?").get(Number(filters.site_id)) as { nom: string } | undefined;
+          const siteRow = db.prepare("SELECT nom FROM t_sites WHERE id = ?").get(Number(filters.site_id)) as { nom: string } | undefined;
           if (siteRow) siteName = siteRow.nom;
         }
       }
@@ -1515,7 +1619,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               contact: { cellWidth: 45 },
               emargement: { cellWidth: 55 } // Wide space for manual signature
             },
-            didDrawPage: (data) => {
+            didDrawPage: (data: any) => {
               // Footer page number
               const totalPages = doc.getNumberOfPages();
               doc.setFontSize(8);
@@ -1664,13 +1768,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // USERS
-  ipcMain.handle('users:getAll', (_, siteId?: number) => queries.getUsers(siteId));
+  ipcMain.handle('users:getAll', (_, siteId?: number, centreId?: number) => queries.getUsers(siteId, centreId));
+  ipcMain.handle('users:getProfile', async (_, login: string) => {
+    const db = getDatabase();
+    if (!db) return null;
+    return db.prepare('SELECT id_user, login, role, nom_user, prenom_user, site_id, centre_id, sync_id FROM t_users WHERE login = ?').get(login);
+  });
   ipcMain.handle('users:create', async (_, data, currentUser) => {
-    const res = await queries.createUser(data, currentUser?.id_user || 0);
+    const userLogin = currentUser?.login || getCurrentUserLogin();
+    let callerUserId = currentUser?.id_user || 0;
+    if (!callerUserId && userLogin) {
+      const db = getDatabase();
+      if (db) {
+        const u = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(userLogin) as { id_user: number } | undefined;
+        if (u) callerUserId = u.id_user;
+      }
+    }
+    const res = await queries.createUser(data, callerUserId);
     queries.insertAuditLog(
-      currentUser?.login || 'ADMIN',
+      userLogin || 'ADMIN',
       'VALIDATION',
-      `CrÃ©ation de l'utilisateur ${data.login} (RÃ´le : ${data.role}).`
+      `Création de l'utilisateur ${data.login} (Rôle : ${data.role}).`
     );
     return res;
   });
@@ -1877,8 +1995,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.resetSiteAdminPassword(siteId, pass); }
     catch (e) { log.error('IPC Error: hierarchy:resetAdminPassword', e); throw e; }
   });
-  ipcMain.handle('hierarchy:verifyPassword', async (_, password) => {
-    try { return queries.verifySuperAdminPassword(password); }
+  ipcMain.handle('hierarchy:verifyPassword', async (_, password, loginOverride?: string) => {
+    try {
+      const login = loginOverride || getCurrentUserLogin();
+      if (login) {
+        log.info(`[hierarchy:verifyPassword] Vérification du mot de passe pour l'utilisateur '${login}'.`);
+        return queries.verifyUserPassword(login, password);
+      }
+      log.warn('[hierarchy:verifyPassword] Aucun login fourni, fallback sur verifySuperAdminPassword.');
+      return queries.verifySuperAdminPassword(password);
+    }
     catch (e) { log.error('IPC Error: hierarchy:verifyPassword', e); throw e; }
   });
   ipcMain.handle('hierarchy:getCentres', async (_, siteId) => {
@@ -1896,6 +2022,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return queries.getCentres(finalSiteId);
     }
     catch (e) { log.error('IPC Error: hierarchy:getCentres', e); throw e; }
+  });
+  ipcMain.handle('hierarchy:getCentreById', async (_, id) => {
+    try { return queries.getCentreById(id); }
+    catch (e) { log.error('IPC Error: hierarchy:getCentreById', e); throw e; }
   });
 
   ipcMain.handle('hierarchy:createCentre', async (_, data) => {
@@ -1996,6 +2126,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             
             (async () => {
               try {
+                // S'assurer que le champ code est absent de la requête de modification directe vers Supabase
+                delete updateData.code;
                 const { error } = await supabase.from('t_centres').update(updateData).eq('sync_id', centreDb.sync_id);
                 if (error) log.error(`[Sync] Erreur lors de la mise à jour du centre ${id} sur Supabase:`, error.message);
                 else log.info(`[Sync] Centre ${id} mis à jour avec succès sur Supabase.`);
@@ -2284,6 +2416,44 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // MAINTENANCE
+  ipcMain.handle('maintenance:analyzeUploadedLogs', async () => {
+    try {
+      const result = await dialog.showOpenDialog({
+        title: 'Sélectionner le fichier de logs',
+        filters: [{ name: 'Fichiers Log', extensions: ['log', 'txt'] }],
+        properties: ['openFile']
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, error: 'canceled' };
+      }
+
+      const filePath = result.filePaths[0];
+      const fs = require('fs');
+      const content = fs.readFileSync(filePath, 'utf-8');
+      
+      const lines = content.split('\n');
+      const errorLines = lines.filter((l: string) => l.toLowerCase().includes('error') || l.toLowerCase().includes('exception') || l.toLowerCase().includes('failed'));
+      
+      let problemDescription = "Aucune erreur majeure détectée.";
+      let detailedExplanation = "Le journal ne contient pas de traces d'erreur explicites.";
+      let prompt = "";
+
+      if (errorLines.length > 0) {
+        problemDescription = "Des erreurs ont été détectées dans les logs de diagnostic.";
+        detailedExplanation = "Les lignes suivantes contiennent des mots-clés d'erreur (error, exception, failed) :\n\n" + errorLines.slice(-10).join('\n');
+        
+        prompt = `[CONSIGNE IMPÉRATIVE DE PRODUCTION]\n- URGENT : Voici les erreurs extraites des logs de diagnostic :\n${errorLines.slice(-20).join('\n')}\n- OBJECTIF : Diagnostiquer la cause racine et proposer un plan de correction.\n- PAS DE 'npm run build'. Utilise uniquement 'npx tsc --noEmit'.`;
+      }
+
+      return { success: true, problemDescription, detailedExplanation, prompt };
+    } catch (e: any) {
+      log.error('IPC Error: maintenance:analyzeUploadedLogs', e);
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
+  // MAINTENANCE
   ipcMain.handle('maintenance:clearAll', async (event, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
     try {
@@ -2358,7 +2528,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw e;
     }
   });
-  ipcMain.handle('maintenance:clearCloudCartes', async (_, siteId: number, confirmed: boolean, currentUser) => {
+  ipcMain.handle('maintenance:clearCloudCartes', async (event, siteId: number, confirmed: boolean, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
     try {
       if (confirmed !== true) {
@@ -2385,12 +2555,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const localCountRow = db.prepare("SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?").get(siteId) as { count: number } | undefined;
       const localCount = localCountRow ? localCountRow.count : 0;
 
-      // 1. Sauvegarde automatique locale avant purge
+      // 1. Sauvegarde automatique locale asynchrone avant purge (pour libérer la boucle d'événements)
       const backupDir = getBackupDir();
       const backupPath = join(backupDir, `backup_pre_cloud_purge_${Date.now()}.db`);
       log.info(`[PURGE CLOUD] Sauvegarde de sécurité locale avant purge vers : ${backupPath}`);
-      await db.backup(backupPath);
-      log.info(`[PURGE CLOUD] Sauvegarde locale réussie.`);
+      await new Promise<void>((resolve, reject) => {
+        setImmediate(() => {
+          try {
+            db.backup(backupPath);
+            log.info(`[PURGE CLOUD] Sauvegarde locale réussie.`);
+            resolve();
+          } catch (err) {
+            log.error(`[PURGE CLOUD] Échec de la sauvegarde locale :`, err);
+            reject(err);
+          }
+        });
+      });
 
       logAudit(
         userLogin,
@@ -2401,14 +2581,80 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.info(`[PURGE CLOUD] Initialisation de la purge Supabase pour le site ID ${siteId} par l'utilisateur '${userLogin}'.`);
       const cloudPurgeStart = performance.now();
       const supabase = getSupabaseClient();
-      const { error } = await supabase
-        .from('t_cartes')
-        .delete()
-        .eq('id_site', siteId);
-      if (error) {
-        log.error(`[PURGE CLOUD] Ã‰CHEC CRITIQUE de la purge Supabase pour le site ${siteId} :`, error.message);
-        throw new Error(`Erreur lors de la suppression sur Supabase : ${error.message}`);
+      console.info("[PURGE CLOUD] Tentative de suppression pour id_site :", siteId);
+      
+      let cloudTotal = localCount;
+      try {
+        const { count, error: countError } = await supabase
+          .from('t_cartes')
+          .select('*', { count: 'exact', head: true })
+          .eq('id_site', siteId);
+        if (!countError && count !== null) {
+          cloudTotal = count;
+        }
+      } catch (e) {
+        log.warn("[PURGE CLOUD] Erreur lors de l'estimation du total cloud, utilisation du compte local:", e);
       }
+
+      let totalDeleted = 0;
+      let keepDeleting = true;
+
+      while (keepDeleting) {
+        // RÃ©cupÃ©ration par lots de 2000
+        const { data, error: fetchError } = await supabase
+          .from('t_cartes')
+          .select('sync_id')
+          .eq('id_site', siteId)
+          .limit(2000);
+
+        if (fetchError) {
+          log.error(`[PURGE CLOUD] Ã‰CHEC FETCH de la purge Supabase pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(fetchError, null, 2));
+          throw new Error(`Erreur lors de la rÃ©cupÃ©ration des IDs sur Supabase : [${fetchError.code || 'NO_CODE'}] ${fetchError.message}`);
+        }
+
+        if (!data || data.length === 0) {
+          keepDeleting = false;
+          if (!event.sender.isDestroyed()) {
+             event.sender.send('db:purge-cloud-progress', 100);
+          }
+          break;
+        }
+
+        const ids = data.map(d => d.sync_id);
+        
+        // PostgREST limite la taille des URLs (~8KB). 2000 UUIDs = 74KB = Bad Request.
+        // On dÃ©coupe donc en sous-lots de 100 (3.7KB max) et on les lance en parallÃ¨le.
+        const chunkSize = 100;
+        const chunks = [];
+        for (let i = 0; i < ids.length; i += chunkSize) {
+          chunks.push(ids.slice(i, i + chunkSize));
+        }
+
+        // ExÃ©cution sÃ©quentielle des 20 requÃªtes de 100 pour ne pas saturer le thread principal et le rÃ©seau
+        for (const chunk of chunks) {
+          const { error: deleteError } = await supabase.from('t_cartes').delete().in('sync_id', chunk);
+          if (deleteError) {
+            log.error(`[PURGE CLOUD] Ã‰CHEC DELETE par lot pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(deleteError, null, 2));
+            throw new Error(`Erreur lors de la suppression par lot sur Supabase : [${deleteError.code || 'NO_CODE'}] ${deleteError.message}`);
+          }
+          
+          totalDeleted += chunk.length;
+          const percent = cloudTotal > 0 ? Math.min(99, Math.round((totalDeleted / cloudTotal) * 100)) : 99;
+          if (!event.sender.isDestroyed()) {
+             event.sender.send('db:purge-cloud-progress', percent);
+          }
+          
+          // Respiration CPU obligatoire (10ms) pour libÃ©rer l'Event Loop et Ã©viter le "Freeze" de la UI
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+
+        log.info(`[PURGE CLOUD] Lot de ${ids.length} cartes supprimÃ©. Total cumulÃ© : ${totalDeleted}`);
+        
+        // DeuxiÃ¨me respiration aprÃ¨s chaque lot de 2000
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+
+      log.info('[PURGE CLOUD] SUCCÈS');
 
       const runResult = db.prepare(`
         UPDATE t_cartes 
@@ -2434,6 +2680,89 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         JSON.stringify({ site_id: siteId, error: e.message || String(e) })
       );
       throw e;
+    }
+  });
+
+  ipcMain.handle('sync:getAutoDownstream', async (_, login: string) => {
+    try {
+      const db = getDatabase();
+      if (!db) return false;
+      const row = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${login}`) as { value: string } | undefined;
+      return row ? row.value === 'true' : false;
+    } catch (e) {
+      log.warn('Erreur getAutoDownstream:', e);
+      return false;
+    }
+  });
+
+  ipcMain.handle('sync:setAutoDownstream', async (_, login: string, enabled: boolean) => {
+    try {
+      const db = getDatabase();
+      if (!db) return { success: false };
+      db.prepare("INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(`auto_downstream_${login}`, enabled ? 'true' : 'false');
+      
+      if (enabled) {
+        const user = db.prepare("SELECT site_id FROM t_users WHERE login = ?").get(login) as { site_id: number } | undefined;
+        if (user && user.site_id) {
+          syncEngine.startAutoDownstreamTimer(user.site_id);
+        }
+      } else {
+        syncEngine.stopAutoDownstreamTimer();
+      }
+      return { success: true };
+    } catch (e) {
+      log.warn('Erreur setAutoDownstream:', e);
+      return { success: false };
+    }
+  });
+
+  ipcMain.handle('sync:getCloudCartesCount', async (_, siteId: number) => {
+    try {
+      const db = getDatabase();
+      let watermark = '1970-01-01T00:00:00Z';
+      let lastSyncId = '00000000-0000-0000-0000-000000000000';
+      
+      if (db) {
+        const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+        if (configRow && configRow.value) watermark = configRow.value;
+        const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
+        if (configRowId && configRowId.value) lastSyncId = configRowId.value;
+      }
+
+      const supabase = getSupabaseClient();
+      const { count, error } = await supabase
+        .from('t_cartes')
+        .select('*', { count: 'exact', head: true })
+        .or(`updated_at.gt."${watermark}",and(updated_at.eq."${watermark}",sync_id.gt."${lastSyncId}")`)
+        .eq('id_site', siteId);
+
+      if (error) {
+        log.warn(`[SYNC] Erreur rÃ©seau ou Supabase pour le count du site ${siteId}:`, error.message);
+        return -1;
+      }
+      return count !== null ? count : 0;
+    } catch (err) {
+      log.warn(`[SYNC] Exception rÃ©seau lors du count du site ${siteId}:`, err);
+      return -1;
+    }
+  });
+
+  ipcMain.handle('sync:getTotalCloudCartesCount', async (_, siteId: number) => {
+    try {
+      const supabase = getSupabaseClient();
+      const { count, error } = await supabase
+        .from('t_cartes')
+        .select('*', { count: 'exact', head: true })
+        .eq('id_site', siteId);
+
+      if (error) {
+        log.warn(`[SYNC] Erreur rÃ©seau ou Supabase pour le total count du site ${siteId}:`, error.message);
+        return -1;
+      }
+      return count !== null ? count : 0;
+    } catch (err) {
+      log.warn(`[SYNC] Exception rÃ©seau lors du total count du site ${siteId}:`, err);
+      return -1;
     }
   });
   ipcMain.handle('maintenance:fullReset', async (event, currentUser) => {
@@ -2477,18 +2806,142 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       return res;
     } catch (e) {
-      log.error('[MAINTENANCE] Ã‰CHEC CRITIQUE de maintenance:fullReset :', e);
+      log.error('[MAINTENANCE] ÉCHEC CRITIQUE de maintenance:fullReset :', e);
       throw e;
     }
   });
 
-  // SYNC
+  ipcMain.handle('maintenance:getLogs', async (_, limit = 50, offset = 0, searchTerm = '', filterLevel = 'ALL') => {
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error("Base de données indisponible");
+
+      let queryLogs = `
+        SELECT id_log AS id, id_user, login_user, action, detail AS details, date_heure AS timestamp, site_id 
+        FROM t_logs 
+        WHERE 1=1
+      `;
+      let queryCount = `SELECT COUNT(*) AS total FROM t_logs WHERE 1=1`;
+      const params: any[] = [];
+
+      if (filterLevel === 'ERROR') {
+        const errCond = ` AND (UPPER(action) LIKE '%ERROR%' OR UPPER(action) LIKE '%ECHEC%' OR UPPER(action) LIKE '%FAILURE%' OR UPPER(detail) LIKE '%ERROR%')`;
+        queryLogs += errCond;
+        queryCount += errCond;
+      } else if (filterLevel === 'WARN') {
+        const warnCond = ` AND (UPPER(action) LIKE '%WARN%' OR UPPER(action) LIKE '%ALERT%' OR UPPER(detail) LIKE '%WARN%')`;
+        queryLogs += warnCond;
+        queryCount += warnCond;
+      }
+
+      if (searchTerm.trim() !== '') {
+        const term = `%${searchTerm.toLowerCase()}%`;
+        const searchCond = ` AND (LOWER(action) LIKE ? OR LOWER(detail) LIKE ? OR LOWER(login_user) LIKE ?)`;
+        queryLogs += searchCond;
+        queryCount += searchCond;
+        params.push(term, term, term);
+      }
+
+      queryLogs += ` ORDER BY date_heure DESC LIMIT ? OFFSET ?`;
+      const rows = db.prepare(queryLogs).all(...params, limit, offset);
+      const totalRow = db.prepare(queryCount).get(...params) as { total: number };
+      return { logs: rows, total: totalRow.total };
+    } catch (e: any) {
+      log.error('IPC Error: maintenance:getLogs', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('maintenance:clearLogs', async (_, password, currentUser) => {
+    const userLogin = currentUser?.login || getCurrentUserLogin();
+    try {
+      if (!userLogin) {
+        throw new Error("Utilisateur non connecté.");
+      }
+      const db = getDatabase();
+      if (!db) throw new Error("Base de données indisponible");
+
+      const isValid = queries.verifyUserPassword(userLogin, password);
+      if (!isValid) {
+        throw new Error("Mot de passe incorrect.");
+      }
+
+      db.prepare('DELETE FROM t_logs').run();
+
+      logAudit(userLogin, 'MAINTENANCE_LOGS_PURGE', `Purge locale des logs système effectuée par ${userLogin}.`);
+      return { success: true };
+    } catch (e: any) {
+      log.error('IPC Error: maintenance:clearLogs', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('maintenance:exportLogs', async () => {
+    const userLogin = getCurrentUserLogin() || 'SYSTEM';
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error("Base de données indisponible");
+
+      const rows = db.prepare(`
+        SELECT id_log AS id, id_user, login_user, action, detail AS details, date_heure AS timestamp, site_id 
+        FROM t_logs 
+        ORDER BY date_heure DESC
+      `).all() as any[];
+
+      const result = await dialog.showSaveDialog({
+        title: 'Exporter les logs de diagnostic',
+        defaultPath: join(app.getPath('desktop'), `diagnostic_logs_${Date.now()}.txt`),
+        filters: [{ name: 'Fichiers Texte', extensions: ['txt'] }]
+      });
+
+      if (!result.canceled && result.filePath) {
+        const content = rows.map(r => `[${r.timestamp}] [${r.action}] (${r.login_user || 'system'}): ${r.details || ''}`).join('\r\n');
+        const { writeFileSync } = require('fs');
+        writeFileSync(result.filePath, content, 'utf-8');
+        logAudit(userLogin, 'MAINTENANCE_LOGS_EXPORT', `Logs de diagnostic exportés vers ${result.filePath}`);
+        return { success: true, filePath: result.filePath };
+      }
+      return { success: false, canceled: true };
+    } catch (e: any) {
+      log.error('IPC Error: maintenance:exportLogs', e);
+      return { success: false, error: e.message || String(e) };
+    }
+  });
+
   ipcMain.handle('sync:getStatus', () => {
     const db = getDatabase();
     let queueCount = 0;
+    let outboxCount = 0;
+    let errors: any[] = [];
+
     if (db) {
-      const row = db.prepare("SELECT COUNT(*) as count FROM t_sync_queue WHERE synced = 0").get() as { count: number } | undefined;
-      queueCount = row ? row.count : 0;
+      try {
+        const row = db.prepare("SELECT COUNT(*) as count FROM t_sync_queue WHERE synced = 0").get() as { count: number } | undefined;
+        queueCount = row ? row.count : 0;
+      } catch (e) {
+        log.error('sync:getStatus - queueCount error:', e);
+      }
+
+      try {
+        const row = db.prepare("SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING'").get() as { count: number } | undefined;
+        outboxCount = row ? row.count : 0;
+      } catch (e) {
+        log.error('sync:getStatus - outboxCount error:', e);
+      }
+
+      try {
+        errors = db.prepare(`
+          SELECT id_log AS id, action, detail AS details, date_heure AS timestamp 
+          FROM (
+            SELECT * FROM t_logs ORDER BY id_log DESC LIMIT 500
+          )
+          WHERE action LIKE '%ERROR%' OR action LIKE '%ECHEC%' OR action LIKE '%FAILURE%'
+          LIMIT 5
+        `).all();
+        log.info('[SYNC] getStatus corrigé');
+      } catch (e) {
+        log.error('sync:getStatus - logs error:', e);
+      }
     }
     
     let lastSync = 'Jamais';
@@ -2500,7 +2953,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return {
       state: networkMonitor.getState(),
       lastSync,
-      queueCount
+      queueCount,
+      outboxCount,
+      errors
     };
   });
 
@@ -2551,85 +3006,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let uploadResult: { success: boolean; uploadedCount: number; message: string };
       try {
         uploadResult = await runBulkUpload(Number(siteId), allowProbable, allowInvalid, (progress: number) => {
-          if (!mainWindow.isDestroyed()) {
-            log.info(`[PROGRESSION BULK UPLOAD] Site ID ${siteId} : ${progress}% envoyÃ©s vers Supabase.`);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            log.info(`[PROGRESSION BULK UPLOAD] Site ID ${siteId} : ${progress}% envoyes vers Supabase.`);
             mainWindow.webContents.send('sync:bulk-progress', progress);
           }
         });
       } finally {
-        // Nettoyage inutile car aucun Ã©couteur focus n'est attachÃ©
+        // Nettoyage : aucun ecouteur focus attache a ce handler
       }
 
-      // Calcul des anomalies restantes en local (qui n'ont pas pu Ãªtre envoyÃ©es car exclues du filtre) de maniÃ¨re asynchrone pour ne pas geler l'Event Loop
-      // 1. Doublons stricts restants
-      const strictCount = await new Promise<number>((resolve) => {
-        setImmediate(() => {
-          // â”€â”€â”€ CHRONO SQLITE : comptage doublons stricts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          const t0 = performance.now();
-          const strictCountRow = db.prepare(`
-            SELECT COUNT(*) as count FROM t_cartes 
-            WHERE site_id = ? AND is_dirty = 1 AND cle_doublon IN (
-              SELECT cle_doublon FROM t_cartes 
-              WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
-              GROUP BY cle_doublon HAVING COUNT(*) > 1
-            )
-          `).get(siteId, siteId) as { count: number } | undefined;
-          const dur = performance.now() - t0;
-          if (dur > 200) log.warn(`[LENTEUR SQLITE] Comptage doublons stricts (sync:startBulk) a pris ${dur.toFixed(2)} ms (seuil 200 ms dÃ©passÃ©)`);
-          // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          resolve(strictCountRow ? strictCountRow.count : 0);
-        });
-      });
-
-      // Pause de respiration CPU
-      await new Promise((resolve) => setImmediate(resolve));
-
-      // 2. Doublons probables restants
-      const probableCount = await new Promise<number>((resolve) => {
-        setImmediate(() => {
-          // â”€â”€â”€ CHRONO SQLITE : comptage doublons probables â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          const t1 = performance.now();
-          const probableCountRow = db.prepare(`
-            SELECT COUNT(*) as count FROM t_cartes 
-            WHERE site_id = ? AND is_dirty = 1 AND (noms || '||' || prenoms || '||' || date_de_naissance) IN (
-              SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes
-              WHERE site_id = ?
-              GROUP BY noms, prenoms, date_de_naissance HAVING COUNT(DISTINCT cle_doublon) > 1
-            )
-          `).get(siteId, siteId) as { count: number } | undefined;
-          const dur1 = performance.now() - t1;
-          if (dur1 > 200) log.warn(`[LENTEUR SQLITE] Comptage doublons probables (sync:startBulk) a pris ${dur1.toFixed(2)} ms (seuil 200 ms dÃ©passÃ©)`);
-          // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          resolve(probableCountRow ? probableCountRow.count : 0);
-        });
-      });
-
-      // Pause de respiration CPU
-      await new Promise((resolve) => setImmediate(resolve));
-
-      // 3. Dates invalides restantes
-      const invalidCount = await new Promise<number>((resolve) => {
-        setImmediate(() => {
-          // â”€â”€â”€ CHRONO SQLITE : comptage dates invalides â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          const t2 = performance.now();
-          const invalidCountRow = db.prepare(`
-            SELECT COUNT(*) as count FROM t_cartes 
-            WHERE site_id = ? AND is_dirty = 1 AND (
-              date_de_naissance NOT REGEXP '^\\d{4}-\\d{2}-\\d{2}$' 
-              OR date_de_naissance IS NULL 
-              OR date_de_naissance = ''
-              OR CAST(SUBSTR(date_de_naissance, 6, 2) AS INTEGER) < 1 
-              OR CAST(SUBSTR(date_de_naissance, 6, 2) AS INTEGER) > 12
-              OR CAST(SUBSTR(date_de_naissance, 9, 2) AS INTEGER) < 1 
-              OR CAST(SUBSTR(date_de_naissance, 9, 2) AS INTEGER) > 31
-            )
-          `).get(siteId) as { count: number } | undefined;
-          const dur2 = performance.now() - t2;
-          if (dur2 > 200) log.warn(`[LENTEUR SQLITE] Comptage dates invalides (sync:startBulk) a pris ${dur2.toFixed(2)} ms (seuil 200 ms dÃ©passÃ©)`);
-          // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-          resolve(invalidCountRow ? invalidCountRow.count : 0);
-        });
-      });
+      // 1. Calcul des anomalies restantes en local (qui n'ont pas pu Ãªtre envoyÃ©es car exclues du filtre) via le Worker pour ne pas geler le Main Thread
+      let strictCount = 0;
+      let probableCount = 0;
+      let invalidCount = 0;
+      try {
+        const counts = await runStatsWorker('getBulkAnomalies', { siteId });
+        strictCount = counts.strictCount;
+        probableCount = counts.probableCount;
+        invalidCount = counts.invalidCount;
+      } catch (err: any) {
+        log.error('Erreur lors du comptage des anomalies via Worker:', err.message);
+      }
 
       logAudit(
         userLogin,
@@ -2773,6 +3170,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // SITE ADMIN — Récupération des cartes depuis Supabase (Downstream Pull)
   ipcMain.handle('sync:pullSiteCards', async (_, siteId: number, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
+
+    // ── Verrou anti-concurrence ──────────────────────────────────────────────
+    // Si le SyncEngine est déjà en train de faire un downstream automatique (cycle 2h),
+    // on refuse le pull manuel pour éviter deux DownloadWorkers simultanés → database is locked.
+    if (syncEngine.isCurrentlySyncing()) {
+      log.warn(`[sync:pullSiteCards] Refusé : un downstream automatique est déjà en cours pour le site ${siteId}.`);
+      return {
+        success: false,
+        count: 0,
+        message: 'Une synchronisation automatique est déjà en cours. Veuillez patienter.'
+      };
+    }
+
     logAudit(
       userLogin,
       'SYNC_DOWN_INIT',
@@ -2780,7 +3190,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     );
     try {
       if (!siteId || isNaN(Number(siteId))) {
-        throw new Error("siteId obligatoire et valide requis pour la rÃ©cupÃ©ration.");
+        throw new Error("siteId obligatoire et valide requis pour la récupération.");
       }
       const pulledCount = await runDownstream(Number(siteId));
       logAudit(
@@ -2790,7 +3200,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       );
       return { success: true, count: pulledCount };
     } catch (error: any) {
-      log.error(`Erreur lors de la rÃ©cupÃ©ration des cartes pour le site ${siteId}:`, error);
+      log.error(`Erreur lors de la récupération des cartes pour le site ${siteId}:`, error);
       logAudit(
         userLogin,
         'SYNC_DOWN_FAILURE',
@@ -2799,6 +3209,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: false, message: error.message || String(error) };
     }
   });
+
 
   // SITE ADMIN — Récupération des agents depuis Supabase (Downstream Pull)
   ipcMain.handle('sync:pullAgents', async (_, siteId: number, currentUser?: any) => {
@@ -2824,10 +3235,49 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       );
       return res;
     } catch (error: any) {
-      log.error(`Erreur lors de la rÃ©cupÃ©ration des agents pour le site ${siteId}:`, error);
+      log.error(`Erreur lors de la rÃ©cupération des agents pour le site ${siteId}:`, error);
       logAudit(
         userLogin,
         'SYNC_AGENTS_FAILURE',
+        JSON.stringify({ site_id: siteId, error: error.message || String(error) })
+      );
+      return { success: false, message: error.message || String(error) };
+    }
+  });
+
+  // RÉCUPÉRATION FORCÉE DES UTILISATEURS (ADMIN CENTRE & SUPER ADMIN)
+  ipcMain.handle('admin:syncUsersFromSupabase', async (_, siteId: number, currentUser?: any) => {
+    const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
+    const userRole = currentUser?.role || 'OPERATEUR';
+    try {
+      if (!['SUPER ADMIN', 'ADMIN_CENTRE'].includes(userRole)) {
+        throw new Error("Accès refusé : rôle insuffisant pour forcer la synchronisation des utilisateurs.");
+      }
+      if (!siteId || isNaN(Number(siteId))) {
+        throw new Error("siteId obligatoire et valide requis.");
+      }
+
+      const restrictCentreId = userRole === 'ADMIN_CENTRE' ? currentUser?.centre_id : undefined;
+
+      logAudit(
+        userLogin,
+        'SYNC_USERS_FORCED_INIT',
+        JSON.stringify({ site_id: siteId, restrictCentreId })
+      );
+      
+      const res = await queries.pullAgentsFromCloud(Number(siteId), restrictCentreId);
+      
+      logAudit(
+        userLogin,
+        'SYNC_USERS_FORCED_SUCCESS',
+        JSON.stringify({ site_id: siteId, restrictCentreId, result: res })
+      );
+      return res;
+    } catch (error: any) {
+      log.error(`Erreur lors de la récupération forcée des utilisateurs pour le site ${siteId}:`, error);
+      logAudit(
+        userLogin,
+        'SYNC_USERS_FORCED_FAILURE',
         JSON.stringify({ site_id: siteId, error: error.message || String(error) })
       );
       return { success: false, message: error.message || String(error) };
@@ -2873,6 +3323,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la synchronisation forcée.");
       }
+
+      // On tente de ré-initialiser la DB localement
+      await initDatabase();
 
       logAudit(
         currentUser?.login || 'ADMIN',
@@ -2991,7 +3444,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       // Essayer d'enregistrer l'audit dans la nouvelle base importée
       try {
-        const { initDatabase } = await import('../database/connection');
         const tempDb = await initDatabase();
         
         // Créer la table si elle n'existe pas
@@ -3937,8 +4389,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  ipcMain.handle('sync:pullCentres', async (_, siteId: number, currentUser?: any) => {
+    try {
+      return await queries.pullCentresFromCloud(Number(siteId));
+    } catch (error: any) {
+      log.error('Erreur lors de la recup des centres :', error);
+      return { success: false, message: error.message };
+    }
+  });
+
+  ipcMain.handle('sync:forceCentres', async (_, siteId: number, currentUser?: any) => {
+    try {
+      return await queries.forceCentresSync(Number(siteId));
+    } catch (error: any) {
+      log.error("Erreur lors de l'envoi des centres :", error);
+      return { success: false, message: error.message };
+    }
+  });
+
+
   log.info('All IPC handlers registered');
 }
-
-
 

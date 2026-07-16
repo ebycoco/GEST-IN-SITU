@@ -1,13 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'react-hot-toast';
 import { useVisibilityBufferedCallback } from '../../../hooks/useVisibilityBufferedCallback';
+import { useSyncDownstreamStore } from '../../../stores/syncDownstreamStore';
 
 export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: () => Promise<void>) {
   const [isForceSyncing, setIsForceSyncing] = useState<boolean>(false);
   const [forceSyncResult, setForceSyncResult] = useState<any | null>(null);
   const [isSiteSyncing, setIsSiteSyncing] = useState<boolean>(false);
   const [isSyncingAgents, setIsSyncingAgents] = useState<boolean>(false);
-  const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
+  const [isPullingCardsLocalState, setIsPullingCardsLocal] = useState<boolean>(false);
+
+  // ── Store global du téléchargement — visible sur toutes les pages ──────────
+  const {
+    isBackgroundPulling,
+    downstreamInfo,
+    setIsPullingCards: setStorePulling,
+    setDownstreamProgress,
+    clearDownstream,
+  } = useSyncDownstreamStore();
+  // Compat: isPullingCards = vrai seulement si pas encore en arrière-plan
+  const isPullingCards = isPullingCardsLocalState && !isBackgroundPulling;
+  const downstreamProgress = downstreamInfo?.progress ?? -1;
 
   const [allowProbable, setAllowProbable] = useState<boolean>(false);
   const [allowInvalid, setAllowInvalid] = useState<boolean>(false);
@@ -41,6 +54,33 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     return undefined;
   }, [handleBulkProgress]);
 
+  // ⚠️ NE PAS utiliser useVisibilityBufferedCallback ici :
+  // Le downstream automatique dure ~20 minutes. Si la fenêtre est minimisée
+  // (même 1 seconde), le filtre de visibilité gèle la barre à sa dernière valeur.
+  // Le store Zustand global doit recevoir les mises à jour en temps réel.
+  const handleDownstreamProgress = useCallback((payload: { progress: number; merged: number; total: number }) => {
+    // Écriture dans le store GLOBAL — persiste même si le Dashboard est démonté
+    setDownstreamProgress(payload);
+    if (payload.progress >= 100) {
+      // Téléchargement réellement terminé : on efface tout après 3 secondes
+      setTimeout(() => {
+        clearDownstream();
+        setIsPullingCardsLocal(false);
+      }, 3000);
+    }
+  }, [setDownstreamProgress, clearDownstream]);
+
+  // Listen to downstream progress (sans filtre de visibilité — progression toujours à jour)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.api?.sync?.onDownstreamProgress) {
+      const unsubscribe = window.api.sync.onDownstreamProgress(handleDownstreamProgress);
+      return () => {
+        unsubscribe();
+      };
+    }
+    return undefined;
+  }, [handleDownstreamProgress]);
+
   const handleStartBulkUpload = async (forceProbable = false, forceInvalid = false) => {
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
@@ -59,6 +99,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         setAllowProbable(false);
         setAllowInvalid(false);
         await loadStats();
+      } else if ((res as any).cancelled) {
+        toast('⚠️ Transfert annulé par l\'agent.', { id: toastId, icon: '🛑' });
       } else {
         toast.dismiss(toastId);
       }
@@ -69,6 +111,22 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     } finally {
       setIsBulkUploading(false);
       setBulkProgress(-1);
+    }
+  };
+
+  /**
+   * Envoie le signal d'annulation au Main Process pour stopper proprement
+   * le transfert en cours entre deux blocs de 1 000 cartes.
+   * L'interface reste réactive pendant toute la durée de l'annulation.
+   */
+  const handleCancelBulkUpload = async () => {
+    if (!isBulkUploading) return;
+    toast.loading('🛑 Annulation du transfert en cours...', { id: 'cancel-bulk' });
+    try {
+      await window.api.sync.cancelBulk(user);
+      toast.success('Transfert annulé. Les cartes déjà envoyées sont conservées.', { id: 'cancel-bulk', duration: 5000 });
+    } catch (err: any) {
+      toast.error(`Échec de l'annulation : ${err.message || err}`, { id: 'cancel-bulk' });
     }
   };
 
@@ -176,7 +234,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
       return;
     }
 
-    setIsPullingCards(true);
+    setIsPullingCardsLocal(true);
+    setStorePulling(true);
     let toastId: string | undefined;
     if (!isAutomatic) {
       toastId = toast.loading('☁️ Récupération des cartes depuis le cloud en cours...');
@@ -206,11 +265,34 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         toast.error(`Échec de récupération des cartes : ${err.message || err}`, { id: toastId });
       }
     } finally {
-      setIsPullingCards(false);
+      setIsPullingCardsLocal(false);
+      // Le store se nettoie lui-même via clearDownstream() à la fin du téléchargement
+      // mais en cas d'erreur, on force le nettoyage
+      if (!isBackgroundPulling) {
+        clearDownstream();
+      }
     }
   };
 
   const [isClearingCloud, setIsClearingCloud] = useState<boolean>(false);
+  const [purgeCloudProgress, setPurgeCloudProgress] = useState<number>(-1);
+
+  const handlePurgeCloudProgress = useVisibilityBufferedCallback((progress: number) => {
+    setPurgeCloudProgress(progress);
+    if (progress >= 100) {
+      setPurgeCloudProgress(-1);
+    }
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.api?.maintenance?.onPurgeCloudProgress) {
+      const unsubscribe = window.api.maintenance.onPurgeCloudProgress(handlePurgeCloudProgress);
+      return () => {
+        unsubscribe();
+      };
+    }
+    return undefined;
+  }, [handlePurgeCloudProgress]);
 
   const handleClearCloudDatabase = async () => {
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -219,18 +301,44 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
       return;
     }
 
+    // ─── PROTECTION UI : Vérification du statut de synchro avant purge ─────
+    // Interroge le Main Process pour s'assurer qu'aucun cycle n'est actif.
+    // Le verrou IPC côté backend est la protection principale (atomique),
+    // mais ce contrôle préalable évite de lancer une promesse vouée à l'échec
+    // et améliore l'expérience utilisateur.
+    try {
+      const syncStatus = await window.api.sync.getStatus();
+      if (syncStatus?.isSyncing) {
+        toast.error(
+          '⛔ Action impossible : une synchronisation est en cours. Veuillez patienter avant de purger le cloud.',
+          { duration: 6000 }
+        );
+        return;
+      }
+    } catch {
+      // Si le statut est indisponible, on laisse le backend refuser si nécessaire.
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     setIsClearingCloud(true);
+    setPurgeCloudProgress(0);
     const toastId = toast.loading("Purge des cartes sur Supabase Cloud en cours...");
     try {
       const res = await window.api.maintenance.clearCloudCartes(Number(siteIdToUse), user);
       if (res.success) {
         toast.success("✅ Toutes les cartes de ce site ont été purgées de Supabase Cloud.", { id: toastId });
         await loadStats();
+      } else {
+        toast.error(
+          `Purge refusée : ${(res as any).error || 'Erreur inconnue'}`,
+          { id: toastId, duration: 8000 }
+        );
       }
     } catch (err: any) {
       toast.error(`Échec de la purge Cloud : ${err.message || err}`, { id: toastId });
     } finally {
       setIsClearingCloud(false);
+      setPurgeCloudProgress(-1);
     }
   };
 
@@ -240,16 +348,21 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     isSiteSyncing,
     isSyncingAgents,
     isPullingCards,
+    isBackgroundPulling,
     allowProbable,
     allowInvalid,
     isBulkUploading,
     bulkProgress,
+    downstreamProgress,
+    downstreamInfo,
     isClearingCloud,
+    purgeCloudProgress,
     handleForceGlobalSync,
     handleForceSiteSync,
     handleForceAgentsSync,
     handlePullSiteCards,
     handleStartBulkUpload,
+    handleCancelBulkUpload,
     handleClearCloudDatabase
   };
 }

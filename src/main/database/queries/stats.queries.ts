@@ -1,8 +1,69 @@
 import { getDatabase } from '../connection';
+import log from 'electron-log';
+import { Worker } from 'worker_threads';
+import { join } from 'path';
+import { app } from 'electron';
+import { getDbPath } from '../connection';
+
+let _statsWorker: Worker | null = null;
+let _messageIdCounter = 0;
+const _pendingRequests = new Map<number, { resolve: Function, reject: Function }>();
+
+function getOrCreateStatsWorker(): Worker {
+  if (!_statsWorker) {
+    let sqlitePath: string;
+    try {
+      sqlitePath = require.resolve('better-sqlite3');
+    } catch {
+      sqlitePath = 'better-sqlite3';
+    }
+
+    const workerPath = join(__dirname, 'workers', 'stats-worker.js');
+      
+    _statsWorker = new Worker(workerPath, {
+      workerData: { dbPath: getDbPath(), sqlitePath }
+    });
+
+    _statsWorker.on('message', (msg) => {
+      if (msg.type === 'log') {
+        log.info(msg.message);
+        return;
+      }
+      const req = _pendingRequests.get(msg.messageId);
+      if (req) {
+        _pendingRequests.delete(msg.messageId);
+        if (msg.success) req.resolve(msg.data);
+        else req.reject(new Error(msg.error));
+      }
+    });
+
+    _statsWorker.on('error', (err) => {
+      log.error('[STATS WORKER FATAL ERROR]', err);
+      _pendingRequests.forEach(req => req.reject(err));
+      _pendingRequests.clear();
+      _statsWorker = null;
+    });
+
+    _statsWorker.on('exit', (code) => {
+      if (code !== 0) log.error(`[STATS WORKER EXIT] code ${code}`);
+      _pendingRequests.forEach(req => req.reject(new Error(`Worker stopped with exit code ${code}`)));
+      _pendingRequests.clear();
+      _statsWorker = null;
+    });
+  }
+  return _statsWorker;
+}
+
+export function runStatsWorker(type: string, payload: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const worker = getOrCreateStatsWorker();
+    const messageId = ++_messageIdCounter;
+    _pendingRequests.set(messageId, { resolve, reject });
+    worker.postMessage({ type, messageId, ...payload });
+  });
+}
 
 export async function getStats(siteId?: number, centreId?: number) {
-  const db = getDatabase()!;
-  // Construire la clause WHERE en fonction des paramètres disponibles
   let where = '';
   const params: Record<string, any> = {};
   if (siteId && centreId) {
@@ -14,154 +75,23 @@ export async function getStats(siteId?: number, centreId?: number) {
     params.siteId = siteId;
   }
 
-  // Helpers : AND clauses complémentaires pour les requêtes avec WHERE propre
-  const andSite = siteId ? `AND site_id = @siteId` : '';
-  const andCentre = centreId ? `AND centre_id = @centreId` : '';
-  const andSiteT = siteId ? `AND t.site_id = @siteId` : '';
-  const andCentreT = centreId ? `AND t.centre_id = @centreId` : '';
+  try {
+    log.info(`[STATS WORKER] Offloading getStats to background thread for siteId: ${siteId}`);
+    return await runStatsWorker('getStats', { siteId, centreId, where, params });
+  } catch (err: any) {
+    log.error('[STATS WORKER ERROR] Echec du worker, verifiez stats-worker.js :', err.message);
+    throw err;
+  }
+}
 
-  // 1. KPI généraux
-  const stats = await new Promise<Record<string, number>>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        const res = db.prepare(`
-          SELECT
-            COUNT(*) as total,
-            IFNULL(SUM(CASE WHEN statut = 'EN STOCK' OR statut IS NULL OR statut = '' THEN 1 ELSE 0 END), 0) as en_stock,
-            IFNULL(SUM(CASE WHEN statut IN ('DELIVRE','DISTRIBUEE','RETIRE') THEN 1 ELSE 0 END), 0) as distribuees,
-            IFNULL(SUM(CASE WHEN statut_physique = 'ABSENT' THEN 1 ELSE 0 END), 0) as absentes,
-            IFNULL(SUM(CASE WHEN num_secu IS NULL OR num_secu = '' OR num_secu LIKE '-%' THEN 1 ELSE 0 END), 0) as sans_num_secu,
-            IFNULL(SUM(CASE WHEN rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE' THEN 1 ELSE 0 END), 0) as sans_rangement,
-            0 as dates_invalides
-          FROM t_cartes
-          ${where}
-        `).get(params) as Record<string, number>;
-        resolve(res);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-
-  // Récupération rapide du nombre d'anomalies de date depuis la DLQ (t_import_anomalies)
-  const anomaliesCount = await new Promise<number>((resolve) => {
-    setImmediate(() => {
-      try {
-        const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='t_import_anomalies'").get();
-        if (!tableCheck) {
-          resolve(0);
-          return;
-        }
-        let countQuery = 'SELECT COUNT(*) as count FROM t_import_anomalies';
-        const row = db.prepare(countQuery).get() as { count: number } | undefined;
-        const totalAnomalies = row ? row.count : 0;
-        console.log(`[DASHBOARD DIAGNOSTIC] 📊 Compteur d'anomalies lu depuis t_import_anomalies. Total : ${totalAnomalies}`);
-        resolve(totalAnomalies);
-      } catch (err) {
-        console.warn("Erreur non critique lors du comptage des anomalies (t_import_anomalies) :", err);
-        resolve(0);
-      }
-    });
-  });
-
-  stats.dates_invalides = anomaliesCount;
-
-  // Respiration CPU
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  // 2. Distribution par jour - OPTIMISÉE (plus de fonction date() sur la colonne)
-  const distribParJour = await new Promise<any[]>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        const res = db.prepare(`
-          SELECT date_delivrance as jour, COUNT(*) as count
-          FROM t_cartes 
-          WHERE date_delivrance IS NOT NULL AND date_delivrance != ''
-          ${andSite} ${andCentre}
-          GROUP BY date_delivrance ORDER BY jour DESC LIMIT 30
-        `).all(params);
-        resolve(res);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-
-  // Respiration CPU
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  // 3. Distribution par centre
-  const distribParCentre = await new Promise<any[]>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        const res = db.prepare(`
-          SELECT c.nom as centre, COUNT(t.id_carte) as count
-          FROM t_cartes t LEFT JOIN t_centres c ON t.centre_id = c.id
-          WHERE t.statut IN ('DELIVRE','DISTRIBUEE','RETIRE')
-          ${andSiteT} ${andCentreT}
-          GROUP BY t.centre_id
-        `).all(params);
-        resolve(res);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-
-  // Respiration CPU
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  // 4. Doublons stricts
-  const doublons = await new Promise<{ count: number }>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        const hasWhere = where !== '';
-        const res = db.prepare(`
-          SELECT COUNT(*) as count FROM (
-            SELECT cle_doublon FROM t_cartes
-            ${where}
-            ${hasWhere ? 'AND' : 'WHERE'} cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
-            GROUP BY cle_doublon HAVING COUNT(*) > 1
-          )
-        `).get(params) as { count: number };
-        resolve(res);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-
-  // Respiration CPU
-  await new Promise<void>((resolve) => setImmediate(resolve));
-
-  // 5. Doublons probables
-  const doublonsProbables = await new Promise<{ count: number }>((resolve, reject) => {
-    setImmediate(() => {
-      try {
-        const res = db.prepare(`
-          SELECT COUNT(*) as count FROM (
-            SELECT noms, prenoms, date_de_naissance
-            FROM t_cartes
-            ${where}
-            ${where ? 'AND' : 'WHERE'} noms IS NOT NULL
-            GROUP BY noms, prenoms, date_de_naissance
-            HAVING COUNT(DISTINCT cle_doublon) > 1
-          )
-        `).get(params) as { count: number };
-        resolve(res);
-      } catch (err) {
-        reject(err);
-      }
-    });
-  });
-
-  return {
-    ...stats,
-    doublons_stricts: doublons.count,
-    doublons_probables: doublonsProbables.count,
-    distribParJour,
-    distribParCentre
-  };
+export async function getDetailedSyncStats(siteId: number) {
+  try {
+    log.info(`[STATS WORKER] Offloading getDetailedSyncStats to background thread for siteId: ${siteId}`);
+    return await runStatsWorker('getDetailedSyncStats', { siteId });
+  } catch (err: any) {
+    log.error('[STATS WORKER ERROR] Echec de getDetailedSyncStats :', err.message);
+    throw err;
+  }
 }
 
 export function getVerificationStats(agentUsername: string, siteId: number) {
@@ -295,22 +225,37 @@ export function getAgentRecentSaisies(userId: number, limit: number = 15) {
   `).all(userId, limit);
 }
 
-export function getSiteSaisieStatsToday(siteId: number, centreId?: number) {
+export function getSiteSaisieStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {
   const db = getDatabase()!;
-  const todayStartStr = new Date().toISOString().split('T')[0] + 'T00:00:00.000Z';
-  const whereClause = centreId 
-    ? 'WHERE u.site_id = ? AND u.role = \'OPERATEUR_SAISIE\' AND u.centre_id = ?' 
-    : 'WHERE u.site_id = ? AND u.role = \'OPERATEUR_SAISIE\'';
-  const params = centreId ? [siteId, centreId] : [siteId];
+  
+  // Utilise la date fournie ou la date du jour au format YYYY-MM-DD
+  const targetDate = dateStr || new Date().toISOString().split('T')[0];
+  const startOfDay = targetDate + 'T00:00:00.000Z';
+  const endOfDay = targetDate + 'T23:59:59.999Z';
+  
+  let whereClause = `WHERE u.site_id = ? AND (u.role = 'OPERATEUR_SAISIE' OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role = 'OPERATEUR_SAISIE'))`;
+  const params: unknown[] = [siteId];
+
+  if (centreId) {
+    whereClause += ' AND u.centre_id = ?';
+    params.push(centreId);
+  }
+  if (agentId) {
+    whereClause += ' AND u.id_user = ?';
+    params.push(agentId);
+  }
+
+  // Injecter la date de début et de fin pour le filtrage
+  params.unshift(startOfDay, endOfDay);
 
   return db.prepare(`
     SELECT u.id_user, u.login, u.nom_user, u.prenom_user, u.centre_id, COUNT(c.id_carte) as total_saisies
     FROM t_users u
-    LEFT JOIN t_cartes c ON u.id_user = c.created_by AND c.created_at >= ?
+    LEFT JOIN t_cartes c ON u.id_user = c.created_by AND c.created_at >= ? AND c.created_at <= ?
     ${whereClause}
     GROUP BY u.id_user
     ORDER BY total_saisies DESC
-  `).all(...params, todayStartStr);
+  `).all(...params);
 }
 
 export function getRetraitsByCentre(
@@ -475,31 +420,55 @@ export function getDetailsRetraitsCentre(siteId: number | undefined, centreNom: 
   return { rows, total };
 }
 
-export function getSiteQualiteStatsToday(siteId: number, centreId?: number) {
+export function getSiteQualiteStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {
   const db = getDatabase()!;
-  const todayStartStr = new Date().toISOString().split('T')[0] + ' 00:00:00';
-  const whereClause = centreId 
-    ? 'WHERE u.site_id = ? AND u.role = \'OPERATEUR_QUALITE\' AND u.centre_id = ?' 
-    : 'WHERE u.site_id = ? AND u.role = \'OPERATEUR_QUALITE\'';
-  const params = centreId ? [siteId, centreId] : [siteId];
+  
+  const targetDate = dateStr || new Date().toISOString().split('T')[0];
+  const startOfDay = targetDate + ' 00:00:00';
+  const endOfDay = targetDate + ' 23:59:59';
+  
+  let whereClause = `WHERE u.site_id = ? AND (u.role = 'OPERATEUR_QUALITE' OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role = 'OPERATEUR_QUALITE'))`;
+  const params: unknown[] = [siteId];
+
+  if (centreId) {
+    whereClause += ' AND u.centre_id = ?';
+    params.push(centreId);
+  }
+  if (agentId) {
+    whereClause += ' AND u.id_user = ?';
+    params.push(agentId);
+  }
+
+  params.unshift(startOfDay, endOfDay);
 
   return db.prepare(`
     SELECT u.id_user, u.login, u.nom_user, u.prenom_user, u.centre_id, COUNT(l.id_log) as total_actions
     FROM t_users u
-    LEFT JOIN t_logs l ON u.id_user = l.id_user AND l.date_heure >= ?
+    LEFT JOIN t_logs l ON u.id_user = l.id_user AND l.date_heure >= ? AND l.date_heure <= ?
     ${whereClause}
     GROUP BY u.id_user
     ORDER BY total_actions DESC
-  `).all(...params, todayStartStr);
+  `).all(...params);
 }
 
-export function getSiteLogistiqueStatsToday(siteId: number, centreId?: number) {
+export function getSiteLogistiqueStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {
   const db = getDatabase()!;
-  const todayStr = new Date().toISOString().split('T')[0];
-  const whereClause = centreId 
-    ? 'WHERE u.site_id = ? AND u.role IN (\'OPERATEUR_LOGISTIQUE\', \'OPERATEUR_INVENTAIRE\') AND u.centre_id = ?' 
-    : 'WHERE u.site_id = ? AND u.role IN (\'OPERATEUR_LOGISTIQUE\', \'OPERATEUR_INVENTAIRE\')';
-  const params = centreId ? [siteId, centreId] : [siteId];
+  
+  const targetDate = dateStr || new Date().toISOString().split('T')[0];
+  
+  let whereClause = `WHERE u.site_id = ? AND (u.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE') OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE')))`;
+  const params: unknown[] = [siteId];
+
+  if (centreId) {
+    whereClause += ' AND u.centre_id = ?';
+    params.push(centreId);
+  }
+  if (agentId) {
+    whereClause += ' AND u.id_user = ?';
+    params.push(agentId);
+  }
+
+  params.unshift(targetDate);
 
   return db.prepare(`
     SELECT u.id_user, u.login, u.nom_user, u.prenom_user, u.centre_id, COUNT(c.id_carte) as total_distributions
@@ -508,5 +477,24 @@ export function getSiteLogistiqueStatsToday(siteId: number, centreId?: number) {
     ${whereClause}
     GROUP BY u.id_user
     ORDER BY total_distributions DESC
-  `).all(...params, todayStr);
+  `).all(...params);
+}
+
+/**
+ * Fonction unifiée pour récupérer toutes les activités par agent et par date (Pilotage de Terrain).
+ */
+export function getActivitiesByAgentAndDate(siteId: number, centreId?: number | null, agentId?: number | null, dateStr?: string | null) {
+  const resolvedCentreId = centreId || undefined;
+  const resolvedAgentId = agentId || undefined;
+  const resolvedDateStr = dateStr || undefined;
+
+  const saisies = getSiteSaisieStatsToday(siteId, resolvedCentreId, resolvedAgentId, resolvedDateStr);
+  const qualite = getSiteQualiteStatsToday(siteId, resolvedCentreId, resolvedAgentId, resolvedDateStr);
+  const logistique = getSiteLogistiqueStatsToday(siteId, resolvedCentreId, resolvedAgentId, resolvedDateStr);
+
+  return {
+    saisies,
+    qualite,
+    logistique
+  };
 }

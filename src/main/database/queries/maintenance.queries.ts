@@ -8,7 +8,8 @@ export function clearDatabaseCartes(siteId?: number): void {
     db.transaction(() => {
       if (siteId !== undefined) {
         db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(siteId);
-        db.prepare('DELETE FROM t_sync_queue WHERE site_id = ?').run(siteId);
+        // t_sync_queue n'a PAS de colonne site_id — purge des entr\u00e9es orphelines apr\u00e8s suppression des cartes
+        db.prepare("DELETE FROM t_sync_queue WHERE table_name = 't_cartes' AND record_id NOT IN (SELECT id_carte FROM t_cartes)").run();
         db.prepare('DELETE FROM t_logs WHERE site_id = ?').run(siteId);
       } else {
         db.prepare('DELETE FROM t_cartes').run();
@@ -116,8 +117,11 @@ export async function emergencyPurge(
 
   // Étape 3 : Nettoyage des files & logs (60%)
   db.transaction(() => {
+    // t_logs a bien une colonne site_id (ajoutée en migration V6/V7)
     db.prepare("DELETE FROM t_logs WHERE site_id = ? AND action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE')").run(siteId);
-    db.prepare('DELETE FROM t_sync_queue WHERE site_id = ?').run(siteId);
+    // t_sync_queue n'a PAS de colonne site_id — on purge via les IDs de cartes du site concerné
+    // ou on vide toute la queue (les entrées orphelines après purge t_cartes sont de toute façon inutiles)
+    db.prepare("DELETE FROM t_sync_queue WHERE table_name = 't_cartes' AND record_id NOT IN (SELECT id_carte FROM t_cartes)").run();
   })();
   if (progressCallback) progressCallback(60);
   await new Promise(resolve => setImmediate(resolve));
@@ -158,8 +162,47 @@ export async function emergencyPurge(
     END;
   `);
 
-  db.prepare("INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement) SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement FROM t_cartes WHERE site_id = ?").run(siteId);
-  
+  // ─── RE-INDEXATION FTS5 NON-BLOQUANTE (lots de 500 + yield setImmediate) ───
+  // CORRECTIF ANTI-FREEZE : Le SELECT...INSERT en bloc précédent gelait le Main
+  // Thread Electron pendant 15-45s sur 220 000 cartes (Abobo). Désormais :
+  //   1. Les données sont chargées en mémoire en une seule requête SELECT (rapide).
+  //   2. L'insertion FTS5 se fait par lots de FTS_BATCH_SIZE pour libérer l'Event
+  //      Loop entre chaque lot via setImmediate (non bloquant pour l'UI).
+  //   3. La progression est mise à jour de façon granulaire entre 75% et 90%.
+  const FTS_BATCH_SIZE = 500;
+  type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
+  const ftsCards = db.prepare(`
+    SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
+    FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
+  `).all(siteId) as FtsCard[];
+
+  const totalFts = ftsCards.length;
+  if (totalFts > 0) {
+    const ftsInsertStmt = db.prepare(`
+      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (let i = 0; i < totalFts; i += FTS_BATCH_SIZE) {
+      const batch = ftsCards.slice(i, i + FTS_BATCH_SIZE);
+      db.transaction(() => {
+        for (const c of batch) {
+          ftsInsertStmt.run(c.id_carte, c.noms || '', c.prenoms || '', c.num_secu || '', c.contact || '', c.lieu_de_naissance || '', c.rangement || '');
+        }
+      })();
+
+      // Progression granulaire : 75% → 90% pendant la ré-indexation
+      if (progressCallback) {
+        const ftsProgress = 75 + Math.round(((i + batch.length) / totalFts) * 15);
+        progressCallback(Math.min(ftsProgress, 90));
+      }
+
+      // Yield de la boucle d'événements — libère le thread UI d'Electron
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    log.info(`[EMERGENCY PURGE] Ré-indexation FTS5 terminée : ${totalFts} cartes indexées par lots de ${FTS_BATCH_SIZE}.`);
+  }
+
   if (progressCallback) progressCallback(90);
   await new Promise(resolve => setImmediate(resolve));
 
@@ -191,6 +234,19 @@ export function purgeExpiredDeadLetters(): void {
   }
 }
 
+/**
+ * Réinitialisation TOTALE du système : cartes, queue de sync, logs, utilisateurs (hors SUPER ADMIN).
+ *
+ * ⚠️  AVERTISSEMENT — OPÉRATION SYNCHRONE BLOQUANTE :
+ *   Les DELETE en transaction SQLite ci-dessous sont exécutés de façon synchrone.
+ *   Sur une base contenant plus de 100 000 cartes, cela peut geler le Main Thread
+ *   Electron pendant 2 à 8 secondes. Cette fonction est réservée au SUPER ADMIN
+ *   et doit être appelée UNIQUEMENT lors des opérations de maintenance planifiée
+ *   (hors utilisation active des postes de terrain).
+ *
+ * Thread Safety : appelée depuis maintenance:fullReset (IPC Handler) qui gère
+ * la vérification de rôle SUPER ADMIN en amont.
+ */
 export function fullSystemReset(): { success: boolean } {
   try {
     const db = getDatabase()!;

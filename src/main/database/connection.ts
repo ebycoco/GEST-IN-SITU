@@ -25,7 +25,7 @@ export async function initDatabase(): Promise<Database.Database> {
   const dbPath = getDbPath();
   log.info(`Database path: ${dbPath}`);
 
-  db = new Database(dbPath);
+  db = new Database(dbPath, { timeout: 30000 });
 
   // Performance optimizations for 200k+ rows
   db.pragma('journal_mode = WAL');
@@ -47,6 +47,8 @@ export async function initDatabase(): Promise<Database.Database> {
   } catch (err) {
     log.error('Échec de la purge de démarrage des Dead Letters:', err);
   }
+
+
 
 
   // Add Regexp support

@@ -201,25 +201,38 @@ export default function TopBar() {
       navigate('/admin/queue');
       setShowNotifications(false);
     } else if (n.action === 'CARTE_ABSENTE_RETROUVEE' || n.action === 'CARTE_PERDUE_CONFIRMEE' || n.action === 'CARTE_PERDUE_RETROUVEE') {
-      let parsed = null;
-      try {
-        parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
-      } catch (e) {
-        console.error('Failed to parse valeur_apres:', e);
+      if (user?.role === 'OPERATEUR_VERIFICATION') {
+        try {
+          if (window.api && window.api.sync.markNotificationAsRead) {
+            await window.api.sync.markNotificationAsRead(n.id_log);
+          }
+        } catch (err) {
+          console.error('[TopBar] Failed to mark notification as read:', err);
+        }
+        setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
+        setShowNotifications(false);
+        navigate('/verification/recherche?tab=resolus');
+      } else {
+        let parsed = null;
+        try {
+          parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+        } catch (e) {
+          console.error('Failed to parse valeur_apres:', e);
+        }
+        setSelectedResolution({
+          id_log: n.id_log,
+          message: n.action === 'CARTE_PERDUE_RETROUVEE' 
+            ? `Bonne nouvelle ! La carte de ${parsed?.noms || ''} ${parsed?.prenoms || ''} a été RETROUVÉE et réintégrée au stock.`
+            : n.detail,
+          noms: parsed?.noms || 'Inconnu',
+          prenoms: parsed?.prenoms || '',
+          rangement: parsed?.rangement || 'Non classé',
+          contact: parsed?.contact || '—',
+          isLost: n.action === 'CARTE_PERDUE_CONFIRMEE'
+        });
+        setShowResolutionModal(true);
+        setShowNotifications(false);
       }
-      setSelectedResolution({
-        id_log: n.id_log,
-        message: n.action === 'CARTE_PERDUE_RETROUVEE' 
-          ? `Bonne nouvelle ! La carte de ${parsed?.noms || ''} ${parsed?.prenoms || ''} a été RETROUVÉE et réintégrée au stock.`
-          : n.detail,
-        noms: parsed?.noms || 'Inconnu',
-        prenoms: parsed?.prenoms || '',
-        rangement: parsed?.rangement || 'Non classé',
-        contact: parsed?.contact || '—',
-        isLost: n.action === 'CARTE_PERDUE_CONFIRMEE'
-      });
-      setShowResolutionModal(true);
-      setShowNotifications(false);
     } else {
       try {
         if (window.api && window.api.sync.markNotificationAsRead) {
@@ -262,12 +275,34 @@ export default function TopBar() {
   }, [showNotifications]);
 
   const isOnline = syncStatus.status === 'ONLINE' || syncStatus.status === 'PROBING';
+  const showOfflineWarning = !isOnline && syncStatus.queueLength > 0;
 
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <h1 className="topbar-title">GESTION CARTES IN-SITU</h1>
-      </div>
+    <>
+      {showOfflineWarning && (
+        <div style={{
+          position: 'fixed',
+          top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#ef4444',
+          color: '#fff',
+          padding: '8px 24px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 8,
+          fontSize: 13,
+          fontWeight: 600,
+          boxShadow: '0 4px 12px rgba(239,68,68,0.3)',
+          animation: 'slideDown 0.3s ease-out'
+        }}>
+          <AlertTriangle size={16} />
+          Vous avez des signalements ou données en attente. Veuillez vous connecter à Internet pour finaliser leur envoi.
+        </div>
+      )}
+      <header className="topbar" style={{ marginTop: showOfflineWarning ? 36 : 0, transition: 'margin-top 0.3s' }}>
+        <div className="topbar-left">
+          <h1 className="topbar-title">GESTION CARTES IN-SITU</h1>
+        </div>
 
       <div className="topbar-right" ref={dropdownRef}>
         {/* Affichage du périmètre d'affectation pour l'Opérateur de Vérification */}
@@ -564,6 +599,7 @@ export default function TopBar() {
           </div>
         )}
       </div>
-    </header>
+      </header>
+    </>
   );
 }

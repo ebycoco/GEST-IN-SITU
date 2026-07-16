@@ -287,3 +287,36 @@
   height: 120px !important;
   width: 100%;
 }
+
+
+/* PREMIUM COMPONENT CLASSES */
+.premium-glass {
+  background: rgba(20, 24, 39, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.premium-glass:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  background: rgba(25, 30, 48, 0.8);
+}
+
+.data-table-premium tr {
+  transition: background-color 0.2s ease;
+}
+
+.data-table-premium tr:hover {
+  background-color: rgba(255, 255, 255, 0.03) !important;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes scaleIn {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}

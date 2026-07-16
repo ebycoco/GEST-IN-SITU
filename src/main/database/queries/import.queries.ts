@@ -172,7 +172,23 @@ export async function fusionnerImport(siteId: number): Promise<{ updated: number
 
 export function getImportAnomalies(siteId: number) {
   const db = getDatabase()!;
-  return db.prepare('SELECT * FROM t_import_anomalies ORDER BY id DESC').all();
+  return db.prepare(`
+    SELECT
+      id,
+      carte_id,
+      type_anomalie,
+      COALESCE(erreur_message, description) AS erreur_message,
+      noms,
+      prenoms,
+      date_de_naissance,
+      num_secu,
+      contact,
+      site_id,
+      created_at
+    FROM t_import_anomalies
+    WHERE (site_id IS NULL OR site_id = ?)
+    ORDER BY id DESC
+  `).all(siteId);
 }
 
 export function clearImportAnomalies(siteId: number) {

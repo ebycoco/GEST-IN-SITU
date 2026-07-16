@@ -1,18 +1,32 @@
 import React from 'react';
-import { Activity } from 'lucide-react';
+import { Activity, Database, Globe } from 'lucide-react';
 
 interface OperatorViewProps {
   operatorTodayCount: number;
   operatorRecentSaisies: any[];
+  dirtyCartesCount: number;
+  cloudCartesCount: number;
+  isOnline: boolean;
+  isPullingCards: boolean;
+  isBulkUploading: boolean;
+  handleStartBulkUpload: () => void;
+  handlePullSiteCards: () => void;
 }
 
 export function OperatorView({
   operatorTodayCount,
-  operatorRecentSaisies
+  operatorRecentSaisies,
+  dirtyCartesCount,
+  cloudCartesCount,
+  isOnline,
+  isPullingCards,
+  isBulkUploading,
+  handleStartBulkUpload,
+  handlePullSiteCards
 }: OperatorViewProps) {
   return (
     <div className="dashboard-premium animate-fade-in" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 900, color: 'white', margin: 0 }}>TABLEAU DE BORD OPÉRATEUR</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Suivi quotidien de vos performances de saisie de fiches.</p>
@@ -23,7 +37,61 @@ export function OperatorView({
         </div>
       </div>
 
-      <div className="premium-card premium-glass" style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '32px', background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.05) 0%, rgba(255, 215, 0, 0.01) 100%)', border: '1px solid rgba(255, 215, 0, 0.2)', borderRadius: 16 }}>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <button 
+          onClick={handlePullSiteCards} 
+          disabled={isPullingCards || !isOnline || cloudCartesCount === 0}
+          className="btn-outline" 
+          style={{ 
+            padding: '12px 24px', 
+            borderRadius: 12, 
+            fontWeight: 700,
+            cursor: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+            opacity: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 0.5 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            background: 'rgba(255, 255, 255, 0.03)',
+            color: 'white',
+            flex: '1 1 auto',
+            justifyContent: 'center',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
+          {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+        </button>
+
+        <button 
+          onClick={handleStartBulkUpload} 
+          disabled={isBulkUploading || !isOnline || dirtyCartesCount === 0}
+          className="btn-plein-soleil" 
+          style={{ 
+            padding: '12px 24px', 
+            borderRadius: 12, 
+            fontWeight: 700,
+            backgroundColor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
+            color: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
+            border: '1px solid #FFE600',
+            cursor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
+            opacity: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 0.5 : 1,
+            boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            transition: 'all 0.2s ease-in-out',
+            flex: '1 1 auto',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+          {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+        </button>
+      </div>
+
+      <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '32px', background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.05) 0%, rgba(255, 215, 0, 0.01) 100%)', border: '1px solid rgba(255, 215, 0, 0.2)', borderRadius: 16 }}>
         <div style={{ width: 64, height: 64, borderRadius: 20, background: 'linear-gradient(135deg, #eccc68 0%, #ffd700 100%)', color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(255, 215, 0, 0.2)' }}>
           <Activity size={32} />
         </div>
@@ -33,7 +101,7 @@ export function OperatorView({
         </div>
       </div>
 
-      <div className="premium-card premium-glass" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, borderRadius: 16 }}>
+      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, borderRadius: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16 }}>
           <span style={{ fontSize: 16, fontWeight: 700, color: 'white' }}>Dernières fiches saisies (Max 15)</span>
           <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Mise à jour en temps réel</span>

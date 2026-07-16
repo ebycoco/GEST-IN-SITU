@@ -14,6 +14,9 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const [siteLogistiqueStats, setSiteLogistiqueStats] = useState<any[]>([]);
   const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
   const [dirtyUsersCount, setDirtyUsersCount] = useState<number>(0);
+  const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
+  const [totalCloudCartesCount, setTotalCloudCartesCount] = useState<number>(0);
+  const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number } | null>(null);
 
   const loadGlobalData = async (silent = false) => {
     try {
@@ -36,22 +39,42 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
   };
 
-  const loadStats = async (silent = false) => {
+  const loadStats = async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => {
     try {
       if (!silent) setLoading(true);
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const centreIdToUse = user?.role === 'ADMIN_CENTRE' ? user?.centre_id : undefined;
+      const centreIdToUse = user?.role === 'ADMIN_CENTRE' 
+        ? user?.centre_id 
+        : (supervisionFilters?.centreId !== undefined ? supervisionFilters.centreId : undefined);
       
+      const targetAgentId = supervisionFilters?.agentId;
+      const targetDateStr = supervisionFilters?.dateStr;
+
       if (user?.role === 'OPERATEUR_SAISIE') {
-        const [todayCount, recents] = await Promise.all([
+        const [todayCount, recents, cartesCount] = await Promise.all([
           window.api.stats.getAgentToday(user.id_user),
-          window.api.stats.getAgentRecentSaisies(user.id_user, 15)
+          window.api.stats.getAgentRecentSaisies(user.id_user, 15),
+          window.api.stats.getUnsyncedCardsCount(siteIdToUse!)
         ]);
         setOperatorTodayCount(todayCount);
         setOperatorRecentSaisies(recents);
+        setDirtyCartesCount(cartesCount);
+
+        window.api.sync.getCloudCartesCount(siteIdToUse!).then(count => {
+          setCloudCartesCount(count);
+          useCacheStore.getState().setDashboardCache({
+            ...useCacheStore.getState().dashboardCache,
+            cloudCartesCount: count
+          });
+        }).catch(err => {
+          console.error('Failed to fetch cloud count:', err);
+          setCloudCartesCount(-1);
+        });
+
         useCacheStore.getState().setDashboardCache({
           operatorTodayCount: todayCount,
-          operatorRecentSaisies: recents
+          operatorRecentSaisies: recents,
+          dirtyCartesCount: cartesCount
         });
       } else {
         // Chargement des stats KPI avec bridage centre si ADMIN_CENTRE
@@ -59,31 +82,59 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         setStats(data);
         
         let saisiesToday: any[] = [];
+        let qualiteToday: any[] = [];
+        let logistiqueToday: any[] = [];
         let cartesCount = 0;
         let usersCount = 0;
-
-        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE')) {
-          [saisiesToday, cartesCount, usersCount] = await Promise.all([
-            window.api.stats.getSiteSaisieToday(siteIdToUse, centreIdToUse),
+        let cloudCartes = -1;
+        let syncStats: any = null;
+ 
+        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE')) {
+          [saisiesToday, cartesCount, usersCount, syncStats] = await Promise.all([
+            window.api.stats.getSiteSaisieToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
             window.api.stats.getUnsyncedCardsCount(siteIdToUse),
             window.api.stats.getUnsyncedUsersCount(siteIdToUse),
+            window.api.stats.getDetailedSyncStats(siteIdToUse)
           ]);
-          const qualiteToday = await window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse);
-          const logistiqueToday = await window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse);
+          
+          // Fetch cloud count non-blockingly
+          window.api.sync.getCloudCartesCount(siteIdToUse).then(count => {
+            setCloudCartesCount(count);
+            useCacheStore.getState().setDashboardCache({
+              ...useCacheStore.getState().dashboardCache,
+              cloudCartesCount: count
+            });
+          }).catch(err => {
+            console.error('Failed to fetch cloud count:', err);
+            setCloudCartesCount(-1);
+          });
+
+          window.api.sync.getTotalCloudCartesCount(siteIdToUse).then(count => {
+            setTotalCloudCartesCount(count);
+          }).catch(err => {
+            console.error('Failed to fetch total cloud count:', err);
+            setTotalCloudCartesCount(-1);
+          });
+
+          qualiteToday = await window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
+          logistiqueToday = await window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
           setSiteSaisiesStats(saisiesToday);
           setSiteQualiteStats(qualiteToday);
           setSiteLogistiqueStats(logistiqueToday);
           setDirtyCartesCount(cartesCount);
           setDirtyUsersCount(usersCount);
+          setDetailedSyncStats(syncStats);
         }
-
+ 
         useCacheStore.getState().setDashboardCache({
           stats: data,
           siteSaisiesStats: saisiesToday,
-          siteQualiteStats: siteQualiteStats,
-          siteLogistiqueStats: siteLogistiqueStats,
+          siteQualiteStats: qualiteToday,
+          siteLogistiqueStats: logistiqueToday,
           dirtyCartesCount: cartesCount,
-          dirtyUsersCount: usersCount
+          dirtyUsersCount: usersCount,
+          cloudCartesCount: cloudCartes, // initial state or previous cache if needed, handled above asynchronously
+          detailedSyncStats: syncStats
         });
       }
     } catch (e) { 
@@ -108,6 +159,10 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       setOperatorRecentSaisies(cache.operatorRecentSaisies);
       setDirtyCartesCount(cache.dirtyCartesCount);
       setDirtyUsersCount(cache.dirtyUsersCount);
+      setCloudCartesCount(cache.cloudCartesCount || 0);
+      if (cache.detailedSyncStats) {
+        setDetailedSyncStats(cache.detailedSyncStats);
+      }
       setLoading(false);
       hasCache = true;
     }
@@ -131,6 +186,9 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     siteLogistiqueStats,
     dirtyCartesCount,
     dirtyUsersCount,
+    cloudCartesCount,
+    totalCloudCartesCount,
+    detailedSyncStats,
     loadGlobalData,
     loadStats
   };

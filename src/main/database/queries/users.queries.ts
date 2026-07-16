@@ -5,6 +5,8 @@ import { networkMonitor } from '../../sync/network-monitor';
 import { logAction } from './logs.queries';
 import { v4 as uuidv4 } from 'uuid';
 import log from 'electron-log';
+import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
+import { insertAuditLog } from './audit.queries';
 
 export function seedUserFromCloud(userData: {
   login: string;
@@ -38,15 +40,46 @@ export async function authenticateUser(login: string, password: string): Promise
   const db = getDatabase()!;
   
   const user = db.prepare(`
-    SELECT id_user, login, password_hash, role, nom_user, prenom_user, site_id, centre_id, sync_id, statut_actif
-    FROM t_users 
-    WHERE login = ? AND statut_actif = 1
+    SELECT u.id_user, u.login, u.password_hash, u.role, u.nom_user, u.prenom_user, u.site_id, u.centre_id, u.sync_id, u.statut_actif,
+           s.is_active AS site_is_active, s.expiry_date AS site_expiry_date, s.is_permanent AS site_is_permanent
+    FROM t_users u
+    LEFT JOIN t_sites s ON u.site_id = s.id
+    WHERE u.login = ? AND u.statut_actif = 1
   `).get(login) as any;
 
   if (!user) return null;
 
   const valid = verifyPassword(password, user.password_hash);
   if (!valid) return null;
+
+  // VERIFICATION SITE ACTIF ET LICENCE
+  let warningMessage: string | undefined = undefined;
+  if (user.role !== 'SUPER ADMIN' && user.site_id) {
+    if (user.site_is_active === 0) {
+      throw new Error('SITE_SUSPENDU');
+    }
+
+    if (user.site_is_permanent !== 1 && user.site_expiry_date) {
+      const now = new Date();
+      const expiry = new Date(user.site_expiry_date);
+      if (now > expiry) {
+        throw new Error('LICENCE_EXPIREE');
+      }
+
+      // Calcul des jours restants
+      const timeDiff = expiry.getTime() - now.getTime();
+      const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+      if (daysDiff <= 30) {
+        warningMessage = `Votre licence expire dans ${daysDiff} jour(s) (${expiry.toLocaleDateString('fr-FR')}). Veuillez contacter le Super Administrateur.`;
+      }
+    }
+  }
+
+  const rolesRows = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(user.id_user) as { role: string }[];
+  let roles = rolesRows.map(r => r.role);
+  if (roles.length === 0 && user.role) {
+    roles = [user.role];
+  }
 
   const token = uuidv4();
   db.prepare("UPDATE t_users SET last_login = datetime('now') WHERE id_user = ?").run(user.id_user);
@@ -61,11 +94,13 @@ export async function authenticateUser(login: string, password: string): Promise
     id_user: user.id_user,
     login: user.login,
     role: user.role,
+    roles: roles,
     nom_user: user.nom_user,
     prenom_user: user.prenom_user,
     site_id: user.site_id,
     centre_id: user.centre_id,
-    sessionToken: token
+    sessionToken: token,
+    warning: warningMessage
   };
 }
 
@@ -75,18 +110,29 @@ export function getUserRoles(userId: number): string[] {
   return rows.map(r => r.role);
 }
 
-export function getUsers(siteId?: number) {
+export function getUsers(siteId?: number, centreId?: number) {
   const db = getDatabase()!;
-  const query = `
+  let query = `
     SELECT u.*, c.nom AS centre_nom, s.nom AS site_nom 
     FROM t_users u
     LEFT JOIN t_centres c ON u.centre_id = c.id
     LEFT JOIN t_sites s ON u.site_id = s.id
-    WHERE u.role != 'SUPER ADMIN'
-    ${siteId ? 'AND u.site_id = ?' : ''}
-    ORDER BY u.login
+    WHERE u.role != 'SUPER ADMIN' AND u.statut_actif != -1
   `;
-  const users = (siteId ? db.prepare(query).all(siteId) : db.prepare(query).all()) as any[];
+  
+  const params: any[] = [];
+  if (siteId) {
+    query += ' AND u.site_id = ?';
+    params.push(siteId);
+  }
+  if (centreId) {
+    query += ' AND u.centre_id = ?';
+    params.push(centreId);
+  }
+  
+  query += ' ORDER BY u.login';
+  
+  const users = db.prepare(query).all(...params) as any[];
   
   for (const user of users) {
     const roles = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(user.id_user) as { role: string }[];
@@ -101,15 +147,17 @@ export function getUsers(siteId?: number) {
 export function createUser(data: Record<string, unknown>, callerUserId: number) {
   const db = getDatabase()!;
   
-  const creator = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number } | undefined;
-  if (!creator || !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
+  const creator = db.prepare('SELECT role, site_id, centre_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number; centre_id?: number } | undefined;
+  if (!creator || !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(creator.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour créer un utilisateur.");
   }
 
-  const targetSiteId = creator.role === 'ADMINISTRATEUR_SITE' ? creator.site_id : (Number(data.site_id) || 1);
+  // Si c'est un ADMIN_CENTRE, on utilise son site et son centre. Si c'est un ADMINISTRATEUR_SITE, on utilise son site. Sinon (SUPER ADMIN), on prend data.site_id.
+  const targetSiteId = (creator.role === 'ADMINISTRATEUR_SITE' || creator.role === 'ADMIN_CENTRE') ? creator.site_id : (Number(data.site_id) || 1);
+  const targetCentreId = creator.role === 'ADMIN_CENTRE' ? creator.centre_id : (data.centre_id ? Number(data.centre_id) : null);
 
-  if (creator.role === 'ADMINISTRATEUR_SITE' && data.centre_id) {
-    const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(data.centre_id) as { site_id?: number } | undefined;
+  if (creator.role === 'ADMINISTRATEUR_SITE' && targetCentreId) {
+    const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(targetCentreId) as { site_id?: number } | undefined;
     if (!centre || centre.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé : Ce centre n'appartient pas à votre site.");
     }
@@ -120,9 +168,11 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
   const inputRoles = (data.roles as string[]) || (data.role ? [data.role as string] : ['OPERATEUR_SAISIE']);
   const primaryRole = (data.role as string) || inputRoles[0];
 
-  return db.transaction(() => {
+  const transaction = db.transaction(() => {
     const existing = db.prepare('SELECT id_user, sync_id FROM t_users WHERE login = ?').get(data.login) as { id_user: number; sync_id: string } | undefined;
     
+    let localOutboxToEnqueue: { id: string; table: string; operation: 'INSERT' | 'UPDATE'; payload: Record<string, unknown> } | null = null;
+
     if (existing) {
       const userSyncId = existing.sync_id || syncId;
       const result = db.prepare(`
@@ -136,7 +186,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
         role: primaryRole,
         nom_user: data.nom_user || '',
         prenom_user: data.prenom_user || '',
-        centre_id: data.centre_id || null,
+        centre_id: targetCentreId,
         site_id: targetSiteId,
         sync_id: userSyncId
       });
@@ -147,37 +197,25 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
         insertStmt.run(existing.id_user, r);
       }
 
-      if (networkMonitor.getState() === 'ONLINE') {
-        const supabase = getSupabaseClient();
-        (async () => {
-          try {
-            const { error } = await supabase.from('t_users').upsert({
-              id_user: existing.id_user,
-              login: data.login,
-              password_hash: hash,
-              role: primaryRole,
-              nom_user: data.nom_user || '',
-              prenom_user: data.prenom_user || '',
-              site_id: targetSiteId,
-              centre_id: data.centre_id || null,
-              statut_actif: 1,
-              sync_id: userSyncId,
-              updated_at: new Date().toISOString()
-            }, { onConflict: 'sync_id' });
+      localOutboxToEnqueue = {
+        id: userSyncId,
+        table: 't_users',
+        operation: 'UPDATE',
+        payload: {
+          sync_id: userSyncId,
+          login: data.login,
+          password_hash: hash,
+          role: primaryRole,
+          nom_user: data.nom_user || '',
+          prenom_user: data.prenom_user || '',
+          site_id: targetSiteId,
+          centre_id: targetCentreId,
+          statut_actif: 1,
+          updated_at: new Date().toISOString()
+        }
+      };
 
-            if (error) {
-              log.warn(`[createUser] Push direct de mise à jour de l'agent échoué (non-bloquant): ${error.message}`);
-            } else {
-              log.info(`[createUser] Agent '${data.login}' mis à jour sur Supabase en direct.`);
-              db.prepare("UPDATE t_users SET is_dirty = 0, synced_at = datetime('now') WHERE id_user = ?").run(existing.id_user);
-            }
-          } catch (e: any) {
-            log.warn(`[createUser] Exception push direct de l'agent (non-bloquant): ${e.message || e}`);
-          }
-        })();
-      }
-
-      return result;
+      return { result, outboxToEnqueue: localOutboxToEnqueue };
     }
 
     const result = db.prepare(`
@@ -189,7 +227,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
       role: primaryRole, 
       nom_user: data.nom_user || '', 
       prenom_user: data.prenom_user || '', 
-      centre_id: data.centre_id || null, 
+      centre_id: targetCentreId, 
       site_id: targetSiteId,
       sync_id: syncId 
     });
@@ -201,37 +239,35 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
       insertStmt.run(newUserId, r);
     }
 
+    localOutboxToEnqueue = {
+      id: syncId,
+      table: 't_users',
+      operation: 'INSERT',
+      payload: {
+        sync_id: syncId,
+        login: data.login,
+        password_hash: hash,
+        role: primaryRole,
+        nom_user: data.nom_user || '',
+        prenom_user: data.prenom_user || '',
+        site_id: targetSiteId,
+        centre_id: targetCentreId,
+        statut_actif: 1
+      }
+    };
+
+    return { result, outboxToEnqueue: localOutboxToEnqueue };
+  });
+  const txResult = transaction();
+
+  if (txResult.outboxToEnqueue) {
+    enqueueOutbox(txResult.outboxToEnqueue.id, txResult.outboxToEnqueue.table, txResult.outboxToEnqueue.operation, txResult.outboxToEnqueue.payload);
     if (networkMonitor.getState() === 'ONLINE') {
-      const supabase = getSupabaseClient();
-      (async () => {
-        try {
-          const { error } = await supabase.from('t_users').insert({
-            id_user: newUserId,
-            login: data.login,
-            password_hash: hash,
-            role: primaryRole,
-            nom_user: data.nom_user || '',
-            prenom_user: data.prenom_user || '',
-            site_id: targetSiteId,
-            centre_id: data.centre_id || null,
-            statut_actif: 1,
-            sync_id: syncId
-          });
-
-          if (error) {
-            log.warn(`[createUser] Push direct de création de l'agent échoué (non-bloquant): ${error.message}`);
-          } else {
-            log.info(`[createUser] Nouvel agent '${data.login}' créé sur Supabase en direct.`);
-            db.prepare("UPDATE t_users SET is_dirty = 0, synced_at = datetime('now') WHERE id_user = ?").run(newUserId);
-          }
-        } catch (e: any) {
-          log.warn(`[createUser] Exception push direct de l'agent (non-bloquant): ${e.message || e}`);
-        }
-      })();
+      scheduleOutboxProcessing();
     }
+  }
 
-    return result;
-  })();
+  return txResult.result;
 }
 
 export function updateUser(id: number, data: Record<string, unknown>, creator?: { role: string; site_id?: number }) {
@@ -262,70 +298,180 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   
   const filteredKeys = Object.keys(data).filter(k => allowedUserColumns.includes(k));
   
-  return db.transaction(() => {
+  const transaction = db.transaction(() => {
+    // ── 0. Récupération du sync_id courant de l'utilisateur ──────────────────────
+    const user = db.prepare('SELECT sync_id FROM t_users WHERE id_user = ?').get(id) as { sync_id: string } | undefined;
+
     let result = { changes: 0 };
+    let localOutboxToEnqueue: { id: string; table: string; operation: 'INSERT' | 'UPDATE'; payload: Record<string, unknown> } | null = null;
+
     if (filteredKeys.length > 0) {
       const fields = filteredKeys.map(k => `${k} = @${k}`).join(', ');
-      const params: any = {};
+      const params: Record<string, unknown> = {};
       filteredKeys.forEach(k => {
         params[k] = data[k];
       });
       params.id = id;
       
-      result = db.prepare(`UPDATE t_users SET ${fields}, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = @id`).run(params);
+      // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────
+      try {
+        result = db.prepare(`UPDATE t_users SET ${fields}, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = @id`).run(params);
+      } catch (err: any) {
+        console.error("ERREUR SQL:", err);
+        throw err;
+      }
       if (result.changes === 0) {
         throw new Error("Accès non autorisé aux données de ce site");
       }
     }
 
     if (inputRoles) {
-      db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(id);
-      const insertStmt = db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES (?, ?)');
-      for (const r of inputRoles) {
-        insertStmt.run(id, r);
+      try {
+        db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(id);
+        const insertStmt = db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES (?, ?)');
+        for (const r of inputRoles) {
+          insertStmt.run(id, r);
+        }
+        db.prepare("UPDATE t_users SET is_dirty = 1, updated_at = datetime('now') WHERE id_user = ?").run(id);
+      } catch (err: any) {
+        console.error("ERREUR SQL:", err);
+        throw err;
       }
-      db.prepare("UPDATE t_users SET is_dirty = 1, updated_at = datetime('now') WHERE id_user = ?").run(id);
       result.changes = 1;
     }
 
-    return result;
-  })();
+    // ── 2. Enfilage outbox UPDATE (après confirmation des changements SQLite) ───
+    if (user?.sync_id && result.changes > 0) {
+      let updatedUser;
+      try {
+        updatedUser = db.prepare(
+          'SELECT login, password_hash, role, nom_user, prenom_user, statut_actif, site_id, centre_id FROM t_users WHERE id_user = ?'
+        ).get(id) as any;
+      } catch (err: any) {
+        console.error("ERREUR SQL:", err);
+        throw err;
+      }
+
+      localOutboxToEnqueue = {
+        id: user.sync_id,
+        table: 't_users',
+        operation: 'UPDATE',
+        payload: {
+          sync_id: user.sync_id,
+          ...updatedUser,
+          updated_at: new Date().toISOString()
+        }
+      };
+    }
+
+    return { result, outboxToEnqueue: localOutboxToEnqueue };
+  });
+  const txResult = transaction();
+
+  if (txResult.outboxToEnqueue) {
+    enqueueOutbox(txResult.outboxToEnqueue.id, txResult.outboxToEnqueue.table, txResult.outboxToEnqueue.operation, txResult.outboxToEnqueue.payload);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  }
+
+  return txResult.result;
 }
 
-export function deleteUser(id: number, creator?: { role: string; site_id?: number }) {
+export function deleteUser(id: number, creator?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
+  
+  if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
+    throw new Error("Accès non autorisé : Rôle insuffisant pour désactiver un agent.");
+  }
+
   if (creator && creator.role !== 'SUPER ADMIN') {
     const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
     if (!target || target.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
   }
+
+  // Trace d'audit
+  const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string; login: string } | undefined;
+  if (user) {
+    insertAuditLog(
+      creator?.login || 'ADMIN',
+      'VALIDATION',
+      `[SUPPRESSION] Par ${creator?.login || 'ADMIN'} sur t_users (ID: ${id})`
+    );
+  }
+
+  // Soft-delete local immédiat (statut_actif = 0)
   const result = db.prepare("UPDATE t_users SET statut_actif = 0, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = ?").run(id);
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
+
+  if (user?.sync_id) {
+    enqueueOutbox(user.sync_id, 't_users', 'UPDATE', {
+      sync_id: user.sync_id,
+      statut_actif: 0,
+      updated_at: new Date().toISOString()
+    });
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  }
+
   return result;
 }
 
-export function hardDeleteUser(id: number, creator?: { role: string; site_id?: number }) {
+export function hardDeleteUser(id: number, creator?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
+  
+  if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
+    throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer définitivement un agent.");
+  }
+
   if (creator && creator.role !== 'SUPER ADMIN') {
     const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
     if (!target || target.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
   }
-  return db.transaction(() => {
-    db.prepare('DELETE FROM t_logs WHERE id_user = ?').run(id);
-    const result = db.prepare('DELETE FROM t_users WHERE id_user = ?').run(id);
-    if (result.changes === 0) {
-      throw new Error("Accès non autorisé aux données de ce site");
+
+  const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string | null; login: string } | undefined;
+  if (!user) return { changes: 0 };
+  const userSyncId = user.sync_id;
+
+  // Trace d'audit
+  insertAuditLog(
+    creator?.login || 'ADMIN',
+    'VALIDATION',
+    `[SUPPRESSION] Par ${creator?.login || 'ADMIN'} sur t_users (ID: ${id})`
+  );
+
+  // Marquer temporairement en local comme supprimé (statut_actif = -1, is_dirty = -1)
+  const result = db.prepare("UPDATE t_users SET statut_actif = -1, is_dirty = -1, updated_at = datetime('now') WHERE id_user = ?").run(id);
+  if (result.changes === 0) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+
+  // Enfilage outbox DELETE
+  if (userSyncId) {
+    const wasLocalOnly = cancelPendingInsert(userSyncId, 't_users');
+    if (!wasLocalOnly) {
+      enqueueOutbox(userSyncId, 't_users', 'DELETE', { sync_id: userSyncId });
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    } else {
+      // Si l'utilisateur n'a jamais été synchronisé, suppression physique immédiate
+      db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(id);
+      db.prepare('DELETE FROM t_users WHERE id_user = ?').run(id);
     }
-    return result;
-  })();
+  }
+
+  return result;
 }
 
-export async function resetAgentPassword(targetUserId: number, callerUserId: number) {
+export function resetAgentPassword(targetUserId: number, callerUserId: number): { success: boolean } {
   const db = getDatabase()!;
   
   const caller = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number } | undefined;
@@ -345,6 +491,7 @@ export async function resetAgentPassword(targetUserId: number, callerUserId: num
   const newPasswordPlain = 'cnam@2026';
   const hash = hashPassword(newPasswordPlain);
   
+  // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────
   db.prepare(`
     UPDATE t_users
     SET password_hash = ?, is_dirty = 1, updated_at = datetime('now')
@@ -353,32 +500,24 @@ export async function resetAgentPassword(targetUserId: number, callerUserId: num
 
   logAction(callerUserId, caller.role, 'RESET_PASSWORD', `Réinitialisation du mot de passe de l'agent ${target.login} (${targetUserId})`);
 
-  if (networkMonitor.getState() === 'ONLINE') {
-    const supabase = getSupabaseClient();
-    try {
-      const { error } = await supabase
-        .from('t_users')
-        .update({
-          password_hash: hash,
-          updated_at: new Date().toISOString()
-        })
-        .eq('sync_id', target.sync_id);
-        
-      if (error) {
-        log.warn(`[resetAgentPassword] Échec de la mise à jour synchrone cloud pour l'agent ${target.login}: ${error.message}`);
-      } else {
-        log.info(`[resetAgentPassword] Mot de passe de l'agent ${target.login} synchronisé sur Supabase.`);
-        db.prepare("UPDATE t_users SET is_dirty = 0, synced_at = datetime('now') WHERE id_user = ?").run(targetUserId);
-      }
-    } catch (e: any) {
-      log.warn(`[resetAgentPassword] Exception lors de la mise à jour cloud: ${e.message || e}`);
+  // ── 2. Enfilage outbox UPDATE (remplacement du push Supabase direct) ───────
+  // L'ancien push asynchrone Supabase était fragile (pas de réessai en cas
+  // d'échec réseau). Le pattern outbox garantit la synchro différée.
+  if (target.sync_id) {
+    enqueueOutbox(target.sync_id, 't_users', 'UPDATE', {
+      sync_id: target.sync_id,
+      password_hash: hash,
+      updated_at: new Date().toISOString()
+    });
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
     }
   }
 
   return { success: true };
 }
 
-export async function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string }) {
+export function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string }): { success: boolean } {
   const db = getDatabase()!;
   
   const user = db.prepare('SELECT role, sync_id, login FROM t_users WHERE id_user = ?').get(userId) as { role: string; sync_id: string; login: string } | undefined;
@@ -390,11 +529,11 @@ export async function updateSelfProfile(userId: number, data: { nom_user?: strin
     throw new Error("La modification autonome du compte Super Admin est désactivée.");
   }
 
-  const updateData: Record<string, any> = {};
-  if (data.nom_user !== undefined) updateData.nom_user = data.nom_user;
+  const updateData: Record<string, unknown> = {};
+  if (data.nom_user !== undefined)    updateData.nom_user    = data.nom_user;
   if (data.prenom_user !== undefined) updateData.prenom_user = data.prenom_user;
-  if (data.email !== undefined) updateData.email = data.email;
-  if (data.telephone !== undefined) updateData.telephone = data.telephone;
+  if (data.email !== undefined)       updateData.email       = data.email;
+  if (data.telephone !== undefined)   updateData.telephone   = data.telephone;
   
   if (data.password) {
     updateData.password_hash = hashPassword(data.password);
@@ -408,12 +547,13 @@ export async function updateSelfProfile(userId: number, data: { nom_user?: strin
   }
 
   const fields = filteredKeys.map(k => `${k} = @${k}`).join(', ');
-  const params: any = {};
+  const params: Record<string, unknown> = {};
   filteredKeys.forEach(k => {
     params[k] = updateData[k];
   });
   params.userId = userId;
 
+  // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────
   db.prepare(`
     UPDATE t_users 
     SET ${fields}, is_dirty = 1, updated_at = datetime('now')
@@ -422,23 +562,19 @@ export async function updateSelfProfile(userId: number, data: { nom_user?: strin
 
   logAction(userId, user.role, 'UPDATE_PROFILE', `Mise à jour autonome du profil de l'utilisateur ${user.login}`);
 
-  if (networkMonitor.getState() === 'ONLINE') {
-    const supabase = getSupabaseClient();
-    try {
-      const payload: Record<string, any> = { ...updateData, updated_at: new Date().toISOString() };
-      const { error } = await supabase
-        .from('t_users')
-        .update(payload)
-        .eq('sync_id', user.sync_id);
-        
-      if (error) {
-        log.warn(`[updateSelfProfile] Échec de la mise à jour cloud en direct pour ${user.login}: ${error.message}`);
-      } else {
-        log.info(`[updateSelfProfile] Profil de ${user.login} mis à jour en direct sur Supabase.`);
-        db.prepare("UPDATE t_users SET is_dirty = 0, synced_at = datetime('now') WHERE id_user = ?").run(userId);
-      }
-    } catch (e: any) {
-      log.warn(`[updateSelfProfile] Exception lors de la mise à jour cloud: ${e.message || e}`);
+  // ── 2. Enfilage outbox UPDATE (remplacement du push Supabase direct) ───────
+  // L'ancienne implémentation async était fragile : en cas de déconnexion au
+  // moment du push, la modification était perdue. Le pattern outbox garantit
+  // la synchro différée dès le retour du réseau, sans risque de perte.
+  if (user.sync_id) {
+    const outboxPayload: Record<string, unknown> = {
+      sync_id: user.sync_id,
+      ...updateData,
+      updated_at: new Date().toISOString()
+    };
+    enqueueOutbox(user.sync_id, 't_users', 'UPDATE', outboxPayload);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
     }
   }
 
@@ -449,19 +585,13 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
   const db = getDatabase()!;
   const supabase = getSupabaseClient();
 
-  log.info(`[pullAgentsFromCloud] Récupération manuelle des agents pour le site ${siteId} (centre: ${centreId || 'tous'}) depuis Supabase...`);
+  log.info(`[pullAgentsFromCloud] Récupération manuelle des agents pour le site ${siteId} (filtrage par centre local) depuis Supabase...`);
 
   try {
-    let query = supabase
+    const { data: cloudUsers, error } = await supabase
       .from('t_users')
       .select('login, password_hash, role, nom_user, prenom_user, email, telephone, site_id, centre_id, sync_id, statut_actif')
       .eq('site_id', siteId);
-
-    if (centreId) {
-      query = query.eq('centre_id', centreId);
-    }
-
-    const { data: cloudUsers, error } = await query;
 
     if (error) {
       log.error(`[pullAgentsFromCloud] Erreur Supabase : ${error.message}`);
@@ -508,6 +638,25 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
           continue;
         }
 
+        let finalCentreId = u.centre_id || null;
+        if (finalCentreId) {
+          // Vérifier si le centre existe localement. S'il n'existe pas encore (synchro incomplète), 
+          // on l'ignore temporairement pour éviter une erreur de FOREIGN KEY constraint failed.
+          const checkLocal = db.prepare('SELECT id FROM t_centres WHERE id = ?').get(finalCentreId);
+          if (!checkLocal) {
+            log.warn(`[pullAgentsFromCloud] Le centre ${finalCentreId} n'existe pas localement. L'utilisateur ${u.login} sera importé sans centre pour l'instant.`);
+            finalCentreId = null;
+          }
+        }
+
+        if (finalCentreId && centreId) {
+          const cloudCentre = db.prepare('SELECT nom FROM t_centres WHERE id = ?').get(finalCentreId) as { nom: string } | undefined;
+          const adminCentre = db.prepare('SELECT nom FROM t_centres WHERE id = ?').get(centreId) as { nom: string } | undefined;
+          if (cloudCentre && adminCentre && cloudCentre.nom.toUpperCase().trim() === adminCentre.nom.toUpperCase().trim()) {
+            finalCentreId = centreId;
+          }
+        }
+
         const result = insertStmt.run({
           login: u.login,
           password_hash: u.password_hash,
@@ -518,7 +667,7 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
           telephone: u.telephone || null,
           statut_actif: u.statut_actif !== undefined ? u.statut_actif : 1,
           site_id: u.site_id,
-          centre_id: u.centre_id || null,
+          centre_id: finalCentreId,
           sync_id: u.sync_id || null
         });
         if (result.changes > 0) {

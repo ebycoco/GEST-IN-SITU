@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { confirmService } from '../components/confirmService';
 import { useNavigate } from 'react-router-dom';
 import { useCacheStore } from '../stores/cacheStore';
 
@@ -184,12 +185,9 @@ export default function ImportPage() {
     }
   };
 
-  const handlePurge = async () => {
-    if (purgeConfirmText !== 'CONFIRMER') {
-      toast.error('Veuillez saisir "CONFIRMER" pour valider');
-      return;
-    }
-
+  // ─── Logique interne de purge (sans vérification de texte) ─────────────────
+  // Appelée après confirmation externe (confirmService) OU depuis le modal interne.
+  const executePurge = async () => {
     setIsPurging(true);
     setPurgeProgress(0);
 
@@ -238,12 +236,18 @@ export default function ImportPage() {
     }
   };
 
-  const handleEmergencyPurge = async () => {
-    if (emergencyPurgeConfirmText !== 'RÉPARER') {
-      toast.error("Veuillez saisir RÉPARER pour confirmer.");
+  // Appelée depuis le modal interne avec saisie manuelle du texte
+  const handlePurge = async () => {
+    if (purgeConfirmText !== 'CONFIRMER') {
+      toast.error('Veuillez saisir "CONFIRMER" pour valider');
       return;
     }
-    
+    await executePurge();
+  };
+
+  // ─── Logique interne de réparation (sans vérification de texte) ─────────────
+  // Appelée après confirmation externe (confirmService) OU depuis le modal interne.
+  const executeEmergencyPurge = async () => {
     setIsEmergencyPurging(true);
     setPurgeProgress(0);
 
@@ -296,6 +300,15 @@ export default function ImportPage() {
       removePurgeListener();
       setIsEmergencyPurging(false);
     }
+  };
+
+  // Appelée depuis le modal interne avec saisie manuelle du texte
+  const handleEmergencyPurge = async () => {
+    if (emergencyPurgeConfirmText !== 'RÉPARER') {
+      toast.error("Veuillez saisir RÉPARER pour confirmer.");
+      return;
+    }
+    await executeEmergencyPurge();
   };
 
   // Helper for Stepper
@@ -691,7 +704,19 @@ export default function ImportPage() {
               <button 
                 className="btn" 
                 disabled={cardCount === 0 || isPurging}
-                onClick={() => setShowPurgeModal(true)}
+                onClick={async () => {
+                  const isConfirmed = await confirmService.confirm({
+                    title: "Purge des cartes locales",
+                    message: "Êtes-vous sûr de vouloir purger toutes les fiches locales de ce PC ? Cette action est définitive.",
+                    isDanger: true,
+                    requirePassword: true,
+                    actionName: "[SYSTÈME] Purge locale de cartes"
+                  });
+                  if (isConfirmed) {
+                    // Bypass la vérification du texte : le confirmService a déjà validé le mot de passe
+                    await executePurge();
+                  }
+                }}
                 style={{ 
                   background: (cardCount === 0 || isPurging) ? 'rgba(255,255,255,0.05)' : 'rgba(231, 76, 60, 0.1)', 
                   color: (cardCount === 0 || isPurging) ? 'var(--text-muted)' : 'var(--accent-red)', 
@@ -708,14 +733,23 @@ export default function ImportPage() {
         )}
         <button
           disabled={isEmergencyPurging || isPurging}
-          onClick={() => {
+          onClick={async () => {
             const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
             if (!siteIdToUse) {
               toast.error("Impossible de déterminer le site pour la purge d'urgence.");
               return;
             }
-            setShowEmergencyPurgeModal(true);
-            setEmergencyPurgeConfirmText('');
+            const isConfirmed = await confirmService.confirm({
+              title: "Réparer & Forcer la Synchronisation",
+              message: "Cette action réinitialise l'index de recherche locale FTS5 et vide la file d'attente Outbox locale pour ce site. Vos données cloud de Supabase restent en parfaite sécurité.",
+              isDanger: true,
+              requirePassword: true,
+              actionName: "[SYSTÈME] Réparation et forçage de la synchronisation locale"
+            });
+            if (isConfirmed) {
+              // Bypass la vérification du texte : le confirmService a déjà validé le mot de passe
+              await executeEmergencyPurge();
+            }
           }}
           style={{
             marginTop: '20px',

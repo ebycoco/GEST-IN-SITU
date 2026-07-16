@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, Calendar, MapPin, User, CheckCircle, Clock, ArrowRight, X, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { useAuthStore } from '../stores/authStore';
-import DateInput from '../components/DateInput';
+import { useAuthStore } from '../../stores/authStore';
+import DateInput from '../../components/DateInput';
 
-export default function InventairePage() {
+export default function InventaireApurement() {
   const { user } = useAuthStore();
   const siteId = user?.site_id || 1;
   const username = user?.login || 'INCONNU';
@@ -165,7 +165,7 @@ export default function InventairePage() {
         <p style={{ color: 'var(--text-muted)', fontSize: 14 }}>Saisie à la chaîne des fiches d'émargement physiques.</p>
       </div>
 
-      <div className="premium-card premium-glass" style={{ padding: 32 }}>
+      <div className="glass-card" style={{ padding: 32 }}>
         {!selectedCarte ? (
           /* SECTION RECHERCHE COMBINÉE */
           <form onSubmit={handleSearchSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>

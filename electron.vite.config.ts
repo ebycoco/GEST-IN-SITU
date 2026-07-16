@@ -9,10 +9,20 @@ function copyWorkerPlugin() {
   return {
     name: 'copy-worker',
     closeBundle() {
-      const srcWorker = resolve('src/main/workers/import-worker.js');
       const outDir = resolve('dist/main/workers');
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
-      copyFileSync(srcWorker, resolve(outDir, 'import-worker.js'));
+      
+      const importWorker = resolve('src/main/workers/import-worker.js');
+      if (existsSync(importWorker)) copyFileSync(importWorker, resolve(outDir, 'import-worker.js'));
+      
+      const uploadWorker = resolve('src/main/workers/upload-worker.js');
+      if (existsSync(uploadWorker)) copyFileSync(uploadWorker, resolve(outDir, 'upload-worker.js'));
+      
+      const statsWorker = resolve('src/main/workers/stats-worker.js');
+      if (existsSync(statsWorker)) copyFileSync(statsWorker, resolve(outDir, 'stats-worker.js'));
+
+      const downloadWorker = resolve('src/main/workers/download-worker.js');
+      if (existsSync(downloadWorker)) copyFileSync(downloadWorker, resolve(outDir, 'download-worker.js'));
     }
   };
 }

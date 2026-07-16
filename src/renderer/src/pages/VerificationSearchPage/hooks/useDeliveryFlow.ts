@@ -81,7 +81,8 @@ export function useDeliveryFlow(
 
       await window.api.cartes.delivrer(selectedCarte.id_carte, {
         nom_retirant: nomRetirant.trim().toUpperCase(),
-        num_retirant: telRetirant.trim(),
+        num_retirant: '', // Dans VerificationSearchPage, pas de N° de Pièce demandé
+        contact_retirant: telRetirant.trim(),
         agent_distributeur: agent,
         centre_retrait: centreName,
         rangement: isUnclassifiedCard(selectedCarte) ? emergencyRangement.trim().toUpperCase() : undefined

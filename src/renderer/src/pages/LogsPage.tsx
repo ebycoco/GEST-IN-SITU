@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { FileText, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { confirmService } from '../components/confirmService';
 
 interface AuditLog {
   id: number;
@@ -19,9 +20,17 @@ export default function LogsPage() {
   const { user } = useAuthStore();
   const limit = 15; // Pagination stricte demandée
 
-  const handleDeleteLog = (id: number, e?: React.MouseEvent) => {
+  const handleDeleteLog = async (id: number, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!confirm('Voulez-vous vraiment supprimer cet enregistrement d\'audit ?')) return;
+    
+    const isConfirmed = await confirmService.confirm({
+      title: "Supprimer l'enregistrement d'audit",
+      message: "Voulez-vous vraiment supprimer cet enregistrement d'audit ?",
+      isDanger: true,
+      requirePassword: true,
+      actionName: `Suppression du log d'audit ID ${id}`
+    });
+    if (!isConfirmed) return;
 
     window.api.audit.delete(id, user).then((res: any) => {
       if (res && res.success) {

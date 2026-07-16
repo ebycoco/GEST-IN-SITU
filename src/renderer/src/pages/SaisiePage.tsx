@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import DateInput from '../components/DateInput';
+import { confirmService } from '../components/confirmService';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
 import { normalizeDate } from '../../../shared/utils/date';
@@ -126,7 +127,7 @@ function InputWithIcon({
       </span>
       <input
         type="text"
-        className="form-input"
+        className="form-input soleil-input"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
@@ -232,8 +233,13 @@ export default function SaisiePage() {
   const updateRaw = (field: keyof FormState) => (value: string) =>
     setFormData((prev) => ({ ...prev, [field]: value }));
 
-  const handleReset = () => {
-    if (confirm('Voulez-vous vraiment vider le formulaire ?')) {
+  const handleReset = async () => {
+    const isConfirmed = await confirmService.confirm({
+      title: "Vider le formulaire",
+      message: "Voulez-vous vraiment vider le formulaire ?",
+      isDanger: true
+    });
+    if (isConfirmed) {
       setFormData({
         ...INITIAL_STATE,
         site: activeSiteName,
@@ -338,11 +344,63 @@ export default function SaisiePage() {
     }
   };
 
+  // Progression de saisie
+  const getCompletionPercentage = () => {
+    let filled = 0;
+    if (formData.noms.trim()) filled++;
+    if (formData.prenoms.trim()) filled++;
+    const normalized = normalizeDate(formData.date_de_naissance);
+    if (normalized.length === 10) filled++;
+    if (formData.lieu_de_naissance.trim()) filled++;
+    if (formData.num_secu.trim().length === 13) filled++;
+    return Math.round((filled / 5) * 100);
+  };
+  const progressPercent = getCompletionPercentage();
+
   return (
     <div
       className="animate-fade-in"
       style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}
     >
+      <style dangerouslySetInnerHTML={{ __html: `
+        .soleil-card {
+          background: rgba(26, 31, 74, 0.45);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
+          padding: 24px;
+          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), 
+                      box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                      border-color 0.25s ease;
+        }
+        .soleil-card:hover {
+          transform: translateY(-1px);
+          border-color: rgba(255, 255, 255, 0.15);
+          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        }
+        .soleil-input {
+          transition: all 0.2s ease-in-out !important;
+        }
+        .soleil-input:focus {
+          border-color: #8b5cf6 !important;
+          box-shadow: 0 0 12px rgba(139, 92, 246, 0.25) !important;
+          background: rgba(26, 31, 74, 0.6) !important;
+        }
+        .progress-bar-container {
+          width: 100%;
+          height: 6px;
+          background: rgba(255, 255, 255, 0.05);
+          border-radius: 3px;
+          overflow: hidden;
+        }
+        .progress-bar-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #8b5cf6, #3b82f6);
+          transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+      `}} />
+
       <CentreContextSwitcher />
 
       {/* ── Page Header ──────────────────────────────────────────────────────── */}
@@ -413,23 +471,33 @@ export default function SaisiePage() {
         )}
       </div>
 
-      {/* ── Form Card ────────────────────────────────────────────────────────── */}
+      {/* ── Progress Indicator ────────────────────────────────────────────────── */}
+      <div className="soleil-card" style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '16px 20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Sparkles size={14} style={{ color: '#8b5cf6' }} />
+            Progression de la saisie
+          </span>
+          <span style={{ fontSize: 13, fontWeight: 700, color: progressPercent === 100 ? '#4ade80' : '#8b5cf6' }}>
+            {progressPercent}%
+          </span>
+        </div>
+        <div className="progress-bar-container">
+          <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+        </div>
+      </div>
+
+      {/* ── Form ─────────────────────────────────────────────────────────────── */}
       <form
         onSubmit={handleSave}
         style={{
-          background: 'rgba(255,255,255,0.03)',
-          border: '1px solid rgba(255,255,255,0.07)',
-          borderRadius: 20,
-          padding: '28px 32px',
-          backdropFilter: 'blur(12px)',
           display: 'flex',
           flexDirection: 'column',
-          gap: 28,
-          boxShadow: '0 8px 40px rgba(0,0,0,0.25)',
+          gap: 20,
         }}
       >
         {/* ── SECTION 1 : Identité ─────────────────────────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        <div className="soleil-card" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <SectionHeader
             icon={<User size={18} />}
             title="Identité de l'assuré"
@@ -477,6 +545,7 @@ export default function SaisiePage() {
               }
               value={formData.date_de_naissance}
               onChange={updateRaw('date_de_naissance')}
+              className="soleil-input"
               required
             />
             <FormField label="Lieu de naissance" required icon={<MapPin size={14} />}>
@@ -491,47 +560,14 @@ export default function SaisiePage() {
               />
             </FormField>
           </div>
-
-          <div style={GRID2}>
-            <FormField
-              label="N° Sécurité Sociale (CMU)"
-              required
-              icon={<Hash size={14} />}
-              hint="Saisie obligatoire (Exactement 13 chiffres)"
-            >
-              <InputWithIcon
-                icon={<Hash size={16} />}
-                value={formData.num_secu}
-                onChange={(v) => updateUpper('num_secu')(v.replace(/\D/g, '').substring(0, 13))}
-                placeholder="Ex: 3841236548952"
-                tabIndex={5}
-                inputMode="numeric"
-                required
-              />
-            </FormField>
-            <FormField
-              label="Contact / Téléphone"
-              icon={<Phone size={14} />}
-              hint="Format : +225 XX XX XX XX XX"
-            >
-              <InputWithIcon
-                icon={<Phone size={16} />}
-                value={formData.contact}
-                onChange={(v) => updateRaw('contact')(formatPhoneNumber(v))}
-                placeholder="Ex: +225 07 00 00 00 00"
-                tabIndex={6}
-                inputMode="tel"
-              />
-            </FormField>
-          </div>
         </div>
 
-        {/* ── SECTION 2 : Localisation & Rangement ─────────────────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+        {/* ── SECTION 2 : Localisation ─────────────────────────────────────── */}
+        <div className="soleil-card" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
           <SectionHeader
             icon={<Briefcase size={18} />}
-            title="Localisation &amp; Rangement"
-            subtitle="Emplacement physique de la carte dans le stock"
+            title="Localisation de l'enrôlement"
+            subtitle="Rattachement administratif"
             accentColor="#3b82f6"
           />
 
@@ -568,8 +604,50 @@ export default function SaisiePage() {
               />
             </FormField>
           </div>
+        </div>
 
-          {/* Code Rangement — pleine largeur, mis en avant */}
+        {/* ── SECTION 3 : Données CMU & Rangement ─────────────────────────── */}
+        <div className="soleil-card" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <SectionHeader
+            icon={<Hash size={18} />}
+            title="Données CMU &amp; Rangement"
+            subtitle="Numéros administratifs et stockage physique"
+            accentColor="#10b981"
+          />
+
+          <div style={GRID2}>
+            <FormField
+              label="N° Sécurité Sociale (CMU)"
+              required
+              icon={<Hash size={14} />}
+              hint="Saisie obligatoire (Exactement 13 chiffres)"
+            >
+              <InputWithIcon
+                icon={<Hash size={16} />}
+                value={formData.num_secu}
+                onChange={(v) => updateUpper('num_secu')(v.replace(/\D/g, '').substring(0, 13))}
+                placeholder="Ex: 3841236548952"
+                tabIndex={5}
+                inputMode="numeric"
+                required
+              />
+            </FormField>
+            <FormField
+              label="Contact / Téléphone"
+              icon={<Phone size={14} />}
+              hint="Format : +225 XX XX XX XX XX"
+            >
+              <InputWithIcon
+                icon={<Phone size={16} />}
+                value={formData.contact}
+                onChange={(v) => updateRaw('contact')(formatPhoneNumber(v))}
+                placeholder="Ex: +225 07 00 00 00 00"
+                tabIndex={6}
+                inputMode="tel"
+              />
+            </FormField>
+          </div>
+
           <FormField
             label="Code Rangement"
             icon={<Archive size={14} />}
@@ -592,7 +670,7 @@ export default function SaisiePage() {
               </span>
               <input
                 type="text"
-                className="form-input"
+                className="form-input soleil-input"
                 value={formData.rangement}
                 onChange={(e) => updateUpper('rangement')(e.target.value)}
                 placeholder="Ex: BOITE 42 / RAYON C"
@@ -620,7 +698,7 @@ export default function SaisiePage() {
             padding: '12px 16px',
             background: 'rgba(250,204,21,0.06)',
             border: '1px solid rgba(250,204,21,0.18)',
-            borderRadius: 10,
+            borderRadius: 12,
             fontSize: 12,
             color: 'var(--text-muted)',
           }}
@@ -708,4 +786,5 @@ export default function SaisiePage() {
     </div>
   );
 }
+
 

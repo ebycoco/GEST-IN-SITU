@@ -1,212 +1,164 @@
 import log from 'electron-log';
-import { getSupabaseClient } from './supabase-client';
-import { getDatabase } from '../database/connection';
+import { Worker } from 'worker_threads';
+import { join } from 'path';
+import { app } from 'electron';
+import { getDbPath } from '../database/connection';
 import { networkMonitor } from './network-monitor';
+import { logAudit } from '../utils/audit';
+
+// ─── SIGNAL D'ANNULATION GLOBAL ─────────────────────────────────────────────
+let _currentWorker: Worker | null = null;
+
+/**
+ * Annule le bulk upload en cours de façon sûre en terminant le Worker Thread.
+ * Idempotent : sans effet si aucun upload n'est actif.
+ */
+export function cancelBulkUpload(): void {
+  if (_currentWorker) {
+    log.warn('[BulkUpload] Signal d\'annulation reçu. Interruption du Worker...');
+    _currentWorker.terminate();
+    _currentWorker = null;
+  }
+}
 
 /**
  * Pousse en masse toutes les cartes modifiées (is_dirty = 1) d'un site vers Supabase.
- * Par paquets de 5000 pour préserver la mémoire et la bande passante.
- * Le processus est résumable : en cas d'interruption, les lignes déjà synchronisées
- * ont leur is_dirty passé à 0 et ne seront pas re-téléversées.
+ *
+ * ARCHITECTURE WORKER THREAD :
+ * ────────────────────────────
+ * Cette fonction agit uniquement comme un Orchestrateur. Le travail lourd 
+ * (SQLite, Supabase, sérialisation JSON, Garbage Collection) est exécuté dans 
+ * un processus V8 isolé (`upload-worker.js`) pour garantir que l'interface React
+ * reste 100% fluide, même sur des machines à 4Go de RAM.
+ *
+ * @param siteId        Identifiant du site à synchroniser.
+ * @param allowProbable Inclure les doublons probables dans l'envoi.
+ * @param allowInvalid  Inclure les cartes à dates invalides dans l'envoi.
+ * @param progressCallback Appelé selon le throttle IPC du Worker avec le % d'avancement.
+ * @param userLogin     Login de l'agent initiateur (pour l'audit).
  */
 export async function runBulkUpload(
   siteId: number,
   allowProbable: boolean,
   allowInvalid: boolean,
-  progressCallback: (progress: number) => void
-): Promise<{ success: boolean; uploadedCount: number; message: string }> {
-  const db = getDatabase()!;
+  progressCallback: (progress: number) => void,
+  userLogin: string = 'system'
+): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean }> {
   
+  const dbPath = getDbPath();
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
+  const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    log.error('[BulkUpload] Configuration Supabase manquante (.env).');
+    return { success: false, uploadedCount: 0, message: 'Configuration Supabase manquante.' };
+  }
+
   // Activer le contournement forcé du statut ONLINE pour ignorer la congestion réseau
   networkMonitor.setBypassForceOnline(true);
-  
-  try {
-    // Construction dynamique de la clause WHERE et de ses paramètres
-    let filterClause = `
-      WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL OR synced_at = '')
-      AND (cle_doublon IS NULL OR cle_doublon = '' OR cle_doublon = '||||' OR cle_doublon NOT IN (
-        SELECT cle_doublon FROM t_cartes 
-        WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
-        GROUP BY cle_doublon HAVING COUNT(*) > 1
-      ))
-    `;
-    const queryParams: any[] = [siteId, siteId];
 
-    if (!allowProbable) {
-      filterClause += `
-        AND (noms || '||' || prenoms || '||' || date_de_naissance) NOT IN (
-          SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes
-          WHERE site_id = ?
-          GROUP BY noms, prenoms, date_de_naissance HAVING COUNT(DISTINCT cle_doublon) > 1
-        )
-      `;
-      queryParams.push(siteId);
+  // ── Audit de démarrage (SYS_SYNC_CLOUD_START) ─────────────────────────────
+  logAudit(userLogin, 'SYS_SYNC_CLOUD_START', {
+    site_id: siteId,
+    allowProbable,
+    allowInvalid,
+    timestamp: new Date().toISOString()
+  });
+
+  return new Promise((resolve) => {
+    // Résolution du chemin vers better-sqlite3 pour le worker (module natif)
+    let sqlitePath: string;
+    try {
+      sqlitePath = require.resolve('better-sqlite3');
+    } catch {
+      sqlitePath = 'better-sqlite3';
     }
 
-    if (!allowInvalid) {
-      filterClause += `
-        AND date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
-        AND date_de_naissance IS NOT NULL
-        AND date_de_naissance != ''
-      `;
-    }
+    // Le chemin __dirname pointe vers dist/main en dev et dans l'ASAR en prod.
+    // Electron gère nativement le chargement des worker_threads depuis un ASAR.
+    const workerPath = join(__dirname, 'workers', 'upload-worker.js');
 
-    // Libération du thread principal pour laisser Electron afficher le loader à 0%
-    await new Promise(r => setImmediate(r));
+    log.info(`[BulkUpload] Instanciation du Worker Thread : ${workerPath}`);
 
-    // 1. Récupérer uniquement les IDs des cartes à synchroniser (léger en mémoire)
-    const cardIdsRows = db.prepare(`
-      SELECT id_carte FROM t_cartes 
-      ${filterClause}
-    `).all(...queryParams) as { id_carte: number }[];
-    
-    const totalToUpload = cardIdsRows.length;
-    console.log(`📦 [BULK-START] Nombre total d'IDs récupérés depuis SQLite : ${totalToUpload}`);
-    
-    if (totalToUpload === 0) {
-      progressCallback(100);
-      return { success: true, uploadedCount: 0, message: 'Aucune donnée locale conforme en attente de synchronisation.' };
-    }
-
-    log.info(`BulkUpload: Starting bulk upload of ${totalToUpload} cards for site ${siteId} (allowProbable=${allowProbable}, allowInvalid=${allowInvalid})...`);
-    const supabase = getSupabaseClient();
-    let uploadedCount = 0;
-    const CHUNK_SIZE = 1000;
-
-    for (let i = 0; i < totalToUpload; i += CHUNK_SIZE) {
-      const chunkIds = cardIdsRows.slice(i, i + CHUNK_SIZE).map(r => r.id_carte);
-      if (chunkIds.length === 0) {
-        break;
+    const worker = new Worker(workerPath, {
+      workerData: {
+        siteId,
+        allowProbable,
+        allowInvalid,
+        dbPath,
+        supabaseUrl,
+        supabaseAnonKey,
+        sqlitePath
       }
+    });
 
-      const blockIndex = Math.floor(i / CHUNK_SIZE) + 1;
-      const totalBlocks = Math.ceil(totalToUpload / CHUNK_SIZE);
-      console.log(`📦 [BLOC] Traitement du bloc ${blockIndex}/${totalBlocks} (${chunkIds.length} cartes)...`);
+    _currentWorker = worker;
 
-      // 2. Récupérer le bloc de cartes par leurs IDs
-      const placeholders = chunkIds.map(() => '?').join(',');
-      const cards = db.prepare(`
-        SELECT * FROM t_cartes
-        WHERE id_carte IN (${placeholders})
-      `).all(...chunkIds) as any[];
-
-      log.info(`BulkUpload: Preparing chunk of ${cards.length} cards...`);
-
-      // Filtrer les cartes avec dates invalides si allowInvalid === false
-      const validCards: any[] = [];
-      const skippedCards: any[] = [];
-
-      for (const c of cards) {
-        if (!allowInvalid && !isValidDate(c.date_de_naissance)) {
-          skippedCards.push(c);
-        } else {
-          validCards.push(c);
-        }
-      }
-
-      console.log(`🚨 [DATE INVALID] Bloc ${blockIndex}/${totalBlocks} : ${validCards.length} saines, ${skippedCards.length} invalides isolées`);
-
-      if (validCards.length > 0) {
-        const startTime = Date.now();
-        console.log(`🌐 [SUPABASE] Début de l'upsert pour le bloc ${blockIndex}/${totalBlocks}...`);
-        try {
-          // Traduire les champs du format SQLite local vers le format PostgreSQL Supabase
-          const mappedCards = validCards.map(c => ({
-            sync_id: c.sync_id,
-            noms: c.noms,
-            prenoms: c.prenoms || '',
-            date_naissance: c.date_de_naissance || null,
-            lieu_naissance: c.lieu_de_naissance || null,
-            num_secu: c.num_secu || null,
-            lieu_enrolement: c.lieu_enrolement || null,
-            contact: c.contact || null,
-            rangement: c.rangement || null,
-            statut: c.statut || 'EN STOCK',
-            date_delivrance: c.date_delivrance || null,
-            agent_distributeur: c.agent_distributeur || null,
-            centre_retrait: c.centre_retrait || null,
-            nom_retirant: c.nom_retirant || null,
-            num_retirant: c.num_retirant || null,
-            cle_doublon: c.cle_doublon || null,
-            cle_doublon_flex: c.cle_doublon_flex || null,
-            statut_physique: c.statut_physique || 'OK',
-            id_site: c.site_id || 1,
-            id_centre: c.centre_id || null,
-            id_poste: c.poste_id || null,
-            qr_code_data: c.qr_code_data || null,
-            updated_at: c.updated_at || new Date().toISOString()
-          }));
-
-          // 3. Pousser vers Supabase
-          const { error } = await supabase
-            .from('t_cartes')
-            .upsert(mappedCards, { onConflict: 'sync_id' });
-
-          const duration = Date.now() - startTime;
-          if (error) {
-            console.error(`🌐 [SUPABASE] ÉCHEC de l'upsert pour le bloc ${blockIndex}/${totalBlocks} en ${duration}ms : ${error.message}`);
-            throw new Error(`Cloud upsert chunk failure: ${error.message}`);
-          }
-          console.log(`🌐 [SUPABASE] SUCCÈS de l'upsert pour le bloc ${blockIndex}/${totalBlocks} en ${duration}ms`);
-
-          // 4. Mettre à jour SQLite localement (marquer is_dirty = 0) dans une transaction asynchrone pour ne pas bloquer l'Event Loop
-          await new Promise<void>((resolveTx) => {
-            setImmediate(() => {
-              db.transaction(() => {
-                const updateStmt = db.prepare(`
-                  UPDATE t_cartes
-                  SET is_dirty = 0, synced_at = datetime('now')
-                  WHERE sync_id = ?
-                `);
-                
-                for (const card of validCards) {
-                  updateStmt.run(card.sync_id);
-                }
-              })();
-              resolveTx();
-            });
+    worker.on('message', (msg) => {
+      switch (msg.type) {
+        case 'start':
+          log.info(`[BulkUpload] Worker démarré avec succès. ${msg.total} cartes à synchroniser.`);
+          progressCallback(0);
+          break;
+        case 'progress':
+          progressCallback(msg.progress);
+          // Optionnel : on peut logger discrètement si nécessaire, 
+          // mais le Worker a déjà un log minimal.
+          break;
+        case 'log':
+          if (msg.level === 'error') log.error(`[UploadWorker] ${msg.message}`);
+          else if (msg.level === 'warn') log.warn(`[UploadWorker] ${msg.message}`);
+          else log.info(`[UploadWorker] ${msg.message}`);
+          break;
+        case 'done':
+          logAudit(userLogin, 'SYS_SYNC_CLOUD_SUCCESS', {
+            site_id: siteId,
+            uploaded_count: msg.uploadedCount,
+            timestamp_fin: new Date().toISOString()
           });
-
-          uploadedCount += validCards.length;
-        } catch (chunkErr: any) {
-          log.error(`BulkUpload: Error uploading chunk starting at index ${i}:`, chunkErr);
-          // Si une erreur de bloc survient, on loggue et on continue le traitement du reste
-        }
+          _currentWorker = null;
+          networkMonitor.setBypassForceOnline(false);
+          resolve({ success: true, uploadedCount: msg.uploadedCount, message: msg.message });
+          break;
+        case 'error':
+          logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {
+            site_id: siteId,
+            error: msg.error,
+            timestamp: new Date().toISOString()
+          });
+          _currentWorker = null;
+          networkMonitor.setBypassForceOnline(false);
+          resolve({ success: false, uploadedCount: 0, message: `Erreur interne du Worker : ${msg.error}` });
+          break;
       }
+    });
 
-      // Les cartes sautées pour date invalide ne sont pas poussées mais on incrémente l'index pour la progression
-      uploadedCount += skippedCards.length;
-      
-      // Notifier la progression
-      const progress = Math.min(Math.round(((i + chunkIds.length) / totalToUpload) * 100), 100);
-      console.log(`📈 [PROGRESS] Progression envoyée à l'UI : ${progress}%`);
-      progressCallback(progress);
-      log.info(`BulkUpload: Progress ${progress}% (${i + chunkIds.length}/${totalToUpload})`);
+    worker.on('error', (err) => {
+      log.error('[BulkUpload] Crash fatal du Worker :', err);
+      logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {
+        site_id: siteId,
+        error: err.message,
+        timestamp: new Date().toISOString()
+      });
+      _currentWorker = null;
+      networkMonitor.setBypassForceOnline(false);
+      resolve({ success: false, uploadedCount: 0, message: `Crash du Worker : ${err.message}` });
+    });
 
-      // Micro-pause de 50ms pour libérer l'Event Loop et permettre à Electron de rafraîchir l'IHM et transmettre les messages IPC
-      await new Promise(r => setTimeout(r, 50));
-    }
-
-    log.info(`BulkUpload: Successfully completed bulk upload. ${uploadedCount} cards processed.`);
-    console.log(`🟢 [SUPABASE BULK SUCCESS] Synchronisation de masse terminée avec succès : ${uploadedCount} cartes poussées vers la table t_cartes.`);
-    return { success: true, uploadedCount, message: `Synchronisation de masse terminée : ${uploadedCount} cartes traitées.` };
-  } catch (err: any) {
-    log.error('BulkUpload: Fatal upload failure:', err);
-    return { success: false, uploadedCount: 0, message: `Erreur lors de la synchronisation en masse : ${err.message || err}` };
-  } finally {
-    networkMonitor.setBypassForceOnline(false);
-  }
-}
-
-/**
- * Valide la cohérence logique et le format d'une date YYYY-MM-DD
- */
-function isValidDate(dateStr: string | null | undefined): boolean {
-  if (!dateStr) return false;
-  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return false;
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10);
-  const day = parseInt(match[3], 10);
-  return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    worker.on('exit', (code) => {
+      if (_currentWorker) {
+        // Le worker a été terminé violemment (ex: via cancelBulkUpload())
+        log.warn(`[BulkUpload] Le Worker a été terminé (code ${code}).`);
+        logAudit(userLogin, 'SYS_SYNC_CLOUD_CANCELLED', {
+          site_id: siteId,
+          reason: 'Annulation manuelle par l\'agent / Interruption du thread.'
+        });
+        _currentWorker = null;
+        networkMonitor.setBypassForceOnline(false);
+        resolve({ success: false, uploadedCount: 0, message: 'Transfert annulé par l\'utilisateur.', cancelled: true });
+      } else if (code !== 0) {
+        log.error(`[BulkUpload] Le Worker s'est arrêté avec le code ${code}.`);
+      }
+    });
+  });
 }

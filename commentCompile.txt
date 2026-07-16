@@ -1,0 +1,5 @@
+# 1. Générer le package Windows optimisé
+npm run make:win
+
+# 2. Assembler l'installateur de production final
+powershell -ExecutionPolicy Bypass -File .\compile_installer.ps1

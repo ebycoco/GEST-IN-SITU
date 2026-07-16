@@ -1,0 +1,50 @@
+========================================================================
+             MEMO SECURISE : GESTION DES SUPER-ADMINISTRATEURS
+========================================================================
+Projet : GEST-IN-SITU (Abobo CMU Logistics Platform)
+Auteur : EBYCHOCO
+Date   : 2026-07-05
+========================================================================
+
+Ce mémo décrit les mécanismes de secours et d'administration de haut
+niveau mis en place pour garantir l'accès au rôle OMNISCIENT (SUPER ADMIN)
+sur l'application terrain.
+
+------------------------------------------------------------------------
+1. COMPTE FAILSAFE IMMÉDIAT (ROOT)
+------------------------------------------------------------------------
+Un compte de secours matériel "Root" est programmé en dur au niveau du
+moteur d'authentification local pour contourner d'éventuelles pannes de
+base de données locale ou d'accès au cloud Supabase.
+
+   - Identifiant : root
+   - Mot de passe : Root@Abobo2026!
+   - Privilèges : SUPER ADMIN (Accès complet à tous les sites, toutes les
+     cartes et fonctions d'assainissement).
+
+------------------------------------------------------------------------
+2. DÉBLOCAGE DE LA PROCÉDURE D'INSCRIPTION SECRÈTE (SUPER ADMIN)
+------------------------------------------------------------------------
+Pour configurer un nouveau compte SUPER ADMIN persistant enregistré dans
+les bases de données (SQLite locale & PostgreSQL Supabase Cloud) :
+
+   a) Rendez-vous sur la page de connexion de l'application (LoginPage).
+   b) Saisissez la commande secrète suivante dans le champ "Identifiant" :
+      
+      /setup-super-admin
+      
+   c) Soumettez la valeur (Appuyez sur Entrée ou cliquez sur Se connecter).
+   d) Le formulaire masqué de création Super-Administrateur apparaîtra.
+   e) Renseignez les champs requis :
+      - Nom Complet
+      - Identifiant
+      - Mot de passe
+      - Clé Maître d'Activation (Master Key) obligatoire :
+        AboboAdmin2026!Securise
+
+   f) Validez. Le compte sera créé en base de données avec le rôle
+      SUPER ADMIN et la vision globale (site_id = 1, centre_id = null).
+
+========================================================================
+RECOMMANDATION : Conserver ce fichier exclusivement sur le Google Drive.
+========================================================================

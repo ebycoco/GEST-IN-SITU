@@ -245,16 +245,16 @@ export function useVerificationSearch(
     }
   };
 
-  const handleSignalerAbsence = async (selectedCarte: any) => {
+  const handleSignalerAbsence = async (selectedCarte: any, commentaire: string = '') => {
     if (!selectedCarte) return;
     try {
+      const agentLogin = user?.login || 'OPERATEUR_VERIFICATION';
       const consultantName = user 
         ? `${user.prenom_user || ''} ${user.nom_user || ''}`.trim() || user.login 
         : 'OPERATEUR_VERIFICATION';
-      const roleText = user ? user.role.toLowerCase() : 'operateur_verification';
-      const agentInfo = `${consultantName} (${roleText})`;
+      const agentInfo = `${consultantName} (${user?.role || 'OPERATEUR_VERIFICATION'})`;
       
-      await window.api.cartes.signalerAbsence(selectedCarte.id_carte, agentInfo);
+      await window.api.cartes.signalerAbsence(selectedCarte.id_carte, agentLogin, agentInfo, commentaire, user);
       toast.success('Absence physique signalée. Traitement admin en cours.');
       
       setShowReportModal(false);

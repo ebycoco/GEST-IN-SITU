@@ -5,9 +5,11 @@ import {
   Users, Plus, Edit, Trash2, Shield, Search, 
   UserCheck, UserX, ShieldCheck, RefreshCw,
   MapPin, Mail, Phone, Calendar, Clock,
-  User, Lock, Building, Type, Key, Eye, EyeOff
+  User, Lock, Building, Type, Key, Eye, EyeOff,
+  CloudDownload, CloudUpload
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { confirmService } from '../components/confirmService';
 
 interface User { 
   id_user: number; 
@@ -28,11 +30,10 @@ interface User {
 }
 
 const AVAILABLE_ROLES = [
-  { value: 'OPERATEUR_VERIFICATION', label: 'Opérateur de Vérification (Lecture seule)' },
+  { value: 'OPERATEUR_VERIFICATION', label: 'Opérateur de Vérification (Recherche & Délivrance)' },
   { value: 'OPERATEUR_SAISIE', label: 'Opérateur de Saisie (Nouvelle Saisie)' },
-  { value: 'OPERATEUR_LOGISTIQUE', label: 'Opérateur Logistique (Classement)' },
-  { value: 'OPERATEUR_INVENTAIRE', label: 'Opérateur Inventaire (Apurement)' },
-  { value: 'OPERATEUR_QUALITE', label: 'Opérateur Qualité & Assainissement' },
+  { value: 'OPERATEUR_LOGISTIQUE', label: 'Opérateur Logistique (Scan, Classement, Apurement)' },
+  { value: 'OPERATEUR_QUALITE', label: 'Opérateur Qualité (Correction & Fusion)' },
   { value: 'ADMINISTRATEUR_SITE', label: 'Administrateur de Site (Totalité)' },
   { value: 'ADMIN_CENTRE', label: 'Administrateur de Centre (Local)' },
 ];
@@ -166,9 +167,10 @@ export default function AgentsPage() {
     if (!isSilent) setLoading(true);
     try { 
       const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
+      const centreIdToUse = userContext?.role === 'ADMIN_CENTRE' ? userContext?.centre_id : undefined;
       
-      const users = await window.api.users.getAll(siteIdToUse || undefined);
-      console.log(`[AgentsPage] Loaded ${users.length} users for site_id=${siteIdToUse}`);
+      const users = await window.api.users.getAll(siteIdToUse || undefined, centreIdToUse || undefined);
+      console.log(`[AgentsPage] Loaded ${users.length} users for site_id=${siteIdToUse}, centre_id=${centreIdToUse}`);
       setUsers(users);
       useCacheStore.getState().setAgentsCache(users);
       
@@ -183,6 +185,7 @@ export default function AgentsPage() {
   };
 
   const [isPullingAgents, setIsPullingAgents] = useState(false);
+  const [isPushingAgents, setIsPushingAgents] = useState(false);
 
   const handlePullAgents = async () => {
     if (!navigator.onLine) {
@@ -202,15 +205,44 @@ export default function AgentsPage() {
     try {
       const res = await window.api.sync.pullAgents(Number(siteIdToUse), userContext);
       if (res.success) {
-        toast.success(`✅ Rapatriement réussi : ${res.count} profil(s) d'agent(s) récupéré(s) ou mis à jour.`, { id: toastId, duration: 5000 });
+        toast.success(`✅ Téléchargement réussi : ${res.count} profil(s) d'agent(s) récupéré(s) ou mis à jour.`, { id: toastId, duration: 5000 });
         await loadData();
       } else {
-        toast.error(`Échec du rapatriement : ${res.message || 'Erreur inconnue'}`, { id: toastId });
+        toast.error(`Échec du téléchargement : ${res.message || 'Erreur inconnue'}`, { id: toastId });
       }
     } catch (err: any) {
       toast.error(`Erreur de connexion cloud : ${err.message || err}`, { id: toastId });
     } finally {
       setIsPullingAgents(false);
+    }
+  };
+
+  const handlePushAgents = async () => {
+    if (!navigator.onLine) {
+      toast.error("⚠️ Connexion Internet requise : Veuillez vous connecter pour envoyer les comptes des agents.");
+      return;
+    }
+
+    const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
+    if (!siteIdToUse) {
+      toast.error("Veuillez d'abord sélectionner un site actif.");
+      return;
+    }
+
+    setIsPushingAgents(true);
+    const toastId = toast.loading("☁️ Envoi des comptes agents vers le cloud...");
+
+    try {
+      const res = await window.api.sync.forceAgents(Number(siteIdToUse));
+      if (res && res.success) {
+        toast.success(`✅ Envoi réussi : ${res.count} profil(s) d'agent(s) envoyé(s) ou mis à jour sur le cloud.`, { id: toastId, duration: 5000 });
+      } else {
+        toast.error(`Échec de l'envoi : ${res?.message || 'Erreur inconnue'}`, { id: toastId });
+      }
+    } catch (err: any) {
+      toast.error(`Erreur de connexion cloud : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsPushingAgents(false);
     }
   };
 
@@ -242,7 +274,16 @@ export default function AgentsPage() {
   const handleToggleStatus = async (user: User) => {
     const newStatus = user.statut_actif === 1 ? 0 : 1;
     const actionText = newStatus === 1 ? 'activer' : 'désactiver';
-    if (!confirm(`Êtes-vous sûr de vouloir ${actionText} cet utilisateur ?`)) return;
+    
+    const isConfirmed = await confirmService.confirm({
+      title: `${newStatus === 1 ? 'Activation' : 'Désactivation'} d'un agent`,
+      message: `Êtes-vous sûr de vouloir ${actionText} cet utilisateur ?`,
+      isDanger: newStatus !== 1,
+      requirePassword: newStatus !== 1,
+      actionName: `${newStatus === 1 ? 'Activation' : 'Désactivation'} de l'agent ${user.login}`
+    });
+    if (!isConfirmed) return;
+
     try {
       await window.api.users.update(user.id_user, { statut_actif: newStatus });
       toast.success(`Utilisateur ${newStatus === 1 ? 'activé' : 'désactivé'}`);
@@ -253,7 +294,16 @@ export default function AgentsPage() {
   };
 
   const handleHardDelete = async (id: number) => {
-    if (!confirm('ATTENTION: Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT cet utilisateur de la base de données ? Cette action est irréversible.')) return;
+    const userToDel = users.find(u => u.id_user === id);
+    const isConfirmed = await confirmService.confirm({
+      title: "Suppression définitive",
+      message: "ATTENTION: Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT cet utilisateur de la base de données ? Cette action est irréversible.",
+      isDanger: true,
+      requirePassword: true,
+      actionName: `Suppression définitive de l'agent ${userToDel?.login || id}`
+    });
+    if (!isConfirmed) return;
+
     try {
       await window.api.users.hardDelete(id);
       toast.success('Utilisateur supprimé définitivement');
@@ -345,8 +395,8 @@ export default function AgentsPage() {
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingBottom: '6rem' }}>
       {/* Header & Search */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flex: '1 1 min-content' }}>
           <div className="icon-box" style={{ background: 'var(--premium-glass)', border: '1px solid rgba(255,255,255,0.1)' }}>
             <Users size={24} color="var(--accent-primary)" />
           </div>
@@ -358,30 +408,42 @@ export default function AgentsPage() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 12 }}>
-          <div style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, flex: '1 1 auto', justifyContent: 'flex-start' }}>
+          <div style={{ position: 'relative', flex: '1 1 min-content' }}>
             <Search size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input 
               className="form-input" 
               placeholder="Rechercher un agent..." 
-              style={{ paddingLeft: 40, width: 280, borderRadius: 14, height: 44 }}
+              style={{ paddingLeft: 40, width: '100%', minWidth: 200, maxWidth: 280, borderRadius: 14, height: 44 }}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <button className="btn btn-primary" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700 }} onClick={() => { closeModal(); setShowModal(true); }}>
+          <button className="btn btn-primary" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, flex: '1 1 auto', minWidth: 'max-content' }} onClick={() => { closeModal(); setShowModal(true); }}>
             <Plus size={18} /> Nouvel Agent
           </button>
           <button 
             className="btn btn-outline" 
-            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }} 
+            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content' }} 
             onClick={handlePullAgents}
             disabled={isPullingAgents || loading}
+            title="Télécharger les agents créés sur le Cloud vers cet ordinateur"
           >
-            <RefreshCw size={16} className={isPullingAgents ? 'animate-spin' : ''} />
-            Récupérer depuis le Cloud
+            <CloudDownload size={18} className={isPullingAgents ? 'animate-bounce' : ''} />
+            Télécharger les agents
           </button>
-          <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => loadData()}>
+          
+          <button 
+            className="btn btn-primary" 
+            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content' }} 
+            onClick={handlePushAgents}
+            disabled={isPushingAgents || loading}
+            title="Envoyer les agents créés localement vers le Cloud"
+          >
+            <CloudUpload size={18} className={isPushingAgents ? 'animate-bounce' : ''} />
+            Envoyer vers le Cloud
+          </button>
+          <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => loadData()}>
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>

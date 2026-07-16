@@ -7,7 +7,9 @@ import {
   TrendingUp, 
   RefreshCw, 
   Clock, 
-  UserCheck 
+  UserCheck,
+  Database,
+  Globe
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
@@ -24,6 +26,7 @@ interface OperatorCadence {
   login: string;
   nom_user: string;
   prenom_user: string;
+  role: string;
   verifications_today: number;
   derniere_activite: string | null;
 }
@@ -40,9 +43,12 @@ export default function AdminCentreDashboardPage() {
 
   // Sync state variables
   const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
+  const [downstreamProgress, setDownstreamProgress] = useState<number>(-1);
+  const [isSyncingUsers, setIsSyncingUsers] = useState<boolean>(false);
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
   const [bulkProgress, setBulkProgress] = useState<number>(-1);
   const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
+  const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   // Anomaly stats state
@@ -77,29 +83,67 @@ export default function AdminCentreDashboardPage() {
     return undefined;
   }, []);
 
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.api?.sync?.onDownstreamProgress) {
+      const unsubscribe = window.api.sync.onDownstreamProgress((payload) => {
+        const progress = payload.progress;
+        setDownstreamProgress(progress);
+        if (progress >= 100) {
+          setTimeout(() => {
+            setDownstreamProgress(-1);
+          }, 2000);
+        }
+      });
+      return () => {
+        unsubscribe();
+      };
+    }
+    return undefined;
+  }, []);
+
   const fetchDashboardData = async (silent?: boolean) => {
     const isSilent = !!silent;
     try {
       if (!isSilent) setLoading(true);
       
-      const siteIdToUse = user?.site_id;
-      const centreIdToUse = user?.centre_id;
+      let activeUser = user;
+      if (user?.login) {
+        const freshUser = await window.api.users.getProfile(user.login);
+        if (freshUser) {
+          activeUser = { ...user, ...freshUser };
+          useAuthStore.setState({ user: activeUser });
+        }
+      }
 
-      if (siteIdToUse) {
-        // Load centre name if not already set
-        if (!centreName && centreIdToUse) {
+      const siteIdToUse = activeUser?.site_id;
+      const centreIdToUse = activeUser?.centre_id;
+
+      if (siteIdToUse && centreIdToUse) {
+        if (window.api.hierarchy.getCentreById) {
+          const currentCentre = await window.api.hierarchy.getCentreById(Number(centreIdToUse));
+          if (currentCentre) {
+            setCentreName(currentCentre.nom);
+          }
+        } else {
+          // Fallback if not available
           const centres = await window.api.hierarchy.getCentres(siteIdToUse);
-          const currentCentre = centres.find((c: any) => c.id === centreIdToUse);
+          const currentCentre = centres.find((c: any) => Number(c.id) === Number(centreIdToUse));
           if (currentCentre) {
             setCentreName(currentCentre.nom);
           }
         }
-
+      }
+      if (siteIdToUse) {
         // Fetch unsynced cards count for the push button badge
         const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(siteIdToUse);
         if (typeof unsyncedRes === 'number') {
           setDirtyCartesCount(unsyncedRes);
         }
+        window.api.sync.getCloudCartesCount(siteIdToUse).then(count => {
+          setCloudCartesCount(count);
+        }).catch(err => {
+          console.error('Failed to fetch cloud count:', err);
+        });
       }
 
       if (centreIdToUse && siteIdToUse) {
@@ -175,6 +219,29 @@ export default function AdminCentreDashboardPage() {
     }
   };
 
+  const handleSyncUsers = async () => {
+    if (!user?.site_id) return;
+    setIsSyncingUsers(true);
+    const toastId = toast.loading('☁️ Synchronisation des utilisateurs depuis le cloud...');
+    try {
+      const res = await window.api.sync.syncUsersFromSupabase(Number(user.site_id), user);
+      if (res.success) {
+        if (res.count && res.count > 0) {
+          toast.success(`✅ Synchronisation terminée avec succès : ${res.count} utilisateur(s) synchronisé(s).`, { id: toastId, duration: 5000 });
+        } else {
+          toast.success("✅ Synchronisation terminée avec succès.", { id: toastId, duration: 4000 });
+        }
+        await fetchDashboardData();
+      } else {
+        toast.error(`Échec de la synchronisation : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 6000 });
+      }
+    } catch (err: any) {
+      toast.error(`Échec de la synchronisation : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsSyncingUsers(false);
+    }
+  };
+
   useEffect(() => {
     const cache = useCacheStore.getState().centreDashboardCache;
     let hasCache = false;
@@ -189,6 +256,21 @@ export default function AdminCentreDashboardPage() {
     const interval = setInterval(() => fetchDashboardData(true), 30000);
     return () => clearInterval(interval);
   }, [user, user?.site_id, user?.centre_id]);
+
+  // Synchronisation automatique et silencieuse des utilisateurs au chargement
+  useEffect(() => {
+    if (user?.site_id && isOnline && user.role === 'ADMIN_CENTRE') {
+      // Synchronisation sans bloquer l'interface ni afficher de toast
+      window.api.sync.syncUsersFromSupabase(Number(user.site_id), user)
+        .then((res) => {
+          if (res.success && res.count && res.count > 0) {
+             // Rafraîchir les données locales silencieusement après avoir récupéré de nouveaux agents
+             fetchDashboardData(true);
+          }
+        })
+        .catch((err) => console.error("Erreur sync silencieuse utilisateurs:", err));
+    }
+  }, [user?.site_id, isOnline]);
 
   const formatLastActivity = (isoString: string | null) => {
     if (!isoString) return '—';
@@ -209,8 +291,15 @@ export default function AdminCentreDashboardPage() {
   return (
     <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '100%', overflowY: 'auto', color: 'var(--text-primary)' }}>
       {/* En-tête */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '16px',
+        width: '100%'
+      }}>
+        <div style={{ flex: '1 1 300px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent-primary)', marginBottom: 4 }}>
             <Building2 size={24} />
             <span style={{ fontSize: 13, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Supervision Locale</span>
@@ -223,7 +312,7 @@ export default function AdminCentreDashboardPage() {
           </p>
         </div>
         
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <button 
             onClick={() => fetchDashboardData(false)} 
             disabled={loading}
@@ -249,14 +338,15 @@ export default function AdminCentreDashboardPage() {
         </div>
       </div>
 
-      {/* ZONE DE SYNCHRONISATION PREMIUM ISOLÉE POUR L'ADMIN_CENTRE */}
-      {user?.role === 'ADMIN_CENTRE' && (
+      {/* ZONE DE SYNCHRONISATION PREMIUM ISOLÉE POUR L'ADMIN_CENTRE ET LE SUPER ADMIN */}
+      {['ADMIN_CENTRE', 'SUPER ADMIN'].includes(user?.role || '') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div 
             style={{ 
               display: 'flex', 
               alignItems: 'center', 
               justifyContent: 'space-between',
+              flexWrap: 'wrap',
               padding: '16px 24px', 
               background: 'rgba(15, 23, 42, 0.4)', 
               border: '1px solid rgba(52, 211, 153, 0.15)', 
@@ -269,62 +359,60 @@ export default function AdminCentreDashboardPage() {
                 <RefreshCw size={16} /> Mode Supervision : Actions de Synchronisation
               </span>
               <span style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginTop: 2 }}>
-                Synchronisez les cartes CMU locales de votre centre d'enrôlement avec le Cloud.
+                Synchronisez les cartes CMU locales et la liste des utilisateurs de votre centre avec le Cloud.
               </span>
             </div>
-
-            <div style={{ display: 'flex', gap: 12 }}>
-              <button
-                onClick={() => handleStartBulkUpload()}
-                style={{
-                  padding: '10px 20px',
-                  borderRadius: '10px',
-                  border: '1px solid rgba(52, 211, 153, 0.3)',
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <button 
+                onClick={handlePullSiteCards} 
+                disabled={isPullingCards || !isOnline || cloudCartesCount === 0}
+                className="btn-outline" 
+                style={{ 
+                  padding: '12px 24px', 
+                  borderRadius: 12, 
                   fontWeight: 700,
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  background: 'rgba(6, 78, 59, 0.4)',
-                  color: '#34d399',
-                  transition: 'all 0.2s',
-                  boxShadow: '0 4px 12px rgba(16, 185, 129, 0.05)',
-                  whiteSpace: 'nowrap',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = '#059669';
-                  e.currentTarget.style.color = '#ffffff';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'rgba(6, 78, 59, 0.4)';
-                  e.currentTarget.style.color = '#34d399';
+                  cursor: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isPullingCards || !isOnline || cloudCartesCount === 0) ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  color: 'white',
+                  flex: '1 1 auto',
+                  whiteSpace: 'nowrap'
                 }}
               >
-                ↑ Envoyer les modifications ({dirtyCartesCount})
+                <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
               </button>
 
-              <button
-                onClick={() => handlePullSiteCards()}
-                style={{
-                  padding: '10px 20px',
-                  borderRadius: '10px',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
+              <button 
+                onClick={handleStartBulkUpload} 
+                disabled={isBulkUploading || !isOnline || dirtyCartesCount === 0}
+                className="btn-plein-soleil" 
+                style={{ 
+                  padding: '12px 24px', 
+                  borderRadius: 12, 
                   fontWeight: 700,
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  background: 'rgba(30, 41, 59, 0.4)',
-                  color: '#e2e8f0',
-                  transition: 'all 0.2s',
-                  whiteSpace: 'nowrap',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.background = '#475569';
-                  e.currentTarget.style.color = '#ffffff';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = 'rgba(30, 41, 59, 0.4)';
-                  e.currentTarget.style.color = '#e2e8f0';
+                  backgroundColor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
+                  color: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
+                  border: '1px solid #FFE600',
+                  cursor: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isBulkUploading || !isOnline || dirtyCartesCount === 0) ? 0.5 : 1,
+                  boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  transition: 'all 0.2s ease-in-out',
+                  flex: '1 1 auto',
+                  whiteSpace: 'nowrap'
                 }}
               >
-                ↓ Récupérer du Cloud
+                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
               </button>
             </div>
           </div>
@@ -479,6 +567,7 @@ export default function AdminCentreDashboardPage() {
               <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-secondary)', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Nom complet</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Identifiant</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600 }}>Rôle</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'center' }}>Cadence / Jour</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Dernière activité</th>
               </tr>
@@ -486,7 +575,7 @@ export default function AdminCentreDashboardPage() {
             <tbody>
               {cadence.length === 0 ? (
                 <tr>
-                  <td colSpan={4} style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
+                  <td colSpan={5} style={{ padding: '32px 16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 14 }}>
                     Aucun Opérateur de Vérification actif aujourd'hui dans ce centre.
                   </td>
                 </tr>
@@ -495,6 +584,33 @@ export default function AdminCentreDashboardPage() {
                   <tr key={op.id_user} style={{ borderBottom: '1px solid rgba(255,255,255,0.03)', fontSize: 14, transition: 'background 0.2s' }} className="hover-row">
                     <td style={{ padding: '16px', fontWeight: 600 }}>{op.nom_user} {op.prenom_user}</td>
                     <td style={{ padding: '16px', color: 'var(--text-secondary)' }}>@{op.login}</td>
+                    <td style={{ padding: '16px' }}>
+                      <span style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: '4px 8px',
+                        borderRadius: '6px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.02em',
+                        background: op.role.startsWith('OPERATEUR_VERIF') ? 'rgba(245,158,11,0.1)' : 
+                                    op.role.startsWith('OPERATEUR_SAISIE') ? 'rgba(34,197,94,0.1)' :
+                                    op.role.startsWith('OPERATEUR_QUALITE') ? 'rgba(139,92,246,0.1)' :
+                                    op.role.startsWith('OPERATEUR_LOGISTIQUE') ? 'rgba(59,130,246,0.1)' :
+                                    op.role.startsWith('OPERATEUR_INVENTAIRE') ? 'rgba(236,72,153,0.1)' : 'rgba(255,255,255,0.05)',
+                        color: op.role.startsWith('OPERATEUR_VERIF') ? '#f59e0b' : 
+                               op.role.startsWith('OPERATEUR_SAISIE') ? '#22c55e' :
+                               op.role.startsWith('OPERATEUR_QUALITE') ? '#8b5cf6' :
+                               op.role.startsWith('OPERATEUR_LOGISTIQUE') ? '#3b82f6' :
+                               op.role.startsWith('OPERATEUR_INVENTAIRE') ? '#ec4899' : 'var(--text-secondary)',
+                        border: op.role.startsWith('OPERATEUR_VERIF') ? '1px solid rgba(245,158,11,0.2)' : 
+                                op.role.startsWith('OPERATEUR_SAISIE') ? '1px solid rgba(34,197,94,0.2)' :
+                                op.role.startsWith('OPERATEUR_QUALITE') ? '1px solid rgba(139,92,246,0.2)' :
+                                op.role.startsWith('OPERATEUR_LOGISTIQUE') ? '1px solid rgba(59,130,246,0.2)' :
+                                op.role.startsWith('OPERATEUR_INVENTAIRE') ? '1px solid rgba(236,72,153,0.2)' : '1px solid rgba(255,255,255,0.1)'
+                      }}>
+                        {op.role.replace('OPERATEUR_', '').replace('_', ' ')}
+                      </span>
+                    </td>
                     <td style={{ padding: '16px', textAlign: 'center' }}>
                       <span style={{ 
                         background: op.verifications_today > 0 ? 'rgba(34,197,94,0.1)' : 'rgba(255,255,255,0.02)',
@@ -520,7 +636,7 @@ export default function AdminCentreDashboardPage() {
       </div>
 
       {/* Bouclier global anti-clics et curseur de chargement pour AdminCentreDashboardPage */}
-      {(isBulkUploading || isPullingCards) && (
+      {(isBulkUploading || isPullingCards || isSyncingUsers) && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -564,9 +680,32 @@ export default function AdminCentreDashboardPage() {
                 {bulkProgress}%
               </div>
             )}
+            {isPullingCards && downstreamProgress >= 0 && (
+              <div style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+                fontWeight: 800,
+                color: '#60a5fa'
+              }}>
+                {downstreamProgress}%
+              </div>
+            )}
           </div>
           <span style={{ color: 'white', fontWeight: 700, fontSize: 14, letterSpacing: '0.5px' }}>
-            {isBulkUploading ? `Transfert de masse vers le Cloud... (${bulkProgress >= 0 ? bulkProgress : 0}%)` : 'Récupération des cartes...'}
+            {isBulkUploading 
+              ? `Transfert de masse vers le Cloud... (${bulkProgress >= 0 ? bulkProgress : 0}%)` 
+              : isSyncingUsers 
+                ? 'Synchronisation des utilisateurs...' 
+                : isPullingCards && downstreamProgress >= 0 
+                  ? `Récupération des cartes... (${downstreamProgress}%)`
+                  : 'Récupération des cartes...'}
           </span>
         </div>
       )}

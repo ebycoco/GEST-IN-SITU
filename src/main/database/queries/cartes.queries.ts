@@ -1,5 +1,8 @@
 import { getDatabase } from '../connection';
 import { v4 as uuidv4 } from 'uuid';
+import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
+import { networkMonitor } from '../../sync/network-monitor';
+import { insertAuditLog } from './audit.queries';
 
 function removeAccents(str: string): string {
   if (!str) return '';
@@ -24,7 +27,7 @@ function normalizeContact(contactStr: string): string {
 
 export function getCartesPage(offset: number, limit: number, filters?: Record<string, string>) {
   const db = getDatabase()!;
-  let where = 'WHERE 1=1';
+  let where = 'WHERE is_dirty != -1';
   const params: any = {};
 
   if (filters?.statut) { where += ' AND statut = @statut'; params.statut = filters.statut; }
@@ -35,7 +38,7 @@ export function getCartesPage(offset: number, limit: number, filters?: Record<st
   
   if (filters?.q || filters?.search) {
     const q = filters.q || filters.search;
-    where += ' AND (noms LIKE @q OR prenoms LIKE @q OR num_secu LIKE @q OR contact LIKE @q OR lieu_de_naissance LIKE @q OR rangement LIKE @q)';
+    where += " AND (noms LIKE @q OR prenoms LIKE @q OR (noms || ' ' || prenoms) LIKE @q OR (prenoms || ' ' || noms) LIKE @q OR num_secu LIKE @q OR contact LIKE @q OR lieu_de_naissance LIKE @q OR rangement LIKE @q)";
     params.q = `%${q}%`;
   }
 
@@ -51,7 +54,7 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
   
   const params: Record<string, any> = { limit };
   let hasFilters = false;
-  let filtersSql = '';
+  let filtersSql = ' AND t_cartes.is_dirty != -1';
 
   if (filters?.date_de_naissance) {
     filtersSql += ' AND t_cartes.date_de_naissance = @date_de_naissance';
@@ -74,7 +77,6 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
     params.contact = finalContactParam;
     hasFilters = true;
   }
-
   if (filters?.site_id) {
     filtersSql += ' AND t_cartes.site_id = @site_id';
     params.site_id = Number(filters.site_id);
@@ -87,9 +89,7 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
   }
 
   if (!query.trim()) {
-    if (!hasFilters) return [];
-    
-    let nonFtsQuery = `SELECT t_cartes.*, t_sites.nom as site_nom, t_centres.nom as centre_nom FROM t_cartes LEFT JOIN t_sites ON t_cartes.site_id = t_sites.id LEFT JOIN t_centres ON t_cartes.centre_id = t_centres.id WHERE 1=1`;
+    let nonFtsQuery = `SELECT t_cartes.*, t_sites.nom as site_nom, t_centres.nom as centre_nom FROM t_cartes LEFT JOIN t_sites ON t_cartes.site_id = t_sites.id LEFT JOIN t_centres ON t_cartes.centre_id = t_centres.id WHERE t_cartes.is_dirty != -1`;
     if (filters?.date_de_naissance) nonFtsQuery += ' AND t_cartes.date_de_naissance = @date_de_naissance';
     if (filters?.lieu_de_naissance) nonFtsQuery += ' AND t_cartes.lieu_de_naissance LIKE @lieu_de_naissance';
     if (filters?.contact) nonFtsQuery += ' AND t_cartes.contact LIKE @contact';
@@ -118,11 +118,11 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
 export function getCarteById(id: number, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
   if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    const row = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND site_id = ?').get(id, currentUser.site_id);
+    const row = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND site_id = ? AND is_dirty != -1').get(id, currentUser.site_id);
     if (!row) throw new Error("Accès non autorisé aux données de ce site");
     return row;
   }
-  return db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id);
+  return db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND is_dirty != -1').get(id);
 }
 
 function isValidDate(dateStr: string | null | undefined): boolean {
@@ -189,6 +189,30 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
     created_by: data.created_by || null
   });
 
+  enqueueOutbox(syncId, 't_cartes', 'INSERT', {
+    sync_id: syncId,
+    noms,
+    prenoms,
+    date_de_naissance: ddn || null,
+    lieu_de_naissance: lieuN,
+    num_secu: data.num_secu || null,
+    lieu_enrolement: removeAccents(data.lieu_enrolement as string || ''),
+    contact,
+    rangement: removeAccents(data.rangement as string || ''),
+    statut: data.statut || 'EN STOCK',
+    agent_saisie: data.agent_saisie || 'SYSTEM',
+    centre_id: data.centre_id || null,
+    poste_id: data.poste_id || null,
+    cle_doublon: cleDbl,
+    cle_doublon_flex: cleFlex,
+    site_id: siteIdToUse,
+    created_by: data.created_by || null
+  });
+
+  if (networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
+  }
+
   return { id: result.lastInsertRowid, sync_id: syncId };
 }
 
@@ -242,37 +266,87 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
+
+  const carte = db.prepare('SELECT sync_id FROM t_cartes WHERE id_carte = ?').get(id) as { sync_id: string } | undefined;
+  if (carte?.sync_id) {
+    const updatedCarte = db.prepare('SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie, nom_retirant, num_retirant, agent_distributeur, centre_retrait, cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id, qr_code_data, created_by FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    
+    enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', {
+      sync_id: carte.sync_id,
+      ...updatedCarte,
+      updated_at: now
+    });
+
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  }
+
   return result;
 }
 
-export function deleteCarte(id: number, currentUser?: { role: string; site_id?: number }) {
+export function deleteCarte(id: number, currentUser?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
-  let query = 'DELETE FROM t_cartes WHERE id_carte = ?';
-  const params: any[] = [id];
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = ?';
-    params.push(currentUser.site_id);
+  
+  // 1. Validation de l'autorisation : réservé aux administrateurs
+  if (currentUser && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(currentUser.role)) {
+    throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer une carte.");
   }
-  const result = db.prepare(query).run(...params);
+
+  // Lire les données de la carte
+  const carte = db.prepare('SELECT sync_id, site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { sync_id: string | null; site_id: number; centre_id: number } | undefined;
+  if (!carte) {
+    return { changes: 0 };
+  }
+
+  if (currentUser && currentUser.role !== 'SUPER ADMIN' && carte.site_id !== currentUser.site_id) {
+    throw new Error("Accès non autorisé aux données de ce site");
+  }
+
+  // Trace d'audit
+  insertAuditLog(
+    currentUser?.login || 'ADMIN',
+    'VALIDATION',
+    `[SUPPRESSION] Par ${currentUser?.login || 'ADMIN'} sur t_cartes (ID: ${id})`
+  );
+
+  // 2. Marquer la carte en pending_delete local (is_dirty = -1) au lieu de la supprimer physiquement
+  const result = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id);
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
+
+  // 3. Enfilage Outbox DELETE
+  if (carte.sync_id) {
+    const wasLocalOnly = cancelPendingInsert(carte.sync_id, 't_cartes');
+    if (!wasLocalOnly) {
+      enqueueOutbox(carte.sync_id, 't_cartes', 'DELETE', { sync_id: carte.sync_id });
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    } else {
+      // Si la carte n'a jamais été synchronisée (local uniquement), suppression physique immédiate
+      db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id);
+    }
+  }
+
   return result;
 }
 
 export function delivrerCarte(
   id: number, 
-  data: { nom_retirant: string; num_retirant: string; agent_distributeur: string; centre_retrait?: string; rangement?: string }, 
+  data: { nom_retirant: string; num_retirant: string; contact_retirant?: string; agent_distributeur: string; centre_retrait?: string; rangement?: string }, 
   currentUser?: { role: string; site_id?: number }
 ) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  let query = `
+  const query = `
     UPDATE t_cartes SET
       statut = 'DELIVRE',
       date_delivrance = @now,
       nom_retirant = @nom_retirant,
       num_retirant = @num_retirant,
+      contact_retirant = @contact_retirant,
       agent_distributeur = @agent_distributeur,
       centre_retrait = @centre_retrait,
       rangement = COALESCE(@rangement, rangement),
@@ -284,18 +358,43 @@ export function delivrerCarte(
     id,
     nom_retirant: data.nom_retirant,
     num_retirant: data.num_retirant,
+    contact_retirant: data.contact_retirant || null,
     agent_distributeur: data.agent_distributeur,
     centre_retrait: data.centre_retrait || null,
     rangement: data.rangement || null,
     now
   };
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = @site_id';
-    params.site_id = currentUser.site_id;
-  }
   const result = db.prepare(query).run(params);
   if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
+    throw new Error("Carte introuvable ou déjà distribuée.");
+  }
+  return result;
+}
+
+export function transfererCarte(
+  id: number, 
+  data: { centre_id: number; rangement?: string; agent_transfert: string }
+) {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
+  
+  const query = `
+    UPDATE t_cartes SET
+      centre_id = @centre_id,
+      rangement = COALESCE(@rangement, rangement),
+      updated_at = @now,
+      is_dirty = 1
+    WHERE id_carte = @id AND statut = 'EN STOCK'
+  `;
+  const params: any = { 
+    id,
+    centre_id: data.centre_id,
+    rangement: data.rangement || null,
+    now
+  };
+  const result = db.prepare(query).run(params);
+  if (result.changes === 0) {
+    throw new Error("Carte introuvable ou n'est plus EN STOCK.");
   }
   return result;
 }
@@ -563,6 +662,42 @@ export function getSansRangementPage(siteId: number, offset: number, limit: numb
   return { rows, total };
 }
 
+export function getSansNomPage(siteId: number, offset: number, limit: number, query?: string) {
+  const db = getDatabase()!;
+  let where = "WHERE site_id = ? AND (noms IS NULL OR noms = '')";
+  const params: any[] = [siteId];
+
+  if (query && query.trim()) {
+    where += " AND (prenoms LIKE ? OR num_secu LIKE ? OR contact LIKE ?)";
+    params.push(`%${query}%`, `%${query}%`, `%${query}%`);
+  }
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
+  const total = totalRow?.count || 0;
+
+  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+  return { rows, total };
+}
+
+export function getSansPrenomPage(siteId: number, offset: number, limit: number, query?: string) {
+  const db = getDatabase()!;
+  let where = "WHERE site_id = ? AND (prenoms IS NULL OR prenoms = '')";
+  const params: any[] = [siteId];
+
+  if (query && query.trim()) {
+    where += " AND (noms LIKE ? OR num_secu LIKE ? OR contact LIKE ?)";
+    params.push(`%${query}%`, `%${query}%`, `%${query}%`);
+  }
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
+  const total = totalRow?.count || 0;
+
+  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+  return { rows, total };
+}
+
 export function updateQuickFields(id: number, fields: { num_secu?: string, rangement?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
@@ -675,4 +810,35 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
     now,
     id
   );
+}
+
+export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string) {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
+  const cleanedId = identifiant.trim().toUpperCase();
+  const targetRangement = rangement.trim().toUpperCase();
+
+  // Search for the card by num_secu (or id_carte if it's the sync_id/cle_doublon, but assuming num_secu or similar unique field)
+  const carte = db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
+  
+  if (!carte) {
+    return { success: false, message: "Carte introuvable avec cet identifiant." };
+  }
+
+  db.prepare(`
+    UPDATE t_cartes
+    SET statut = 'EN STOCK',
+        rangement = ?,
+        updated_at = ?,
+        is_dirty = 1
+    WHERE id_carte = ?
+  `).run(targetRangement, now, carte.id_carte);
+
+  return { 
+    success: true, 
+    carte: {
+      ...carte,
+      rangement: targetRangement
+    }
+  };
 }
