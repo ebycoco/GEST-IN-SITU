@@ -10,7 +10,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { initDatabase, getDatabase } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
 import { ensureSyncIds } from './database/queries/hierarchy.queries';
-import { initAutoUpdater } from './updater';
+import { setupAutoUpdater } from './auto-updater';
+import { checkAppVersionEnforcement } from './enforcer';
 import { initBackupScheduler } from './backup';
 import log from 'electron-log';
 import { syncEngine } from './sync/sync-engine';
@@ -219,9 +220,11 @@ app.whenReady().then(async () => {
   // Auto-updater (production only)
   if (!is.dev) {
     try {
-      initAutoUpdater(mainWindow!);
+      setupAutoUpdater(mainWindow!, syncEngine);
+      // Run Enforcer check
+      checkAppVersionEnforcement(mainWindow!);
     } catch (updaterError: any) {
-      log.warn("L'auto-updater n'a pas pu être initialisé (non bloquant, ex: app-update.yml manquant) :", updaterError?.message || updaterError);
+      log.warn("L'auto-updater n'a pas pu être initialisé (non bloquant) :", updaterError?.message || updaterError);
     }
     try {
       initBackupScheduler();

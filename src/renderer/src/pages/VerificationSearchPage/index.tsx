@@ -130,6 +130,7 @@ export default function VerificationSearchPage() {
       toast.error(`Échec de récupération des cartes : ${err.message || err}`, { id: toastId });
     } finally {
       setIsPullingCards(false);
+      await fetchSyncStats();
     }
   };
 

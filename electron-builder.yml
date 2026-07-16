@@ -1,0 +1,26 @@
+appId: com.ebychoco.gest-in-situ
+productName: GEST-IN-SITU
+directories:
+  output: dist-electron-builder
+files:
+  - dist/**
+  - package.json
+publish:
+  provider: github
+  owner: ebycoco
+  repo: GEST-IN-SITU
+win:
+  target: nsis
+  icon: resources/icon.ico
+  verifyUpdateCodeSignature: false
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: GEST-IN-SITU
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  artifactName: ${productName}-Setup-v${version}.${ext}

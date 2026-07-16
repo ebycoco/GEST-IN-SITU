@@ -21,10 +21,11 @@ import InventaireLayout from './pages/inventaire/InventaireLayout';
 import AdminCentreDashboardPage from './pages/AdminCentreDashboardPage';
 import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
+import { UpdateRequiredBlocker } from './components/UpdateRequiredBlocker';
 
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
@@ -58,13 +59,33 @@ function ProtectedRoute({ children, requiredRoles }: { children: React.ReactElem
 
 export default function App() {
   const checkAuth = useAuthStore(s => s.checkAuth);
+  const [updateInfo, setUpdateInfo] = useState<any>(null);
 
   useEffect(() => {
     checkAuth();
+
+    const unsubWarning = window.api?.auth?.onAuthWarning?.((msg: string) => {
+      import('react-hot-toast').then(({ toast }) => {
+        toast(msg, {
+          icon: '⚠️',
+          duration: 10000,
+        });
+      });
+    });
+
+    const unsubEnforcer = window.api?.enforcer?.onUpdateRequired?.((info: any) => {
+      setUpdateInfo(info);
+    });
+
+    return () => {
+      if (unsubWarning) unsubWarning();
+      if (unsubEnforcer) unsubEnforcer();
+    };
   }, [checkAuth]);
 
   return (
     <>
+      {updateInfo && <UpdateRequiredBlocker info={updateInfo} />}
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
       <HashRouter>
