@@ -1,11 +1,19 @@
 import { autoUpdater } from 'electron-updater';
 import { ipcMain, BrowserWindow } from 'electron';
 import log from 'electron-log';
+import { is } from '@electron-toolkit/utils';
 
 export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
   autoUpdater.logger = log;
   (autoUpdater.logger as any).transports.file.level = 'info';
-  autoUpdater.autoDownload = false;
+  
+  // Activer le téléchargement automatique en arrière-plan
+  autoUpdater.autoDownload = true;
+  
+  // Forcer l'auto-updater à fonctionner même en mode développement
+  if (is.dev) {
+    autoUpdater.forceDevUpdateConfig = true;
+  }
 
   // Déclenchement automatique et autonome de la recherche de mise à jour 10s après le démarrage
   setTimeout(() => {

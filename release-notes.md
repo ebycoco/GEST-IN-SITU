@@ -1,4 +1,5 @@
-# GEST-IN-SITU v2.5.4
+# GEST-IN-SITU v2.5.5
 
 ## Corrigé
-- **UI/UX :** Restauration de l'affichage dynamique de la version de l'application (ex: `v2.5.4`) à l'intérieur de la signature du pied de page global (`© Ebychoco 2026`).
+- **Auto-Updater :** Activation du téléchargement automatique (`autoDownload = true`) en arrière-plan pour que les futures mises à jour s'installent silencieusement sans nécessiter d'action utilisateur.
+- **Auto-Updater :** Activation optionnelle de l'updater en mode développement pour faciliter les tests locaux.
