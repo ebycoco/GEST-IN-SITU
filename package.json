@@ -1,6 +1,6 @@
 {
   "name": "gest-in-situ",
-  "version": "2.5.6",
+  "version": "2.5.7",
   "description": "Application desktop de gestion logistique ultra-performante pour le cycle de vie des cartes CMU",
   "main": "./dist/main/index.js",
   "author": "EBYCHOCO",
