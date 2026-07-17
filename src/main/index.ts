@@ -213,13 +213,14 @@ app.whenReady().then(async () => {
     syncEngine.init();
   }
 
-  // Auto-updater (production only)
+  // Auto-updater (production only / temporairement activé en dev)
+  try {
+    setupAutoUpdater(mainWindow!, syncEngine);
+  } catch (updaterError: any) {
+    log.warn("L'auto-updater n'a pas pu être initialisé (non bloquant) :", updaterError?.message || updaterError);
+  }
+
   if (!is.dev) {
-    try {
-      setupAutoUpdater(mainWindow!, syncEngine);
-    } catch (updaterError: any) {
-      log.warn("L'auto-updater n'a pas pu être initialisé (non bloquant) :", updaterError?.message || updaterError);
-    }
     try {
       initBackupScheduler();
     } catch (backupError: any) {
