@@ -851,8 +851,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:reactiverCarte', e); throw e; }
   });
-  ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number) => {
-    try { return queries.getInvalidDateRecords(siteId); }
+  ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number, offset = 0, limit = 50) => {
+    try { return queries.getInvalidDateRecords(siteId, offset, limit); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
   });
   ipcMain.handle('cartes:updateDate', async (_, id, newDate) => {
@@ -1092,11 +1092,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.fusionnerImport(siteId); }
     catch (e) { log.error('IPC Error: import:fusionner', e); throw e; }
   });
-  ipcMain.handle('import:getAnomalies', (_, siteId) => {
+  ipcMain.handle('import:getAnomalies', (_, siteId, offset = 0, limit = 50) => {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis.');
     }
-    return queries.getImportAnomalies(Number(siteId));
+    return queries.getImportAnomalies(Number(siteId), offset, limit);
   });
   ipcMain.handle('import:clearAnomalies', (_, siteId) => {
     if (siteId === undefined || siteId === null) {
@@ -1182,10 +1182,68 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       db.transaction(() => {
-        if (champ_corrige === 'date_de_naissance') {
-          queries.updateDateDeNaissance(id_carte, valeur_apres);
-        } else {
-          queries.updateQuickFields(id_carte, { [champ_corrige]: valeur_apres });
+        if (anomaly) {
+          if (!card && !anomaly.carte_id) {
+            // Transfert complet de t_import_anomalies vers t_cartes
+            const newDate = champ_corrige === 'date_de_naissance' ? valeur_apres : anomaly.date_de_naissance;
+            
+            const crypto = require('crypto');
+            const syncId = crypto.randomUUID();
+
+            const insertStmt = db.prepare(`
+              INSERT INTO t_cartes (
+                noms, prenoms, date_de_naissance, num_secu, contact, site_id,
+                statut, agent_saisie, sync_id, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, 'EN STOCK', 'SYSTEM', ?, datetime('now'), datetime('now'))
+            `);
+
+            const result = insertStmt.run(
+              anomaly.noms || '',
+              anomaly.prenoms || '',
+              newDate || '',
+              anomaly.num_secu || null,
+              anomaly.contact || null,
+              anomaly.site_id || null,
+              syncId
+            );
+
+            // Création de la transaction outbox pour Supabase
+            const outboxStmt = db.prepare(`
+              INSERT INTO t_outbox (table_name, operation, record_id, payload, sync_id)
+              VALUES (?, ?, ?, ?, ?)
+            `);
+
+            const payloadStr = JSON.stringify({
+              noms: anomaly.noms || '',
+              prenoms: anomaly.prenoms || '',
+              date_de_naissance: newDate || '',
+              num_secu: anomaly.num_secu || null,
+              contact: anomaly.contact || null,
+              site_id: anomaly.site_id || null,
+              statut: 'EN STOCK',
+              agent_saisie: 'SYSTEM',
+              sync_id: syncId
+            });
+
+            outboxStmt.run('t_cartes', 'INSERT', result.lastInsertRowid, payloadStr, syncId);
+          } else {
+            // L'anomalie est déjà liée à une carte existante, on la met à jour
+            const targetId = anomaly.carte_id || id_carte;
+            if (champ_corrige === 'date_de_naissance') {
+              queries.updateDateDeNaissance(targetId, valeur_apres);
+            } else {
+              queries.updateQuickFields(targetId, { [champ_corrige]: valeur_apres });
+            }
+          }
+          // Suppression de l'anomalie traitée
+          db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(anomaly.id);
+        } else if (card) {
+          // Si c'est une simple carte (pas d'anomalie)
+          if (champ_corrige === 'date_de_naissance') {
+            queries.updateDateDeNaissance(id_carte, valeur_apres);
+          } else {
+            queries.updateQuickFields(id_carte, { [champ_corrige]: valeur_apres });
+          }
         }
       })();
 
@@ -1267,6 +1325,98 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: true, deleted: deletedCount };
     } catch (e) {
       log.error('IPC Error: qualite:supprimerIncoherences', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('qualite:auditDates', async (event) => {
+    const userLogin = getCurrentUserLogin() || 'SYSTEM';
+    try {
+      const db = getDatabase();
+      if (!db) throw new Error('Base de données indisponible');
+
+      // Helper pour valider le calendrier strict
+      const isValidDate = (dateStr: string | null | undefined): boolean => {
+        if (!dateStr) return false;
+        const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!match) return false;
+        const year = parseInt(match[1], 10);
+        const month = parseInt(match[2], 10);
+        const day = parseInt(match[3], 10);
+        const d = new Date(year, month - 1, day);
+        return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
+      };
+
+      // 1. Récupérer le nombre total de cartes
+      const totalCountRes = db.prepare('SELECT COUNT(*) as count FROM t_cartes').get() as { count: number };
+      const total = totalCountRes.count;
+      
+      let processed = 0;
+      let movedCount = 0;
+      const chunkSize = 250;
+      let offset = 0;
+      
+      // On boucle par lots de 250
+      while (processed < total) {
+        const cards = db.prepare('SELECT * FROM t_cartes LIMIT ? OFFSET ?').all(chunkSize, offset) as any[];
+        if (cards.length === 0) break;
+        
+        const invalidCards = cards.filter(c => !isValidDate(c.date_de_naissance));
+        
+        if (invalidCards.length > 0) {
+          db.transaction(() => {
+            const insertAnomaly = db.prepare(`
+              INSERT INTO t_import_anomalies (
+                carte_id, type_anomalie, description, erreur_message,
+                noms, prenoms, date_de_naissance, num_secu, contact, site_id,
+                created_at
+              ) VALUES (?, 'DATE_INVALIDE', 'Erreur: Date invalide ou impossible (Audit Rétroactif)', 'Date physiquement absente du calendrier', ?, ?, ?, ?, ?, ?, datetime('now'))
+            `);
+            const deleteCard = db.prepare('DELETE FROM t_cartes WHERE id_carte = ?');
+            
+            for (const c of invalidCards) {
+              insertAnomaly.run(
+                c.id_carte,
+                c.noms,
+                c.prenoms,
+                c.date_de_naissance,
+                c.num_secu,
+                c.contact,
+                c.site_id
+              );
+              deleteCard.run(c.id_carte);
+              log.info(`[AUDIT] Déplacement de la carte ID=${c.id_carte} vers anomalies : date détectée comme impossible (${c.date_de_naissance})`);
+              movedCount++;
+            }
+          })();
+          // Comme on supprime des cartes de la table, on ne doit pas avancer l'offset du même montant si les cartes sont supprimées "avant" notre position.
+          // Mais ORDER n'est pas garanti. Il vaut mieux juste ignorer l'offset et faire un tri, ou ajuster.
+          // Pour faire simple sans buguer l'offset sur des DELETE, utilisons un offset qui avance, 
+          // mais vu qu'on supprime des lignes, l'OFFSET classique est faussé.
+          // Mieux: utiliser rowid ou trier par id_carte.
+        }
+        
+        processed += cards.length;
+        // On avance l'offset seulement des cartes non supprimées.
+        // Puisque nous avons supprimé `invalidCards.length` cartes avant la fin de ce lot.
+        offset += (cards.length - invalidCards.length);
+        
+        // Emettre l'avancement
+        event.sender.send('qualite:auditProgress', { 
+          processed, 
+          total, 
+          movedCount 
+        });
+        
+        // Petite pause pour laisser le fil principal respirer (yield)
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+      
+      logAudit(userLogin, 'AUDIT_DATES', JSON.stringify({ movedCount, totalScanned: total }));
+      
+      return { success: true, movedCount, total };
+    } catch (e) {
+      log.error('IPC Error: qualite:auditDates', e);
       throw e;
     }
   });

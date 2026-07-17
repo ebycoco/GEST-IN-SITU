@@ -194,8 +194,8 @@ const api = {
       ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId),
     fusionner: (agent: string, siteId?: number): Promise<{ updated: number; inserted: number }> => 
       ipcRenderer.invoke('import:fusionner', agent, siteId),
-    getAnomalies: (siteId: number): Promise<any[]> =>
-      ipcRenderer.invoke('import:getAnomalies', siteId),
+    getAnomalies: (siteId: number, offset = 0, limit = 50): Promise<{rows: any[], total: number}> =>
+      ipcRenderer.invoke('import:getAnomalies', siteId, offset, limit),
     clearAnomalies: (siteId: number): Promise<void> =>
       ipcRenderer.invoke('import:clearAnomalies', siteId),
     onProgress: (callback: (p: number) => void) => {
@@ -271,6 +271,12 @@ const api = {
       ipcRenderer.invoke('qualite:corrigerFormat', payload),
     supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }): Promise<any> =>
       ipcRenderer.invoke('qualite:supprimerIncoherences', payload),
+    auditDates: (): Promise<{ success: boolean; movedCount: number; total: number }> =>
+      ipcRenderer.invoke('qualite:auditDates'),
+    onAuditProgress: (callback: (event: any, data: { processed: number; total: number; movedCount: number }) => void) => {
+      ipcRenderer.removeAllListeners('qualite:auditProgress');
+      ipcRenderer.on('qualite:auditProgress', callback);
+    }
   },
   // Hierarchy
   hierarchy: {

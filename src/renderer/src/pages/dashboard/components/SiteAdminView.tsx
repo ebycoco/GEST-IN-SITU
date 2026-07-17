@@ -175,6 +175,33 @@ export function SiteAdminView({
     message: string;
   } | null>(null);
 
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [auditProgress, setAuditProgress] = useState<{ processed: number; total: number; movedCount: number } | null>(null);
+
+  const handleAuditDates = async () => {
+    setIsAuditing(true);
+    setAuditProgress({ processed: 0, total: 0, movedCount: 0 });
+    
+    // S'abonner aux événements de progression
+    (window as any).api.qualite.onAuditProgress((_: any, data: { processed: number; total: number; movedCount: number }) => {
+      setAuditProgress(data);
+    });
+
+    try {
+      const res = await (window as any).api.qualite.auditDates();
+      if (res.success) {
+        toast.success(`Audit terminé : ${res.movedCount} dates invalides déplacées vers le tableau de bord Qualité.`);
+        loadStats();
+      }
+    } catch (e: any) {
+      console.error(e);
+      toast.error(`Erreur lors de l'audit: ${e.message}`);
+    } finally {
+      setIsAuditing(false);
+      setAuditProgress(null);
+    }
+  };
+
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -1082,6 +1109,37 @@ export function SiteAdminView({
                         </p>
                       </div>
                     )}
+
+                    <div>
+                      <button
+                        onClick={handleAuditDates}
+                        disabled={isAuditing || loading}
+                        className="btn"
+                        title="Vérifie toutes les dates de naissance du stock et isole les dates invalides"
+                        style={{
+                          padding: '12px 24px',
+                          borderRadius: 12,
+                          fontWeight: 700,
+                          backgroundColor: 'rgba(234, 179, 8, 0.1)',
+                          color: '#eab308',
+                          border: '1px solid rgba(234, 179, 8, 0.25)',
+                          cursor: (isAuditing || loading) ? 'not-allowed' : 'pointer',
+                          opacity: (isAuditing || loading) ? 0.5 : 1,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          width: 'fit-content'
+                        }}
+                      >
+                        <Search size={18} style={{ animation: isAuditing ? 'spin 2s linear infinite' : 'none' }} />
+                        {isAuditing ? (
+                          auditProgress ? `Audit en cours (${auditProgress.processed}/${auditProgress.total}) - ${auditProgress.movedCount} anomalies` : 'Audit en cours...'
+                        ) : 'Auditer les Dates Invalides'}
+                      </button>
+                      <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                        Recherche et déplace automatiquement les cartes ayant une date de naissance impossible vers les anomalies.
+                      </p>
+                    </div>
 
                     {syncAlert && (
                       <div className="glass-card" style={{ border: '1px solid rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.05)', padding: '16px 20px', borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
