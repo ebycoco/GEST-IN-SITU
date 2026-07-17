@@ -6,7 +6,7 @@ powershell -ExecutionPolicy Bypass -File .\compile_installer.ps1
 
 Voici mon accès token de GitHub: 
 
-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
+ghp_***MASKED***
 
 ********************************************************************************************************************
 
@@ -21,7 +21,6 @@ L'intégrité de la version dans package.json.
 Si tout est parfait, émets le signal : 'VALIDATION COMPLÈTE'. Si tu détectes un risque, bloque le build et explique-moi pourquoi.
 
 **********************************************************************************************************************************************
-
 Agent 7, j'ai reçu la 'VALIDATION COMPLÈTE' de l'Agent 12. Nous sommes prêts pour la release. Suis ce protocole strict :
 
 Délégation au Versioning (Agent 11) : Contacte immédiatement l'Agent 11. Demande-lui d'analyser les changements récents et de procéder à l'incrémentation de version dans package.json et au journal des modifications dans CHANGELOG.md selon les règles SemVer.
@@ -32,7 +31,7 @@ Exécution sécurisée (Build & Publish) : Une fois la confirmation reçue, lanc
 
 Gestion des incidents :
 
-En cas d'erreur réseau (timeout, token GH_TOKEN manquant), voici mon accès token de GitHub: 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
+En cas d'erreur réseau (timeout, token GH_TOKEN manquant), voici mon accès token de GH_TOKEN=***MASKED***
 
 En cas d'erreur de verrouillage Windows (file access), force la suppression du dossier dist-electron-builder, nettoie les processus résiduels, et retente une unique fois la commande npm run release.
 

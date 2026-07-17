@@ -687,17 +687,6 @@ export function GovernanceView({
         </div>
       )}
 
-      <footer style={{
-        textAlign: 'center',
-        padding: '12px 20px',
-        fontSize: '11px',
-        color: 'var(--text-muted)',
-        opacity: 0.6,
-        borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-        marginTop: '24px'
-      }}>
-        GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
-      </footer>
     </div>
   );
 }
