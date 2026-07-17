@@ -4,6 +4,12 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.6] - 2026-07-17
+
+### Corrigé
+- **UI/UX :** Suppression de la double signature redondante sur la vue Governance (Dashboard Super Admin).
+- **UI/UX :** Correction du débordement de la page de Login sur les petits écrans en s'assurant de son adaptabilité (`height: 100vh` et `overflow-y: auto`).
+
 ## [2.5.5] - 2026-07-17
 
 ### Corrigé
