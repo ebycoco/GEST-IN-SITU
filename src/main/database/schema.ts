@@ -252,6 +252,8 @@ export function runMigrations(db: Database.Database): void {
       migrateV36(db); // Optimisation de la requête distribParJour
       migrateV37(db); // Signalement absence et escalade
       migrateV38(db); // Index de performance pour les doublons stricts
+      migrateV21(db); // Garantit audit_logs (V21)
+      migrateV22(db); // Garantit t_user_roles (V22)
       migrateV39(db); // Add contact_retirant column to t_cartes
       migrateV40(db); // Add expiry_date and is_permanent to t_sites
       migrateV27_safetyNet(db);
@@ -1610,6 +1612,39 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_import_anomalies', 'contact', 'TEXT');
   safeAlter('t_import_anomalies', 'site_id', 'INTEGER');
   safeAlter('t_import_anomalies', 'erreur_message', 'TEXT');
+
+  // ── audit_logs : table de logs d'audit (V21) ─────────────────────────────
+  // Garantie universelle : crée la table si elle n'existe pas (bases pré-V21
+  // ou reconstructions d'urgence qui auraient omis migrateV21).
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        operator_id TEXT,
+        action_type TEXT CHECK(action_type IN ('CONNEXION', 'DECONNEXION', 'RETRAIT', 'IMPORT_CARTE', 'VALIDATION')),
+        details TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    log.info('[SAFETY NET] Table audit_logs garantie.');
+  } catch (e: any) {
+    log.warn('[SAFETY NET] Impossible de garantir audit_logs :', e.message);
+  }
+
+  // ── t_user_roles : table des rôles multiples (V22) ────────────────────────
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS t_user_roles (
+        id_user INTEGER NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+        PRIMARY KEY (id_user, role),
+        FOREIGN KEY (id_user) REFERENCES t_users(id_user) ON DELETE CASCADE
+      );
+    `);
+    log.info('[SAFETY NET] Table t_user_roles garantie.');
+  } catch (e: any) {
+    log.warn('[SAFETY NET] Impossible de garantir t_user_roles :', e.message);
+  }
 
   log.info('[SAFETY NET] Vérification des colonnes critiques terminée.');
 }

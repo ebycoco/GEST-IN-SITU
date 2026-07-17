@@ -8,7 +8,7 @@ export default function LoginPage() {
   const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
-  const { login: doLogin, isLoading, setActiveRole } = useAuthStore();
+  const { login: doLogin, isLoading } = useAuthStore();
   const navigate = useNavigate();
 
   const [isPreloading, setIsPreloading] = useState(false);
@@ -22,46 +22,14 @@ export default function LoginPage() {
     }
   }, []);
 
-  const [showRoleModal, setShowRoleModal] = useState(false);
-  const [availableRoles, setAvailableRoles] = useState<string[]>([]);
 
-  const getRoleLabel = (role: string) => {
-    switch(role) {
-      case 'SUPER ADMIN': return 'Super Administrateur';
-      case 'ADMINISTRATEUR_SITE': return 'Administrateur de Site (Global)';
-      case 'ADMIN_CENTRE': return 'Administrateur de Centre (Local)';
-      case 'OPERATEUR_VERIFICATION': return 'Opérateur de Vérification (Recherche & Délivrance)';
-      case 'OPERATEUR_SAISIE': return 'Opérateur de Saisie (Nouvelle Saisie)';
-      case 'OPERATEUR_LOGISTIQUE': return 'Opérateur Logistique (Scan, Classement, Apurement)';
-      case 'OPERATEUR_QUALITE': return 'Opérateur Qualité (Correction & Fusion)';
-      default: return role;
-    }
-  };
-
-  const proceedToDashboard = (user: any) => {
+  const proceedToDashboard = (_user: any) => {
     toast.success('Bienvenue dans GESTION CARTES IN-SITU !');
-    
-    if (user?.role === 'OPERATEUR_VERIFICATION') {
-      navigate('/verification/recherche');
-    } else if (user?.role === 'OPERATEUR_SAISIE') {
-      navigate('/dashboard');
-    } else if (user?.role === 'OPERATEUR_QUALITE') {
-      navigate('/qualite');
-    } else if (user?.role === 'ADMIN_CENTRE') {
-      navigate('/centre/dashboard');
-    } else if (user?.role === 'OPERATEUR_LOGISTIQUE') {
-      navigate('/inventaire');
-    } else {
-      navigate('/dashboard');
-    }
+    // Le composant RoleRedirect (route index '/') gère la redirection
+    // dynamique selon le rôle. Évite les routes hardcodées incorrectes.
+    navigate('/');
   };
 
-  const handleRoleSelection = (role: string) => {
-    setActiveRole(role);
-    setShowRoleModal(false);
-    const updatedUser = useAuthStore.getState().user;
-    proceedToDashboard(updatedUser);
-  };
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -189,10 +157,14 @@ export default function LoginPage() {
     const success = await doLogin(login.trim(), password.trim());
     if (success) {
       const user = useAuthStore.getState().user;
-      
-      if (user?.roles && user.roles.length > 1) {
-        setAvailableRoles(user.roles);
-        setShowRoleModal(true);
+      // Log diagnostic de connexion (multi-rôle ou mono-rôle)
+      const roles = user?.roles ?? (user?.role ? [user.role] : []);
+      console.info(`[LOGIN] Connexion réussie. Login: ${user?.login} | Rôles disponibles: ${roles.join(', ')}`);
+
+      if (roles.length > 1) {
+        // Multi-rôle → page dédiée de sélection
+        toast.success('Bienvenue ! Sélectionnez votre rôle pour cette session.');
+        navigate('/role-selector');
       } else {
         proceedToDashboard(user);
       }
@@ -333,63 +305,6 @@ export default function LoginPage() {
           GEST-IN-SITU {appVersion ? `v${appVersion}` : ''} - © Ebychoco {new Date().getFullYear()} - Tous droits réservés
         </p>
       </div>
-
-      {/* Modale de sélection de rôle */}
-      {showRoleModal && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000
-        }}>
-          <div className="card animate-slide-up" style={{ maxWidth: 500, width: '100%', padding: 32, border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-            <div style={{ textAlign: 'center', marginBottom: 24 }}>
-              <div style={{ width: 56, height: 56, borderRadius: 18, background: 'var(--gradient-button)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
-                <Shield size={28} color="white" />
-              </div>
-              <h3 style={{ fontSize: 22, fontWeight: 800, color: 'white', margin: '0 0 8px 0' }}>
-                Sélection du Rôle
-              </h3>
-              <p style={{ fontSize: 14, color: 'var(--text-muted)' }}>
-                Votre compte possède plusieurs rôles. Veuillez sélectionner celui que vous souhaitez utiliser pour cette session.
-              </p>
-            </div>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '50vh', overflowY: 'auto', paddingRight: 4 }}>
-              {availableRoles.map(role => (
-                <button
-                  key={role}
-                  onClick={() => handleRoleSelection(role)}
-                  className="role-selection-btn"
-                  style={{
-                    padding: '16px',
-                    borderRadius: '12px',
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    color: 'white',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    transition: 'all 0.2s ease',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 12
-                  }}
-                  onMouseOver={(e) => {
-                    e.currentTarget.style.background = 'rgba(255,255,255,0.08)';
-                    e.currentTarget.style.borderColor = 'var(--accent-primary)';
-                  }}
-                  onMouseOut={(e) => {
-                    e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                    e.currentTarget.style.borderColor = 'rgba(255,255,255,0.1)';
-                  }}
-                >
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent-primary)' }} />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>{getRoleLabel(role)}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Modale de confirmation d'importation */}
       {showImportModal && (

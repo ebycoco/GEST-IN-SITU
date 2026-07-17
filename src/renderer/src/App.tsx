@@ -25,6 +25,7 @@ import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
+import RoleSelectorPage from './pages/RoleSelectorPage';
 
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
@@ -101,6 +102,7 @@ export default function App() {
       <HashRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/role-selector" element={<RoleSelectorPage />} />
           
           <Route path="/" element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
             {/* Redirection dynamique par défaut */}
