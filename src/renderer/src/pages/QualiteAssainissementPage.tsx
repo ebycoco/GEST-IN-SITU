@@ -277,6 +277,7 @@ export default function QualiteAssainissementPage() {
     if (!saveModal) return;
     const { cardId, field, value, oldVal } = saveModal;
     try {
+      window.api.log.info(`[QUALITÉ] Tentative de modification du champ ${field} pour la carte ID=${cardId}`);
       setIsResolving(prev => ({ ...prev, [cardId]: true }));
       await window.api.qualite.corrigerFormat({
         id_carte: cardId,
@@ -284,12 +285,14 @@ export default function QualiteAssainissementPage() {
         valeur_avant: oldVal,
         valeur_apres: value
       });
+      window.api.log.info(`[QUALITÉ] Succès : Modification du champ ${field} terminée pour ID=${cardId}`);
       toast.success('Donnée enregistrée !');
       setEditingId(null);
       setSaveModal(null);
       loadTabData();
       loadStats();
     } catch (err) {
+      window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la modification du champ ${field} pour ID=${cardId} : ${err}`);
       console.error(err);
       toast.error('Erreur lors de la mise à jour.');
     } finally {
@@ -305,12 +308,15 @@ export default function QualiteAssainissementPage() {
     if (!deleteModal || isDeleting) return;
     setIsDeleting(true);
     try {
+      window.api.log.info(`[QUALITÉ] Tentative de suppression pour la carte ID=${deleteModal.cardId}`);
       await window.api.cartes.delete(deleteModal.cardId);
+      window.api.log.info(`[QUALITÉ] Succès : Suppression terminée pour ID=${deleteModal.cardId}`);
       toast.success('Doublon supprimé !');
       setDeleteModal(null);
       loadTabData();
       loadStats();
     } catch (err) {
+      window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la suppression pour ID=${deleteModal.cardId} : ${err}`);
       toast.error('Impossible de supprimer la carte.');
     } finally {
       setIsDeleting(false);
@@ -325,6 +331,7 @@ export default function QualiteAssainissementPage() {
     if (!mergeModal) return;
     const { target, source } = mergeModal;
     try {
+      window.api.log.info(`[QUALITÉ] Tentative de fusion de la carte source ID=${source.id_carte} vers cible ID=${target.id_carte}`);
       const mergedFields: string[] = [];
       if (!target.num_secu && source.num_secu) mergedFields.push('num_secu');
       if ((!target.rangement || target.rangement === 'NON CLASSE') && source.rangement) mergedFields.push('rangement');
@@ -334,11 +341,13 @@ export default function QualiteAssainissementPage() {
         id_carte_cible: target.id_carte,
         champs_fusionnes: mergedFields
       });
+      window.api.log.info(`[QUALITÉ] Succès : Fusion terminée pour la cible ID=${target.id_carte}`);
       toast.success('Cartes fusionnées avec succès !');
       setMergeModal(null);
       loadTabData();
       loadStats();
     } catch (err) {
+      window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la fusion vers la cible ID=${target.id_carte} : ${err}`);
       toast.error('Erreur lors de la fusion.');
     }
   };

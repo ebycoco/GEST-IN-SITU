@@ -70,6 +70,7 @@ export default function InvalidFormatView() {
     }
     
     try {
+      window.api.log.info(`[QUALITÉ] Tentative de correction de date pour la carte ID=${card.id_carte}`);
       setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
       await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
@@ -77,10 +78,12 @@ export default function InvalidFormatView() {
         valeur_avant: card.date_de_naissance || '(Vide)',
         valeur_apres: editValue
       });
+      window.api.log.info(`[QUALITÉ] Succès : Correction de date terminée pour ID=${card.id_carte}`);
       toast.success('Date de naissance corrigée !');
       setEditingId(null);
       loadTabData();
     } catch (err) {
+      window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la correction de date pour ID=${card.id_carte} : ${err}`);
       console.error(err);
       toast.error('Erreur lors de la mise à jour.');
     } finally {
