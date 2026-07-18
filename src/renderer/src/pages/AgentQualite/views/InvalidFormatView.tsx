@@ -3,6 +3,7 @@ import { Search, Calendar, Edit3, Save, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../../stores/authStore';
 import DateInput from '../../../components/DateInput';
+import { isValidCalendarDate } from '../../../utils/dateValidator';
 
 export default function InvalidFormatView() {
   const { user, activeSiteId } = useAuthStore();
@@ -25,19 +26,24 @@ export default function InvalidFormatView() {
     setIsLoading(true);
     try {
       const offset = (currentPage - 1) * itemsPerPage;
-      const raw = await window.api.import.getAnomalies(siteIdToUse);
-      
-      // Filtre uniquement les anomalies de type "DATES_INVALIDES" ou on fait confiance à l'API backend si elle renvoie tout.
-      // (D'après QualiteAssainissementPage, on filtrait tout sur getAnomalies)
-      const mapped = (raw || []).map((r: any) => ({ ...r, id_carte: r.id }));
-      const filtered = mapped.filter((r: any) =>
-        `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (r.num_secu && r.num_secu.includes(searchQuery)) ||
-        (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
-      );
-      
-      setRecords(filtered.slice(offset, offset + itemsPerPage));
-      setTotalItems(filtered.length);
+      // ✔️ Pagination côté serveur via table t_import_anomalies
+      const res = await (window.api.import as any).getAnomalies(siteIdToUse, offset, itemsPerPage);
+
+      console.log('[DEBUG DATE] siteId utilisé :', siteIdToUse);
+      console.log('[DEBUG DATE] nombre de résultats reçus :', res?.total ?? 0);
+
+      const allRows: any[] = res?.rows || [];
+      // Filtrage local sur les résultats de la page courante uniquement
+      const filtered = searchQuery.trim()
+        ? allRows.filter((r: any) =>
+            `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (r.num_secu && r.num_secu.includes(searchQuery)) ||
+            (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
+          )
+        : allRows;
+
+      setRecords(filtered);
+      setTotalItems(res?.total || 0);
     } catch (err) {
       console.error(err);
       toast.error('Erreur lors du chargement des données.');
@@ -58,6 +64,10 @@ export default function InvalidFormatView() {
 
   const handleSaveDate = async (card: any) => {
     if (editValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
+    if (!isValidCalendarDate(editValue)) {
+      toast.error('Date physiquement impossible dans le calendrier (ex: 30/02 ou 31/04). Veuillez saisir une date correcte.');
+      return;
+    }
     
     try {
       setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));

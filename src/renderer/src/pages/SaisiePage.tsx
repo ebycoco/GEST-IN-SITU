@@ -20,6 +20,7 @@ import { confirmService } from '../components/confirmService';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
 import { normalizeDate } from '../../../shared/utils/date';
+import { isValidCalendarDate, DATE_ERROR_MESSAGE } from '../utils/dateValidator';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface FormState {
@@ -219,6 +220,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
   const [formData, setFormData] = useState<FormState>(initialData || INITIAL_STATE);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [dateError, setDateError] = useState<string | null>(null);
   const firstInputRef = useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
@@ -302,6 +304,11 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
     if (normalizedBirthDate.length !== 10) {
       toast.error('La date de naissance est invalide ou incomplète.');
+      return;
+    }
+    if (!isValidCalendarDate(formData.date_de_naissance)) {
+      setDateError(DATE_ERROR_MESSAGE);
+      toast.error('Date impossible dans le calendrier (ex: 30/02). Veuillez corriger.');
       return;
     }
     if (!formData.num_secu.trim() || formData.num_secu.trim().length !== 13) {
@@ -566,8 +573,27 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
                 </>
               }
               value={formData.date_de_naissance}
-              onChange={updateRaw('date_de_naissance')}
+              onChange={(v) => {
+                updateRaw('date_de_naissance')(v);
+                // Valider dès que la date est complète (10 chars: JJ/MM/AAAA)
+                if (v.length === 10) {
+                  if (!isValidCalendarDate(v)) {
+                    setDateError(DATE_ERROR_MESSAGE);
+                  } else {
+                    setDateError(null);
+                  }
+                } else {
+                  setDateError(null);
+                }
+              }}
+              onBlur={() => {
+                const v = formData.date_de_naissance;
+                if (v && v.length === 10 && !isValidCalendarDate(v)) {
+                  setDateError(DATE_ERROR_MESSAGE);
+                }
+              }}
               className="soleil-input"
+              error={dateError || undefined}
               required
             />
             <FormField label="Lieu de naissance" required icon={<MapPin size={14} />}>

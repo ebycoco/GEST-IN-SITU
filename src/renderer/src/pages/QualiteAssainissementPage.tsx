@@ -10,6 +10,7 @@ import DateInput from '../components/DateInput';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { confirmService } from '../components/confirmService';
+import { isValidCalendarDate } from '../utils/dateValidator';
 
 type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'DOUBLONS_PROBABLES' | 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM';
 
@@ -142,7 +143,7 @@ export default function QualiteAssainissementPage() {
     if (!silent) setStatsLoading(true);
     try {
       const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang, rawSansNom, rawSansPrenom] = await Promise.all([
-        window.api.import.getAnomalies(siteIdToUse),
+        window.api.import.getAnomalies(siteIdToUse, 0, 1),
         window.api.cartes.getDoublonsPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getDoublonsProbablesPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansNumSecuPage(siteIdToUse, 0, 1, ''),
@@ -151,7 +152,7 @@ export default function QualiteAssainissementPage() {
         window.api.cartes.getSansPrenomPage(siteIdToUse, 0, 1, ''),
       ]);
       const loadedStats = {
-        datesInvalides: (rawDates || []).length,
+        datesInvalides: rawDates?.total || 0,
         doublons: rawDoublons?.total || 0,
         doublonsProbables: rawDoublonsProbables?.total || 0,
         sansSecu: rawSansSecu?.total || 0,
@@ -207,17 +208,22 @@ export default function QualiteAssainissementPage() {
       let res: { rows: any[], total: number };
 
       if (activeTab === 'DATES_INVALIDES') {
-        const raw = await window.api.import.getAnomalies(siteIdToUse);
-        const mapped = (raw || []).map((r: any) => ({
+        const raw = await window.api.import.getAnomalies(siteIdToUse, offset, itemsPerPage);
+        const mapped = (raw.rows || []).map((r: any) => ({
           ...r,
           id_carte: r.id // Mapping id d'anomalie vers id_carte
         }));
-        const filtered = mapped.filter((r: any) =>
-          `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          (r.num_secu && r.num_secu.includes(searchQuery)) ||
-          (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
-        );
-        res = { rows: filtered.slice(offset, offset + itemsPerPage), total: filtered.length };
+        
+        // La recherche locale s'applique uniquement à la page chargée si le backend ne la gère pas
+        const filtered = searchQuery.trim() 
+          ? mapped.filter((r: any) =>
+              `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
+              (r.num_secu && r.num_secu.includes(searchQuery)) ||
+              (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
+            )
+          : mapped;
+          
+        res = { rows: filtered, total: raw.total };
       } else if (activeTab === 'DOUBLONS') {
         res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, searchQuery);
       } else if (activeTab === 'DOUBLONS_PROBABLES') {
@@ -254,6 +260,10 @@ export default function QualiteAssainissementPage() {
   // ─── Handlers d'enregistrement ───────────────────────────────────────
   const handleSaveDate = (card: any) => {
     if (editValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
+    if (!isValidCalendarDate(editValue)) {
+      toast.error('Date physiquement impossible dans le calendrier (ex: 30/02 ou 31/04). Veuillez saisir une date correcte.');
+      return;
+    }
     setSaveModal({ isOpen: true, cardId: card.id_carte, label: `${card.noms} ${card.prenoms}`, field: 'date_de_naissance', value: editValue, oldVal: card.date_de_naissance || '(Vide)' });
   };
 
