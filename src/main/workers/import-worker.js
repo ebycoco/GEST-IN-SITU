@@ -36,10 +36,16 @@ async function run() {
   // Comptage initial ultra-rapide par analyse binaire du fichier
   const countLinesFast = (path) => new Promise((resolve, reject) => {
     let count = 0;
+    let lastChar = 0;
     const stream = createReadStream(path);
     stream.on('data', (chunk) => {
       for (let i = 0; i < chunk.length; ++i) {
-        if (chunk[i] === 10) count++; // Code ASCII de \n
+        if (chunk[i] === 10 && lastChar !== 13) {
+          count++; // \n seul (Unix)
+        } else if (chunk[i] === 13) {
+          count++; // \r (Mac) ou début de \r\n (Windows)
+        }
+        lastChar = chunk[i];
       }
     });
     stream.on('end', () => resolve(count));
@@ -47,7 +53,7 @@ async function run() {
   });
 
   const rawCount = await countLinesFast(filePath);
-  const total = rawCount > 0 ? rawCount - 1 : 220000;
+  const total = rawCount > 0 ? rawCount - 1 : (totalEstimate || 220000);
 
   // Index de routage multi-site (longest-prefix-first) sur les centres
   const routingIndex = [];
@@ -142,8 +148,8 @@ async function run() {
   );
 
   const insertAnomalyStmt = db.prepare(`
-    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description, noms, prenoms, date_de_naissance, num_secu, contact, site_id, erreur_message)
-    VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message)
+    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description, noms, prenoms, date_de_naissance, num_secu, contact, site_id, erreur_message, lieu_de_naissance, rangement)
+    VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message, @lieu_de_naissance, @rangement)
   `);
 
   const BATCH_SIZE = 1000;
@@ -399,6 +405,21 @@ async function run() {
     return VALEURS_EXACTES_LIVRE.indexOf(raw) !== -1;
   }
 
+  // Liste exhaustive des statuts reconnus par le pipeline (Chemins A, B, C)
+  // Tout rawStatut non vide et absent de cette liste sera tracé comme STATUT_INCONNU.
+  var STATUS_CONNUS = [
+    // Chemin ANNULE
+    'ANNULE',
+    // Chemin B — valeurs exactes
+    'OK', 'RECU', 'OUI', 'LIVRE', 'RETIRE',
+    // Chemin B — préfixes (on inclut les valeurs de base que les préfixes couvrent)
+    'DELIV', 'DELIVRE', 'DELIVREE', 'DELIVRER',
+    'DISTRIB', 'DISTRIBUE', 'DISTRIBUEE', 'DISTRIBUER',
+    'REMI', 'REMIS', 'REMETTRE',
+    // Chemin C — valeurs stock normales
+    'EN STOCK', 'STOCK', 'NON DISTRIBUE', 'NON DELIVRE', 'DISPONIBLE', 'EN ATTENTE RETRAIT'
+  ];
+
   /**
    * CHEMIN C — Normalisation par défaut.
    * Retourne 'EN STOCK' pour toutes les valeurs vides, connues ou inconnues.
@@ -508,7 +529,8 @@ async function run() {
     const year = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const day = parseInt(match[3], 10);
-    return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    const d = new Date(year, month - 1, day);
+    return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
   }
 
   // Date du jour précalculée une seule fois pour toute la session d'import.
@@ -520,7 +542,7 @@ async function run() {
     if (lineCount === 0) {
       // Détection du séparateur
       sep = line.includes(';') ? ';' : ',';
-      headers = line.split(sep).map(function(h) { return h.trim().replace(/"/g, ''); });
+      headers = line.split(sep).map(function(h) { return h.trim().replace(/"/g, '').replace(/^\uFEFF/, ''); });
       // MISSION 1 : Construire la carte canonique des colonnes
       colMap = buildColumnMap(headers);
       console.log('[CSV WORKER] Column map resolved:', JSON.stringify(colMap));
@@ -583,8 +605,44 @@ async function run() {
           // ============================================================
           // CHEMIN C — Normalisation par défaut
           // Q2 arbitrage : statuts inconnus conservés en majuscules pour audit
+          // FIX 3 : Si rawStatut n'est pas vide ET n'est dans aucune catégorie
+          // connue (ni un préfixe Chemin B, ni une valeur Chemin C), on émet
+          // une anomalie STATUT_INCONNU pour traçabilité opératrice.
           // ============================================================
           finalStatut = normaliserStatut(rawStatut);
+
+          // Détection d'un statut véritablement inconnu : non vide, non trivial
+          // et absent de STATUS_CONNUS (comparaison exacte ET par préfixe pour PREFIXES_LIVRE).
+          var isTrivalEmpty = !rawStatut || rawStatut === '-' || rawStatut === '--' || rawStatut === 'N/A' || rawStatut === 'NA';
+          if (!isTrivalEmpty) {
+            var isKnown = STATUS_CONNUS.indexOf(rawStatut) !== -1;
+            // Vérification par préfixe pour DELIV*, DISTRIB*, REMI* (couverts par Chemin B mais
+            // listés ici pour exhaustivité — en pratique isStatutDistribueSimple les attrape avant).
+            if (!isKnown) {
+              for (var pi2 = 0; pi2 < PREFIXES_LIVRE.length; pi2++) {
+                if (rawStatut.startsWith(PREFIXES_LIVRE[pi2])) { isKnown = true; break; }
+              }
+            }
+            if (!isKnown) {
+              var errMsg = 'Statut inconnu "' + rawStatut + '" normalisé en EN STOCK';
+              console.warn('[CSV WORKER] STATUT_INCONNU détecté, création anomalie:', rawStatut);
+              anomaliesBatch.push({
+                carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn),
+                type_anomalie: 'STATUT_INCONNU',
+                description: errMsg,
+                noms: noms,
+                prenoms: prenoms,
+                date_de_naissance: ddn,
+                num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+                contact: contact,
+                site_id: siteId,
+                erreur_message: errMsg,
+                lieu_de_naissance: lieuN,
+                rangement: (getCol(cols, colMap, 'rangement') || '').toUpperCase().trim()
+              });
+              totalRejected++;
+            }
+          }
         }
 
         var resolved = resolveRouting(getCol(cols, colMap, 'rangement') || '');
@@ -610,7 +668,9 @@ async function run() {
             num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
             contact: contact,
             site_id: siteId,
-            erreur_message: dateError
+            erreur_message: dateError,
+            lieu_de_naissance: lieuN,
+            rangement: resolved.rangement
           });
         } else {
           batch.push({

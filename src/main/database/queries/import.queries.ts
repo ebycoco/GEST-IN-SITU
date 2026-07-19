@@ -22,7 +22,7 @@ function normalizeContact(contactStr: string): string {
 }
 
 export function clearImportTemp(siteId: number) {
-  return getDatabase()!.prepare('DELETE FROM t_import_temp').run();
+  return getDatabase()!.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(siteId);
 }
 
 export function importBatch(rows: Record<string, string>[], agentSaisie: string, siteId: number) {
@@ -170,11 +170,19 @@ export async function fusionnerImport(siteId: number): Promise<{ updated: number
   return { updated: updateResult.changes, inserted: insertResult.changes };
 }
 
-export function getImportAnomalies(siteId: number) {
+export function getImportAnomalies(siteId: number, offset = 0, limit = 50) {
   const db = getDatabase()!;
-  return db.prepare(`
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as count FROM t_import_anomalies
+    WHERE site_id = ?
+  `).get(siteId) as { count: number };
+  const total = totalRow?.count || 0;
+
+  const rows = db.prepare(`
     SELECT
       id,
+      id AS id_carte,
       carte_id,
       type_anomalie,
       COALESCE(erreur_message, description) AS erreur_message,
@@ -182,16 +190,50 @@ export function getImportAnomalies(siteId: number) {
       prenoms,
       date_de_naissance,
       num_secu,
+      lieu_de_naissance,
+      rangement,
       contact,
       site_id,
       created_at
     FROM t_import_anomalies
-    WHERE (site_id IS NULL OR site_id = ?)
+    WHERE site_id = ?
     ORDER BY id DESC
-  `).all(siteId);
+    LIMIT ? OFFSET ?
+  `).all(siteId, limit, offset);
+
+  return { rows, total };
 }
 
 export function clearImportAnomalies(siteId: number) {
   const db = getDatabase()!;
-  return db.prepare('DELETE FROM t_import_anomalies').run();
+  return db.prepare('DELETE FROM t_import_anomalies WHERE site_id = ?').run(siteId);
+}
+
+export function deleteImportAnomaly(id: number) {
+  const db = getDatabase()!;
+  return db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
+}
+
+export function countEmptyAnomalies(siteId: number) {
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT COUNT(*) as count FROM t_import_anomalies
+    WHERE (site_id IS NULL OR site_id = ?)
+      AND (noms IS NULL OR trim(noms) = '')
+      AND (prenoms IS NULL OR trim(prenoms) = '')
+      AND (date_de_naissance IS NULL OR trim(date_de_naissance) = '')
+  `).get(siteId) as { count: number };
+  
+  return row?.count || 0;
+}
+
+export function deleteEmptyAnomalies(siteId: number) {
+  const db = getDatabase()!;
+  return db.prepare(`
+    DELETE FROM t_import_anomalies
+    WHERE (site_id IS NULL OR site_id = ?)
+      AND (noms IS NULL OR trim(noms) = '')
+      AND (prenoms IS NULL OR trim(prenoms) = '')
+      AND (date_de_naissance IS NULL OR trim(date_de_naissance) = '')
+  `).run(siteId);
 }
