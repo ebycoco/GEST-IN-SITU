@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app, BrowserWindow, shell } from 'electron';
+
 import * as queries from '../database/queries';
 import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
 import { hashPassword } from '../auth/local-auth';
@@ -164,6 +165,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('auth:registerSuperAdmin', async (_, data: { login: string; password: string; nom_user: string }) => {
     try {
       const supabase = getSupabaseClient();
+      if (!supabase) {
+        return { success: false, reason: 'Client Supabase non disponible (mode hors-ligne).' };
+      }
       
       const email = data.login;
       
@@ -859,29 +863,37 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.updateDateDeNaissance(id, newDate); }
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
-  ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getDoublonsStrictsPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getDoublonsStrictsPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getDoublonsProbablesPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getDoublonsProbablesPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getDoublonsProbablesPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getDoublonsProbablesPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsProbablesPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getSansNumSecuPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansNumSecuPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getSansNumSecuPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getSansNumSecuPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNumSecuPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansRangementPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getSansRangementPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansNomPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getSansNomPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNomPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getSansPrenomPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansPrenomPage(siteId, offset, limit, query); }
+  ipcMain.handle('cartes:getSansPrenomPage', async (_, siteId, offset, limit, query, filters) => {
+    try { return queries.getSansPrenomPage(siteId, offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansPrenomPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSansContactPage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansContactPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansContactPage', e); throw e; }
+  });
+  ipcMain.handle('cartes:getSansLieuNaissancePage', async (_, siteId, offset, limit, query) => {
+    try { return queries.getSansLieuNaissancePage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansLieuNaissancePage', e); throw e; }
   });
   ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
     try { return queries.updateQuickFields(id, fields); }
@@ -1092,17 +1104,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.fusionnerImport(siteId); }
     catch (e) { log.error('IPC Error: import:fusionner', e); throw e; }
   });
-  ipcMain.handle('import:getAnomalies', (_, siteId, offset = 0, limit = 50) => {
+  ipcMain.handle('import:getAnomalies', (_, siteId, offset = 0, limit = 50, query?: string) => {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis.');
     }
-    return queries.getImportAnomalies(Number(siteId), offset, limit);
+    return queries.getImportAnomalies(Number(siteId), offset, limit, query);
   });
   ipcMain.handle('import:clearAnomalies', (_, siteId) => {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis.');
     }
     return queries.clearImportAnomalies(Number(siteId));
+  });
+
+  ipcMain.handle('import:countEmptyAnomalies', (_, siteId) => {
+    return queries.countEmptyAnomalies(Number(siteId));
+  });
+
+  ipcMain.handle('import:deleteEmptyAnomalies', (_, siteId) => {
+    return queries.deleteEmptyAnomalies(Number(siteId));
+  });
+  
+  ipcMain.handle('import:deleteAnomaly', (_, id) => {
+    if (id === undefined || id === null) {
+      throw new Error('id requis.');
+    }
+    return queries.deleteImportAnomaly(Number(id));
   });
 
   // QUALITE & ASSAINISSEMENT HANDLERS
@@ -1120,6 +1147,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (!sourceCard) {
         return { success: true, changes: 0 };
       }
+
+      const countBefore = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(sourceCard.site_id) as any;
+      console.log(`[DEBUG QUALITE] Avant Fusion - Nombre de Doublons Stricts pour le site ${sourceCard.site_id}:`, countBefore.c);
 
       const mergedFields: string[] = [];
       const updates: string[] = [];
@@ -1144,6 +1174,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id_carte_source);
       })();
 
+      const countAfter = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(sourceCard.site_id) as any;
+      console.log(`[DEBUG QUALITE] Après Fusion - Nombre de Doublons Stricts pour le site ${sourceCard.site_id}:`, countAfter.c);
+
       logAudit(
         userLogin,
         'QUALITE_FUSION',
@@ -1165,6 +1198,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('qualite:corrigerFormat', async (event, payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
     const { id_carte, champ_corrige, valeur_avant, valeur_apres } = payload;
+
+    // Whitelist de sécurité : seuls ces champs peuvent être modifiés via ce canal
+    const CHAMPS_AUTORISES = ['date_de_naissance', 'num_secu', 'rangement', 'noms', 'prenoms', 'contact', 'lieu_de_naissance'];
+    if (!CHAMPS_AUTORISES.includes(champ_corrige)) {
+      log.error(`[SÉCURITÉ] Tentative de modification d'un champ non autorisé : '${champ_corrige}' par ${userLogin}`);
+      throw new Error(`Champ non autorisé : ${champ_corrige}`);
+    }
+
     try {
       const db = getDatabase();
       if (!db) throw new Error('Base de données indisponible');
@@ -1369,8 +1410,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               INSERT INTO t_import_anomalies (
                 carte_id, type_anomalie, description, erreur_message,
                 noms, prenoms, date_de_naissance, num_secu, contact, site_id,
+                lieu_de_naissance, rangement,
                 created_at
-              ) VALUES (?, 'DATE_INVALIDE', 'Erreur: Date invalide ou impossible (Audit Rétroactif)', 'Date physiquement absente du calendrier', ?, ?, ?, ?, ?, ?, datetime('now'))
+              ) VALUES (?, 'DATE_INVALIDE', 'Erreur: Date invalide ou impossible (Audit Rétroactif)', 'Date physiquement absente du calendrier', ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
             `);
             const deleteCard = db.prepare('DELETE FROM t_cartes WHERE id_carte = ?');
             
@@ -1382,7 +1424,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
                 c.date_de_naissance,
                 c.num_secu,
                 c.contact,
-                c.site_id
+                c.site_id,
+                c.lieu_de_naissance,
+                c.rangement
               );
               deleteCard.run(c.id_carte);
               log.info(`[AUDIT] Déplacement de la carte ID=${c.id_carte} vers anomalies : date détectée comme impossible (${c.date_de_naissance})`);
@@ -2731,6 +2775,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.info(`[PURGE CLOUD] Initialisation de la purge Supabase pour le site ID ${siteId} par l'utilisateur '${userLogin}'.`);
       const cloudPurgeStart = performance.now();
       const supabase = getSupabaseClient();
+      if (!supabase) {
+        log.error('[PURGE CLOUD] Client Supabase non disponible — purge annulée.');
+        return { success: false };
+      }
       console.info("[PURGE CLOUD] Tentative de suppression pour id_site :", siteId);
       
       let cloudTotal = localCount;
@@ -2880,6 +2928,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const supabase = getSupabaseClient();
+      if (!supabase) return -1;
       const { count, error } = await supabase
         .from('t_cartes')
         .select('*', { count: 'exact', head: true })
@@ -2900,6 +2949,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('sync:getTotalCloudCartesCount', async (_, siteId: number) => {
     try {
       const supabase = getSupabaseClient();
+      if (!supabase) return -1;
       const { count, error } = await supabase
         .from('t_cartes')
         .select('*', { count: 'exact', head: true })
@@ -3107,6 +3157,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       outboxCount,
       errors
     };
+  });
+  ipcMain.handle('sync:forcePing', async () => {
+    try {
+      const state = await networkMonitor.forcePing();
+      return { success: true, state };
+    } catch (e) {
+      log.error('Erreur forcePing:', e);
+      return { success: false, state: 'OFFLINE' };
+    }
   });
 
   ipcMain.handle('sync:force', async (_, currentUser) => {

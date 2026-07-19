@@ -75,8 +75,8 @@ parentPort.on('message', (msg) => {
 
       const hasWhere = whereClause !== '';
       const doublons = db.prepare(`
-        SELECT COUNT(*) as count FROM (
-          SELECT cle_doublon FROM t_cartes
+        SELECT SUM(c - 1) as count FROM (
+          SELECT COUNT(*) as c FROM t_cartes
           ${whereClause}
           GROUP BY cle_doublon
           HAVING cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' AND COUNT(*) > 1
@@ -85,9 +85,8 @@ parentPort.on('message', (msg) => {
       const t5 = performance.now();
 
       const doublonsProbables = db.prepare(`
-        SELECT COUNT(*) as count FROM (
-          SELECT noms, prenoms, date_de_naissance
-          FROM t_cartes
+        SELECT SUM(c - 1) as count FROM (
+          SELECT COUNT(*) as c FROM t_cartes
           ${whereClause}
           GROUP BY noms, prenoms, date_de_naissance
           HAVING noms IS NOT NULL AND COUNT(DISTINCT cle_doublon) > 1
@@ -105,8 +104,8 @@ parentPort.on('message', (msg) => {
         messageId,
         data: {
           ...stats,
-          doublons_stricts: doublons.count,
-          doublons_probables: doublonsProbables.count,
+          doublons_stricts: doublons.count || 0,
+          doublons_probables: doublonsProbables.count || 0,
           distribParJour,
           distribParCentre
         }

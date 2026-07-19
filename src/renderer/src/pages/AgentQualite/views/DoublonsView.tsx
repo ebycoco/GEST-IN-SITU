@@ -3,17 +3,22 @@ import { useLocation } from 'react-router-dom';
 import { Search, Database, AlertTriangle, GitMerge, Trash2, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../../stores/authStore';
+import { useQualityUIStore } from '../../../stores/qualityUIStore';
+import { AdvancedSearchBar } from '../../../components/Quality/AdvancedSearchBar';
+import { QualityFilters } from '../../../../../shared/types/quality.types';
+import { PaginationInput } from '../../../components/PaginationInput';
 
 export default function DoublonsView() {
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
 
   const [activeTab, setActiveTab] = useState<'DOUBLONS' | 'DOUBLONS_PROBABLES'>('DOUBLONS');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [filters, setFilters] = useState<QualityFilters>({});
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const { openCorrection, refreshTrigger, openGuide } = useQualityUIStore();
 
   // Modales
   const [mergeModal, setMergeModal] = useState<{ isOpen: boolean; target: any; source: any } | null>(null);
@@ -28,11 +33,42 @@ export default function DoublonsView() {
       const offset = (currentPage - 1) * itemsPerPage;
       let res;
       if (activeTab === 'DOUBLONS') {
-        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, filters.nom || '');
       } else {
-        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, filters.nom || '');
       }
-      setRecords(res?.rows || []);
+      
+      const rawRows = res?.rows || [];
+      const pairedRecords: any[] = [];
+      
+      // Group flat rows into pairs (carte1 = target, carte2 = source duplicate)
+      const groups = new Map<string, any[]>();
+      rawRows.forEach((r: any) => {
+        const groupKey = activeTab === 'DOUBLONS' 
+          ? r.cle_doublon 
+          : `${r.noms}|${r.prenoms}|${r.date_de_naissance}`;
+          
+        if (!groups.has(groupKey)) {
+          groups.set(groupKey, []);
+        }
+        groups.get(groupKey)!.push(r);
+      });
+      
+      groups.forEach((cards) => {
+        if (cards.length > 1) {
+          const targetCard = cards[0];
+          // For each subsequent card in the group, create a pair with the first card
+          for (let i = 1; i < cards.length; i++) {
+            pairedRecords.push({
+              carte1: targetCard,
+              carte2: cards[i],
+              similitude: activeTab === 'DOUBLONS' ? 'Identique' : 'Probable'
+            });
+          }
+        }
+      });
+
+      setRecords(pairedRecords);
       setTotalItems(res?.total || 0);
     } catch (err) {
       console.error(err);
@@ -40,7 +76,7 @@ export default function DoublonsView() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, currentPage, searchQuery, siteIdToUse]);
+  }, [activeTab, currentPage, filters.nom, siteIdToUse, refreshTrigger]);
 
   useEffect(() => {
     loadTabData();
@@ -49,13 +85,13 @@ export default function DoublonsView() {
   // Réinitialiser la page sur changement
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, activeTab]);
+  }, [filters, activeTab]);
 
   const executeDelete = async () => {
     if (!deleteModal || isDeleting) return;
     setIsDeleting(true);
     try {
-      await window.api.cartes.delete(deleteModal.cardId);
+      await window.api.cartes.delete(deleteModal.cardId, user);
       toast.success('Doublon supprimé !');
       setDeleteModal(null);
       loadTabData();
@@ -116,17 +152,7 @@ export default function DoublonsView() {
         </div>
       </div>
 
-      <div style={{ position: 'relative', width: 300 }}>
-        <Search size={16} style={{ position: 'absolute', left: 12, top: 10, color: 'var(--text-muted)' }} />
-        <input 
-          type="text" 
-          placeholder="Rechercher..." 
-          className="form-input" 
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ width: '100%', paddingLeft: 36, height: 36, borderRadius: 10, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.1)' }}
-        />
-      </div>
+      <AdvancedSearchBar filters={filters} setFilters={setFilters} />
 
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         <div className="table-responsive">
@@ -168,8 +194,14 @@ export default function DoublonsView() {
                           </div>
                           <div>
                             <strong>{targetCard.noms} {targetCard.prenoms}</strong>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
-                              ID: {targetCard.id_carte} • N° Sécu: {targetCard.num_secu || 'N/A'} • Rangement: {targetCard.rangement || 'NON CLASSE'}
+                            <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>ID: {targetCard.id_carte}</span>
+                              <span style={{ fontSize: 11, background: targetCard.num_secu ? 'rgba(46,213,115,0.1)' : 'rgba(255,99,72,0.1)', color: targetCard.num_secu ? '#2ed573' : '#ff6b81', padding: '2px 6px', borderRadius: 4 }}>
+                                🛡️ {targetCard.num_secu || 'Sans Sécu'}
+                              </span>
+                              <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📦 {targetCard.rangement || 'NON CLASSE'}</span>
+                              {targetCard.date_de_naissance && <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📅 {targetCard.date_de_naissance}</span>}
+                              {targetCard.lieu_de_naissance && <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📍 {targetCard.lieu_de_naissance}</span>}
                             </div>
                           </div>
                         </div>
@@ -181,8 +213,14 @@ export default function DoublonsView() {
                           </div>
                           <div>
                             <strong style={{ color: '#ef4444' }}>{sourceCard.noms} {sourceCard.prenoms}</strong>
-                            <div style={{ fontSize: 11, color: '#ef4444', opacity: 0.8, marginTop: 2 }}>
-                              ID: {sourceCard.id_carte} • N° Sécu: {sourceCard.num_secu || 'N/A'} • Rangement: {sourceCard.rangement || 'NON CLASSE'}
+                            <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap', opacity: 0.8 }}>
+                              <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>ID: {sourceCard.id_carte}</span>
+                              <span style={{ fontSize: 11, background: sourceCard.num_secu ? 'rgba(46,213,115,0.1)' : 'rgba(255,99,72,0.1)', color: sourceCard.num_secu ? '#2ed573' : '#ff6b81', padding: '2px 6px', borderRadius: 4 }}>
+                                🛡️ {sourceCard.num_secu || 'Sans Sécu'}
+                              </span>
+                              <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📦 {sourceCard.rangement || 'NON CLASSE'}</span>
+                              {sourceCard.date_de_naissance && <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📅 {sourceCard.date_de_naissance}</span>}
+                              {sourceCard.lieu_de_naissance && <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📍 {sourceCard.lieu_de_naissance}</span>}
                             </div>
                           </div>
                         </div>
@@ -193,13 +231,18 @@ export default function DoublonsView() {
                         </div>
                       </td>
                       <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                           <button className="btn btn-secondary" onClick={() => setMergeModal({ isOpen: true, target: targetCard, source: sourceCard })} title="Fusionner (Garder principal)">
                             <GitMerge size={14} /> Fusionner
                           </button>
                           <button className="btn btn-danger" onClick={() => setDeleteModal({ isOpen: true, cardId: sourceCard.id_carte, cardName: `${sourceCard.noms} ${sourceCard.prenoms}` })} title="Supprimer le doublon direct" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.2)' }}>
                             <Trash2 size={14} /> Supprimer
                           </button>
+                          {activeTab === 'DOUBLONS_PROBABLES' && (
+                            <button className="btn btn-primary" onClick={() => openGuide(sourceCard.noms)}>
+                              Assistant
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -218,7 +261,11 @@ export default function DoublonsView() {
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
               <button className="btn btn-secondary" disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
-              <span style={{ padding: '6px 12px', background: 'rgba(255,255,255,0.05)', borderRadius: 6, fontSize: 13 }}>{currentPage} / {totalPages}</span>
+              <PaginationInput 
+                currentPage={currentPage} 
+                totalPages={totalPages} 
+                onPageChange={setCurrentPage} 
+              />
               <button className="btn btn-secondary" disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
             </div>
           </div>
