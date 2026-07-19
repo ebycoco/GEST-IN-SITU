@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 
-export const SCHEMA_VERSION = 40;
+export const SCHEMA_VERSION = 45;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -210,6 +210,31 @@ export function runMigrations(db: Database.Database): void {
       migrateV40(db);
     }
 
+    if (currentVersion < 41) {
+      log.info('Running migration v41: Add has_invalid_date flag + index + triggers for O(log n) invalid date queries');
+      migrateV41(db);
+    }
+
+    if (currentVersion < 42) {
+      log.info('Running migration v42: Allow DELETE operation in t_outbox');
+      migrateV42(db);
+    }
+
+    if (currentVersion < 43) {
+      log.info('Running migration v43: Add BROUILLON to statut CHECK constraint on t_cartes');
+      migrateV43(db);
+    }
+
+    if (currentVersion < 44) {
+      log.info('Running migration v44: Add is_dirty and updated_at to t_import_anomalies');
+      migrateV44(db);
+    }
+
+    if (currentVersion < 45) {
+      log.info('Running migration v45: Add is_dirty and updated_at to t_sites and t_centres');
+      migrateV45(db);
+    }
+
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
 
     // ─── FILET DE SÉCURITÉ UNIVERSEL ───────────────────────────────────────────
@@ -256,6 +281,7 @@ export function runMigrations(db: Database.Database): void {
       migrateV22(db); // Garantit t_user_roles (V22)
       migrateV39(db); // Add contact_retirant column to t_cartes
       migrateV40(db); // Add expiry_date and is_permanent to t_sites
+      migrateV41(db); // has_invalid_date flag + index
       migrateV27_safetyNet(db);
       log.info('[MIGRATION] Reconstruction d\'urgence terminée. Schéma réinstallé en V38.');
 
@@ -393,6 +419,76 @@ function migrateV3(db: Database.Database): void {
   }
 }
 
+function migrateV41(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V41] Ajout de has_invalid_date sur t_cartes...');
+
+    // 1. Ajouter la colonne flag si elle n'existe pas
+    const tableInfo = db.pragma('table_info(t_cartes)') as any[];
+    const hasFlag = tableInfo.some((col: any) => col.name === 'has_invalid_date');
+    if (!hasFlag) {
+      db.exec('ALTER TABLE t_cartes ADD COLUMN has_invalid_date INTEGER DEFAULT 0;');
+      log.info('[MIGRATION V41] Colonne has_invalid_date ajoutee.');
+    } else {
+      log.info('[MIGRATION V41] Colonne has_invalid_date deja presente.');
+    }
+
+    // 2. Créer l'index composite couvrant (site_id, has_invalid_date)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_invalid_date ON t_cartes(site_id, has_invalid_date);');
+    log.info('[MIGRATION V41] Index idx_cartes_site_invalid_date cree.');
+
+    // 3. Créer l'index composite pour doublons probables (noms, prenoms, date_de_naissance, site_id)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_dp_identite ON t_cartes(site_id, noms, prenoms, date_de_naissance);');
+    log.info('[MIGRATION V41] Index idx_cartes_dp_identite cree.');
+
+    // 4. Créer les triggers pour maintenir le flag automatiquement
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_ai
+      AFTER INSERT ON t_cartes
+      BEGIN
+        UPDATE t_cartes SET has_invalid_date = CASE
+          WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+               OR length(NEW.date_de_naissance) != 10
+               OR substr(NEW.date_de_naissance, 5, 1) != '-'
+               OR substr(NEW.date_de_naissance, 8, 1) != '-'
+          THEN 1 ELSE 0 END
+        WHERE id_carte = NEW.id_carte;
+      END;
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_au
+      AFTER UPDATE OF date_de_naissance ON t_cartes
+      BEGIN
+        UPDATE t_cartes SET has_invalid_date = CASE
+          WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+               OR length(NEW.date_de_naissance) != 10
+               OR substr(NEW.date_de_naissance, 5, 1) != '-'
+               OR substr(NEW.date_de_naissance, 8, 1) != '-'
+          THEN 1 ELSE 0 END
+        WHERE id_carte = NEW.id_carte;
+      END;
+    `);
+    log.info('[MIGRATION V41] Triggers de maintenance du flag has_invalid_date crees.');
+
+    // 5. Backfill : calculer et peupler le flag pour toutes les cartes existantes (one-shot)
+    //    Stratégie sans REGEXP pour compatibilité universelle.
+    const backfillResult = db.prepare(`
+      UPDATE t_cartes SET has_invalid_date = CASE
+        WHEN date_de_naissance IS NULL OR date_de_naissance = ''
+             OR length(date_de_naissance) != 10
+             OR substr(date_de_naissance, 5, 1) != '-'
+             OR substr(date_de_naissance, 8, 1) != '-'
+        THEN 1 ELSE 0
+      END
+    `).run();
+    log.info(`[MIGRATION V41] Backfill termine : ${backfillResult.changes} lignes mises a jour.`);
+
+  } catch (e: any) {
+    log.error('[MIGRATION V41] Echec:', e.message);
+    throw e;
+  }
+}
+
 function migrateV1(db: Database.Database): void {
   db.exec('PRAGMA foreign_keys = OFF;');
   db.exec(`
@@ -485,7 +581,7 @@ function migrateV1(db: Database.Database): void {
       lieu_enrolement TEXT,
       contact TEXT,
       rangement TEXT,
-      statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE')),
+      statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON')),
       date_delivrance TEXT,
       agent_saisie TEXT,
       -- Délivrance
@@ -614,7 +710,8 @@ function migrateV1(db: Database.Database): void {
       num_secu TEXT, lieu_de_naissance TEXT, contact TEXT,
       lieu_enrolement TEXT, rangement TEXT, statut TEXT,
       date_delivrance TEXT, agent_saisie TEXT,
-      cle_doublon TEXT, cle_doublon_flex TEXT
+      cle_doublon TEXT, cle_doublon_flex TEXT,
+      site_id INTEGER, nom_retirant TEXT, num_retirant TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_import_temp_cle ON t_import_temp(cle_doublon);
@@ -644,7 +741,7 @@ function migrateV1(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS t_outbox (
       id          TEXT    PRIMARY KEY,
       table_name  TEXT    NOT NULL,
-      operation   TEXT    NOT NULL CHECK(operation IN ('INSERT','UPDATE')),
+      operation   TEXT    NOT NULL CHECK(operation IN ('INSERT','UPDATE','DELETE')),
       payload     TEXT    NOT NULL,
       created_at  TEXT    DEFAULT (datetime('now')),
       status      TEXT    NOT NULL DEFAULT 'PENDING'
@@ -746,7 +843,8 @@ function migrateV2(db: Database.Database): void {
       num_secu TEXT, lieu_de_naissance TEXT, contact TEXT,
       lieu_enrolement TEXT, rangement TEXT, statut TEXT,
       date_delivrance TEXT, agent_saisie TEXT,
-      cle_doublon TEXT, cle_doublon_flex TEXT
+      cle_doublon TEXT, cle_doublon_flex TEXT,
+      site_id INTEGER, nom_retirant TEXT, num_retirant TEXT
     );
   `);
 }
@@ -778,7 +876,7 @@ function migrateV10(db: Database.Database): void {
         lieu_enrolement TEXT,
         contact TEXT,
         rangement TEXT,
-        statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE')),
+        statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON')),
         date_delivrance TEXT,
         agent_saisie TEXT,
         nom_retirant TEXT,
@@ -955,7 +1053,7 @@ function migrateV15(db: Database.Database): void {
             id_user INTEGER PRIMARY KEY AUTOINCREMENT,
             login TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','OPERATEUR_VERIFICATION','EDITEUR','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE')),
+            role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR','OPERATEUR_VERIFICATION','EDITEUR','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
             nom_user TEXT,
             prenom_user TEXT,
             email TEXT,
@@ -1551,6 +1649,8 @@ function migrateV33(db: Database.Database): void {
   safeAlter('contact', 'TEXT');
   safeAlter('site_id', 'INTEGER');
   safeAlter('erreur_message', 'TEXT');
+  safeAlter('lieu_de_naissance', 'TEXT');
+  safeAlter('rangement', 'TEXT');
 
   log.info('[MIGRATION V33] Table t_import_anomalies enrichie avec succès.');
 }
@@ -1612,6 +1712,8 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_import_anomalies', 'contact', 'TEXT');
   safeAlter('t_import_anomalies', 'site_id', 'INTEGER');
   safeAlter('t_import_anomalies', 'erreur_message', 'TEXT');
+  safeAlter('t_import_anomalies', 'lieu_de_naissance', 'TEXT');
+  safeAlter('t_import_anomalies', 'rangement', 'TEXT');
 
   // ── audit_logs : table de logs d'audit (V21) ─────────────────────────────
   // Garantie universelle : crée la table si elle n'existe pas (bases pré-V21
@@ -1796,6 +1898,199 @@ function migrateV40(db: Database.Database): void {
     }
   } catch (e: any) {
     log.error('[MIGRATION V40] Failed to alter table t_sites:', e.message);
+    throw e;
+  }
+}
+
+function migrateV42(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V42] Modification de t_outbox pour autoriser DELETE...');
+    // Renommer la table existante
+    db.exec('ALTER TABLE t_outbox RENAME TO t_outbox_old;');
+    
+    // Recréer la table avec la contrainte mise à jour
+    db.exec(`
+      CREATE TABLE t_outbox (
+        id          TEXT    PRIMARY KEY,
+        table_name  TEXT    NOT NULL,
+        operation   TEXT    NOT NULL CHECK(operation IN ('INSERT','UPDATE','DELETE')),
+        payload     TEXT    NOT NULL,
+        created_at  TEXT    DEFAULT (datetime('now')),
+        status      TEXT    NOT NULL DEFAULT 'PENDING'
+                            CHECK(status IN ('PENDING','SYNCED','ERROR')),
+        error_msg   TEXT,
+        attempts    INTEGER DEFAULT 0
+      );
+      CREATE INDEX IF NOT EXISTS idx_outbox_status ON t_outbox(status, created_at);
+    `);
+
+    // Migrer les données
+    db.exec('INSERT INTO t_outbox SELECT * FROM t_outbox_old;');
+
+    // Supprimer l'ancienne table
+    db.exec('DROP TABLE t_outbox_old;');
+    
+    log.info('[MIGRATION V42] t_outbox modifiée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V42] Erreur :', e.message);
+    throw e;
+  }
+}
+
+function migrateV43(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V43] Reconstruction de t_cartes pour ajouter BROUILLON au CHECK statut...');
+
+    // Étape 1 : Renommer la table existante
+    db.exec('ALTER TABLE t_cartes RENAME TO t_cartes_v42_backup;');
+
+    // Étape 2 : Recréer la table avec la contrainte étendue
+    db.exec(`
+      CREATE TABLE t_cartes (
+        id_carte INTEGER PRIMARY KEY AUTOINCREMENT,
+        noms TEXT NOT NULL,
+        prenoms TEXT NOT NULL,
+        date_de_naissance TEXT,
+        lieu_de_naissance TEXT,
+        num_secu TEXT,
+        lieu_enrolement TEXT,
+        contact TEXT,
+        rangement TEXT,
+        statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON')),
+        date_delivrance TEXT,
+        agent_saisie TEXT,
+        nom_retirant TEXT,
+        num_retirant TEXT,
+        agent_distributeur TEXT,
+        centre_retrait TEXT,
+        cle_doublon TEXT,
+        cle_doublon_flex TEXT,
+        statut_physique TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABIMEE','PERDUE')),
+        site_id INTEGER,
+        centre_id INTEGER,
+        poste_id INTEGER,
+        sync_id TEXT UNIQUE,
+        is_dirty INTEGER DEFAULT 1,
+        is_exported INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now')),
+        synced_at TEXT,
+        qr_code_data TEXT,
+        created_by INTEGER,
+        note_signalement_absence TEXT,
+        escalade_niveau TEXT,
+        contact_retirant TEXT,
+        has_invalid_date INTEGER DEFAULT 0,
+        FOREIGN KEY (site_id) REFERENCES t_sites(id),
+        FOREIGN KEY (centre_id) REFERENCES t_centres(id)
+      );
+    `);
+
+    // Étape 3 : Copier toutes les données
+    db.exec(`
+      INSERT INTO t_cartes
+      SELECT
+        id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+        lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie,
+        nom_retirant, num_retirant, agent_distributeur, centre_retrait,
+        cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id,
+        sync_id, is_dirty, is_exported, created_at, updated_at, synced_at, qr_code_data,
+        created_by, note_signalement_absence, escalade_niveau,
+        CASE WHEN typeof(contact_retirant) = 'text' THEN contact_retirant ELSE NULL END,
+        CASE WHEN typeof(has_invalid_date) = 'integer' THEN has_invalid_date ELSE 0 END
+      FROM t_cartes_v42_backup;
+    `);
+
+    // Étape 4 : Recréer les indexes
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_cartes_site_statut ON t_cartes(site_id, statut);
+      CREATE INDEX IF NOT EXISTS idx_cartes_sync_id ON t_cartes(sync_id);
+      CREATE INDEX IF NOT EXISTS idx_cartes_is_dirty ON t_cartes(is_dirty);
+      CREATE INDEX IF NOT EXISTS idx_cartes_cle_doublon ON t_cartes(cle_doublon);
+      CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes(created_by);
+      CREATE INDEX IF NOT EXISTS idx_cartes_date_delivrance ON t_cartes(date_delivrance);
+      CREATE INDEX IF NOT EXISTS idx_cartes_created_at ON t_cartes(created_at);
+      CREATE INDEX IF NOT EXISTS idx_cartes_identite_civile ON t_cartes(noms, prenoms, date_de_naissance);
+      CREATE INDEX IF NOT EXISTS idx_cartes_cle_doublon_strict ON t_cartes(cle_doublon, site_id, is_dirty);
+      CREATE INDEX IF NOT EXISTS idx_cartes_has_invalid_date ON t_cartes(has_invalid_date) WHERE has_invalid_date = 1;
+    `);
+
+    // Étape 5 : Supprimer la table de sauvegarde
+    db.exec('DROP TABLE t_cartes_v42_backup;');
+
+    log.info('[MIGRATION V43] Contrainte statut étendue avec BROUILLON avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V43] Erreur :', e.message);
+    // Rollback de la table de sauvegarde si elle existe
+    try {
+      const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='t_cartes_v42_backup'").get();
+      if (tables) {
+        const mainExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='t_cartes'").get();
+        if (!mainExists) {
+          db.exec('ALTER TABLE t_cartes_v42_backup RENAME TO t_cartes;');
+          log.warn('[MIGRATION V43] Rollback effectué : t_cartes restaurée depuis la sauvegarde.');
+        }
+      }
+    } catch (rollbackErr) {
+      log.error('[MIGRATION V43] Erreur pendant le rollback :', rollbackErr);
+    }
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V44 : Ajout de is_dirty et updated_at sur t_import_anomalies
+// =====================================================
+function migrateV44(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V44] Ajout de is_dirty et updated_at sur t_import_anomalies...');
+    
+    const tableInfo = db.prepare("PRAGMA table_info(t_import_anomalies)").all() as { name: string }[];
+    const hasColumn = (colName: string) => tableInfo.some(col => col.name === colName);
+
+    if (!hasColumn('is_dirty')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN is_dirty INTEGER DEFAULT 0;");
+      log.info("[MIGRATION V44] Column 'is_dirty' added to t_import_anomalies.");
+    }
+    if (!hasColumn('updated_at')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN updated_at TEXT;");
+      log.info("[MIGRATION V44] Column 'updated_at' added to t_import_anomalies.");
+    }
+    
+    // Index pour la recherche des anomalies  synchroniser manuellement
+    db.exec("CREATE INDEX IF NOT EXISTS idx_import_anomalies_is_dirty ON t_import_anomalies(is_dirty);");
+    
+    log.info('[MIGRATION V44] Migration V44 termine avec succs.');
+  } catch (e: any) {
+    log.error('[MIGRATION V44] Erreur :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V45 : Ajout de is_dirty et updated_at sur t_sites et t_centres
+// =====================================================
+function migrateV45(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V45] Ajout de is_dirty et updated_at sur t_sites et t_centres...');
+    
+    for (const table of ['t_sites', 't_centres']) {
+      const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      const hasColumn = (colName: string) => tableInfo.some(col => col.name === colName);
+
+      if (!hasColumn('is_dirty')) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN is_dirty INTEGER DEFAULT 0;`);
+        log.info(`[MIGRATION V45] Column 'is_dirty' added to ${table}.`);
+      }
+      if (!hasColumn('updated_at')) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN updated_at TEXT;`);
+        log.info(`[MIGRATION V45] Column 'updated_at' added to ${table}.`);
+      }
+    }
+    
+    log.info('[MIGRATION V45] Migration V45 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V45] Erreur :', e.message);
     throw e;
   }
 }

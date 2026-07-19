@@ -11,6 +11,9 @@ import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { confirmService } from '../components/confirmService';
 import { isValidCalendarDate } from '../utils/dateValidator';
+import { QualityFilters } from '../../../shared/types/quality.types';
+import { CorrectionSidePanel } from '../components/Quality/CorrectionSidePanel';
+import { IdentificationGuidee } from '../components/Quality/IdentificationGuidee';
 
 type ActiveTab = 'DATES_INVALIDES' | 'DOUBLONS' | 'DOUBLONS_PROBABLES' | 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM';
 
@@ -111,13 +114,232 @@ function QualityCounter({
   );
 }
 
+// ─── Lignes Mémoïsées ────────────────────────────────────────────────────────
+
+const DoublonsRow = React.memo(({ r, nextCard, prevCard, isGroupStart, isGroupEnd, handleMergeCards, handleDeleteCard, isSameGroup, isProbable, handleOpenCorrection, handleStartIdentification }: any) => {
+  const accentColor = isProbable ? '#f97316' : '#eccc68';
+  const bgAccent = isProbable ? 'rgba(249,115,22,0.01)' : 'rgba(236,203,104,0.01)';
+  
+  return (
+    <tr style={{
+      background: bgAccent,
+      borderLeft: `4px solid ${accentColor}`,
+      borderBottom: isGroupEnd ? '3px solid rgba(255,255,255,0.06)' : '1px solid rgba(255,255,255,0.02)'
+    }}>
+      <td style={{ paddingLeft: 20 }}>
+        <div style={{ fontWeight: 800, color: 'white' }}>{r.noms} {r.prenoms}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#70a1ff' }}>📅 {r.date_de_naissance || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#a29bfe' }}>📍 {r.lieu_de_naissance || '—'}</span>
+        </div>
+      </td>
+      <td>
+        <span style={{ fontFamily: 'monospace', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+          {r.rangement || 'NON CLASSE'}
+        </span>
+      </td>
+      <td>
+        <div style={{ fontSize: 12 }}>
+          {isProbable && <span style={{ color: 'var(--text-muted)' }}>Sécu : </span>}
+          <strong style={{ fontWeight: isProbable ? 800 : 'normal' }}>{r.num_secu || '—'}</strong>
+        </div>
+        <div style={{ fontSize: 11, color: isProbable ? 'inherit' : 'var(--text-muted)' }}>
+          {isProbable && <span style={{ color: 'var(--text-muted)' }}>Contact : </span>}
+          <strong style={{ fontWeight: isProbable ? 800 : 'normal' }}>{r.contact}</strong>
+        </div>
+      </td>
+      <td style={{ textAlign: 'right', paddingRight: 20 }}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          {isGroupStart && isSameGroup(r, nextCard) && (
+            <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, nextCard)}>
+              <GitMerge size={14} /> Conserver & Fusionner
+            </button>
+          )}
+          {!isGroupStart && isSameGroup(r, prevCard) && (
+            <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, prevCard)}>
+              <GitMerge size={14} /> Conserver & Fusionner
+            </button>
+          )}
+          {isProbable && (
+            <button className="btn btn-icon" style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8, padding: '6px 12px', fontSize: 12 }} onClick={() => handleStartIdentification(r.noms)}>
+              <Search size={14} /> Assistant
+            </button>
+          )}
+          <button className="btn btn-icon" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8, padding: '6px 12px', fontSize: 12 }} onClick={() => handleOpenCorrection(r, 'Doublon')}>
+            <Edit3 size={14} /> Corriger
+          </button>
+          <button className="btn btn-icon" style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.15)', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8 }} onClick={() => handleDeleteCard(r)}>
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}, (prev, next) => prev.r === next.r && prev.nextCard === next.nextCard && prev.prevCard === next.prevCard);
+
+const DatesInvalidesRow = React.memo(({ r, editingId, editValue, isResolving, setEditingId, setEditValue, handleSaveDate, handleOpenCorrection }: any) => {
+  const isEditing = editingId === r.id_carte;
+  const isRes = isResolving[r.id_carte];
+  
+  return (
+    <tr>
+      <td style={{ paddingLeft: 20 }}>
+        <strong>{r.noms} {r.prenoms}</strong><br />
+        <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#70a1ff' }}>📅 {r.date_de_naissance || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#a29bfe' }}>📍 {r.lieu_de_naissance || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: 'var(--text-muted)' }}>📞 {r.contact || '—'}</span>
+        </div>
+        {r.erreur_message && (
+          <div style={{ fontSize: 11, color: '#ff7675', marginTop: 4, fontWeight: 500 }}>
+            ⚠️ {r.erreur_message}
+          </div>
+        )}
+      </td>
+      <td>
+        <span style={{ color: 'var(--warning-color)', fontWeight: 600, background: 'rgba(243,156,18,0.1)', padding: '4px 8px', borderRadius: 6 }}>
+          {r.date_de_naissance || '(Vide)'}
+        </span>
+      </td>
+      <td>
+        {isEditing
+          ? <DateInput value={editValue} onChange={setEditValue} autoFocus disabled={isRes} />
+          : <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 13 }}>Modification requise</span>
+        }
+      </td>
+      <td style={{ textAlign: 'right', paddingRight: 20 }}>
+        {isEditing ? (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary" onClick={() => handleSaveDate(r)} disabled={isRes}>
+              {isRes ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r.date_de_naissance || ''); }}>
+              <Edit3 size={14} style={{ marginRight: 6 }} /> Édition rapide
+            </button>
+            <button className="btn" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', padding: '6px 12px', borderRadius: 8, fontSize: 12 }} onClick={() => handleOpenCorrection(r, 'Date Invalide')}>
+              Corriger tout
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}, (prev, next) => {
+  const wasEditing = prev.editingId === prev.r.id_carte;
+  const isEditing = next.editingId === next.r.id_carte;
+  return prev.r === next.r && wasEditing === isEditing && (!isEditing || prev.editValue === next.editValue) && prev.isResolving[prev.r.id_carte] === next.isResolving[next.r.id_carte];
+});
+
+const IncompleteRow = React.memo(({ r, tabType, editingId, editValue, isResolving, setEditingId, setEditValue, handleSaveField, handleOpenCorrection }: any) => {
+  const isEditing = editingId === r.id_carte;
+  const isRes = isResolving[r.id_carte];
+  
+  let labelMissing = 'Manquant';
+  let inputType = 'text';
+  let maxLength = 255;
+  let saveField = 'num_secu';
+  let btnLabel = 'Affecter';
+
+  if (tabType === 'SANS_SECU') {
+    saveField = 'num_secu';
+    maxLength = 13;
+  } else if (tabType === 'SANS_RANGEMENT') {
+    saveField = 'rangement';
+    labelMissing = 'Non classé';
+  } else if (tabType === 'SANS_NOM') {
+    saveField = 'noms';
+    labelMissing = 'Non renseigné';
+  } else if (tabType === 'SANS_PRENOM') {
+    saveField = 'prenoms';
+    labelMissing = 'Non renseigné';
+  }
+
+  const onChangeVal = (e: any) => {
+    if (tabType === 'SANS_SECU') setEditValue(e.target.value.replace(/\\D/g, ''));
+    else setEditValue(e.target.value.toUpperCase());
+  };
+
+  return (
+    <tr>
+      <td style={{ paddingLeft: 20 }}>
+        <strong>{r.noms || '(Sans Nom)'} {r.prenoms || '(Sans Prénom)'}</strong><br />
+        <div style={{ display: 'flex', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#70a1ff' }}>📅 {r.date_de_naissance || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: '#a29bfe' }}>📍 {r.lieu_de_naissance || '—'}</span>
+          <span style={{ padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,0.05)', fontSize: 10, color: 'var(--text-muted)' }}>📞 {r.contact || '—'}</span>
+        </div>
+      </td>
+      <td>
+        <span style={{ fontFamily: 'monospace' }}>{r.rangement || 'NON CLASSE'}</span>
+      </td>
+      <td>
+        {isEditing ? (
+          <input type={inputType} className="form-input" maxLength={maxLength}
+            style={{ width: tabType === 'SANS_SECU' ? 200 : 160, height: 36, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', textTransform: tabType === 'SANS_SECU' ? 'none' : 'uppercase' }}
+            value={editValue}
+            onChange={onChangeVal}
+          />
+        ) : (
+          <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>— ({labelMissing})</span>
+        )}
+      </td>
+      <td style={{ textAlign: 'right', paddingRight: 20 }}>
+        {isEditing ? (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-primary" onClick={() => handleSaveField(r, saveField)} disabled={isRes}>
+              {isRes ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+            </button>
+            <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r[saveField] || ''); }}>
+              <Edit3 size={14} style={{ marginRight: 6 }} /> {btnLabel}
+            </button>
+            <button className="btn" style={{ background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', padding: '6px 12px', borderRadius: 8, fontSize: 12 }} onClick={() => handleOpenCorrection(r, 'Donnée Incomplète')}>
+              Corriger tout
+            </button>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}, (prev, next) => {
+  const wasEditing = prev.editingId === prev.r.id_carte;
+  const isEditing = next.editingId === next.r.id_carte;
+  return prev.r === next.r && wasEditing === isEditing && (!isEditing || prev.editValue === next.editValue) && prev.isResolving[prev.r.id_carte] === next.isResolving[next.r.id_carte];
+});
+
 // ─── Composant principal ───────────────────────────────────────────────────
 export default function QualiteAssainissementPage() {
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('DOUBLONS');
-  const [searchQuery, setSearchQuery] = useState('');
+  const [filters, setFilters] = useState<QualityFilters>({ nom: '', contact: '', ddn: '', lieu: '' });
+  const [showExtendedFilters, setShowExtendedFilters] = useState(false);
+  const [correctionRecord, setCorrectionRecord] = useState<any | null>(null);
+  const [correctionType, setCorrectionType] = useState<string>('');
+  
+  const [showIdentification, setShowIdentification] = useState(false);
+  const [identificationInitialName, setIdentificationInitialName] = useState('');
+  
+  const handleOpenCorrection = useCallback((record: any, type: string) => {
+    setCorrectionRecord(record);
+    setCorrectionType(type);
+  }, []);
+
+  const handleStartIdentification = useCallback((name: string) => {
+    setIdentificationInitialName(name);
+    setShowIdentification(true);
+  }, []);
+
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
@@ -198,7 +420,8 @@ export default function QualiteAssainissementPage() {
   useEffect(() => {
     setCurrentPage(1);
     setEditingId(null);
-  }, [searchQuery, activeTab]);
+    setShowExtendedFilters(false);
+  }, [filters, activeTab]);
 
   // ─── Chargement des données paginées ──────────────────────────────────
   const loadTabData = useCallback(async () => {
@@ -208,34 +431,25 @@ export default function QualiteAssainissementPage() {
       let res: { rows: any[], total: number };
 
       if (activeTab === 'DATES_INVALIDES') {
-        const raw = await window.api.import.getAnomalies(siteIdToUse, offset, itemsPerPage);
+        const raw = await window.api.import.getAnomalies(siteIdToUse, offset, itemsPerPage, filters.nom || undefined);
         const mapped = (raw.rows || []).map((r: any) => ({
           ...r,
           id_carte: r.id // Mapping id d'anomalie vers id_carte
         }));
         
-        // La recherche locale s'applique uniquement à la page chargée si le backend ne la gère pas
-        const filtered = searchQuery.trim() 
-          ? mapped.filter((r: any) =>
-              `${r.noms} ${r.prenoms}`.toLowerCase().includes(searchQuery.toLowerCase()) ||
-              (r.num_secu && r.num_secu.includes(searchQuery)) ||
-              (r.rangement && r.rangement.toLowerCase().includes(searchQuery.toLowerCase()))
-            )
-          : mapped;
-          
-        res = { rows: filtered, total: raw.total };
+        res = { rows: mapped, total: raw.total };
       } else if (activeTab === 'DOUBLONS') {
-        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       } else if (activeTab === 'DOUBLONS_PROBABLES') {
-        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       } else if (activeTab === 'SANS_SECU') {
-        res = await window.api.cartes.getSansNumSecuPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getSansNumSecuPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       } else if (activeTab === 'SANS_NOM') {
-        res = await window.api.cartes.getSansNomPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getSansNomPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       } else if (activeTab === 'SANS_PRENOM') {
-        res = await window.api.cartes.getSansPrenomPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getSansPrenomPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       } else {
-        res = await window.api.cartes.getSansRangementPage(siteIdToUse, offset, itemsPerPage, searchQuery);
+        res = await window.api.cartes.getSansRangementPage(siteIdToUse, offset, itemsPerPage, undefined, filters);
       }
 
       setRecords(res?.rows || []);
@@ -246,34 +460,43 @@ export default function QualiteAssainissementPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, currentPage, searchQuery, siteIdToUse]);
+  }, [activeTab, currentPage, filters, siteIdToUse]);
 
   useEffect(() => {
-    loadTabData();
+    const timer = setTimeout(() => {
+      loadTabData();
+    }, 300);
+    return () => clearTimeout(timer);
   }, [loadTabData]);
 
-  const refreshAll = () => {
+  const refreshAll = useCallback(() => {
     loadStats();
     loadTabData();
-  };
+  }, [loadStats, loadTabData]);
+
+  const handleSaveCorrection = useCallback(async (id: number, updates: any) => {
+    await window.api.cartes.updateQuickFields(id, updates);
+    loadTabData();
+    loadStats();
+  }, [loadTabData, loadStats]);
 
   // ─── Handlers d'enregistrement ───────────────────────────────────────
-  const handleSaveDate = (card: any) => {
+  const handleSaveDate = useCallback((card: any) => {
     if (editValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
     if (!isValidCalendarDate(editValue)) {
       toast.error('Date physiquement impossible dans le calendrier (ex: 30/02 ou 31/04). Veuillez saisir une date correcte.');
       return;
     }
     setSaveModal({ isOpen: true, cardId: card.id_carte, label: `${card.noms} ${card.prenoms}`, field: 'date_de_naissance', value: editValue, oldVal: card.date_de_naissance || '(Vide)' });
-  };
+  }, [editValue]);
 
-  const handleSaveField = (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms') => {
+  const handleSaveField = useCallback((card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms') => {
     if (!editValue.trim()) { toast.error('La valeur ne peut pas être vide.'); return; }
     if (field === 'num_secu' && editValue.trim().length !== 13) { toast.error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.'); return; }
     setSaveModal({ isOpen: true, cardId: card.id_carte, label: `${card.noms} ${card.prenoms}`, field, value: editValue, oldVal: card[field] || '(Vide)' });
-  };
+  }, [editValue]);
 
-  const executeSave = async () => {
+  const executeSave = useCallback(async () => {
     if (!saveModal) return;
     const { cardId, field, value, oldVal } = saveModal;
     try {
@@ -298,18 +521,18 @@ export default function QualiteAssainissementPage() {
     } finally {
       setIsResolving(prev => ({ ...prev, [cardId]: false }));
     }
-  };
+  }, [saveModal, loadTabData, loadStats]);
 
-  const handleDeleteCard = (card: any) => {
+  const handleDeleteCard = useCallback((card: any) => {
     setDeleteModal({ isOpen: true, cardId: card.id_carte, cardName: `${card.noms} ${card.prenoms}` });
-  };
+  }, []);
 
-  const executeDelete = async () => {
+  const executeDelete = useCallback(async () => {
     if (!deleteModal || isDeleting) return;
     setIsDeleting(true);
     try {
       window.api.log.info(`[QUALITÉ] Tentative de suppression pour la carte ID=${deleteModal.cardId}`);
-      await window.api.cartes.delete(deleteModal.cardId);
+      await window.api.cartes.delete(deleteModal.cardId, user);
       window.api.log.info(`[QUALITÉ] Succès : Suppression terminée pour ID=${deleteModal.cardId}`);
       toast.success('Doublon supprimé !');
       setDeleteModal(null);
@@ -321,13 +544,13 @@ export default function QualiteAssainissementPage() {
     } finally {
       setIsDeleting(false);
     }
-  };
+  }, [deleteModal, isDeleting, loadTabData, loadStats]);
 
-  const handleMergeCards = (targetCard: any, sourceCard: any) => {
+  const handleMergeCards = useCallback((targetCard: any, sourceCard: any) => {
     setMergeModal({ isOpen: true, target: targetCard, source: sourceCard });
-  };
+  }, []);
 
-  const executeMerge = async () => {
+  const executeMerge = useCallback(async () => {
     if (!mergeModal) return;
     const { target, source } = mergeModal;
     try {
@@ -350,10 +573,10 @@ export default function QualiteAssainissementPage() {
       window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la fusion vers la cible ID=${target.id_carte} : ${err}`);
       toast.error('Erreur lors de la fusion.');
     }
-  };
+  }, [mergeModal, loadTabData, loadStats]);
 
   const [isSanitizing, setIsSanitizing] = useState(false);
-  const handleBulkSanitize = async () => {
+  const handleBulkSanitize = useCallback(async () => {
     let typeIncoherence = '';
     if (activeTab === 'DATES_INVALIDES') typeIncoherence = 'DATES_INVALIDES';
     else if (activeTab === 'SANS_SECU') typeIncoherence = 'SANS_SECU';
@@ -386,7 +609,7 @@ export default function QualiteAssainissementPage() {
     } finally {
       setIsSanitizing(false);
     }
-  };
+  }, [activeTab, siteIdToUse, refreshAll]);
 
   const totalPages = Math.ceil(totalItems / itemsPerPage);
 
@@ -659,24 +882,63 @@ export default function QualiteAssainissementPage() {
       </div>
 
       {/* ══════════════════════ RECHERCHE ═══════════════════════════════ */}
-      <div style={{
-        background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
-        borderRadius: 14, padding: '12px 20px', marginBottom: 20,
-        display: 'flex', alignItems: 'center', gap: 16
-      }}>
-        <Search size={18} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
-        <input
-          type="text"
-          placeholder="Rechercher par nom, prénom, contact..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 14 }}
-        />
-        {searchQuery && (
-          <button onClick={() => setSearchQuery('')} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12 }}>
-            Effacer
+      {/* ══════════════════════ RECHERCHE MULTI-CRITÈRES ══════════════════════ */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{
+          background: 'var(--bg-secondary)', border: '1px solid var(--border-color)',
+          borderRadius: 14, padding: '16px 20px',
+          display: 'flex', flexDirection: 'column', gap: 12, flex: 1, marginRight: 16
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <Search size={18} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+          <input
+            type="text"
+            placeholder="Nom ou prénom..."
+            value={filters.nom || ''}
+            onChange={(e) => setFilters(prev => ({ ...prev, nom: e.target.value }))}
+            style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+          />
+          <input
+            type="text"
+            placeholder="Contact..."
+            value={filters.contact || ''}
+            onChange={(e) => setFilters(prev => ({ ...prev, contact: e.target.value.replace(/\D/g, '') }))}
+            style={{ width: 140, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+          />
+          <button onClick={() => setShowExtendedFilters(!showExtendedFilters)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, padding: '8px 12px', borderRadius: 8 }}>
+            {showExtendedFilters ? '▲ Moins de filtres' : '▼ Plus de filtres'}
           </button>
+        </div>
+        
+        {showExtendedFilters && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+            <input
+              type="date"
+              value={filters.ddn || ''}
+              onChange={(e) => setFilters(prev => ({ ...prev, ddn: e.target.value }))}
+              style={{ width: 180, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+            />
+            <input
+              type="text"
+              placeholder="Lieu de naissance..."
+              value={filters.lieu || ''}
+              onChange={(e) => setFilters(prev => ({ ...prev, lieu: e.target.value }))}
+              style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+            />
+            {(filters.nom || filters.contact || filters.ddn || filters.lieu) && (
+              <button onClick={() => setFilters({ nom: '', contact: '', ddn: '', lieu: '' })} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, padding: '8px 12px' }}>
+                Effacer tous les filtres
+              </button>
+            )}
+          </div>
         )}
+        </div>
+        
+        <button onClick={() => { setIdentificationInitialName(''); setShowIdentification(true); }}
+          style={{ background: 'var(--accent-primary)', color: 'black', border: 'none', borderRadius: 14, padding: '16px 20px', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: 700, gap: 8 }}>
+          <Search size={24} />
+          <span>Assistant Global</span>
+        </button>
       </div>
 
       {/* ══════════════════════ CONTENU ═════════════════════════════════ */}
@@ -711,45 +973,16 @@ export default function QualiteAssainissementPage() {
                     {records.map((r, i) => {
                       const nextCard = records[i + 1];
                       const prevCard = records[i - 1];
-                      const isGroupEnd = !nextCard || nextCard.cle_doublon !== r.cle_doublon;
-                      const isGroupStart = !prevCard || prevCard.cle_doublon !== r.cle_doublon;
+                      const isSameGroup = (c1: any, c2: any) => c1 && c2 && c1.cle_doublon === c2.cle_doublon;
+                      const isGroupEnd = !isSameGroup(r, nextCard);
+                      const isGroupStart = !isSameGroup(r, prevCard);
                       return (
-                        <tr key={r.id_carte} style={{
-                          background: 'rgba(236,203,104,0.01)',
-                          borderLeft: '4px solid #eccc68',
-                          borderBottom: isGroupEnd ? '3px solid rgba(255,255,255,0.06)' : '1px solid rgba(255,255,255,0.02)'
-                        }}>
-                          <td style={{ paddingLeft: 20 }}>
-                            <div style={{ fontWeight: 800, color: 'white' }}>{r.noms} {r.prenoms}</div>
-                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>DDN: {r.date_de_naissance || '—'}</span>
-                          </td>
-                          <td>
-                            <span style={{ fontFamily: 'monospace', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
-                              {r.rangement || 'NON CLASSE'}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ fontSize: 12 }}>{r.num_secu || '—'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.contact}</div>
-                          </td>
-                          <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              {isGroupStart && nextCard && nextCard.cle_doublon === r.cle_doublon && (
-                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, nextCard)}>
-                                  <GitMerge size={14} /> Conserver & Fusionner
-                                </button>
-                              )}
-                              {!isGroupStart && prevCard && prevCard.cle_doublon === r.cle_doublon && (
-                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, prevCard)}>
-                                  <GitMerge size={14} /> Conserver & Fusionner
-                                </button>
-                              )}
-                              <button className="btn btn-icon" style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.15)', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8 }} onClick={() => handleDeleteCard(r)}>
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                        <DoublonsRow
+                          key={r.id_carte} r={r} nextCard={nextCard} prevCard={prevCard}
+                          isGroupStart={isGroupStart} isGroupEnd={isGroupEnd} isSameGroup={isSameGroup}
+                          handleMergeCards={handleMergeCards} handleDeleteCard={handleDeleteCard} isProbable={false}
+                          handleOpenCorrection={handleOpenCorrection}
+                        />
                       );
                     })}
                   </tbody>
@@ -771,56 +1004,16 @@ export default function QualiteAssainissementPage() {
                     {records.map((r, i) => {
                       const nextCard = records[i + 1];
                       const prevCard = records[i - 1];
-                      
-                      const isSameGroup = (c1: any, c2: any) => 
-                        c1 && c2 && c1.noms === c2.noms && c1.prenoms === c2.prenoms && c1.date_de_naissance === c2.date_de_naissance;
-
+                      const isSameGroup = (c1: any, c2: any) => c1 && c2 && c1.noms === c2.noms && c1.prenoms === c2.prenoms && c1.date_de_naissance === c2.date_de_naissance;
                       const isGroupEnd = !isSameGroup(r, nextCard);
                       const isGroupStart = !isSameGroup(r, prevCard);
-
                       return (
-                        <tr key={r.id_carte} style={{
-                          background: 'rgba(249,115,22,0.01)',
-                          borderLeft: '4px solid #f97316',
-                          borderBottom: isGroupEnd ? '3px solid rgba(255,255,255,0.06)' : '1px solid rgba(255,255,255,0.02)'
-                        }}>
-                          <td style={{ paddingLeft: 20 }}>
-                            <div style={{ fontWeight: 800, color: 'white' }}>{r.noms} {r.prenoms}</div>
-                            <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>DDN: {r.date_de_naissance || '—'} | Lieu: {r.lieu_de_naissance || '—'}</span>
-                          </td>
-                          <td>
-                            <span style={{ fontFamily: 'monospace', padding: '3px 8px', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
-                              {r.rangement || 'NON CLASSE'}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ fontSize: 12 }}>
-                              <span style={{ color: 'var(--text-muted)' }}>Sécu : </span>
-                              <strong>{r.num_secu || '—'}</strong>
-                            </div>
-                            <div style={{ fontSize: 11 }}>
-                              <span style={{ color: 'var(--text-muted)' }}>Contact : </span>
-                              <strong>{r.contact}</strong>
-                            </div>
-                          </td>
-                          <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              {isGroupStart && isSameGroup(r, nextCard) && (
-                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, nextCard)}>
-                                  <GitMerge size={14} /> Conserver & Fusionner
-                                </button>
-                              )}
-                              {!isGroupStart && isSameGroup(r, prevCard) && (
-                                <button className="btn" style={{ background: 'rgba(112,161,255,0.15)', color: '#70a1ff', border: '1px solid rgba(112,161,255,0.25)', display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '6px 12px', borderRadius: 8 }} onClick={() => handleMergeCards(r, prevCard)}>
-                                  <GitMerge size={14} /> Conserver & Fusionner
-                                </button>
-                              )}
-                              <button className="btn btn-icon" style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.15)', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', borderRadius: 8 }} onClick={() => handleDeleteCard(r)}>
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+                        <DoublonsRow
+                          key={r.id_carte} r={r} nextCard={nextCard} prevCard={prevCard}
+                          isGroupStart={isGroupStart} isGroupEnd={isGroupEnd} isSameGroup={isSameGroup}
+                          handleMergeCards={handleMergeCards} handleDeleteCard={handleDeleteCard} isProbable={true}
+                          handleOpenCorrection={handleOpenCorrection} handleStartIdentification={handleStartIdentification}
+                        />
                       );
                     })}
                   </tbody>
@@ -840,42 +1033,11 @@ export default function QualiteAssainissementPage() {
                   </thead>
                   <tbody>
                     {records.map(r => (
-                      <tr key={r.id_carte}>
-                        <td style={{ paddingLeft: 20 }}>
-                          <strong>{r.noms} {r.prenoms}</strong><br />
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{r.num_secu || 'N/A'}</span>
-                          {r.erreur_message && (
-                            <div style={{ fontSize: 11, color: '#ff7675', marginTop: 4, fontWeight: 500 }}>
-                              ⚠️ {r.erreur_message}
-                            </div>
-                          )}
-                        </td>
-                        <td>
-                          <span style={{ color: 'var(--warning-color)', fontWeight: 600, background: 'rgba(243,156,18,0.1)', padding: '4px 8px', borderRadius: 6 }}>
-                            {r.date_de_naissance || '(Vide)'}
-                          </span>
-                        </td>
-                        <td>
-                          {editingId === r.id_carte
-                            ? <DateInput value={editValue} onChange={setEditValue} autoFocus disabled={isResolving[r.id_carte]} />
-                            : <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 13 }}>Modification requise</span>
-                          }
-                        </td>
-                        <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                          {editingId === r.id_carte ? (
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button className="btn btn-primary" onClick={() => handleSaveDate(r)} disabled={isResolving[r.id_carte]}>
-                                {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
-                              </button>
-                              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
-                            </div>
-                          ) : (
-                            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r.date_de_naissance || ''); }}>
-                              <Edit3 size={14} style={{ marginRight: 6 }} /> Corriger la date
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                      <DatesInvalidesRow
+                        key={r.id_carte} r={r} editingId={editingId} editValue={editValue} isResolving={isResolving}
+                        setEditingId={setEditingId} setEditValue={setEditValue} handleSaveDate={handleSaveDate}
+                        handleOpenCorrection={handleOpenCorrection}
+                      />
                     ))}
                   </tbody>
                 </>
@@ -886,7 +1048,7 @@ export default function QualiteAssainissementPage() {
                 <>
                   <thead>
                     <tr>
-                      <th style={{ paddingLeft: 20 }}>Assuré / Contact</th>
+                      <th style={{ paddingLeft: 20 }}>Assuré / Détails</th>
                       <th>Rangement actuel</th>
                       <th>Saisie Numéro Sécurité (13 chiffres)</th>
                       <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
@@ -894,40 +1056,11 @@ export default function QualiteAssainissementPage() {
                   </thead>
                   <tbody>
                     {records.map(r => (
-                      <tr key={r.id_carte}>
-                        <td style={{ paddingLeft: 20 }}>
-                          <strong>{r.noms} {r.prenoms}</strong><br />
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Contact: {r.contact || '—'}</span>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'monospace' }}>{r.rangement || 'NON CLASSE'}</span>
-                        </td>
-                        <td>
-                          {editingId === r.id_carte ? (
-                            <input type="text" className="form-input" maxLength={13}
-                              style={{ width: 200, height: 36, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)' }}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value.replace(/\D/g, ''))}
-                            />
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>— (Manquant)</span>
-                          )}
-                        </td>
-                        <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                          {editingId === r.id_carte ? (
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button className="btn btn-primary" onClick={() => handleSaveField(r, 'num_secu')} disabled={isResolving[r.id_carte]}>
-                                {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
-                              </button>
-                              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
-                            </div>
-                          ) : (
-                            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r.num_secu || ''); }}>
-                              <Edit3 size={14} style={{ marginRight: 6 }} /> Affecter
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                      <IncompleteRow
+                        key={r.id_carte} r={r} tabType="SANS_SECU" editingId={editingId} editValue={editValue} isResolving={isResolving}
+                        setEditingId={setEditingId} setEditValue={setEditValue} handleSaveField={handleSaveField}
+                        handleOpenCorrection={handleOpenCorrection}
+                      />
                     ))}
                   </tbody>
                 </>
@@ -938,46 +1071,19 @@ export default function QualiteAssainissementPage() {
                 <>
                   <thead>
                     <tr>
-                      <th style={{ paddingLeft: 20 }}>Assuré / N° Sécu</th>
-                      <th>Contact</th>
+                      <th style={{ paddingLeft: 20 }}>Assuré / Détails</th>
+                      <th>Rangement actuel</th>
                       <th>Saisie Emplacement (ex: KM102)</th>
                       <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {records.map(r => (
-                      <tr key={r.id_carte}>
-                        <td style={{ paddingLeft: 20 }}>
-                          <strong>{r.noms} {r.prenoms}</strong><br />
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
-                        </td>
-                        <td><span>{r.contact || '—'}</span></td>
-                        <td>
-                          {editingId === r.id_carte ? (
-                            <input type="text" className="form-input"
-                              style={{ width: 160, height: 36, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value.toUpperCase())}
-                            />
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Non classé</span>
-                          )}
-                        </td>
-                        <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                          {editingId === r.id_carte ? (
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button className="btn btn-primary" onClick={() => handleSaveField(r, 'rangement')} disabled={isResolving[r.id_carte]}>
-                                {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
-                              </button>
-                              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
-                            </div>
-                          ) : (
-                            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(r.rangement || ''); }}>
-                              <Edit3 size={14} style={{ marginRight: 6 }} /> Affecter
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                      <IncompleteRow
+                        key={r.id_carte} r={r} tabType="SANS_RANGEMENT" editingId={editingId} editValue={editValue} isResolving={isResolving}
+                        setEditingId={setEditingId} setEditValue={setEditValue} handleSaveField={handleSaveField}
+                        handleOpenCorrection={handleOpenCorrection}
+                      />
                     ))}
                   </tbody>
                 </>
@@ -988,46 +1094,19 @@ export default function QualiteAssainissementPage() {
                 <>
                   <thead>
                     <tr>
-                      <th style={{ paddingLeft: 20 }}>Assuré / N° Sécu</th>
-                      <th>Contact</th>
+                      <th style={{ paddingLeft: 20 }}>Assuré / Détails</th>
+                      <th>Rangement actuel</th>
                       <th>{activeTab === 'SANS_NOM' ? 'Saisie Nom' : 'Saisie Prénom'}</th>
                       <th style={{ textAlign: 'right', paddingRight: 20 }}>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {records.map(r => (
-                      <tr key={r.id_carte}>
-                        <td style={{ paddingLeft: 20 }}>
-                          <strong>{r.noms || '(Sans Nom)'} {r.prenoms || '(Sans Prénom)'}</strong><br />
-                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
-                        </td>
-                        <td><span>{r.contact || '—'}</span></td>
-                        <td>
-                          {editingId === r.id_carte ? (
-                            <input type="text" className="form-input"
-                              style={{ width: 160, height: 36, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', textTransform: 'uppercase' }}
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value.toUpperCase())}
-                            />
-                          ) : (
-                            <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>Non renseigné</span>
-                          )}
-                        </td>
-                        <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                          {editingId === r.id_carte ? (
-                            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                              <button className="btn btn-primary" onClick={() => handleSaveField(r, activeTab === 'SANS_NOM' ? 'noms' : 'prenoms')} disabled={isResolving[r.id_carte]}>
-                                {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
-                              </button>
-                              <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
-                            </div>
-                          ) : (
-                            <button className="btn btn-secondary" onClick={() => { setEditingId(r.id_carte); setEditValue(activeTab === 'SANS_NOM' ? (r.noms || '') : (r.prenoms || '')); }}>
-                              <Edit3 size={14} style={{ marginRight: 6 }} /> Affecter
-                            </button>
-                          )}
-                        </td>
-                      </tr>
+                      <IncompleteRow
+                        key={r.id_carte} r={r} tabType={activeTab} editingId={editingId} editValue={editValue} isResolving={isResolving}
+                        setEditingId={setEditingId} setEditValue={setEditValue} handleSaveField={handleSaveField}
+                        handleOpenCorrection={handleOpenCorrection}
+                      />
                     ))}
                   </tbody>
                 </>
@@ -1188,6 +1267,27 @@ export default function QualiteAssainissementPage() {
           </div>
         </div>
       )}
+
+      {/* ══════════════════════ CORRECTION SIDE PANEL ══════════════════════ */}
+      <CorrectionSidePanel
+        isOpen={!!correctionRecord}
+        onClose={() => setCorrectionRecord(null)}
+        record={correctionRecord}
+        anomalieType={correctionType}
+        onSave={handleSaveCorrection}
+      />
+
+      <IdentificationGuidee
+        isOpen={showIdentification}
+        onClose={() => setShowIdentification(false)}
+        siteId={siteIdToUse}
+        initialName={identificationInitialName}
+        onSelectCard={(carte) => {
+          setShowIdentification(false);
+          // On peut rediriger vers la correction de la carte sélectionnée
+          handleOpenCorrection(carte, 'Carte trouvée via Assistant');
+        }}
+      />
     </div>
   );
 }

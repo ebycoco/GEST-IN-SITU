@@ -69,6 +69,28 @@ export default function SyncWidget() {
     });
   };
 
+  const handleRetry = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    const toastId = toast.loading('Tentative de reconnexion en cours...');
+    try {
+      if (window.api?.sync?.retryConnection) {
+        const res = await window.api.sync.retryConnection();
+        if (res && res.success) {
+          toast.success('Reconnexion réussie !', { id: toastId });
+          const updatedStatus = await window.api.sync.getStatus();
+          setSyncStatus(updatedStatus);
+        } else {
+          toast.error('La reconnexion a échoué.', { id: toastId });
+        }
+      }
+    } catch (err: any) {
+      toast.error(`Erreur de reconnexion: ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const getStatusColor = () => {
     switch (syncStatus.state) {
       case 'ONLINE':
@@ -76,6 +98,8 @@ export default function SyncWidget() {
       case 'PROBING':
       case 'DEGRADED':
         return 'var(--warning)';
+      case 'PERMANENT_OFFLINE':
+        return 'var(--danger, #ef4444)';
       case 'OFFLINE':
       default:
         return 'var(--text-muted)';
@@ -92,6 +116,8 @@ export default function SyncWidget() {
         return 'Vérification connexion...';
       case 'DEGRADED':
         return 'Connexion instable';
+      case 'PERMANENT_OFFLINE':
+        return 'Connexion échouée';
       case 'OFFLINE':
       default:
         return 'Mode local autonome';
@@ -125,7 +151,7 @@ export default function SyncWidget() {
       {/* Icône de statut Cloud */}
       <div style={{ display: 'flex', alignItems: 'center', color: getStatusColor() }}>
         {syncStatus.state === 'ONLINE' && <Cloud size={16} />}
-        {syncStatus.state === 'OFFLINE' && <CloudOff size={16} />}
+        {(syncStatus.state === 'OFFLINE' || syncStatus.state === 'PERMANENT_OFFLINE') && <CloudOff size={16} />}
         {(syncStatus.state === 'PROBING' || syncStatus.state === 'DEGRADED') && (
           <CloudLightning size={16} style={{ animation: 'pulse 1.5s infinite' }} />
         )}
@@ -158,6 +184,35 @@ export default function SyncWidget() {
           }}
           className="sync-button"
           title="Forcer la synchronisation"
+        >
+          <RefreshCw 
+            size={14} 
+            style={{ 
+              animation: isSyncing ? 'spin 1s linear infinite' : 'none'
+            }} 
+          />
+        </button>
+      )}
+
+      {/* Bouton Réessayer */}
+      {syncStatus.state === 'PERMANENT_OFFLINE' && (
+        <button
+          onClick={handleRetry}
+          disabled={isSyncing}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '2px',
+            cursor: isSyncing ? 'not-allowed' : 'pointer',
+            color: 'var(--danger, #ef4444)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: '4px',
+            transition: 'background-color 0.2s',
+          }}
+          className="sync-button"
+          title="Réessayer la connexion"
         >
           <RefreshCw 
             size={14} 

@@ -33,18 +33,8 @@ async function run() {
     const year = parseInt(match[1], 10);
     const month = parseInt(match[2], 10);
     const day = parseInt(match[3], 10);
-    if (month < 1 || month > 12) return false;
-    
-    // Nombres de jours par mois (index 1 à 12)
-    const daysInMonth = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    
-    // Vérification de l'année bissextile pour Février
-    if (month === 2) {
-      const isLeapYear = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
-      if (isLeapYear) daysInMonth[2] = 29;
-    }
-    
-    return day >= 1 && day <= daysInMonth[month];
+    const d = new Date(year, month - 1, day);
+    return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
   }
 
   let filterClause = `

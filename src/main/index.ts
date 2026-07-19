@@ -29,6 +29,7 @@ process.on('unhandledRejection', (reason, promise) => {
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+let isPreloadingUsers = true;
 
 // Sécurisation de l'instance unique
 const gotTheLock = app.requestSingleInstanceLock();
@@ -80,6 +81,38 @@ function createWindow(): void {
     if (is.dev) {
       mainWindow?.webContents.openDevTools({ mode: 'detach' });
     }
+
+    // ─── DÉMARRAGE DIFFÉRÉ DU MOTEUR DE SYNCHRONISATION ──────────────────────
+    // CRITIQUE : syncEngine.init() est appelé ICI (après ready-to-show) et non
+    // plus dans le flux principal whenReady() pour garantir que :
+    //   1. La fenêtre est entièrement visible avant le premier ping réseau
+    //   2. Le NetworkMonitor ne sature pas le service réseau d'Electron avant
+    //      que l'UI ait eu le temps de s'initialiser
+    // Le paramètre delayMs=3000 ajoute un délai supplémentaire de 3s avant le
+    // premier appel à handleNetworkChange, assurant une ouverture < 3s garantie.
+    syncEngine.init(3000);
+    log.info('[INIT] SyncEngine démarré (délai 3s) — fenêtre entièrement affichée.');
+    // ────────────────────────────────────────────────────────────────────────
+
+    // ─── DÉMARRAGE DIFFÉRÉ DU PRELOAD DES UTILISATEURS ───────────────────────
+    // Retardé de 3.5s (après le premier ping SyncEngine) pour éviter que
+    // SupabaseClient ne crashe le service réseau.
+    setTimeout(() => {
+      preloadUsersFromCloud().then(() => {
+        log.info('[INIT] Preload initial terminé — les comptes locaux sont prêts pour le Login.');
+        isPreloadingUsers = false;
+        if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
+      }).catch((preloadError: any) => {
+        log.error(
+          '[INIT] Échec du preload au démarrage (Supabase inaccessible ?) :',
+          preloadError?.message ?? preloadError
+        );
+        log.warn('[INIT] Ouverture du Login avec les comptes locaux existants (mode dégradé).');
+        isPreloadingUsers = false;
+        if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
+      });
+    }, 3500);
+
   });
 
   mainWindow.on('close', (e) => {
@@ -178,25 +211,13 @@ app.whenReady().then(async () => {
   createWindow();
 
   // État global pour savoir si on est en train de preload
-  let isPreloadingUsers = true;
+  // isPreloadingUsers est déclaré globalement en haut du fichier.
 
   // Handler IPC pour que le Renderer puisse interroger l'état au montage
   ipcMain.handle('auth:isPreloadingUsers', () => isPreloadingUsers);
 
-  // Lancement du preload en arrière-plan sans bloquer
-  preloadUsersFromCloud().then(() => {
-    log.info('[INIT] Preload initial terminé — les comptes locaux sont prêts pour le Login.');
-    isPreloadingUsers = false;
-    if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
-  }).catch((preloadError: any) => {
-    log.error(
-      '[INIT] Échec du preload au démarrage (Supabase inaccessible ?) :',
-      preloadError?.message ?? preloadError
-    );
-    log.warn('[INIT] Ouverture du Login avec les comptes locaux existants (mode dégradé).');
-    isPreloadingUsers = false;
-    if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
-  });
+  // Le lancement effectif de preloadUsersFromCloud a été déplacé dans ready-to-show
+  // pour éviter de saturer/crasher le network_service_instance_impl au démarrage.
 
   // Register IPC handlers
   if (mainWindow) {
@@ -209,8 +230,16 @@ app.whenReady().then(async () => {
     // l'envoi de notifications IPC discrètes vers le Renderer (footer "sync en cours").
     syncEngine.setMainWindow(mainWindow);
 
-    // Allumage du moteur de synchronisation automatique et moniteur réseau
-    syncEngine.init();
+    // ⚠️ NOTE : syncEngine.init() est appelé dans le callback ready-to-show ci-dessus
+    // (avec un délai de 3s) pour garantir que l'UI est visible avant tout ping réseau.
+
+    // ─── HANDLER IPC : Bouton "Réessayer" de l'UI ──────────────────────────
+    // Permet au Renderer de déclencher une nouvelle session de tentatives
+    // de connexion après un état PERMANENT_OFFLINE.
+    ipcMain.handle('network:retry', async () => {
+      log.info('[IPC] network:retry reçu — déclenchement de retryConnection().');
+      return syncEngine.retryConnection();
+    });
   }
 
   // Auto-updater (production only / temporairement activé en dev)

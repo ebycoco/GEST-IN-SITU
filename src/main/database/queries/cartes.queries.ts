@@ -62,6 +62,8 @@ export function getCartesPage(offset: number, limit: number, filters?: Record<st
   if (filters?.centre_id) { where += ' AND centre_id = @centre_id'; params.centre_id = Number(filters.centre_id); }
   if (filters?.rangement) { where += " AND rangement LIKE @rangement"; params.rangement = `%${filters.rangement}%`; }
   if (filters?.statut_physique) { where += ' AND statut_physique = @statut_physique'; params.statut_physique = filters.statut_physique; }
+  if (filters?.created_by) { where += ' AND created_by = @created_by'; params.created_by = Number(filters.created_by); }
+  if (filters?.agent_saisie) { where += ' AND agent_saisie = @agent_saisie'; params.agent_saisie = filters.agent_saisie; }
   
   if (filters?.q || filters?.search) {
     const q = filters.q || filters.search;
@@ -187,6 +189,19 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
   const cleDbl = `${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`;
   const cleFlex = `${noms}|${prenoms}|${ddn}|${contact}`;
 
+  // Vérification stricte de doublon avant insertion
+  const existingStrict = db.prepare(`
+    SELECT id_carte, noms, prenoms FROM t_cartes 
+    WHERE cle_doublon = ? AND is_dirty != -1
+  `).get(cleDbl) as { id_carte: number; noms: string; prenoms: string } | undefined;
+
+  if (existingStrict) {
+    throw new Error(
+      `DOUBLON_STRICT: La carte de ${existingStrict.noms} ${existingStrict.prenoms} ` +
+      `(ID: ${existingStrict.id_carte}) existe déjà dans la base locale.`
+    );
+  }
+
   const stmt = db.prepare(`
     INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
       lieu_enrolement, contact, rangement, statut, agent_saisie, centre_id, poste_id,
@@ -218,34 +233,13 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
     created_by: data.created_by || null
   });
 
-  enqueueOutbox(syncId, 't_cartes', 'INSERT', {
-    sync_id: syncId,
-    noms,
-    prenoms,
-    date_de_naissance: ddn || null,
-    lieu_de_naissance: lieuN,
-    num_secu: data.num_secu || null,
-    lieu_enrolement: removeAccents(data.lieu_enrolement as string || ''),
-    contact,
-    rangement: removeAccents(data.rangement as string || ''),
-    statut: data.statut || 'EN STOCK',
-    agent_saisie: data.agent_saisie || 'SYSTEM',
-    centre_id: data.centre_id || null,
-    poste_id: data.poste_id || null,
-    cle_doublon: cleDbl,
-    cle_doublon_flex: cleFlex,
-    site_id: siteIdToUse,
-    created_by: data.created_by || null
-  });
-
-  if (networkMonitor.getState() === 'ONLINE') {
-    scheduleOutboxProcessing();
-  }
+  // L'envoi automatique est désactivé pour permettre un workflow de synchronisation 100% manuel via le bouton Envoyer vers le Cloud.
+  // Toute carte insérée a is_dirty = 1, ce qui permet à l'action manuelle de la détecter.
 
   return { id: result.lastInsertRowid, sync_id: syncId };
 }
 
-export function updateCarte(id: number, data: Record<string, unknown>, currentUser?: { role: string; site_id?: number }) {
+export function updateCarte(id: number, data: Record<string, unknown>, currentUser?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
 
@@ -263,6 +257,63 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
     }
   }
   
+  const isAnomaly = data._recordType === 'En Anomalie' || data._recordType === 'AnomalieImport';
+
+  if (isAnomaly) {
+    const tx = db.transaction(() => {
+      // 1. Lire l'anomalie d'origine
+      const anomaly = db.prepare('SELECT * FROM t_import_anomalies WHERE id = ?').get(id) as any;
+      if (!anomaly) {
+        throw new Error("Anomalie introuvable ou déjà corrigée.");
+      }
+
+      // 2. Fusionner avec les nouvelles données
+      const mergedData = { ...anomaly, ...data };
+      
+      const noms = removeAccents(mergedData.noms || anomaly.noms || '');
+      const prenoms = removeAccents(mergedData.prenoms || anomaly.prenoms || '');
+      const ddn = mergedData.date_de_naissance || anomaly.date_de_naissance || null;
+      const lieuN = removeAccents(mergedData.lieu_de_naissance || anomaly.lieu_de_naissance || '');
+      const num_secu = mergedData.num_secu || anomaly.num_secu || null;
+      const contact = normalizeContact(mergedData.contact || anomaly.contact || '');
+      const rangement = removeAccents(mergedData.rangement || anomaly.rangement || '');
+      const lieu_enrolement = removeAccents(mergedData.lieu_enrolement || anomaly.lieu_enrolement || '');
+      
+      const cleDbl = `${noms}|${prenoms}|${ddn || ''}|${lieuN}|${contact}`;
+      const cleFlex = `${noms}|${prenoms}|${ddn || ''}|${contact}`;
+      
+      const newSyncId = uuidv4();
+      const siteId = anomaly.site_id || (currentUser?.site_id || 1);
+      
+      // 3. Insérer dans t_cartes avec statut EN STOCK
+      const stmt = db.prepare(`
+        INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+          lieu_enrolement, contact, rangement, statut, sync_id, site_id, cle_doublon, cle_doublon_flex, is_dirty, updated_at)
+        VALUES (@noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @num_secu,
+          @lieu_enrolement, @contact, @rangement, 'EN STOCK', @sync_id, @site_id, @cle_doublon, @cle_doublon_flex, 1, @updated_at)
+      `);
+      stmt.run({
+        noms, prenoms, date_de_naissance: ddn, lieu_de_naissance: lieuN,
+        num_secu, lieu_enrolement, contact, rangement, sync_id: newSyncId,
+        site_id: siteId, cle_doublon: cleDbl, cle_doublon_flex: cleFlex, updated_at: now
+      });
+
+      // 4. Supprimer de t_import_anomalies
+      db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
+
+      // 5. Trace d'audit
+      insertAuditLog(
+        currentUser?.login || 'SYSTEM',
+        'VALIDATION',
+        `[CORRECTION ANOMALIE] Anomalie (ID: ${id}) corrigée et transférée vers t_cartes avec le sync_id: ${newSyncId}`
+      );
+      
+      return { changes: 1 };
+    });
+    return tx();
+  }
+
+  // Comportement standard pour t_cartes
   const allowedColumns = [
     'noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'num_secu',
     'lieu_enrolement', 'contact', 'rangement', 'statut', 'date_delivrance',
@@ -271,7 +322,7 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
     'site_id', 'centre_id', 'poste_id', 'qr_code_data', 'sync_id', 'is_dirty', 'is_exported', 'created_by'
   ];
   
-  const filteredKeys = Object.keys(data).filter(k => allowedColumns.includes(k));
+  const filteredKeys = Object.keys(data).filter(k => k !== '_recordType' && allowedColumns.includes(k));
   if (filteredKeys.length === 0) {
     return { changes: 0 };
   }
@@ -293,23 +344,11 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
   
   const result = db.prepare(query).run(params);
   if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
+    throw new Error("Accès non autorisé aux données de ce site ou ligne introuvable.");
   }
 
-  const carte = db.prepare('SELECT sync_id FROM t_cartes WHERE id_carte = ?').get(id) as { sync_id: string } | undefined;
-  if (carte?.sync_id) {
-    const updatedCarte = db.prepare('SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie, nom_retirant, num_retirant, agent_distributeur, centre_retrait, cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id, qr_code_data, created_by FROM t_cartes WHERE id_carte = ?').get(id) as any;
-    
-    enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', {
-      sync_id: carte.sync_id,
-      ...updatedCarte,
-      updated_at: now
-    });
-
-    if (networkMonitor.getState() === 'ONLINE') {
-      scheduleOutboxProcessing();
-    }
-  }
+  // La synchronisation automatique a été désactivée.
+  // L'envoi vers Supabase est 100% manuel et basé sur is_dirty = 1.
 
   return result;
 }
@@ -339,17 +378,11 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
     `[SUPPRESSION] Par ${currentUser?.login || 'ADMIN'} sur t_cartes (ID: ${id})`
   );
 
-  const countBefore = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(carte.site_id) as any;
-  console.log(`[DEBUG QUALITE] Avant Suppression - Nombre de Doublons Stricts pour le site ${carte.site_id}:`, countBefore.c);
-
   // 2. Marquer la carte en pending_delete local (is_dirty = -1) au lieu de la supprimer physiquement
   const result = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id);
   if (result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site");
   }
-
-  const countAfter = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(carte.site_id) as any;
-  console.log(`[DEBUG QUALITE] Après Suppression - Nombre de Doublons Stricts pour le site ${carte.site_id}:`, countAfter.c);
 
   // 3. Enfilage Outbox DELETE
   if (carte.sync_id) {
@@ -981,4 +1014,139 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
       rangement: targetRangement
     }
   };
+}
+
+export function searchAllRecords(siteId: number, filters: QualityFilters, limit: number = 50) {
+  const db = getDatabase()!;
+  
+  let conditions = '';
+  const params: any = {};
+  
+  if (filters?.nom) {
+    conditions += ` AND (noms LIKE @nom OR prenoms LIKE @nom OR (noms || ' ' || prenoms) LIKE @nom)`;
+    params.nom = `%${filters.nom}%`;
+  }
+  if (filters?.contact) {
+    conditions += ` AND contact LIKE @contact`;
+    params.contact = `%${filters.contact}%`;
+  }
+  if (filters?.ddn) {
+    conditions += ` AND date_de_naissance = @ddn`;
+    params.ddn = filters.ddn;
+  }
+  if (filters?.lieu) {
+    conditions += ` AND lieu_de_naissance LIKE @lieu`;
+    params.lieu = `%${filters.lieu}%`;
+  }
+
+  const query = `
+    SELECT 
+      'carte_' || id_carte AS virtual_id,
+      id_carte AS original_id,
+      noms,
+      prenoms,
+      date_de_naissance,
+      num_secu,
+      contact,
+      'Valide' AS record_type,
+      statut AS status_or_anomaly
+    FROM t_cartes
+    WHERE site_id = @siteId ${conditions}
+    
+    UNION ALL
+    
+    SELECT 
+      'anomalie_' || id AS virtual_id,
+      id AS original_id,
+      noms,
+      prenoms,
+      date_de_naissance,
+      num_secu,
+      contact,
+      'En Anomalie' AS record_type,
+      type_anomalie AS status_or_anomaly
+    FROM t_import_anomalies
+    WHERE site_id = @siteId ${conditions}
+    
+    ORDER BY noms, prenoms
+    LIMIT @limit
+  `;
+  
+  params.siteId = siteId;
+  params.limit = limit;
+
+  return db.prepare(query).all(params);
+}
+
+export function getRecordForCorrection(originalId: number | string, recordType: string) {
+  const db = getDatabase()!;
+  if (recordType === 'Valide') {
+    return db.prepare(`SELECT * FROM t_cartes WHERE id_carte = ?`).get(originalId);
+  } else if (recordType === 'En Anomalie') {
+    return db.prepare(`SELECT * FROM t_import_anomalies WHERE id = ?`).get(originalId);
+  }
+  return null;
+}
+
+/**
+ * Compte le nombre de brouillons pour un agent sur un site.
+ */
+export function countDrafts(siteId: number, userId: number): number {
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT COUNT(*) as c FROM t_cartes 
+    WHERE site_id = ? AND created_by = ? AND statut = 'BROUILLON' AND is_dirty != -1
+  `).get(siteId, userId) as { c: number };
+  return row?.c || 0;
+}
+
+/**
+ * Publie tous les brouillons d'un agent pour un site.
+ * Change leur statut en 'EN STOCK' et les enfile dans la t_outbox.
+ */
+export function publishDrafts(siteId: number, userId: number): { publishedCount: number } {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
+  
+  // Scanner toutes les cartes modifiées (brouillons ou corrections)
+  const modifiedCartes = db.prepare(`
+    SELECT * FROM t_cartes 
+    WHERE site_id = ? AND is_dirty = 1
+  `).all(siteId) as any[];
+
+  if (modifiedCartes.length === 0) {
+    return { publishedCount: 0 };
+  }
+
+  const tx = db.transaction(() => {
+    const updateBrouillonStmt = db.prepare(`
+      UPDATE t_cartes 
+      SET statut = 'EN STOCK', updated_at = ? 
+      WHERE id_carte = ? AND statut = 'BROUILLON'
+    `);
+
+    for (const carte of modifiedCartes) {
+      if (carte.statut === 'BROUILLON') {
+        updateBrouillonStmt.run(now, carte.id_carte);
+        carte.statut = 'EN STOCK';
+        carte.updated_at = now;
+      }
+      
+      const updatedCarte = db.prepare('SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie, nom_retirant, num_retirant, agent_distributeur, centre_retrait, cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id, qr_code_data, created_by FROM t_cartes WHERE id_carte = ?').get(carte.id_carte) as any;
+
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', {
+        sync_id: carte.sync_id,
+        ...updatedCarte,
+        updated_at: carte.updated_at
+      });
+    }
+  });
+
+  tx();
+
+  if (networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
+  }
+
+  return { publishedCount: modifiedCartes.length };
 }

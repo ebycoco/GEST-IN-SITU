@@ -170,6 +170,10 @@ export async function processOutboxPending(): Promise<{ processed: number; error
     log.info(`[OutboxService] Traitement de ${pendingEntries.length} entrée(s) PENDING...`);
 
     const supabase = getSupabaseClient();
+    if (!supabase) {
+      log.warn('[OutboxService] Client Supabase non disponible — traitement outbox ignoré.');
+      return { processed: 0, errors: 0 };
+    }
 
     for (const entry of pendingEntries) {
       const newAttempts = entry.attempts + 1;
@@ -194,7 +198,10 @@ export async function processOutboxPending(): Promise<{ processed: number; error
           if (payload.is_active !== undefined) payload.is_active = Boolean(payload.is_active);
           if (payload.is_permanent !== undefined) payload.is_permanent = Boolean(payload.is_permanent);
         } else if (entry.table_name === 't_users') {
-          if (payload.statut_actif !== undefined) payload.statut_actif = Boolean(payload.statut_actif);
+          if (payload.statut_actif !== undefined) {
+            // PostgreSQL attend un entier (1/0) pour t_users.statut_actif
+            payload.statut_actif = (payload.statut_actif === true || payload.statut_actif === 1 || payload.statut_actif === 'true') ? 1 : 0;
+          }
         }
 
       } catch (parseErr: any) {

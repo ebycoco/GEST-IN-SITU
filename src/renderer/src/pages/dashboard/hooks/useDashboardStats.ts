@@ -51,11 +51,12 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       const targetDateStr = supervisionFilters?.dateStr;
 
       if (user?.role === 'OPERATEUR_SAISIE') {
-        const [todayCount, recents, cartesCount] = await Promise.all([
+        const [todayCount, recentsRes, cartesCount] = await Promise.all([
           window.api.stats.getAgentToday(user.id_user),
           window.api.stats.getAgentRecentSaisies(user.id_user, 15),
           window.api.stats.getUnsyncedCardsCount(siteIdToUse!)
         ]);
+        const recents = (recentsRes as any).rows || [];
         setOperatorTodayCount(todayCount);
         setOperatorRecentSaisies(recents);
         setDirtyCartesCount(cartesCount);

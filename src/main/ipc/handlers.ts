@@ -18,6 +18,7 @@ import { logAudit } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing } from '../sync/outbox.service';
 
 const FAILSAFE_ROOT_ID = 999999;
 let activeImportsCount = 0;
@@ -304,6 +305,46 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:search', e); throw e; }
   });
 
+  ipcMain.handle('cartes:searchAllRecords', async (_, siteId, filters, limit) => {
+    try {
+      const userLogin = getCurrentUserLogin() || 'SYSTEM';
+      const results = await queries.searchAllRecords(siteId, filters, limit);
+      
+      setImmediate(() => {
+        logAudit(userLogin, 'RECHERCHE_UNIVERSELLE', {
+          site_id: siteId,
+          critere_utilise: filters ? Object.keys(filters).join(', ') : 'none'
+        });
+      });
+      
+      return results;
+    } catch (e) {
+      log.error('IPC Error: cartes:searchAllRecords', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('cartes:getRecordForCorrection', async (_, originalId, recordType) => {
+    try {
+      const userLogin = getCurrentUserLogin() || 'SYSTEM';
+      const result = await queries.getRecordForCorrection(originalId, recordType);
+      
+      setImmediate(() => {
+        if (result) {
+          logAudit(userLogin, 'CONSULTATION_CORRECTION', {
+            type_enregistrement: recordType,
+            id: originalId
+          });
+        }
+      });
+      
+      return result;
+    } catch (e) {
+      log.error('IPC Error: cartes:getRecordForCorrection', e);
+      throw e;
+    }
+  });
+
   ipcMain.handle('cartes:getById', async (_, id) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
     try { 
@@ -436,6 +477,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:delete', e); throw e; }
+  });
+  
+  ipcMain.handle('cartes:countDrafts', async (_, siteId, currentUser) => {
+    try {
+      const userId = currentUser?.id_user;
+      if (!userId) return 0;
+      return queries.countDrafts(siteId, userId);
+    } catch (e) {
+      log.error('IPC Error: cartes:countDrafts', e); throw e;
+    }
+  });
+
+  ipcMain.handle('cartes:publishDrafts', async (_, siteId, currentUser) => {
+    try {
+      const userId = currentUser?.id_user;
+      if (!userId) throw new Error("Utilisateur non authentifié.");
+      const res = queries.publishDrafts(siteId, userId);
+      logAudit(
+        currentUser.login || 'SYSTEM',
+        'CARTE_PUBLICATION_BROUILLONS',
+        JSON.stringify({
+          site_id: siteId,
+          published_count: res.publishedCount
+        })
+      );
+      return res;
+    } catch (e) {
+      log.error('IPC Error: cartes:publishDrafts', e); throw e;
+    }
   });
 
   // CMU HANDLERS
@@ -1074,13 +1144,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               row[h.toLowerCase().replace(/\s+/g, '_')] = cols[i] || '';
             });
             rows.push(row);
-          } else {
-            break;
           }
+          total++; // AUD-002 : Compter TOUTES les lignes de données sans limite (ne jamais break)
         }
         lineCount++;
       }
-      total = rows.length;
 
       return { rows, headers, total };
     } catch (e) {
@@ -1096,11 +1164,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     return queries.clearImportTemp(Number(siteId));
   });
+  // @deprecated AUD-001 — Pipeline B (mode batch manuel) remplacé par le Worker Thread (import:processFile).
+  // Ces handlers sont conservés pour rétro-compatibilité uniquement. Ne plus appeler depuis le Renderer.
   ipcMain.handle('import:executeBatch', async (_, rows, agent, siteId) => {
+    log.warn('[DEPRECATED] import:executeBatch appelé — Pipeline B déprécié. Utiliser import:processFile (Worker Thread).');
     try { return queries.importBatch(rows, agent, siteId); }
     catch (e) { log.error('IPC Error: import:executeBatch', e); throw e; }
   });
   ipcMain.handle('import:fusionner', async (_, agent, siteId) => {
+    log.warn('[DEPRECATED] import:fusionner appelé — Pipeline B déprécié. La fusion est intégrée dans import:processFile (Worker Thread).');
     try { return queries.fusionnerImport(siteId); }
     catch (e) { log.error('IPC Error: import:fusionner', e); throw e; }
   });
@@ -1148,9 +1220,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         return { success: true, changes: 0 };
       }
 
-      const countBefore = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(sourceCard.site_id) as any;
-      console.log(`[DEBUG QUALITE] Avant Fusion - Nombre de Doublons Stricts pour le site ${sourceCard.site_id}:`, countBefore.c);
-
       const mergedFields: string[] = [];
       const updates: string[] = [];
       const params: any[] = [];
@@ -1171,11 +1240,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           params.push(id_carte_cible);
           db.prepare(`UPDATE t_cartes SET ${updates.join(', ')}, updated_at = datetime('now'), is_dirty = 1 WHERE id_carte = ?`).run(...params);
         }
-        db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id_carte_source);
+        
+        // Soft delete de la carte source + propagation Supabase
+        db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id_carte_source);
+        if (sourceCard.sync_id) {
+          const wasLocalOnly = cancelPendingInsert(sourceCard.sync_id, 't_cartes');
+          if (!wasLocalOnly) {
+            enqueueOutbox(sourceCard.sync_id, 't_cartes', 'DELETE', { sync_id: sourceCard.sync_id });
+            if (networkMonitor.getState() === 'ONLINE') scheduleOutboxProcessing();
+          } else {
+            // S'il n'avait jamais été synchronisé (INSERT annulé), on peut le supprimer physiquement pour libérer l'espace
+            db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id_carte_source);
+          }
+        }
       })();
-
-      const countAfter = db.prepare(`SELECT COUNT(*) as c FROM (SELECT cle_doublon FROM t_cartes WHERE site_id = ? AND is_dirty != -1 AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' GROUP BY cle_doublon HAVING COUNT(*) > 1)`).get(sourceCard.site_id) as any;
-      console.log(`[DEBUG QUALITE] Après Fusion - Nombre de Doublons Stricts pour le site ${sourceCard.site_id}:`, countAfter.c);
 
       logAudit(
         userLogin,
@@ -1225,48 +1303,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       db.transaction(() => {
         if (anomaly) {
           if (!card && !anomaly.carte_id) {
-            // Transfert complet de t_import_anomalies vers t_cartes
+            // Transfert complet de t_import_anomalies vers t_cartes via l'API officielle
             const newDate = champ_corrige === 'date_de_naissance' ? valeur_apres : anomaly.date_de_naissance;
+            // updateDateDeNaissance gère le transfert des anomalies non liées proprement + outbox
+            queries.updateDateDeNaissance(anomaly.id, newDate);
             
-            const crypto = require('crypto');
-            const syncId = crypto.randomUUID();
-
-            const insertStmt = db.prepare(`
-              INSERT INTO t_cartes (
-                noms, prenoms, date_de_naissance, num_secu, contact, site_id,
-                statut, agent_saisie, sync_id, created_at, updated_at
-              ) VALUES (?, ?, ?, ?, ?, ?, 'EN STOCK', 'SYSTEM', ?, datetime('now'), datetime('now'))
-            `);
-
-            const result = insertStmt.run(
-              anomaly.noms || '',
-              anomaly.prenoms || '',
-              newDate || '',
-              anomaly.num_secu || null,
-              anomaly.contact || null,
-              anomaly.site_id || null,
-              syncId
-            );
-
-            // Création de la transaction outbox pour Supabase
-            const outboxStmt = db.prepare(`
-              INSERT INTO t_outbox (table_name, operation, record_id, payload, sync_id)
-              VALUES (?, ?, ?, ?, ?)
-            `);
-
-            const payloadStr = JSON.stringify({
-              noms: anomaly.noms || '',
-              prenoms: anomaly.prenoms || '',
-              date_de_naissance: newDate || '',
-              num_secu: anomaly.num_secu || null,
-              contact: anomaly.contact || null,
-              site_id: anomaly.site_id || null,
-              statut: 'EN STOCK',
-              agent_saisie: 'SYSTEM',
-              sync_id: syncId
-            });
-
-            outboxStmt.run('t_cartes', 'INSERT', result.lastInsertRowid, payloadStr, syncId);
+            if (champ_corrige !== 'date_de_naissance') {
+               // Si le champ n'était pas la date, on doit quand même mettre à jour le champ après coup,
+               // sauf si ça a été mis à jour par le premier appel.
+               // Mais l'anomalie ayant été purgée, on met à jour la nouvelle carte
+               const newCard = db.prepare('SELECT id_carte FROM t_cartes WHERE nums_secu = ? AND noms = ? AND prenoms = ? ORDER BY id_carte DESC LIMIT 1').get(anomaly.num_secu, anomaly.noms, anomaly.prenoms) as any;
+               if (newCard) {
+                 queries.updateQuickFields(newCard.id_carte, { [champ_corrige]: valeur_apres });
+               }
+            }
           } else {
             // L'anomalie est déjà liée à une carte existante, on la met à jour
             const targetId = anomaly.carte_id || id_carte;
@@ -1275,9 +1325,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             } else {
               queries.updateQuickFields(targetId, { [champ_corrige]: valeur_apres });
             }
+            // Suppression de l'anomalie traitée (updateDateDeNaissance ne le fait pas si carte_id existe)
+            db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(anomaly.id);
           }
-          // Suppression de l'anomalie traitée
-          db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(anomaly.id);
+
         } else if (card) {
           // Si c'est une simple carte (pas d'anomalie)
           if (champ_corrige === 'date_de_naissance') {
@@ -1328,13 +1379,39 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           const res = db.prepare('DELETE FROM t_import_anomalies WHERE site_id = ?').run(site_id);
           deletedCount = res.changes;
         } else if (type_incoherence === 'SANS_SECU') {
-          const res = db.prepare("DELETE FROM t_cartes WHERE site_id = ? AND (num_secu IS NULL OR num_secu = '')").run(site_id);
-          deletedCount = res.changes;
+          const cardsToDel = db.prepare("SELECT id_carte, sync_id FROM t_cartes WHERE site_id = ? AND (num_secu IS NULL OR num_secu = '')").all(site_id) as any[];
+          for (const c of cardsToDel) {
+            db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(c.id_carte);
+            if (c.sync_id) {
+              const wasLocalOnly = cancelPendingInsert(c.sync_id, 't_cartes');
+              if (!wasLocalOnly) {
+                enqueueOutbox(c.sync_id, 't_cartes', 'DELETE', { sync_id: c.sync_id });
+              } else {
+                db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(c.id_carte);
+              }
+            }
+          }
+          deletedCount = cardsToDel.length;
         } else if (type_incoherence === 'SANS_RANGEMENT') {
-          const res = db.prepare("DELETE FROM t_cartes WHERE site_id = ? AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')").run(site_id);
-          deletedCount = res.changes;
+          const cardsToDel = db.prepare("SELECT id_carte, sync_id FROM t_cartes WHERE site_id = ? AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')").all(site_id) as any[];
+          for (const c of cardsToDel) {
+            db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(c.id_carte);
+            if (c.sync_id) {
+              const wasLocalOnly = cancelPendingInsert(c.sync_id, 't_cartes');
+              if (!wasLocalOnly) {
+                enqueueOutbox(c.sync_id, 't_cartes', 'DELETE', { sync_id: c.sync_id });
+              } else {
+                db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(c.id_carte);
+              }
+            }
+          }
+          deletedCount = cardsToDel.length;
         }
       })();
+      
+      if (deletedCount > 0 && type_incoherence !== 'DATES_INVALIDES' && networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
 
       // Idempotence : si aucun enregistrement n'est supprimé, on ne logue pas
       if (deletedCount === 0) {
@@ -1395,12 +1472,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let processed = 0;
       let movedCount = 0;
       const chunkSize = 250;
-      let offset = 0;
+      let lastId = 0;
       
       // On boucle par lots de 250
       while (processed < total) {
-        const cards = db.prepare('SELECT * FROM t_cartes LIMIT ? OFFSET ?').all(chunkSize, offset) as any[];
+        const cards = db.prepare('SELECT * FROM t_cartes WHERE id_carte > ? ORDER BY id_carte ASC LIMIT ?').all(lastId, chunkSize) as any[];
         if (cards.length === 0) break;
+        
+        lastId = cards[cards.length - 1].id_carte;
         
         const invalidCards = cards.filter(c => !isValidDate(c.date_de_naissance));
         
@@ -1433,17 +1512,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               movedCount++;
             }
           })();
-          // Comme on supprime des cartes de la table, on ne doit pas avancer l'offset du même montant si les cartes sont supprimées "avant" notre position.
-          // Mais ORDER n'est pas garanti. Il vaut mieux juste ignorer l'offset et faire un tri, ou ajuster.
-          // Pour faire simple sans buguer l'offset sur des DELETE, utilisons un offset qui avance, 
-          // mais vu qu'on supprime des lignes, l'OFFSET classique est faussé.
-          // Mieux: utiliser rowid ou trier par id_carte.
         }
         
         processed += cards.length;
-        // On avance l'offset seulement des cartes non supprimées.
-        // Puisque nous avons supprimé `invalidCards.length` cartes avant la fin de ce lot.
-        offset += (cards.length - invalidCards.length);
         
         // Emettre l'avancement
         event.sender.send('qualite:auditProgress', { 
@@ -1466,12 +1537,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // IMPORT - Process file using Worker Thread (NON-BLOCKING!)
-  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number) => {
+  // AUD-005 : userId optionnel pour vérification directe (plus sécurisé que la recherche par login)
+  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number, userId?: number) => {
     return new Promise((resolve, reject) => {
       const db = getDatabase();
       if (db) {
-        const userRecord = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(agent) as { id_user: number } | undefined;
-        if (!userRecord || !verifyUserRole(userRecord.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        // Vérification de rôle par ID (sécurisée) avec fallback par login (rétro-compatibilité)
+        const resolvedUserId = userId ?? (db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(agent) as { id_user: number } | undefined)?.id_user;
+        if (!resolvedUserId || !verifyUserRole(resolvedUserId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
           return reject(new Error("Accès refusé. Privilèges insuffisants pour importer des données."));
         }
       }
@@ -2173,12 +2246,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getSitesSummary(); }
     catch (e) { log.error('IPC Error: hierarchy:getSitesSummary', e); throw e; }
   });
-  ipcMain.handle('hierarchy:createSite', async (_, data) => {
+  ipcMain.handle('hierarchy:createSite', async (_, data, currentUser) => {
+    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN peut créer un site.");
+    }
     try { return queries.createSite(data); }
     catch (e) { log.error('IPC Error: hierarchy:createSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:updateSite', async (_, id, data) => {
-    try { return queries.updateSite(id, data); }
+    try {
+      const userLogin = getCurrentUserLogin();
+      if (userLogin) {
+        const db = getDatabase();
+        if (db) {
+          const user = db.prepare('SELECT role FROM t_users WHERE login = ?').get(userLogin) as { role: string } | undefined;
+          if (user && user.role !== 'SUPER ADMIN') {
+            delete data.nom;
+            delete data.code;
+          }
+        }
+      }
+      return queries.updateSite(id, data);
+    }
     catch (e) { log.error('IPC Error: hierarchy:updateSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:deleteSite', async (_, id) => {
@@ -2475,7 +2564,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // â”€â”€â”€ LOG AVANT ACTION DESTRUCTRICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       log.info(`[PURGE LOCALE] Initialisation de la purge de la base de donnÃ©es locale pour le site ID ${siteId} par l'utilisateur '${currentUser?.login}'.`);
       const purgeStartTime = performance.now();
-      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
       const db = getDatabase()!;
       // Si l'utilisateur est administrateur de site, on vÃ©rifie que siteId correspond Ã  son site_id
@@ -2517,6 +2606,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         // â”€â”€â”€ LOG APRÃˆS SUCCÃˆS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         const purgeDuration = (performance.now() - purgeStartTime).toFixed(2);
         log.info(`[PURGE LOCALE] Purge locale rÃ©ussie. Reconstruction du schÃ©ma effectuÃ©e en ${purgeDuration} ms pour le site ID ${siteId}.`);
+        // AUD-004 : Audit log post-succes (logAudit)
+        logAudit(
+          currentUser?.login || 'ADMIN',
+          'PURGE_LOCALE',
+          `Purge locale reussie pour le site ID ${siteId}. ${(res as any)?.count ?? 0} cartes supprimees.`
+        );
         // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         return res;
       } finally {
@@ -3308,7 +3403,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // OPERATEUR STATS HANDLERS
   ipcMain.handle('stats:getAgentToday', (_, userId: number) => queries.getAgentStatsToday(userId));
-  ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number) => queries.getAgentRecentSaisies(userId, limit));
+  ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number, offset?: number) => queries.getAgentRecentSaisies(userId, limit, offset));
   ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number, centreId?: number) => queries.getSiteSaisieStatsToday(siteId, centreId));
   ipcMain.handle('stats:getSiteQualiteToday', (_, siteId: number, centreId?: number) => queries.getSiteQualiteStatsToday(siteId, centreId));
   ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number) => queries.getSiteLogistiqueStatsToday(siteId, centreId));

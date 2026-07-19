@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { History, Search, Edit2, AlertCircle, FileText, Cloud, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Edit2, AlertCircle, FileText, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import SaisieEditModal from '../components/SaisieEditModal';
 
-export default function HistoriqueView() {
-  const { user } = useAuthStore();
-  const [saisies, setSaisies] = useState<any[]>([]);
+export default function MesBrouillonsView() {
+  const { user, activeSiteId } = useAuthStore();
+  const [brouillons, setBrouillons] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const limit = 25;
@@ -13,27 +13,25 @@ export default function HistoriqueView() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
 
-  const fetchSaisies = async () => {
-    if (user?.id_user) {
-      try {
-        setIsLoading(true);
-        if (window.api.stats.getAgentRecentSaisies) {
-          const res = await window.api.stats.getAgentRecentSaisies(user.id_user, limit, page * limit);
-          setSaisies(res.rows || []);
-          setTotal(res.total || 0);
-        }
-      } catch (err) {
-          console.error("Erreur lors de la récupération de l'historique:", err);
-        } finally {
-          setIsLoading(false);
-        }
-      }
-    };
-  useEffect(() => {
-    fetchSaisies();
-  }, [user, page]);
+  const fetchBrouillons = async () => {
+    if (!activeSiteId) return;
+    try {
+      setIsLoading(true);
+      const res = await window.api.cartes.getPage(page * limit, limit, { statut: 'BROUILLON', site_id: activeSiteId.toString(), created_by: user?.id_user?.toString() });
+      setBrouillons(res.rows || []);
+      setTotal(res.total || 0);
+    } catch (err) {
+      console.error("Erreur lors de la récupération des brouillons:", err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-  const filteredSaisies = saisies.filter(s => 
+  useEffect(() => {
+    fetchBrouillons();
+  }, [user, activeSiteId, page]);
+
+  const filteredBrouillons = brouillons.filter(s => 
     s.noms.toLowerCase().includes(searchTerm.toLowerCase()) || 
     s.prenoms.toLowerCase().includes(searchTerm.toLowerCase()) || 
     s.num_secu?.includes(searchTerm)
@@ -44,8 +42,8 @@ export default function HistoriqueView() {
       
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: 'white' }}>Historique de vos saisies</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Retrouvez vos 50 dernières saisies. Vous pouvez modifier celles qui ne sont pas encore envoyées au Cloud.</p>
+          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: 'white' }}>Vos brouillons locaux</h2>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Ces cartes ne seront pas synchronisées vers Supabase tant que vous ne cliquerez pas sur "Envoyer mes brouillons".</p>
         </div>
         
         <div style={{ position: 'relative', width: 300 }}>
@@ -64,10 +62,10 @@ export default function HistoriqueView() {
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         {isLoading ? (
           <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Chargement en cours...</div>
-        ) : filteredSaisies.length === 0 ? (
+        ) : filteredBrouillons.length === 0 ? (
           <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
             <FileText size={48} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
-            Aucune saisie trouvée.
+            Aucun brouillon trouvé.
           </div>
         ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
@@ -81,9 +79,8 @@ export default function HistoriqueView() {
               </tr>
             </thead>
             <tbody>
-              {filteredSaisies.map((saisie) => {
-                // En SQLite, is_dirty = 1 signifie non synchronisé
-                const canEdit = saisie.is_dirty === 1;
+              {filteredBrouillons.map((saisie) => {
+                const canEdit = saisie.is_dirty === 1 && saisie.statut === 'BROUILLON';
                 
                 return (
                   <tr key={saisie.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
@@ -96,15 +93,9 @@ export default function HistoriqueView() {
                       {new Date(saisie.created_at || new Date()).toLocaleDateString('fr-FR')}
                     </td>
                     <td style={{ padding: '16px 24px' }}>
-                      {canEdit ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: 'rgba(255, 152, 0, 0.1)', color: '#ff9800', fontSize: 12, fontWeight: 600 }}>
-                          <AlertCircle size={14} /> Local
-                        </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', fontSize: 12, fontWeight: 600 }}>
-                          <Cloud size={14} /> Cloud
-                        </span>
-                      )}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: 'rgba(255, 152, 0, 0.1)', color: '#ff9800', fontSize: 12, fontWeight: 600 }}>
+                        <AlertCircle size={14} /> Brouillon
+                      </span>
                     </td>
                     <td style={{ padding: '16px 24px', textAlign: 'right' }}>
                       {canEdit ? (
@@ -159,7 +150,7 @@ export default function HistoriqueView() {
           onClose={() => setSelectedCarte(null)} 
           onSuccess={() => {
             setSelectedCarte(null);
-            fetchSaisies();
+            fetchBrouillons();
           }} 
         />
       )}

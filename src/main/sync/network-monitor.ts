@@ -2,19 +2,29 @@ import { net } from 'electron';
 import log from 'electron-log';
 import { EventEmitter } from 'events';
 
-export type NetworkState = 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED';
+export type NetworkState = 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE';
 
 export class NetworkMonitor extends EventEmitter {
   private currentState: NetworkState = 'OFFLINE';
   private pingInterval: NodeJS.Timeout | null = null;
   private consecutiveFailures = 0;
   private consecutiveSuccesses = 0;
-  
-  // Configuration
-  private readonly CHECK_INTERVAL = 30 * 1000; // Ping toutes les 30s
-  private readonly FAILURES_FOR_OFFLINE = 6;  // 6 échecs consécutifs (6 * 30s = 3 minutes) pour passer offline
-  private readonly SUCCESSES_FOR_ONLINE = 1;   // 1 succès suffit à repasser online
-  
+
+  // ── Configuration ──────────────────────────────────────────────────────────
+  private readonly CHECK_INTERVAL = 30 * 1000;       // Ping toutes les 30s
+  private readonly FAILURES_FOR_OFFLINE = 6;          // 6 échecs consécutifs (3 min) → OFFLINE
+  private readonly SUCCESSES_FOR_ONLINE = 1;          // 1 succès suffit à repasser ONLINE
+
+  /**
+   * Nombre maximum de tentatives de ping autorisées pendant la phase de démarrage
+   * (avant qu'un utilisateur se connecte). Au-delà, on passe en PERMANENT_OFFLINE
+   * et on stoppe DÉFINITIVEMENT le setInterval pour protéger le service réseau d'Electron.
+   * L'utilisateur doit cliquer sur "Réessayer" pour relancer une session de 3 pings.
+   */
+  private readonly MAX_BOOT_RETRIES = 3;
+  private bootPingCount = 0;
+  private isPermanentOffline = false;
+
   private isChecking = false;
   private bypassForceOnline = false;
 
@@ -24,19 +34,20 @@ export class NetworkMonitor extends EventEmitter {
 
   public setBypassForceOnline(value: boolean): void {
     this.bypassForceOnline = value;
-    log.info(`NetworkMonitor bypassForceOnline set to ${value}`);
+    log.info(`[NetworkMonitor] bypassForceOnline set to ${value}`);
   }
 
   public start(): void {
     if (this.pingInterval) return;
-    
-    log.info('Network monitor started.');
-    
-    // CORRECTION N°3 : Le premier check est retardé de 5 secondes.
-    // L'ancien comportement déclenchait le ping immédiatement au démarrage,
-    // bloquant l'affichage de la fenêtre pendant jusqu'à 7 secondes (ancien timeout).
-    // Avec ce délai, la fenêtre a le temps de s'afficher complètement avant
-    // que le moniteur réseau ne commence à interroger Supabase.
+    // Si l'état permanent offline a déjà été atteint, ne pas redémarrer le monitor
+    if (this.isPermanentOffline) {
+      log.warn('[NetworkMonitor] start() ignoré : état PERMANENT_OFFLINE actif. Utilisez resetAndRetry().');
+      return;
+    }
+
+    log.info('[NetworkMonitor] Démarrage du moniteur réseau.');
+
+    // Premier check retardé de 5s pour laisser la fenêtre s'ouvrir complètement.
     setTimeout(() => {
       this.checkConnection();
     }, 5_000);
@@ -45,6 +56,11 @@ export class NetworkMonitor extends EventEmitter {
     this.pingInterval = setInterval(() => {
       this.checkConnection();
     }, this.CHECK_INTERVAL);
+
+    // .unref() : n'empêche pas Electron de quitter proprement
+    if (typeof (this.pingInterval as any).unref === 'function') {
+      (this.pingInterval as any).unref();
+    }
   }
 
   public stop(): void {
@@ -52,7 +68,7 @@ export class NetworkMonitor extends EventEmitter {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
-    log.info('Network monitor stopped.');
+    log.info('[NetworkMonitor] Moniteur réseau arrêté.');
   }
 
   public getState(): NetworkState {
@@ -62,13 +78,55 @@ export class NetworkMonitor extends EventEmitter {
     return this.currentState;
   }
 
+  /**
+   * Réinitialise l'état PERMANENT_OFFLINE et relance une nouvelle session de
+   * MAX_BOOT_RETRIES tentatives. Appelé par le handler IPC 'network:retry'
+   * déclenché depuis le bouton "Réessayer" de l'UI.
+   */
+  public async resetAndRetry(): Promise<NetworkState> {
+    log.info('[NetworkMonitor] Réinitialisation manuelle — relance d\'une nouvelle session de connexion.');
+    this.isPermanentOffline = false;
+    this.bootPingCount = 0;
+    this.consecutiveFailures = 0;
+    this.consecutiveSuccesses = 0;
+
+    // Stopper l'ancien interval s'il existe encore
+    this.stop();
+
+    // Repasser en OFFLINE pour permettre la transition vers PROBING
+    if (this.currentState === 'PERMANENT_OFFLINE') {
+      this.transitionTo('OFFLINE');
+    }
+
+    // Relancer le monitoring
+    this.start();
+
+    // Attendre le premier ping et retourner l'état résultant
+    await this.checkConnection();
+    return this.currentState;
+  }
+
+  /**
+   * Force le moniteur à abandonner son statut OFFLINE ou PROBING
+   * et à réessayer une connexion immédiatement.
+   */
+  public async forcePing(): Promise<NetworkState> {
+    log.info('[NetworkMonitor] Réessai manuel de connexion initié par l\'utilisateur.');
+    this.consecutiveFailures = 0; // reset des échecs
+    if (this.currentState === 'OFFLINE' || this.currentState === 'DEGRADED') {
+      this.transitionTo('PROBING');
+    }
+    await this.checkConnection();
+    return this.currentState;
+  }
+
   private transitionTo(newState: NetworkState): void {
     if (this.currentState === newState) return;
-    
+
     const oldState = this.currentState;
     this.currentState = newState;
-    
-    log.info(`Network state transition: ${oldState} -> ${newState}`);
+
+    log.info(`[NetworkMonitor] Transition réseau : ${oldState} -> ${newState}`);
     this.emit('change', { oldState, newState });
   }
 
@@ -77,7 +135,33 @@ export class NetworkMonitor extends EventEmitter {
    */
   private async checkConnection(): Promise<void> {
     if (this.isChecking) return;
+
+    // Si on est en PERMANENT_OFFLINE, bloquer tout nouveau ping
+    if (this.isPermanentOffline) {
+      log.warn('[NetworkMonitor] checkConnection() bloqué : état PERMANENT_OFFLINE actif.');
+      return;
+    }
+
     this.isChecking = true;
+
+    // Incrémenter le compteur de boot seulement si on n'est pas encore ONLINE
+    if (this.currentState !== 'ONLINE') {
+      this.bootPingCount++;
+      log.info(`[NetworkMonitor] Tentative de ping ${this.bootPingCount}/${this.MAX_BOOT_RETRIES}`);
+
+      // Vérification de la limite de boot AVANT d'effectuer le ping
+      if (this.bootPingCount > this.MAX_BOOT_RETRIES) {
+        log.warn(
+          `[NetworkMonitor] PERMANENT_OFFLINE — limite de ${this.MAX_BOOT_RETRIES} tentatives atteinte. ` +
+          `Arrêt définitif du monitoring. Cliquez sur "Réessayer" pour relancer.`
+        );
+        this.isPermanentOffline = true;
+        this.isChecking = false;
+        this.stop(); // Stoppe le setInterval définitivement
+        this.transitionTo('PERMANENT_OFFLINE');
+        return;
+      }
+    }
 
     // Signal primaire : Net d'Electron détecte-t-il une connectivité locale/globale ?
     if (!net.online) {
@@ -93,9 +177,9 @@ export class NetworkMonitor extends EventEmitter {
 
     try {
       const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://itvyayakwgzvfqvdrgyv.supabase.co';
-      
+
       const isOnline = await this.pingEndpoint(`${supabaseUrl}/rest/v1/`);
-      
+
       if (isOnline) {
         this.handleSuccess();
       } else {
@@ -116,9 +200,7 @@ export class NetworkMonitor extends EventEmitter {
         redirect: 'manual'
       });
 
-      // CORRECTION N°3 : Timeout réduit à 3 secondes (était 7 secondes).
-      // L'ancien timeout de 7s bloquait l'affichage de la fenêtre au démarrage
-      // car le premier ping était lancé de façon synchrone avec le lancement de l'app.
+      // Timeout à 3 secondes pour ne pas bloquer l'UI
       const timeout = setTimeout(() => {
         request.abort();
         resolve(false);
@@ -143,9 +225,10 @@ export class NetworkMonitor extends EventEmitter {
   private handleSuccess(): void {
     this.consecutiveFailures = 0;
     this.consecutiveSuccesses++;
+    // Quand on passe ONLINE, réinitialiser le compteur de boot (session active)
+    this.bootPingCount = 0;
 
     if (this.consecutiveSuccesses >= this.SUCCESSES_FOR_ONLINE) {
-      // Si on était instable, on repasse en ligne
       this.transitionTo('ONLINE');
     }
   }
@@ -154,7 +237,7 @@ export class NetworkMonitor extends EventEmitter {
     this.consecutiveSuccesses = 0;
     this.consecutiveFailures++;
 
-    log.warn(`Network ping failure (${this.consecutiveFailures}/${this.FAILURES_FOR_OFFLINE}): ${reason}`);
+    log.warn(`[NetworkMonitor] Échec ping (${this.consecutiveFailures}/${this.FAILURES_FOR_OFFLINE}) : ${reason}`);
 
     if (this.consecutiveFailures === 1 && this.currentState === 'ONLINE') {
       // Première perte de connexion : état dégradé (on attend avant de déclarer offline)

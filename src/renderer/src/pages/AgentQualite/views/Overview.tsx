@@ -81,7 +81,7 @@ export default function Overview() {
     setStatsLoading(true);
     try {
       const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang, rawSansNom, rawSansPrenom] = await Promise.all([
-        window.api.import.getAnomalies(siteIdToUse),
+        window.api.import.getAnomalies(siteIdToUse, 0, 1),
         window.api.cartes.getDoublonsPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getDoublonsProbablesPage(siteIdToUse, 0, 1, ''),
         window.api.cartes.getSansNumSecuPage(siteIdToUse, 0, 1, ''),
@@ -91,7 +91,7 @@ export default function Overview() {
       ]);
 
       setStats({
-        datesInvalides: rawDates ? rawDates.length : 0,
+        datesInvalides: rawDates?.total ?? 0,
         doublons: rawDoublons.total,
         doublonsProbables: rawDoublonsProbables.total,
         sansSecu: rawSansSecu.total,

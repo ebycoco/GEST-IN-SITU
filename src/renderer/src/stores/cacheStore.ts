@@ -37,6 +37,10 @@ interface CacheState {
     list: any[];
     cachedAt: number | null;
   };
+  centresCache: {
+    list: any[];
+    cachedAt: number | null;
+  };
   retraitsCache: {
     data: any | null;
     trend: any[];
@@ -48,6 +52,7 @@ interface CacheState {
   setQualiteCache: (stats: any) => void;
   setAgentsCache: (list: any[]) => void;
   setSitesCache: (list: any[]) => void;
+  setCentresCache: (list: any[]) => void;
   setRetraitsCache: (data: any, trend: any[]) => void;
   clearCache: () => void;
 }
@@ -88,6 +93,10 @@ export const useCacheStore = create<CacheState>((set) => ({
     list: [],
     cachedAt: null
   },
+  centresCache: {
+    list: [],
+    cachedAt: null
+  },
   retraitsCache: {
     data: null,
     trend: [],
@@ -111,6 +120,9 @@ export const useCacheStore = create<CacheState>((set) => ({
   setSitesCache: (list) => set({
     sitesCache: { list, cachedAt: Date.now() }
   }),
+  setCentresCache: (list) => set({
+    centresCache: { list, cachedAt: Date.now() }
+  }),
   setRetraitsCache: (data, trend) => set({
     retraitsCache: { data, trend, cachedAt: Date.now() }
   }),
@@ -121,6 +133,7 @@ export const useCacheStore = create<CacheState>((set) => ({
     qualiteCache: { stats: null, cachedAt: null },
     agentsCache: { list: [], cachedAt: null },
     sitesCache: { list: [], cachedAt: null },
+    centresCache: { list: [], cachedAt: null },
     retraitsCache: { data: null, trend: [], cachedAt: null }
   })
 }));

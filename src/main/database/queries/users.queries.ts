@@ -113,7 +113,8 @@ export function getUserRoles(userId: number): string[] {
 export function getUsers(siteId?: number, centreId?: number) {
   const db = getDatabase()!;
   let query = `
-    SELECT u.*, c.nom AS centre_nom, s.nom AS site_nom 
+    SELECT u.*, c.nom AS centre_nom, s.nom AS site_nom,
+      (SELECT GROUP_CONCAT(role, ',') FROM t_user_roles WHERE id_user = u.id_user) as roles_concat
     FROM t_users u
     LEFT JOIN t_centres c ON u.centre_id = c.id
     LEFT JOIN t_sites s ON u.site_id = s.id
@@ -135,16 +136,16 @@ export function getUsers(siteId?: number, centreId?: number) {
   const users = db.prepare(query).all(...params) as any[];
   
   for (const user of users) {
-    const roles = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(user.id_user) as { role: string }[];
-    user.roles = roles.map(r => r.role);
+    user.roles = user.roles_concat ? user.roles_concat.split(',') : [];
     if (user.roles.length === 0 && user.role) {
       user.roles = [user.role];
     }
+    delete user.roles_concat;
   }
   return users;
 }
 
-export function createUser(data: Record<string, unknown>, callerUserId: number) {
+export function createUser(data: Record<string, unknown>, callerUserId: number, callerLogin?: string) {
   const db = getDatabase()!;
   
   const creator = db.prepare('SELECT role, site_id, centre_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number; centre_id?: number } | undefined;
@@ -267,10 +268,16 @@ export function createUser(data: Record<string, unknown>, callerUserId: number) 
     }
   }
 
+  insertAuditLog(
+    callerLogin || creator?.role || 'SYSTEM',
+    'AGENT',
+    `[CREATION] Agent ${data.login} créé avec succès.`
+  );
+
   return txResult.result;
 }
 
-export function updateUser(id: number, data: Record<string, unknown>, creator?: { role: string; site_id?: number }) {
+export function updateUser(id: number, data: Record<string, unknown>, creator?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
   
   if (creator && creator.role !== 'SUPER ADMIN') {
@@ -321,7 +328,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
         throw err;
       }
       if (result.changes === 0) {
-        throw new Error("Accès non autorisé aux données de ce site");
+        throw new Error("Utilisateur introuvable ou aucune donnée n'a été modifiée.");
       }
     }
 
@@ -374,6 +381,12 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
       scheduleOutboxProcessing();
     }
   }
+
+  insertAuditLog(
+    creator?.login || creator?.role || 'SYSTEM',
+    'AGENT',
+    `[MODIFICATION] Agent ID ${id} (Login: ${data.login || 'Inconnu'}) mis à jour avec succès.`
+  );
 
   return txResult.result;
 }
@@ -488,7 +501,7 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }
 
-  const newPasswordPlain = 'cnam@2026';
+  const newPasswordPlain = process.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026';
   const hash = hashPassword(newPasswordPlain);
   
   // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────
@@ -584,6 +597,10 @@ export function updateSelfProfile(userId: number, data: { nom_user?: string; pre
 export async function pullAgentsFromCloud(siteId: number, centreId?: number): Promise<{ success: boolean; count: number; message?: string }> {
   const db = getDatabase()!;
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[pullAgentsFromCloud] Client Supabase non disponible.');
+    return { success: false, count: 0, message: 'Client Supabase non disponible.' };
+  }
 
   log.info(`[pullAgentsFromCloud] Récupération manuelle des agents pour le site ${siteId} (filtrage par centre local) depuis Supabase...`);
 
@@ -600,6 +617,30 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
 
     if (!cloudUsers || cloudUsers.length === 0) {
       return { success: true, count: 0, message: "Aucun agent trouvé sur Supabase pour ce site." };
+    }
+
+    // Récupérer les rôles multiples pour ces agents
+    const syncIds = cloudUsers.map(u => u.sync_id).filter(id => id);
+    let cloudRoles: any[] = [];
+    if (syncIds.length > 0) {
+      const { data: rolesData, error: rolesError } = await supabase
+        .from('t_user_roles')
+        .select('user_sync_id, role')
+        .in('user_sync_id', syncIds);
+
+      if (!rolesError && rolesData) {
+        cloudRoles = rolesData;
+      } else if (rolesError) {
+        log.warn(`[pullAgentsFromCloud] Erreur lors de la récupération des rôles multiples : ${rolesError.message}`);
+      }
+    }
+
+    // Grouper les rôles par user_sync_id
+    const rolesMap = new Map<string, string[]>();
+    for (const r of cloudRoles) {
+      const roles = rolesMap.get(r.user_sync_id) || [];
+      roles.push(r.role);
+      rolesMap.set(r.user_sync_id, roles);
     }
 
     let count = 0;
@@ -672,6 +713,21 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
         });
         if (result.changes > 0) {
           count++;
+        }
+
+        // --- Synchronisation des multi-rôles ---
+        if (u.sync_id) {
+          const cloudRolesForUser = rolesMap.get(u.sync_id);
+          if (cloudRolesForUser && cloudRolesForUser.length > 0) {
+            const localUser = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(u.login) as { id_user: number } | undefined;
+            if (localUser) {
+              db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localUser.id_user);
+              const insertRoleStmt = db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES (?, ?)');
+              for (const r of cloudRolesForUser) {
+                insertRoleStmt.run(localUser.id_user, r);
+              }
+            }
+          }
         }
       }
     })();

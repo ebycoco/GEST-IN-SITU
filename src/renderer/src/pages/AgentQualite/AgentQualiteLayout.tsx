@@ -2,16 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { OnlineBadge } from '../../components/OnlineBadge';
 
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { Database, Globe, AlertTriangle, Users, Calendar, Fingerprint, LayoutDashboard } from 'lucide-react';
+import { Database, Globe, AlertTriangle, Users, Calendar, Fingerprint, LayoutDashboard, Search } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
+import { CorrectionSidePanel } from '../../components/Quality/CorrectionSidePanel';
+import { IdentificationGuidee } from '../../components/Quality/IdentificationGuidee';
+import { useQualityUIStore } from '../../stores/qualityUIStore';
 
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const location = useLocation();
   const isOverview = location.pathname === '/agent-qualite' || location.pathname === '/agent-qualite/';
+  const { activeCard, correctionType, closeCorrection, isGuideOpen, closeGuide, guideInitialName, triggerRefresh, openCorrection } = useQualityUIStore();
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -123,6 +127,12 @@ export default function AgentQualiteLayout() {
           <NavLink to="/agent-qualite/invalides" className="tab-link" style={getNavLinkStyle}>
             <Calendar size={16} /> Formats Invalides
           </NavLink>
+          <NavLink to="/agent-qualite/anomalies-brutes" className="tab-link" style={getNavLinkStyle}>
+            <AlertTriangle size={16} /> Anomalies Brutes
+          </NavLink>
+          <NavLink to="/agent-qualite/recherche-universelle" className="tab-link" style={getNavLinkStyle}>
+            <Search size={16} /> Recherche Universelle
+          </NavLink>
         </div>
       </div>
 
@@ -130,6 +140,29 @@ export default function AgentQualiteLayout() {
       <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
         <Outlet />
       </div>
+
+      {activeCard && (
+        <CorrectionSidePanel
+          isOpen={!!activeCard}
+          record={activeCard}
+          anomalieType={correctionType}
+          onClose={closeCorrection}
+          onSave={async (id, updates) => {
+            await window.api.cartes.updateCarte(id, updates, user);
+            triggerRefresh();
+          }}
+        />
+      )}
+
+      {isGuideOpen && (
+        <IdentificationGuidee
+          isOpen={isGuideOpen}
+          initialName={guideInitialName}
+          onClose={closeGuide}
+          siteId={activeSiteId || 1}
+          onSelectCard={(carte) => openCorrection(carte, 'Identification')}
+        />
+      )}
     </div>
   );
 }
@@ -146,7 +179,8 @@ const navLinkStyle = {
   fontSize: 14,
   transition: 'all 0.2s ease',
   backgroundColor: 'rgba(255,255,255,0.02)',
-  border: '1px solid rgba(255,255,255,0.05)'
+  border: '1px solid rgba(255,255,255,0.05)',
+  whiteSpace: 'nowrap' as const
 };
 
 const getNavLinkStyle = ({ isActive }: { isActive: boolean }) => ({

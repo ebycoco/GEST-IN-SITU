@@ -43,10 +43,18 @@ const api = {
   },
   // Cartes
   cartes: {
+    countDrafts: (siteId: number): Promise<number> => 
+      ipcRenderer.invoke('cartes:countDrafts', siteId),
+    publishDrafts: (siteId: number): Promise<{ publishedCount: number }> => 
+      ipcRenderer.invoke('cartes:publishDrafts', siteId),
+    searchAllRecords: (siteId: number, filters: any, limit: number): Promise<any[]> => 
+      ipcRenderer.invoke('cartes:searchAllRecords', siteId, filters, limit),
+    getRecordForCorrection: (originalId: number | string, recordType: string): Promise<any> => 
+      ipcRenderer.invoke('cartes:getRecordForCorrection', originalId, recordType),
     getPage: (
       offset: number, 
       limit: number, 
-      filters?: { statut?: string; site_id?: string; centre_id?: string; rangement?: string; statut_physique?: string; q?: string; search?: string }
+      filters?: { statut?: string; site_id?: string; centre_id?: string; rangement?: string; statut_physique?: string; q?: string; search?: string; agent_saisie?: string }
     ): Promise<{ rows: ICarte[]; total: number; offset: number; limit: number }> => 
       ipcRenderer.invoke('cartes:getPage', offset, limit, filters),
     search: (
@@ -61,10 +69,10 @@ const api = {
       ipcRenderer.invoke('cartes:create', data),
     updateCarte: (id: number, data: Partial<ICarte>, currentUser?: any): Promise<{ id: number; sync_id: string; changes?: number }> => 
       ipcRenderer.invoke('cmu:updateCarte', id, data, currentUser),
-    update: (id: number, data: Partial<ICarte>): Promise<{ changes: number }> => 
-      ipcRenderer.invoke('cartes:update', id, data),
-    delete: (id: number): Promise<{ changes: number }> => 
-      ipcRenderer.invoke('cartes:delete', id),
+    update: (id: number, data: Partial<ICarte>, currentUser?: any): Promise<{ changes: number }> => 
+      ipcRenderer.invoke('cartes:update', id, data, currentUser),
+    delete: (id: number, currentUser?: any): Promise<{ changes: number }> => 
+      ipcRenderer.invoke('cartes:delete', id, currentUser),
     delivrer: (id: number, data: IDeliveryData, currentUser?: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('cartes:delivrer', id, data, currentUser),
     transferer: (id: number, data: { centre_id: number; rangement?: string; agent_transfert: string }, currentUser?: Partial<IUser>): Promise<any> => 
@@ -98,18 +106,22 @@ const api = {
       ipcRenderer.invoke('cartes:getInvalidDates', siteId),
     updateDate: (id: number, newDate: string): Promise<any> => 
       ipcRenderer.invoke('cartes:updateDate', id, newDate),
-    getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getDoublonsPage', siteId, offset, limit, query),
-    getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getDoublonsProbablesPage', siteId, offset, limit, query),
-    getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getSansNumSecuPage', siteId, offset, limit, query),
-    getSansNomPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getSansNomPage', siteId, offset, limit, query),
-    getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getSansPrenomPage', siteId, offset, limit, query),
-    getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query),
+    getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getDoublonsPage', siteId, offset, limit, query, filters),
+    getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getDoublonsProbablesPage', siteId, offset, limit, query, filters),
+    getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansNumSecuPage', siteId, offset, limit, query, filters),
+    getSansNomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansNomPage', siteId, offset, limit, query, filters),
+    getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansPrenomPage', siteId, offset, limit, query, filters),
+    getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query, filters),
+    getSansContactPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansContactPage', siteId, offset, limit, query),
+    getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
+      ipcRenderer.invoke('cartes:getSansLieuNaissancePage', siteId, offset, limit, query),
     updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }): Promise<any> => 
       ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
     searchQuickLogistique: (siteId: number, critere: string): Promise<Partial<ICarte>[]> => 
@@ -159,8 +171,8 @@ const api = {
       ipcRenderer.invoke('stats:getCardsToday', agentUsername, siteId),
     getAgentToday: (userId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getAgentToday', userId),
-    getAgentRecentSaisies: (userId: number, limit?: number): Promise<ICarte[]> => 
-      ipcRenderer.invoke('stats:getAgentRecentSaisies', userId, limit),
+    getAgentRecentSaisies: (userId: number, limit?: number, offset?: number): Promise<{ total: number; rows: any[] }> => 
+      ipcRenderer.invoke('stats:getAgentRecentSaisies', userId, limit, offset),
     getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
       ipcRenderer.invoke('stats:getSiteSaisieToday', siteId, centreId, agentId, dateStr),
     getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
@@ -190,14 +202,20 @@ const api = {
       ipcRenderer.invoke('import:executeBatch', rows, agent, siteId),
     clearTemp: (siteId?: number): Promise<void> => 
       ipcRenderer.invoke('import:clearTemp', siteId),
-    processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number): Promise<{ success: boolean; message: string }> => 
-      ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId),
+    processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number): Promise<{ success: boolean; message: string }> => 
+      ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId, userId),
     fusionner: (agent: string, siteId?: number): Promise<{ updated: number; inserted: number }> => 
       ipcRenderer.invoke('import:fusionner', agent, siteId),
-    getAnomalies: (siteId: number, offset = 0, limit = 50): Promise<{rows: any[], total: number}> =>
-      ipcRenderer.invoke('import:getAnomalies', siteId, offset, limit),
+    getAnomalies: (siteId: number, offset = 0, limit = 50, query?: string): Promise<{rows: any[], total: number}> =>
+      ipcRenderer.invoke('import:getAnomalies', siteId, offset, limit, query),
     clearAnomalies: (siteId: number): Promise<void> =>
       ipcRenderer.invoke('import:clearAnomalies', siteId),
+    deleteAnomaly: (id: number): Promise<void> =>
+      ipcRenderer.invoke('import:deleteAnomaly', id),
+    countEmptyAnomalies: (siteId: number): Promise<number> =>
+      ipcRenderer.invoke('import:countEmptyAnomalies', siteId),
+    deleteEmptyAnomalies: (siteId: number): Promise<void> =>
+      ipcRenderer.invoke('import:deleteEmptyAnomalies', siteId),
     onProgress: (callback: (p: number) => void) => {
       const listener = (_: any, p: number) => callback(p);
       ipcRenderer.on('import:progress', listener);
@@ -284,8 +302,8 @@ const api = {
       ipcRenderer.invoke('hierarchy:getSites'),
     getSitesSummary: (): Promise<ISiteSummary[]> => 
       ipcRenderer.invoke('hierarchy:getSitesSummary'),
-    createSite: (data: { nom: string; code: string; max_centres: number; admin: { nom: string; login: string; password_hash: string } }): Promise<any> => 
-      ipcRenderer.invoke('hierarchy:createSite', data),
+    createSite: (data: { nom: string; code: string; max_centres: number; admin: { nom: string; login: string; password_hash: string } }, currentUser?: any): Promise<any> => 
+      ipcRenderer.invoke('hierarchy:createSite', data, currentUser),
     updateSite: (id: number, data: Partial<ISite>): Promise<any> => 
       ipcRenderer.invoke('hierarchy:updateSite', id, data),
     deleteSite: (id: number): Promise<any> => 
@@ -395,6 +413,10 @@ const api = {
       ipcRenderer.invoke('sync:getTotalCloudCartesCount', siteId),
     force: (): Promise<any> => 
       ipcRenderer.invoke('sync:force'),
+    forcePing: (): Promise<{ success: boolean; state: string }> => 
+      ipcRenderer.invoke('sync:forcePing'),
+    retryConnection: (): Promise<{ success: boolean; state: string }> =>
+      ipcRenderer.invoke('network:retry'),
     getAutoDownstream: (login: string): Promise<boolean> =>
       ipcRenderer.invoke('sync:getAutoDownstream', login),
     setAutoDownstream: (login: string, enabled: boolean): Promise<{ success: boolean }> =>

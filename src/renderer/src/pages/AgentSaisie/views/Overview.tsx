@@ -16,7 +16,7 @@ export default function Overview() {
           
           if (window.api.stats.getAgentRecentSaisies) {
             const recent = await window.api.stats.getAgentRecentSaisies(user.id_user, 5);
-            setOperatorRecentSaisies(recent);
+            setOperatorRecentSaisies(recent.rows || []);
           }
         } catch (err) {
           console.error("Erreur lors de la récupération des stats de l'opérateur:", err);

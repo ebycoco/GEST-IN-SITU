@@ -25,7 +25,6 @@ export default function ImportPage() {
   const [file, setFile] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ rows: any[]; headers: string[]; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number } | null>(null);
   
@@ -135,7 +134,6 @@ export default function ImportPage() {
     
     setShowConfirmSetupModal(false);
     setImporting(true);
-    setIsImporting(true);
     setProgress(0);
     
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -168,7 +166,7 @@ export default function ImportPage() {
 
     try {
       await window.api.import.clearTemp(Number(siteIdToUse));
-      const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, Number(siteIdToUse));
+      const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, Number(siteIdToUse), user?.id_user);
       setResult(res);
       toast.success(`Migration terminée !`);
       await fetchCardCount();
@@ -180,7 +178,6 @@ export default function ImportPage() {
         removeListener();
       }
       setImporting(false);
-      setIsImporting(false);
       setProgress(100);
     }
   };
@@ -255,12 +252,6 @@ export default function ImportPage() {
     let purgeRafPending = false;
 
     const removePurgeListener = window.api.db.onPurgeProgress((p: number) => {
-      // Sécurité anti-saccade/latence IPC lors de la réduction de la fenêtre
-      if (p === 100) {
-        setIsEmergencyPurging(false);
-        setPurgeProgress(100);
-        return;
-      }
       // Ignorer les rafraîchissements graphiques React si la fenêtre est réduite/masquée
       if (document.visibilityState === 'hidden') {
         pendingPurgeProgress.current = p;
@@ -311,8 +302,7 @@ export default function ImportPage() {
     await executeEmergencyPurge();
   };
 
-  // Helper for Stepper
-  const currentStep = result ? 3 : (importing ? 2 : (file ? 2 : 1));
+  const currentStep = result ? 3 : (importing ? 2 : 1);
 
   return (
     <div className="import-container animate-fade-in">
@@ -731,6 +721,7 @@ export default function ImportPage() {
             </div>
           </div>
         )}
+        {(user?.role === 'ADMINISTRATEUR_SITE' || (user?.role === 'SUPER ADMIN' && activeSiteId)) && !importing && (
         <button
           disabled={isEmergencyPurging || isPurging}
           onClick={async () => {
@@ -777,6 +768,7 @@ export default function ImportPage() {
             "🔴 Réparer & Forcer la Synchronisation Locale"
           )}
         </button>
+        )}
       </div>
 
       {/* Purge Modal */}
@@ -1096,7 +1088,7 @@ export default function ImportPage() {
       )}
 
       {/* Overlay de blocage pendant l'importation et la purge */}
-      {(isImporting || isPurging || isEmergencyPurging) && (
+      {(importing || isPurging || isEmergencyPurging) && (
         <div style={{
           position: 'fixed',
           inset: 0,

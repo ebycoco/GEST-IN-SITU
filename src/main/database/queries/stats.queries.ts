@@ -214,15 +214,27 @@ export function getAgentStatsToday(userId: number) {
   return row ? row.count : 0;
 }
 
-export function getAgentRecentSaisies(userId: number, limit: number = 15) {
+export function getAgentRecentSaisies(userId: number, limit: number = 25, offset: number = 0) {
   const db = getDatabase()!;
-  return db.prepare(`
-    SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, rangement, contact, created_at, statut
+  
+  const countRow = db.prepare(`
+    SELECT COUNT(*) as total 
+    FROM t_cartes 
+    WHERE created_by = ?
+  `).get(userId) as { total: number };
+  
+  const rows = db.prepare(`
+    SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, lieu_de_naissance, rangement, contact, created_at, statut, is_dirty
     FROM t_cartes
     WHERE created_by = ?
     ORDER BY created_at DESC
-    LIMIT ?
-  `).all(userId, limit);
+    LIMIT ? OFFSET ?
+  `).all(userId, limit, offset);
+  
+  return {
+    total: countRow ? countRow.total : 0,
+    rows
+  };
 }
 
 export function getSiteSaisieStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {

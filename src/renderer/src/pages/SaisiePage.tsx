@@ -19,6 +19,7 @@ import DateInput from '../components/DateInput';
 import { confirmService } from '../components/confirmService';
 import CentreContextSwitcher from '../components/layout/CentreContextSwitcher';
 import { useAuthStore } from '../stores/authStore';
+import { useCacheStore } from '../stores/cacheStore';
 import { normalizeDate } from '../../../shared/utils/date';
 import { isValidCalendarDate, DATE_ERROR_MESSAGE } from '../utils/dateValidator';
 
@@ -218,7 +219,9 @@ export interface SaisiePageProps {
 export default function SaisiePage({ initialData, mode = 'create', onSubmitOverride }: SaisiePageProps = {}) {
   const { user, activeSiteId, selectedCentreId } = useAuthStore();
   const [formData, setFormData] = useState<FormState>(initialData || INITIAL_STATE);
+  const originalData = useRef<FormState>(initialData || INITIAL_STATE);
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
   const [saved, setSaved] = useState(false);
   const [dateError, setDateError] = useState<string | null>(null);
   const firstInputRef = useRef<HTMLDivElement>(null);
@@ -229,14 +232,19 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     }
   }, [initialData]);
 
-  const [sites, setSites] = useState<any[]>([]);
-  const [centres, setCentres] = useState<any[]>([]);
+  const { sitesCache, setSitesCache, centresCache, setCentresCache } = useCacheStore();
+  const sites = sitesCache.list || [];
+  const centres = centresCache.list || [];
 
-  // Charger les référentiels de sites et centres
+  // Charger les référentiels de sites et centres depuis le cache global
   React.useEffect(() => {
-    window.api.hierarchy.getSites().then(setSites).catch(console.error);
-    window.api.hierarchy.getCentres().then(setCentres).catch(console.error);
-  }, []);
+    if (sites.length === 0) {
+      window.api.hierarchy.getSites().then(setSitesCache).catch(console.error);
+    }
+    if (centres.length === 0) {
+      window.api.hierarchy.getCentres().then(setCentresCache).catch(console.error);
+    }
+  }, [sites.length, centres.length, setSitesCache, setCentresCache]);
 
   const activeSiteName = sites.find(s => s.id === (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id))?.nom || '';
   const activeCentreName = centres.find(c => c.id === selectedCentreId)?.nom || '';
@@ -254,11 +262,12 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
       isDanger: true
     });
     if (isConfirmed) {
-      setFormData({
+      const resetTarget = mode === 'edit' ? originalData.current : {
         ...INITIAL_STATE,
         site: activeSiteName,
         centre: activeCentreName,
-      });
+      };
+      setFormData(resetTarget);
       setSaved(false);
       setTimeout(() => {
         (firstInputRef.current?.querySelector('input') as HTMLInputElement | null)?.focus();
@@ -268,12 +277,13 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
 
   // Synchronise les valeurs site/centre au montage ou au changement de site/centre actif
   React.useEffect(() => {
+    if (mode !== 'create') return;
     setFormData(prev => ({
       ...prev,
       site: activeSiteName,
       centre: activeCentreName
     }));
-  }, [activeSiteName, activeCentreName]);
+  }, [activeSiteName, activeCentreName, mode]);
 
   // Formatage de téléphone dynamique style Ivoirien (+225 XX XX XX XX XX)
   const formatPhoneNumber = (value: string) => {
@@ -296,6 +306,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingRef.current) return;
 
     if (!formData.noms.trim() || !formData.prenoms.trim() || !formData.lieu_de_naissance.trim()) {
       toast.error('Les champs Nom de famille, Prénom(s) et Lieu de naissance sont obligatoires.');
@@ -327,8 +338,9 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     }
 
     setIsSaving(true);
-    setSaved(false);
+    isSavingRef.current = true;
     try {
+      setSaved(false);
       const finalData = {
         ...formData,
         date_de_naissance: normalizedBirthDate,
@@ -339,7 +351,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         agent_saisie: `${user?.nom_user || ''} ${user?.prenom_user || ''}`.trim() || user?.login || 'OPERATEUR_SAISIE',
         created_by: user?.id_user || null,
         centre_id: selectedCentreId,
-        statut: 'EN STOCK',
+        statut: 'BROUILLON',
         statut_physique: 'OK',
       };
 
@@ -363,6 +375,10 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         }, 100);
       }
     } catch (err: any) {
+      if (err?.message?.startsWith('DOUBLON_STRICT:')) {
+        toast.error('⚠️ Doublon détecté : cette carte existe déjà dans la base locale.');
+        return;
+      }
       if (window.api?.log?.error) {
         window.api.log.error(`SaisiePage: Échec d'enregistrement de la carte CMU (${mode})`, err?.message || String(err));
       }
@@ -370,6 +386,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
       toast.error("Erreur lors de l'enregistrement.");
     } finally {
       setIsSaving(false);
+      isSavingRef.current = false;
     }
   };
 
@@ -391,44 +408,6 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
       className="animate-fade-in"
       style={{ padding: '24px 28px', maxWidth: 960, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 20 }}
     >
-      <style dangerouslySetInnerHTML={{ __html: `
-        .soleil-card {
-          background: rgba(26, 31, 74, 0.45);
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
-          border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 16px;
-          padding: 24px;
-          transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), 
-                      box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-                      border-color 0.25s ease;
-        }
-        .soleil-card:hover {
-          transform: translateY(-1px);
-          border-color: rgba(255, 255, 255, 0.15);
-          box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
-        }
-        .soleil-input {
-          transition: all 0.2s ease-in-out !important;
-        }
-        .soleil-input:focus {
-          border-color: #8b5cf6 !important;
-          box-shadow: 0 0 12px rgba(139, 92, 246, 0.25) !important;
-          background: rgba(26, 31, 74, 0.6) !important;
-        }
-        .progress-bar-container {
-          width: 100%;
-          height: 6px;
-          background: rgba(255, 255, 255, 0.05);
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .progress-bar-fill {
-          height: 100%;
-          background: linear-gradient(90deg, #8b5cf6, #3b82f6);
-          transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-      `}} />
 
       <CentreContextSwitcher />
 

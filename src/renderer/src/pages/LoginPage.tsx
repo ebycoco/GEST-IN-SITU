@@ -122,8 +122,16 @@ export default function LoginPage() {
   }, [isFirstLaunch, setupStatus]);
   const triggerFirstLaunchSetup = async () => {
     setSetupStatus('pulling');
-    setSetupMessage("🟡 Connexion établie — Téléchargement et configuration de la base de données...");
+    setSetupMessage("🟡 Connexion en cours... (Vérification du réseau Supabase)");
     try {
+      const pingRes = await window.api.sync.forcePing();
+      if (!pingRes || !pingRes.success || pingRes.state === 'OFFLINE') {
+        setSetupStatus('failed');
+        setSetupMessage("🔴 Échec de la configuration — Le réseau Supabase est actuellement injoignable.");
+        return;
+      }
+
+      setSetupMessage("🟡 Connexion établie — Téléchargement et configuration de la base de données...");
       // Pull global de la synchronisation de démarrage (site + centres + agents)
       const syncRes = await window.api.sync.forceGlobal();
       if (syncRes && syncRes.success) {
@@ -189,7 +197,7 @@ export default function LoginPage() {
           <p>Système de Gestion des Cartes CMU</p>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* ─── BANDEAUX DE SÉCURITÉ PREMIER DÉMARRAGE ─── */}
           {isFirstLaunch && (
             <div 
@@ -229,38 +237,63 @@ export default function LoginPage() {
           )}
           {/* ───────────────────────────────────────────── */}
 
-          <div className="form-group">
-            <label className="form-label">Identifiant</label>
-            <input className="form-input" type="text" placeholder="Entrez votre identifiant"
-              value={login} onChange={(e) => setLogin(e.target.value)} autoFocus />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Mot de passe</label>
-            <div style={{ position: 'relative' }}>
-              <input className="form-input" type={showPwd ? 'text' : 'password'}
-                placeholder="Entrez votre mot de passe" style={{ width: '100%', paddingRight: 44 }}
-                value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="button" onClick={() => setShowPwd(!showPwd)}
-                style={{
-                  position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-                  background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)'
-                }}>
-                {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+        {isFirstLaunch && setupStatus !== 'success' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20, marginTop: 20, alignItems: 'center' }}>
+            {setupStatus === 'pulling' || setupStatus === 'idle' ? (
+              <>
+                <Loader size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-primary)' }} />
+                <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: 14 }}>
+                  Veuillez patienter pendant le téléchargement des données...
+                </p>
+              </>
+            ) : null}
+            {setupStatus === 'failed' && (
+              <button 
+                type="button" 
+                className="btn btn-secondary" 
+                onClick={triggerFirstLaunchSetup}
+                style={{ marginTop: 8 }}
+              >
+                Réessayer la connexion
               </button>
-            </div>
+            )}
           </div>
+        ) : (
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div className="form-group">
+              <label className="form-label">Identifiant</label>
+              <input className="form-input" type="text" placeholder="Entrez votre identifiant"
+                value={login} onChange={(e) => setLogin(e.target.value)} autoFocus />
+            </div>
 
-          <button 
-            type="submit" 
-            className="btn btn-primary" 
-            disabled={isLoading || (isFirstLaunch && setupStatus !== 'success') || isPreloading}
-            style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
-          >
-            {isLoading || isPreloading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-            {isPreloading ? 'Synchronisation des comptes...' : isLoading ? 'Connexion...' : 'Se connecter'}
-          </button>
-        </form>
+            <div className="form-group">
+              <label className="form-label">Mot de passe</label>
+              <div style={{ position: 'relative' }}>
+                <input className="form-input" type={showPwd ? 'text' : 'password'}
+                  placeholder="Entrez votre mot de passe" style={{ width: '100%', paddingRight: 44 }}
+                  value={password} onChange={(e) => setPassword(e.target.value)} />
+                <button type="button" onClick={() => setShowPwd(!showPwd)}
+                  style={{
+                    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)'
+                  }}>
+                  {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            <button 
+              type="submit" 
+              className="btn btn-primary" 
+              disabled={isLoading}
+              style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
+            >
+              {isLoading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+              {isLoading ? 'Connexion...' : 'Se connecter'}
+            </button>
+          </form>
+        )}
+        </div>
 
         {/* Message informatif pour les zones isolées */}
         <div style={{

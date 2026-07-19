@@ -1,7 +1,7 @@
--- ============================================================
--- GEST-IN-SITU : Schéma Supabase/PostgreSQL officiel
--- Version : alignée sur schema.ts v18 + mapping bulk-uploader.ts
--- Généré le : 2026-07-03
+﻿-- ============================================================
+-- GEST-IN-SITU : SchÃ©ma Supabase/PostgreSQL officiel
+-- Version : alignÃ©e sur schema.ts v18 + mapping bulk-uploader.ts
+-- GÃ©nÃ©rÃ© le : 2026-07-03
 -- ============================================================
 
 -- ============================================================
@@ -95,7 +95,7 @@ CREATE TABLE public.t_users (
 );
 
 -- ============================================================
--- 5. t_cartes — TABLE PRINCIPALE (200k+ lignes)
+-- 5. t_cartes â€” TABLE PRINCIPALE (200k+ lignes)
 -- Mapping bulk-uploader.ts :
 --   date_de_naissance -> date_naissance
 --   lieu_de_naissance -> lieu_naissance
@@ -143,7 +143,7 @@ CREATE TABLE public.t_cartes (
 );
 
 -- ============================================================
--- 6. t_logs — Journal d'audit
+-- 6. t_logs â€” Journal d'audit
 -- ============================================================
 CREATE TABLE public.t_logs (
     id_log          BIGSERIAL PRIMARY KEY,
@@ -185,7 +185,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_action           ON public.t_logs(action);
 CREATE INDEX IF NOT EXISTS idx_logs_sync_id          ON public.t_logs(sync_id);
 
 -- ============================================================
--- 8. RLS : DÉSACTIVÉ sur toutes les tables
+-- 8. RLS : DÃ‰SACTIVÃ‰ sur toutes les tables
 -- ============================================================
 ALTER TABLE public.t_sites    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.t_centres  DISABLE ROW LEVEL SECURITY;
@@ -214,3 +214,25 @@ CREATE TABLE public.t_app_version (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 INSERT INTO public.t_app_version (min_version, latest_version, release_notes) VALUES ('2.4.2', '2.4.2', 'Version initiale avec auto-updater.');
+
+
+-- ============================================================================
+-- TABLE : t_user_roles (Roles multiples par agent)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.t_user_roles (
+    id SERIAL PRIMARY KEY,
+    user_sync_id TEXT NOT NULL REFERENCES public.t_users(sync_id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE(user_sync_id, role)
+);
+
+-- Activation du RLS
+ALTER TABLE public.t_user_roles ENABLE ROW LEVEL SECURITY;
+
+-- Autoriser la lecture et l'écriture
+CREATE POLICY "Enable read access for all users" ON public.t_user_roles FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for all users" ON public.t_user_roles FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for all users" ON public.t_user_roles FOR UPDATE USING (true);
+CREATE POLICY "Enable delete access for all users" ON public.t_user_roles FOR DELETE USING (true);
+

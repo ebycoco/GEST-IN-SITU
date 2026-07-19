@@ -89,7 +89,7 @@ export default function AgentsPage() {
             <div>
               <div style={{ fontWeight: 800, color: '#ffffff' }}>Mot de passe réinitialisé !</div>
               <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>
-                Nouvelle valeur temporaire : <span style={{ textDecoration: 'underline', fontWeight: 'bold' }}>cnam@2026</span>
+                Nouvelle valeur temporaire : <span style={{ textDecoration: 'underline', fontWeight: 'bold' }}>{import.meta.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026'}</span>
               </div>
             </div>
           </div>
@@ -287,7 +287,7 @@ export default function AgentsPage() {
     try {
       await window.api.users.update(user.id_user, { statut_actif: newStatus });
       toast.success(`Utilisateur ${newStatus === 1 ? 'activé' : 'désactivé'}`);
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error('Erreur: ' + err.message);
     }
@@ -307,7 +307,7 @@ export default function AgentsPage() {
     try {
       await window.api.users.hardDelete(id);
       toast.success('Utilisateur supprimé définitivement');
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error('Erreur: ' + err.message);
     }
@@ -351,7 +351,7 @@ export default function AgentsPage() {
       }
       
       closeModal();
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error('Erreur: ' + err.message);
     }
@@ -852,7 +852,7 @@ export default function AgentsPage() {
             
             <p style={{ color: 'white', fontSize: 14, lineHeight: 1.6, marginBottom: 24 }}>
               Voulez-vous réinitialiser le mot de passe de cet agent (<strong style={{ color: '#fbbf24' }}>@{resetTargetUser.login}</strong>) ? 
-              Un mot de passe temporaire <strong style={{ color: '#fbbf24' }}>'cnam@2026'</strong> lui sera attribué.
+              Un mot de passe temporaire <strong style={{ color: '#fbbf24' }}>'{import.meta.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026'}'</strong> lui sera attribué.
             </p>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16 }}>

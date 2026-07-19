@@ -135,7 +135,6 @@ export default function Sidebar() {
     if (user.role === 'OPERATEUR_QUALITE') {
       return [
         { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/agent-qualite' },
-        { label: 'Cartes CMU', icon: CreditCard, path: '/cartes' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

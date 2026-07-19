@@ -41,24 +41,12 @@ export default function InvalidFormatView() {
     setIsLoading(true);
     try {
       const offset = (currentPage - 1) * itemsPerPage;
-      // ✔️ Pagination côté serveur via table t_import_anomalies
-      const res = await (window.api.import as any).getAnomalies(siteIdToUse, offset, itemsPerPage);
-
-      console.log('[DEBUG DATE] siteId utilisé :', siteIdToUse);
-      console.log('[DEBUG DATE] nombre de résultats reçus :', res?.total ?? 0);
-
-      const allRows: any[] = res?.rows || [];
-      // Filtrage local sur les résultats de la page courante uniquement
       const query = filters.nom || '';
-      const filtered = query.trim()
-        ? allRows.filter((r: any) =>
-            `${r.noms} ${r.prenoms}`.toLowerCase().includes(query.toLowerCase()) ||
-            (r.num_secu && r.num_secu.includes(query)) ||
-            (r.rangement && r.rangement.toLowerCase().includes(query.toLowerCase()))
-          )
-        : allRows;
+      // ✔️ Pagination côté serveur via table t_import_anomalies
+      const res = await (window.api.import as any).getAnomalies(siteIdToUse, offset, itemsPerPage, query);
+      const allRows: any[] = res?.rows || [];
 
-      setRecords(filtered);
+      setRecords(allRows);
       setTotalItems(res?.total || 0);
     } catch (err) {
       console.error(err);

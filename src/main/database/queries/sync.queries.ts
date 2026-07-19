@@ -121,6 +121,10 @@ export async function forceAgentsSync(siteId: number): Promise<{ success: boolea
 
   // 3. On pousse les utilisateurs vers Supabase (la gestion réseau et les timeouts sont gérés par le client)
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[forceAgentsSync] Client Supabase non disponible — sync agents ignoré.');
+    return { success: false, count: 0, message: 'Client Supabase non disponible.' };
+  }
   const mappedUsers = dirtyUsers.map(u => ({
     login: u.login,
     password_hash: u.password_hash,
@@ -162,7 +166,7 @@ export async function forceAgentsSync(siteId: number): Promise<{ success: boolea
         .upsert(localRoles, { onConflict: 'user_sync_id,role' });
 
       if (rolesError) {
-        log.warn(`[forceAgentsSync] Avertissement du push des rôles vers Supabase : ${rolesError.message} (la table t_user_roles n'existe peut-être pas encore sur ce backend)`);
+        log.warn(`[forceAgentsSync] Avertissement du push des rôles vers Supabase : ${rolesError.message}`);
       }
     } catch (e: any) {
       log.warn(`[forceAgentsSync] Exception lors du push des rôles vers Supabase : ${e.message || e}`);
@@ -188,6 +192,10 @@ export async function forceAgentsSync(siteId: number): Promise<{ success: boolea
 export async function pullCentresFromCloud(siteId: number): Promise<{ success: boolean; count: number; message?: string }> {
   const db = getDatabase()!;
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[pullCentresFromCloud] Client Supabase non disponible.');
+    return { success: false, count: 0, message: 'Client Supabase non disponible.' };
+  }
   log.info(`[pullCentresFromCloud] Récupération manuelle des centres pour le site ${siteId} depuis Supabase...`);
 
   try {
@@ -257,6 +265,10 @@ export async function forceCentresSync(siteId: number): Promise<{ success: boole
   }
 
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[forceCentresSync] Client Supabase non disponible.');
+    return { success: false, count: 0, message: 'Client Supabase non disponible.' };
+  }
   const mappedCentres = dirtyCentres.map(c => ({
     id: c.id,
     site_id: c.site_id,

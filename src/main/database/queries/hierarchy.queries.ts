@@ -6,6 +6,20 @@ import { networkMonitor } from '../../sync/network-monitor';
 import { insertAuditLog } from './audit.queries';
 import log from 'electron-log';
 
+// Cache du schéma de t_centres pour éviter de répéter PRAGMA table_info à chaque appel
+let _centresColumns: Set<string> | null = null;
+function getCentresColumns(): Set<string> {
+  if (!_centresColumns) {
+    const db = getDatabase()!;
+    const info = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
+    _centresColumns = new Set(info.map(c => c.name));
+    log.info('[hierarchy.queries][cache] PRAGMA table_info(t_centres) chargé en cache. Colonnes:', [..._centresColumns].join(', '));
+  }
+  return _centresColumns;
+}
+// Invalider le cache après migration
+export function invalidateCentresColumnsCache(): void { _centresColumns = null; }
+
 export function getSites() {
   const db = getDatabase()!;
   return db.prepare('SELECT * FROM t_sites ORDER BY nom').all();
@@ -30,7 +44,6 @@ export function getCentres(siteId?: number) {
       FROM t_centres c 
       LEFT JOIN t_sites s ON c.site_id = s.id 
       WHERE c.site_id = ? 
-      GROUP BY CASE WHEN c.sync_id IS NULL OR c.sync_id = '' THEN c.id ELSE c.sync_id END
       ORDER BY c.nom
     `).all(siteId);
   } else {
@@ -38,7 +51,6 @@ export function getCentres(siteId?: number) {
       SELECT c.*, s.nom as site_nom 
       FROM t_centres c 
       LEFT JOIN t_sites s ON c.site_id = s.id 
-      GROUP BY CASE WHEN c.sync_id IS NULL OR c.sync_id = '' THEN c.id ELSE c.sync_id END
       ORDER BY s.nom, c.nom
     `).all();
   }
@@ -180,6 +192,8 @@ export function updateSite(id: number, data: { nom?: string; code?: string; max_
   if (data.is_permanent !== undefined) { sets.push('is_permanent = ?'); params.push(data.is_permanent); }
 
   if (sets.length === 0) return null;
+  sets.push("updated_at = datetime('now')");
+  sets.push("is_dirty = 1");
   params.push(id);
 
   // ── 1. Mise à jour locale immédiate ───────────────────────────────────────────
@@ -226,26 +240,35 @@ export function deleteSite(id: number) {
 
   const transaction = db.transaction(() => {
     // 1. Delete Cards
-    db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(id);
+    const cartesCount = db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(id).changes;
 
     // 2. Delete Logs
-    db.prepare('DELETE FROM t_logs WHERE id_user IN (SELECT id_user FROM t_users WHERE site_id = ?)').run(id);
-    try { db.prepare('DELETE FROM t_logs WHERE site_id = ?').run(id); } catch (_e) {}
+    const logsCount1 = db.prepare('DELETE FROM t_logs WHERE id_user IN (SELECT id_user FROM t_users WHERE site_id = ?)').run(id).changes;
+    let logsCount2 = 0;
+    try { logsCount2 = db.prepare('DELETE FROM t_logs WHERE site_id = ?').run(id).changes; } catch (_e) {}
 
     // 3. Delete Users
-    db.prepare("DELETE FROM t_users WHERE site_id = ? AND role != 'SUPER ADMIN'").run(id);
+    const usersCount = db.prepare("DELETE FROM t_users WHERE site_id = ? AND role != 'SUPER ADMIN'").run(id).changes;
 
     // 4. Delete Postes
-    db.prepare('DELETE FROM t_postes WHERE centre_id IN (SELECT id FROM t_centres WHERE site_id = ?)').run(id);
+    const postesCount = db.prepare('DELETE FROM t_postes WHERE centre_id IN (SELECT id FROM t_centres WHERE site_id = ?)').run(id).changes;
 
     // 5. Delete Centres
-    db.prepare('DELETE FROM t_centres WHERE site_id = ?').run(id);
+    const centresCount = db.prepare('DELETE FROM t_centres WHERE site_id = ?').run(id).changes;
 
     // 6. Delete Temp Imports
-    db.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(id);
+    const tempCount = db.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(id).changes;
 
     // 7. Finally Delete Site
-    return db.prepare('DELETE FROM t_sites WHERE id = ?').run(id);
+    const res = db.prepare('DELETE FROM t_sites WHERE id = ?').run(id);
+    
+    insertAuditLog(
+      'SUPER ADMIN',
+      'VALIDATION',
+      `[PURGE SITE] Site ID: ${id} supprimé. Détail : ${cartesCount} cartes, ${usersCount} agents, ${centresCount} centres, ${postesCount} postes, ${logsCount1 + logsCount2} logs, ${tempCount} imports temp.`
+    );
+    
+    return res;
   });
   const result = transaction();
 
@@ -282,7 +305,7 @@ export function verifyUserPassword(login: string, password: string): boolean {
   const db = getDatabase()!;
   const user = db.prepare("SELECT password_hash FROM t_users WHERE login = ?").get(login) as any;
   if (!user) {
-    return verifySuperAdminPassword(password);
+    return false;
   }
   
   const hash = user.password_hash;
@@ -357,9 +380,9 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
   // UUID généré ici = clé d'idempotence pour l'outbox (une seule entrée possible par centre)
   const centreSyncId = data.sync_id || uuidv4();
 
-  // Vérification de l'existence des colonnes en base (filet de sécurité)
-  const tableInfo = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
-  const hasColumn = (colName: string) => tableInfo.some(c => c.name === colName);
+  // Vérification de l'existence des colonnes en base (cache module-level)
+  const centreColumns = getCentresColumns();
+  const hasColumn = (colName: string) => centreColumns.has(colName);
 
   const columns = ['site_id', 'nom', 'sync_id'];
   const values: (string | number | null)[] = [data.site_id, data.nom, centreSyncId];
@@ -442,9 +465,9 @@ export function updateCentre(id: number, data: { nom?: string; code?: string; li
   const sets: string[] = [];
   const params: unknown[] = [];
 
-  // Vérification de l'existence des colonnes en base
-  const tableInfo = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
-  const hasColumn = (colName: string) => tableInfo.some(c => c.name === colName);
+  // Vérification de l'existence des colonnes en base (cache module-level)
+  const centreColumns = getCentresColumns();
+  const hasColumn = (colName: string) => centreColumns.has(colName);
 
   if (data.nom !== undefined)                                    { sets.push('nom = ?');                params.push(data.nom); }
   if (data.numero !== undefined && hasColumn('numero'))          { sets.push('numero = ?');             params.push(data.numero); }
@@ -456,6 +479,8 @@ export function updateCentre(id: number, data: { nom?: string; code?: string; li
   }
 
   if (sets.length === 0) return null;
+  sets.push("updated_at = datetime('now')");
+  sets.push("is_dirty = 1");
   params.push(id);
 
   // ── 1. Mise à jour locale immédiate ───────────────────────────────────────────
@@ -540,9 +565,7 @@ export function deleteCentre(id: number) {
         scheduleOutboxProcessing();
       }
     } else {
-      // Si local uniquement, suppression physique immédiate
-      db.prepare('DELETE FROM t_postes WHERE centre_id = ?').run(id);
-      db.prepare('DELETE FROM t_centres WHERE id = ?').run(id);
+      // Si local uniquement, la suppression physique a déjà été faite ci-dessus.
     }
   }
 

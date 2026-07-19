@@ -21,7 +21,7 @@ declare global {
         getVerification: (agentUsername: string, siteId: number) => Promise<any>;
         getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
         getAgentToday: (userId: number) => Promise<number>;
-        getAgentRecentSaisies: (userId: number, limit?: number) => Promise<any[]>;
+        getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;
         getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;
         getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;
         getSiteLogistiqueToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;
@@ -33,13 +33,17 @@ declare global {
         getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number }>;
       };
       cartes: {
+        searchAllRecords: (siteId: number, filters: any, limit: number) => Promise<any[]>;
+        getRecordForCorrection: (originalId: number | string, recordType: string) => Promise<any>;
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
         search: (query: string, limit?: number, filters?: any) => Promise<any[]>;
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
+        countDrafts: (siteId: number) => Promise<number>;
+        publishDrafts: (siteId: number) => Promise<{ publishedCount: number }>;
         updateCarte: (id: number, data: any, currentUser?: any) => Promise<any>;
-        update: (id: number, data: any) => Promise<any>;
-        delete: (id: number) => Promise<boolean>;
+        update: (id: number, data: any, currentUser?: any) => Promise<any>;
+        delete: (id: number, currentUser?: any) => Promise<boolean>;
         delivrer: (id: number, data: any, currentUser?: any) => Promise<boolean>;
         transferer: (id: number, data: { centre_id: number; rangement?: string; agent_transfert: string }, currentUser?: any) => Promise<any>;
         signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any) => Promise<boolean>;
@@ -55,13 +59,15 @@ declare global {
         reactiverCarte: (id: number, nouveauRangement: string, currentUser?: any) => Promise<any>;
         getInvalidDates: (siteId?: number) => Promise<any[]>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
-        getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        getSansNomPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }) => Promise<any>;
+        getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansNomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansContactPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, noms?: string, prenoms?: string, contact?: string, lieu_de_naissance?: string, date_de_naissance?: string, sexe?: string }) => Promise<any>;
         searchQuickLogistique: (siteId: number, critere: string) => Promise<any[]>;
         updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }) => Promise<any>;
         searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
@@ -113,16 +119,19 @@ declare global {
         parseCSV: (path: string) => Promise<{rows: any[], headers: string[], total: number, error?: string}>;
         executeBatch: (rows: any[], agent: string, siteId?: number) => Promise<void>;
         clearTemp: (siteId?: number) => Promise<void>;
-        processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number) => Promise<any>;
+        processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number) => Promise<any>;
         fusionner: (agent: string, siteId?: number) => Promise<{updated: number, inserted: number}>;
-        getAnomalies: (siteId: number) => Promise<any[]>;
+        getAnomalies: (siteId: number, offset?: number, limit?: number, query?: string) => Promise<{rows: any[], total: number}>;
         clearAnomalies: (siteId: number) => Promise<void>;
+        deleteAnomaly: (id: number) => Promise<void>;
+        countEmptyAnomalies: (siteId: number) => Promise<number>;
+        deleteEmptyAnomalies: (siteId: number) => Promise<void>;
         onProgress: (callback: (p: number) => void) => () => void;
       };
       hierarchy: {
         getSites: () => Promise<any[]>;
         getSitesSummary: () => Promise<any[]>;
-        createSite: (data: any) => Promise<any>;
+        createSite: (data: any, currentUser?: any) => Promise<any>;
         updateSite: (id: number, data: any) => Promise<any>;
         deleteSite: (id: number) => Promise<any>;
         resetAdminPassword: (siteId: number, pass: string) => Promise<any>;
@@ -183,6 +192,9 @@ declare global {
         getCloudCartesCount: (siteId: number) => Promise<number>;
         getTotalCloudCartesCount: (siteId: number) => Promise<number>;
         force: () => Promise<{ success: boolean; message: string }>;
+        forcePing: () => Promise<{ success: boolean; state: string }>;
+        retryConnection: () => Promise<{ success: boolean; state: string }>;
+
         getAutoDownstream: (login: string) => Promise<boolean>;
         setAutoDownstream: (login: string, enabled: boolean) => Promise<{ success: boolean }>;
         onStatusChanged: (callback: (status: any) => void) => () => void;

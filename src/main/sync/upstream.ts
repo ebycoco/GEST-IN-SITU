@@ -86,7 +86,12 @@ export async function runUpstream(): Promise<number> {
 
   log.info(`Upstream: Found ${pendingOps.length} pending operations to push in bulk.`);
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[Upstream] Client Supabase non disponible — upstream ignoré.');
+    return 0;
+  }
   let successCount = 0;
+
 
   // 1. Regrouper les opérations par table
   const tableGroups: Record<string, GroupedOps> = {};
@@ -159,6 +164,10 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
       if (tableName === 't_sites') {
         if (rawPayload.is_permanent !== undefined) {
           rawPayload.is_permanent = Boolean(rawPayload.is_permanent);
+        }
+      } else if (tableName === 't_users') {
+        if (rawPayload.statut_actif !== undefined) {
+          rawPayload.statut_actif = (rawPayload.statut_actif === true || rawPayload.statut_actif === 1 || rawPayload.statut_actif === 'true') ? 1 : 0;
         }
       }
       const mappedPayload = tableName === 't_cartes' ? mapCardPayload(rawPayload) : rawPayload;

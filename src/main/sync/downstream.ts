@@ -112,6 +112,10 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
   }
 
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[runDownstream] Client Supabase non disponible — downstream ignoré.');
+    return 0;
+  }
   const db = getDatabase()!;
 
   // 1. TÉLÉCHARGER ET STOCKER LE SITE COURANT (t_sites)
@@ -308,6 +312,10 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
 
   log.info(`Downstream Chunk: Fetching updates on t_cartes from Supabase since ${watermark} (sync_id > ${lastSyncId}) for site ${siteId}...`);
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[runDownstreamChunk] Client Supabase non disponible — chunk ignoré.');
+    return 0;
+  }
 
   // 2. Requête Supabase avec AbortController
   const controller = new AbortController();
@@ -576,6 +584,10 @@ function resolveAndApplyConflict(db: any, local: any, cloud: any): void {
 export async function syncUsersFromCloud(siteId: number): Promise<number> {
   const db = getDatabase()!;
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[syncUsersFromCloud] Client Supabase non disponible — sync utilisateurs ignoré.');
+    return 0;
+  }
 
   log.info(`Downstream: Synchronisation préliminaire du site ${siteId} depuis Supabase...`);
   
@@ -734,6 +746,10 @@ export async function preloadUsersFromCloud(): Promise<void> {
       return;
     }
     const supabase = getSupabaseClient();
+    if (!supabase) {
+      log.warn('[preloadUsersFromCloud] Client Supabase non disponible — preload ignoré (mode dégradé).');
+      return;
+    }
 
     // Vérification de la présence des tables critiques dans SQLite
     const checkTableExists = (tableName: string): boolean => {

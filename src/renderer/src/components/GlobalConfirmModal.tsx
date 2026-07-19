@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from './confirmService';
+import { useAuthStore } from '../stores/authStore';
 
 export const GlobalConfirmModal: React.FC = () => {
+  const { user } = useAuthStore();
   const [isOpen, setIsOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -35,7 +37,7 @@ export const GlobalConfirmModal: React.FC = () => {
       }
       setLoading(true);
       try {
-        const isCorrect = await window.api.hierarchy.verifyPassword(password, options.actionName);
+        const isCorrect = await window.api.hierarchy.verifyPassword(password, user?.login);
         if (!isCorrect) {
           toast.error("❌ Mot de passe administrateur incorrect.");
           setLoading(false);

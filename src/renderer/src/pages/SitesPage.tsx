@@ -31,7 +31,7 @@ export default function SitesPage() {
   const [showSiteModal, setShowSiteModal] = useState(false);
   const [editingSite, setEditingSite] = useState<Site | null>(null);
   const [editingCentre, setEditingCentre] = useState<any>(null);
-  const [confirmModal, setConfirmModal] = useState<{ type: 'DELETE' | 'BAN' | 'ACTIVATE', site: Site } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ type: 'DELETE' | 'BAN' | 'ACTIVATE' | 'UPDATE', site: Site } | null>(null);
   
   const [activeTab, setActiveTab] = useState<'SITES' | 'CENTRES'>(userContext?.role === 'SUPER ADMIN' ? 'SITES' : 'CENTRES');
   
@@ -95,7 +95,7 @@ export default function SitesPage() {
           login: siteFormData.adminLogin,
           password_hash: siteFormData.adminPassword // Le backend s'occupe du hachage
         }
-      });
+      }, userContext);
       toast.success('Site et Administrateur créés avec succès');
       setShowSiteModal(false);
       setSiteFormData({ 
@@ -108,7 +108,7 @@ export default function SitesPage() {
         expiry_date: '',
         is_permanent: false
       });
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message);
     }
@@ -117,21 +117,7 @@ export default function SitesPage() {
   const handleUpdateSite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingSite) return;
-    try {
-      await window.api.hierarchy.updateSite(editingSite.id, {
-        nom: editingSite.nom,
-        code: editingSite.code,
-        max_centres: editingSite.max_centres,
-        expiry_date: editingSite.is_permanent ? null : (editingSite.expiry_date || null),
-        is_permanent: editingSite.is_permanent ? 1 : 0,
-        is_active: editingSite.is_active
-      });
-      toast.success('Modifications enregistrées');
-      setEditingSite(null);
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message);
-    }
+    setConfirmModal({ type: 'UPDATE', site: editingSite });
   };
 
   const handleCreateCentre = async (e: React.FormEvent) => {
@@ -171,7 +157,7 @@ export default function SitesPage() {
       toast.success('Centre créé avec succès');
       setShowCentreModal(false);
       setCentreFormData({ nom: '', numero: '', lieu: '', site_id: '', prefixe_rangement: '' });
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la création du centre');
     }
@@ -205,7 +191,7 @@ export default function SitesPage() {
       });
       toast.success('Centre modifié avec succès');
       setEditingCentre(null);
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la modification du centre');
     }
@@ -225,7 +211,7 @@ export default function SitesPage() {
     try {
       await window.api.hierarchy.deleteCentre(id);
       toast.success("Centre supprimé avec succès");
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || "Erreur lors de la suppression du centre");
     }
@@ -254,11 +240,22 @@ export default function SitesPage() {
       } else if (type === 'ACTIVATE') {
         await window.api.hierarchy.updateSite(site.id, { is_active: 1 });
         toast.success(`Accès restauré pour le site ${site.nom}`);
+      } else if (type === 'UPDATE') {
+        await window.api.hierarchy.updateSite(site.id, {
+          nom: site.nom,
+          code: site.code,
+          max_centres: site.max_centres,
+          expiry_date: site.is_permanent ? null : (site.expiry_date || null),
+          is_permanent: site.is_permanent ? 1 : 0,
+          is_active: site.is_active
+        });
+        toast.success('Modifications enregistrées avec succès');
+        setEditingSite(null);
       }
 
       setConfirmModal(null);
       setAdminPassword('');
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || 'Une erreur est survenue lors de l\'opération');
     } finally {
@@ -273,7 +270,7 @@ export default function SitesPage() {
       const result = await window.api.hierarchy.pullCentres(userContext.site_id, userContext);
       if (result.success) {
         toast.success(result.message || `${result.count} centres téléchargés avec succès.`);
-        loadData();
+        await loadData();
       } else {
         toast.error(result.message || 'Erreur lors du téléchargement des centres.');
       }
@@ -291,7 +288,7 @@ export default function SitesPage() {
       const result = await window.api.hierarchy.forceCentres(userContext.site_id, userContext);
       if (result.success) {
         toast.success(result.message || `${result.count} centres envoyés au Cloud avec succès.`);
-        loadData();
+        await loadData();
       } else {
         toast.error(result.message || 'Erreur lors de l\'envoi des centres.');
       }
@@ -332,10 +329,10 @@ export default function SitesPage() {
         <div style={{ display: 'flex', gap: 12 }}>
           {userContext?.role === 'SUPER ADMIN' ? (
             <div className="tabs-premium">
-              <button className={activeTab === 'SITES' ? 'active' : ''} onClick={() => setActiveTab('SITES')}>
+              <button className={activeTab === 'SITES' ? 'active' : ''} onClick={() => { setActiveTab('SITES'); setCurrentPage(1); }}>
                 <MapPin size={16} /> Sites
               </button>
-              <button className={activeTab === 'CENTRES' ? 'active' : ''} onClick={() => setActiveTab('CENTRES')}>
+              <button className={activeTab === 'CENTRES' ? 'active' : ''} onClick={() => { setActiveTab('CENTRES'); setCurrentPage(1); }}>
                 <Building2 size={16} /> Centres
               </button>
             </div>
@@ -378,13 +375,15 @@ export default function SitesPage() {
             </>
           )}
 
-          <button 
-            className="btn btn-primary btn-lg" 
-            disabled={userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4)}
-            onClick={() => activeTab === 'SITES' ? setShowSiteModal(true) : setShowCentreModal(true)}
-          >
-            <Plus size={18} /> {activeTab === 'SITES' ? 'Nouveau Site' : 'Nouveau Centre'}
-          </button>
+          {(userContext?.role === 'SUPER ADMIN' || activeTab === 'CENTRES') && (
+            <button 
+              className="btn btn-primary btn-lg" 
+              disabled={userContext?.role !== 'SUPER ADMIN' && centres.filter(c => c.site_id === userContext?.site_id).length >= (sites.find(x => x.id === userContext?.site_id)?.max_centres || 4)}
+              onClick={() => activeTab === 'SITES' ? setShowSiteModal(true) : setShowCentreModal(true)}
+            >
+              <Plus size={18} /> {activeTab === 'SITES' ? 'Nouveau Site' : 'Nouveau Centre'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -680,7 +679,7 @@ export default function SitesPage() {
               <div className="action-summary">
                 <span className="label">Opération :</span>
                 <span className={`value ${confirmModal.type === 'DELETE' ? 'text-red' : 'text-primary'}`}>
-                  {confirmModal.type === 'DELETE' ? 'PURGE COMPLÈTE DU SITE' : confirmModal.type === 'BAN' ? 'RÉVOCATION D\'ACCÈS' : 'RESTAURATION D\'ACCÈS'}
+                  {confirmModal.type === 'DELETE' ? 'PURGE COMPLÈTE DU SITE' : confirmModal.type === 'BAN' ? 'RÉVOCATION D\'ACCÈS' : confirmModal.type === 'UPDATE' ? 'MODIFICATION DU SITE' : 'RESTAURATION D\'ACCÈS'}
                 </span>
               </div>
               
@@ -954,130 +953,6 @@ export default function SitesPage() {
         </div>
       )}
 
-      {/* Styles inline pour le look Premium si non présents dans index.css */}
-      <style>{`
-        .card-premium {
-          background: rgba(18, 22, 33, 0.6) !important;
-          backdrop-filter: blur(20px);
-          border: 1px solid rgba(255,255,255,0.05) !important;
-          box-shadow: 0 12px 40px rgba(0,0,0,0.3) !important;
-        }
-        .tabs-premium {
-          background: rgba(255,255,255,0.03);
-          padding: 4px;
-          border-radius: 12px;
-          display: flex;
-          gap: 4px;
-          border: 1px solid rgba(255,255,255,0.05);
-        }
-        .tabs-premium button {
-          padding: 8px 16px;
-          border-radius: 10px;
-          border: none;
-          background: transparent;
-          color: var(--text-muted);
-          font-size: 13px;
-          font-weight: 600;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          cursor: pointer;
-          transition: all 0.2s;
-        }
-        .tabs-premium button.active {
-          background: rgba(255,255,255,0.08);
-          color: white;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-        }
-        .stat-card-mini {
-          background: rgba(255,255,255,0.03);
-          border: 1px solid rgba(255,255,255,0.05);
-          border-radius: 16px;
-          padding: 16px;
-          display: flex;
-          align-items: center;
-          gap: 16px;
-        }
-        .stat-card-mini .icon {
-          width: 36px;
-          height: 36px;
-          border-radius: 10px;
-          background: rgba(255,255,255,0.05);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: var(--accent-primary);
-        }
-        .stat-card-mini .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; display: block; }
-        .stat-card-mini .value { font-size: 18px; font-weight: 800; color: white; }
-        
-        .table-premium { width: 100%; border-collapse: collapse; }
-        .table-premium th { text-align: left; padding: 16px 24px; font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; border-bottom: 1px solid rgba(255,255,255,0.05); }
-        .table-premium td { padding: 16px 24px; border-bottom: 1px solid rgba(255,255,255,0.03); vertical-align: middle; }
-        .table-premium tr:hover { background: rgba(255,255,255,0.02); }
-        .row-inactive { opacity: 0.5; }
-        
-        .status-badge { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 700; }
-        .status-badge.active { background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); }
-        .status-badge.banned { background: rgba(239, 68, 68, 0.1); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.2); }
-        .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
-        
-        .code-tag { background: rgba(255,255,255,0.05); padding: 2px 8px; border-radius: 6px; font-family: monospace; color: var(--accent-primary); border: 1px solid rgba(255,255,255,0.08); }
-        .btn-action { width: 32px; height: 32px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-        .btn-action:hover { background: rgba(255,255,255,0.08); color: white; border-color: rgba(255,255,255,0.2); }
-        .btn-action.delete:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
-        .btn-action.ban:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
-        .btn-action.activate:hover { background: rgba(16, 185, 129, 0.1); color: #10b981; border-color: rgba(16, 185, 129, 0.3); }
-
-        /* MODAL PREMIUM */
-        .modal-overlay-premium { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(5, 7, 15, 0.85); backdrop-filter: blur(12px); display: flex; align-items: center; justify-content: center; z-index: 9999; animation: fadeIn 0.3s; }
-        .modal-content-premium { background: #131722; width: 95%; max-width: 450px; max-height: 90vh; border-radius: 24px; border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 32px 64px -12px rgba(0, 0, 0, 0.6); overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; }
-        .modal-content-premium.danger { border-top: 4px solid #ef4444; }
-        .modal-content-premium.secure { border-top: 4px solid var(--accent-primary); }
-        
-        .modal-header { padding: 32px 32px 20px; display: flex; gap: 20px; position: relative; }
-        .icon-wrapper { width: 48px; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .modal-content-premium.danger .icon-wrapper { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
-        .modal-content-premium.secure .icon-wrapper { background: rgba(79, 70, 229, 0.1); color: var(--accent-primary); }
-        .icon-wrapper.primary { background: rgba(79, 70, 229, 0.1); color: var(--accent-primary); }
-        
-        .title-group { flex: 1; padding-right: 50px; }
-        .title-group h3 { margin: 0 0 4px; font-size: 17px; font-weight: 800; color: white; line-height: 1.2; }
-        .title-group p { margin: 0; font-size: 12px; color: var(--text-muted); }
-        .close-btn { position: absolute; top: 20px; right: 20px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); color: var(--text-muted); cursor: pointer; padding: 8px; border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; z-index: 10; }
-        .close-btn:hover { background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: rgba(239, 68, 68, 0.2); transform: rotate(90deg); }
-        
-        .modal-body { padding: 0 32px 32px; }
-        .action-summary { background: rgba(255,255,255,0.02); padding: 12px 16px; border-radius: 12px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border: 1px solid rgba(255,255,255,0.05); }
-        .action-summary .label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
-        .action-summary .value { font-size: 13px; font-weight: 800; }
-        .text-red { color: #ef4444; }
-        .text-primary { color: var(--accent-primary); }
-        
-        .target-info { display: flex; align-items: center; gap: 8px; font-size: 13px; color: white; margin-bottom: 20px; padding-left: 4px; }
-        .warning-box { background: rgba(239, 68, 68, 0.05); border: 1px solid rgba(239, 68, 68, 0.1); padding: 12px 16px; border-radius: 12px; display: flex; gap: 12px; color: #ef4444; font-size: 12px; line-height: 1.5; }
-        
-        .input-group-premium label { display: block; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; letter-spacing: 0.05em; }
-        .input-wrapper { position: relative; }
-        .field-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
-        
-        .input-p { width: 100%; background: #0c0f17 !important; border: 1px solid rgba(255,255,255,0.08) !important; border-radius: 12px !important; height: 48px; padding: 0 16px; color: white !important; font-size: 14px; transition: all 0.2s; }
-        .input-p::placeholder { color: rgba(255,255,255,0.3); }
-        .input-p:focus { border-color: var(--accent-primary) !important; outline: none; box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.1); }
-        .input-wrapper .input-p { padding-left: 44px; }
-        
-        .modal-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 32px; }
-        .btn-secondary { height: 48px; border-radius: 14px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); color: white; font-weight: 700; cursor: pointer; }
-        .btn-secondary:hover { background: rgba(255,255,255,0.08); }
-        .btn-execute { height: 48px; border-radius: 14px; border: none; color: white; font-weight: 800; cursor: pointer; transition: all 0.2s; font-size: 13px; letter-spacing: 0.02em; }
-        .btn-execute.btn-primary { background: linear-gradient(135deg, var(--accent-primary) 0%, #6366f1 100%); box-shadow: 0 8px 20px rgba(79, 70, 229, 0.3); }
-        .btn-execute.btn-danger { background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); box-shadow: 0 8px 20px rgba(239, 68, 68, 0.3); }
-        .btn-execute:hover { transform: translateY(-2px); filter: brightness(1.1); }
-        .btn-execute:active { transform: translateY(0); }
-
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-      `}</style>
     </div>
   );
 }

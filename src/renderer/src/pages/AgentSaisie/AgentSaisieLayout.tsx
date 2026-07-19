@@ -2,14 +2,33 @@ import React, { useState, useEffect } from 'react';
 import { OnlineBadge } from '../../components/OnlineBadge';
 
 import { Outlet, NavLink } from 'react-router-dom';
-import { Database, Globe, FileText, History, LayoutDashboard } from 'lucide-react';
+import { Database, Globe, FileText, History, LayoutDashboard, Send, Edit3 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
+import { toast } from 'react-hot-toast';
 
 export default function AgentSaisieLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [draftsCount, setDraftsCount] = useState<number>(0);
+  const [isPublishing, setIsPublishing] = useState<boolean>(false);
+
+  const fetchDraftsCount = async () => {
+    if (!activeSiteId) return;
+    try {
+      const count = await window.api.cartes.countDrafts(activeSiteId);
+      setDraftsCount(count);
+    } catch (e) {
+      console.error('Erreur chargement brouillons:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchDraftsCount();
+    const interval = setInterval(fetchDraftsCount, 5000);
+    return () => clearInterval(interval);
+  }, [activeSiteId]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -106,7 +125,48 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+              {isBulkUploading ? 'SYNCHRONISATION EN COURS...' : `SYNCHRONISER AVEC LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+            </button>
+
+            {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}
+            <button
+              onClick={async () => {
+                if (!activeSiteId) return;
+                setIsPublishing(true);
+                try {
+                  const res = await window.api.cartes.publishDrafts(activeSiteId);
+                  toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation.`);
+                  fetchDraftsCount();
+                  loadStats();
+                } catch (e: any) {
+                  toast.error("Erreur lors de l'envoi des brouillons: " + e.message);
+                } finally {
+                  setIsPublishing(false);
+                }
+              }}
+              disabled={draftsCount === 0 || isPublishing}
+              className="btn-plein-soleil"
+              style={{
+                padding: '12px 24px',
+                borderRadius: 12,
+                fontWeight: 700,
+                backgroundColor: draftsCount === 0 || isPublishing ? '#555555' : '#4CAF50',
+                color: '#ffffff',
+                border: '1px solid ' + (draftsCount === 0 || isPublishing ? '#555555' : '#4CAF50'),
+                cursor: draftsCount === 0 || isPublishing ? 'not-allowed' : 'pointer',
+                opacity: draftsCount === 0 || isPublishing ? 0.5 : 1,
+                boxShadow: draftsCount === 0 || isPublishing ? 'none' : '0 4px 15px rgba(76, 175, 80, 0.3)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '8px',
+                transition: 'all 0.2s ease-in-out',
+                flex: '1 1 auto',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              <Send size={18} style={{ animation: isPublishing ? 'pulse 1.5s linear infinite' : 'none' }} />
+              {isPublishing ? 'ENVOI EN COURS...' : `ENVOYER MES BROUILLONS${draftsCount > 0 ? ` (${draftsCount})` : ''}`}
             </button>
           </div>
         </div>
@@ -121,6 +181,9 @@ export default function AgentSaisieLayout() {
           </NavLink>
           <NavLink to="/agent-saisie/historique" className="tab-link" style={getNavLinkStyle}>
             <History size={16} /> Historique des saisies
+          </NavLink>
+          <NavLink to="/agent-saisie/brouillons" className="tab-link" style={getNavLinkStyle}>
+            <Edit3 size={16} /> Mes Brouillons {draftsCount > 0 && <span style={{ background: '#f44336', color: 'white', padding: '2px 6px', borderRadius: 10, fontSize: 11 }}>{draftsCount}</span>}
           </NavLink>
         </div>
       </div>

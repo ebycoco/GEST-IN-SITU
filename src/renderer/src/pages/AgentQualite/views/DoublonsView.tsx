@@ -24,6 +24,7 @@ export default function DoublonsView() {
   const [mergeModal, setMergeModal] = useState<{ isOpen: boolean; target: any; source: any } | null>(null);
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; cardId: number; cardName: string } | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
 
   const itemsPerPage = 10;
 
@@ -103,7 +104,8 @@ export default function DoublonsView() {
   };
 
   const executeMerge = async () => {
-    if (!mergeModal) return;
+    if (!mergeModal || isMerging) return;
+    setIsMerging(true);
     const { target, source } = mergeModal;
     try {
       const mergedFields: string[] = [];
@@ -120,6 +122,8 @@ export default function DoublonsView() {
       loadTabData();
     } catch (err) {
       toast.error('Erreur lors de la fusion.');
+    } finally {
+      setIsMerging(false);
     }
   };
 
@@ -294,9 +298,9 @@ export default function DoublonsView() {
               <div style={{ color: 'white', fontWeight: 600 }}>{mergeModal.source.noms} {mergeModal.source.prenoms}</div>
             </div>
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button className="btn btn-secondary" onClick={() => setMergeModal(null)} style={{ padding: '12px 24px', borderRadius: 12 }}>Annuler</button>
-              <button className="btn-plein-soleil" onClick={executeMerge} style={{ padding: '12px 24px', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <GitMerge size={18} /> Confirmer la fusion
+              <button className="btn btn-secondary" onClick={() => setMergeModal(null)} disabled={isMerging} style={{ padding: '12px 24px', borderRadius: 12 }}>Annuler</button>
+              <button className="btn-plein-soleil" onClick={executeMerge} disabled={isMerging} style={{ padding: '12px 24px', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8, opacity: isMerging ? 0.7 : 1, cursor: isMerging ? 'not-allowed' : 'pointer' }}>
+                <GitMerge size={18} /> {isMerging ? 'Fusion en cours...' : 'Confirmer la fusion'}
               </button>
             </div>
           </div>

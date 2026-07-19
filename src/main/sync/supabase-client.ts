@@ -7,22 +7,36 @@ const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 let supabaseInstance: SupabaseClient | null = null;
 let currentAuthenticatedSiteId: number | null = null;
 
-export function getSupabaseClient(): SupabaseClient {
+/**
+ * Retourne le client Supabase initialisé, ou `null` si la configuration
+ * est manquante ou si l'initialisation a échoué.
+ *
+ * ⚠️ CONTRAT : Cette fonction ne lève JAMAIS d'exception.
+ * Tous les appelants doivent vérifier `if (!supabase) return` avant d'utiliser le client.
+ */
+export function getSupabaseClient(): SupabaseClient | null {
   if (!supabaseInstance) {
     if (!supabaseUrl || !supabaseAnonKey) {
-      log.error('Supabase URL or Anon Key is missing in .env config.');
-      throw new Error('Supabase configuration missing.');
+      log.error('[SupabaseClient] URL ou Anon Key manquante dans la config .env — client non initialisé.');
+      return null;
     }
-    
-    // Initialisation du client avec l'anon key
-    supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false
-      }
-    });
-    log.info('Supabase client initialized.');
+
+    try {
+      // Initialisation du client avec l'anon key
+      supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: false
+        }
+      });
+      log.info('[SupabaseClient] Client Supabase initialisé avec succès.');
+    } catch (e) {
+      // Capture large : tout échec réseau ou d'init ne doit PAS crasher le service Electron.
+      log.error('[SupabaseClient] Échec critique lors de l\'initialisation du client (crash réseau évité) :', e);
+      supabaseInstance = null;
+      return null;
+    }
   }
   return supabaseInstance;
 }
@@ -33,6 +47,10 @@ export function getSupabaseClient(): SupabaseClient {
  */
 export async function authenticateSupabaseSite(siteId: number | null, siteCode: string): Promise<boolean> {
   const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[SupabaseClient] authenticateSupabaseSite : client non disponible (config manquante ou init échouée).');
+    return false;
+  }
 
   // Éviter de re-connecter si on est déjà authentifié sur ce site
   if (currentAuthenticatedSiteId === siteId && supabase.auth.getSession() !== null) {

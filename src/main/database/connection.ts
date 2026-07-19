@@ -3,6 +3,7 @@ import { app } from 'electron';
 import { join } from 'path';
 import { existsSync, mkdirSync } from 'fs';
 import { runMigrations } from './schema';
+import { invalidateCentresColumnsCache } from './queries/hierarchy.queries';
 import log from 'electron-log';
 
 let db: Database.Database | null = null;
@@ -39,6 +40,8 @@ export async function initDatabase(): Promise<Database.Database> {
 
   // Run schema migrations
   runMigrations(db);
+  // Invalider le cache des colonnes de t_centres après migration
+  invalidateCentresColumnsCache();
 
   // Purge automatique des Dead Letter Entries expirées (> 7 jours)
   try {

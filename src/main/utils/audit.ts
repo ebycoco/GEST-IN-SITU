@@ -28,9 +28,9 @@ export function logAudit(utilisateur: string | null | undefined, action: string,
         );
       `).run();
 
-      // Utilisation du login de session actif comme identifiant principal
+      // Utilisation du login explicite, ou fallback sur la session active
       const sessionLogin = getCurrentUserLogin();
-      let resolvedUser = sessionLogin || utilisateur || 'system';
+      let resolvedUser = utilisateur || sessionLogin || 'system';
 
       // Garantir que details est un JSON structuré valide pour analyse de sécurité
       let jsonDetails = '';

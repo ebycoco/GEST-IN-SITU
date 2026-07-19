@@ -25,6 +25,10 @@ export function clearImportTemp(siteId: number) {
   return getDatabase()!.prepare('DELETE FROM t_import_temp WHERE site_id = ?').run(siteId);
 }
 
+/**
+ * @deprecated AUD-001 — Pipeline B déprécié. Remplacé par l'approche unifiée dans le Worker.
+ * N'utiliser que pour des raisons de rétrocompatibilité.
+ */
 export function importBatch(rows: Record<string, string>[], agentSaisie: string, siteId: number) {
   const db = getDatabase()!;
   const insertStmt = db.prepare(`
@@ -109,6 +113,10 @@ export function importBatch(rows: Record<string, string>[], agentSaisie: string,
   return rows.length;
 }
 
+/**
+ * @deprecated AUD-001 — Pipeline B déprécié. La fusion est désormais intégrée dans processFile (Worker).
+ * N'utiliser que pour des raisons de rétrocompatibilité.
+ */
 export async function fusionnerImport(siteId: number): Promise<{ updated: number; inserted: number }> {
   const db = getDatabase()!;
   const now = new Date().toISOString();
@@ -170,13 +178,21 @@ export async function fusionnerImport(siteId: number): Promise<{ updated: number
   return { updated: updateResult.changes, inserted: insertResult.changes };
 }
 
-export function getImportAnomalies(siteId: number, offset = 0, limit = 50) {
+export function getImportAnomalies(siteId: number, offset = 0, limit = 50, query?: string) {
   const db = getDatabase()!;
+  
+  let where = "WHERE site_id = ?";
+  const params: any[] = [siteId];
+  
+  if (query && query.trim()) {
+    where += " AND (noms LIKE ? OR prenoms LIKE ? OR contact LIKE ? OR num_secu LIKE ? OR rangement LIKE ?)";
+    params.push(`%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`, `%${query}%`);
+  }
 
   const totalRow = db.prepare(`
     SELECT COUNT(*) as count FROM t_import_anomalies
-    WHERE site_id = ?
-  `).get(siteId) as { count: number };
+    ${where}
+  `).get(...params) as { count: number };
   const total = totalRow?.count || 0;
 
   const rows = db.prepare(`
@@ -196,10 +212,10 @@ export function getImportAnomalies(siteId: number, offset = 0, limit = 50) {
       site_id,
       created_at
     FROM t_import_anomalies
-    WHERE site_id = ?
+    ${where}
     ORDER BY id DESC
     LIMIT ? OFFSET ?
-  `).all(siteId, limit, offset);
+  `).all(...params, limit, offset);
 
   return { rows, total };
 }

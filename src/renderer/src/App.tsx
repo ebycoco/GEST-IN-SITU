@@ -42,7 +42,7 @@ import AgentSaisieLayout from './pages/AgentSaisie/AgentSaisieLayout';
 import SaisieOverview from './pages/AgentSaisie/views/Overview';
 import NouvelleSaisieView from './pages/AgentSaisie/views/NouvelleSaisieView';
 import HistoriqueView from './pages/AgentSaisie/views/HistoriqueView';
-import EditSaisieView from './pages/AgentSaisie/views/EditSaisieView';
+import MesBrouillonsView from './pages/AgentSaisie/views/MesBrouillonsView';
 
 // Agent de Qualité
 import AgentQualiteLayout from './pages/AgentQualite/AgentQualiteLayout';
@@ -50,6 +50,8 @@ import Overview from './pages/AgentQualite/views/Overview';
 import DoublonsView from './pages/AgentQualite/views/DoublonsView';
 import MissingDataView from './pages/AgentQualite/views/MissingDataView';
 import InvalidFormatView from './pages/AgentQualite/views/InvalidFormatView';
+import AnomaliesBrutesView from './pages/AgentQualite/views/AnomaliesBrutesView';
+import GlobalSearchView from './pages/AgentQualite/views/GlobalSearchView';
 
 function ProtectedRoute({ children, requiredRoles }: { children: React.ReactElement; requiredRoles?: string[] }) {
   const user = useAuthStore(s => s.user);
@@ -131,8 +133,8 @@ export default function App() {
             <Route path="agent-saisie" element={<ProtectedRoute requiredRoles={['OPERATEUR_SAISIE', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentSaisieLayout /></ProtectedRoute>}>
               <Route index element={<SaisieOverview />} />
               <Route path="nouvelle" element={<NouvelleSaisieView />} />
+              <Route path="brouillons" element={<MesBrouillonsView />} />
               <Route path="historique" element={<HistoriqueView />} />
-              <Route path="edit/:id" element={<EditSaisieView />} />
             </Route>
 
             {/* Routes Opérateur Logistique & Inventaire (Hub 3-en-1) */}
@@ -144,10 +146,12 @@ export default function App() {
               <Route path="doublons" element={<DoublonsView />} />
               <Route path="manquants" element={<MissingDataView />} />
               <Route path="invalides" element={<InvalidFormatView />} />
+              <Route path="anomalies-brutes" element={<AnomaliesBrutesView />} />
+              <Route path="recherche-universelle" element={<GlobalSearchView />} />
             </Route>
 
             {/* Routes Transversales */}
-            <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE']}><CartesPage /></ProtectedRoute>} />
+            <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_SAISIE']}><CartesPage /></ProtectedRoute>} />
             <Route path="search" element={<SearchPage />} />
             <Route path="profile" element={<ProfilePage />} />
             

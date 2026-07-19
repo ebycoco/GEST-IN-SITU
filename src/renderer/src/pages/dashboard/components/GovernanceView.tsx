@@ -33,8 +33,8 @@ export function GovernanceView({
   handleForceGlobalSync
 }: GovernanceViewProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [resetPassModal, setResetPassModal] = useState<{ isOpen: boolean, site: any | null, newPass: string }>({ isOpen: false, site: null, newPass: '' });
-  const [confirmStatusModal, setConfirmStatusModal] = useState<{ isOpen: boolean, site: any | null }>({ isOpen: false, site: null });
+  const [resetPassModal, setResetPassModal] = useState<{ isOpen: boolean, site: any | null, newPass: string, adminPass: string }>({ isOpen: false, site: null, newPass: '', adminPass: '' });
+  const [confirmStatusModal, setConfirmStatusModal] = useState<{ isOpen: boolean, site: any | null, adminPass: string }>({ isOpen: false, site: null, adminPass: '' });
   const [showSyncConfirmModal, setShowSyncConfirmModal] = useState<boolean>(false);
   const [loading, setLoading] = useState(false);
   const [appVersion, setAppVersion] = useState('');
@@ -81,12 +81,17 @@ export function GovernanceView({
 
   const handleResetAdminPass = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!resetPassModal.site || !resetPassModal.newPass) return;
+    if (!resetPassModal.site || !resetPassModal.newPass || !resetPassModal.adminPass) return;
     try {
       setLoading(true);
+      const isValid = await window.api.hierarchy.verifyPassword(resetPassModal.adminPass);
+      if (!isValid) {
+        toast.error('Accès refusé : Mot de passe administrateur incorrect');
+        return;
+      }
       await window.api.hierarchy.resetAdminPassword(resetPassModal.site.id, resetPassModal.newPass);
       toast.success("Mot de passe réinitialisé avec succès.");
-      setResetPassModal({ isOpen: false, site: null, newPass: '' });
+      setResetPassModal({ isOpen: false, site: null, newPass: '', adminPass: '' });
     } catch (e) {
       toast.error("Erreur lors de la réinitialisation.");
     } finally {
@@ -95,13 +100,18 @@ export function GovernanceView({
   };
 
   const handleToggleSiteStatus = async () => {
-    if (!confirmStatusModal.site) return;
+    if (!confirmStatusModal.site || !confirmStatusModal.adminPass) return;
     try {
       setLoading(true);
+      const isValid = await window.api.hierarchy.verifyPassword(confirmStatusModal.adminPass);
+      if (!isValid) {
+        toast.error('Accès refusé : Mot de passe administrateur incorrect');
+        return;
+      }
       const newStatus = confirmStatusModal.site.is_active ? 0 : 1;
       await window.api.hierarchy.updateSite(confirmStatusModal.site.id, { is_active: newStatus });
       toast.success(`Site ${confirmStatusModal.site.nom} mis à jour.`);
-      setConfirmStatusModal({ isOpen: false, site: null });
+      setConfirmStatusModal({ isOpen: false, site: null, adminPass: '' });
       loadGlobalData();
     } catch (e) {
       toast.error("Erreur lors de la mise à jour.");
@@ -324,7 +334,7 @@ export function GovernanceView({
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                       <button 
                         title="Réinitialiser le mot de passe"
-                        onClick={() => setResetPassModal({ isOpen: true, site, newPass: '' })}
+                        onClick={() => setResetPassModal({ isOpen: true, site, newPass: '', adminPass: '' })}
                         style={{
                           background: 'rgba(108, 99, 255, 0.15)',
                           border: '1px solid rgba(108, 99, 255, 0.3)',
@@ -341,7 +351,7 @@ export function GovernanceView({
                       </button>
                       <button 
                         title={site.is_active ? "Suspendre l'infrastructure" : "Activer l'infrastructure"}
-                        onClick={() => setConfirmStatusModal({ isOpen: true, site })}
+                        onClick={() => setConfirmStatusModal({ isOpen: true, site, adminPass: '' })}
                         style={{
                           background: site.is_active ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.15))' : 'linear-gradient(135deg, rgba(16, 185, 129, 0.15), rgba(5, 150, 105, 0.15))',
                           border: `1px solid ${site.is_active ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'}`,
@@ -568,8 +578,14 @@ export function GovernanceView({
                 value={resetPassModal.newPass}
                 onChange={e => setResetPassModal({...resetPassModal, newPass: e.target.value})}
               />
+              <input 
+                required type="password" placeholder="Mot de passe Super Admin (Confirmation)"
+                style={{ background: '#08090f', border: '1px solid #ef4444', borderRadius: 12, padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14 }}
+                value={resetPassModal.adminPass}
+                onChange={e => setResetPassModal({...resetPassModal, adminPass: e.target.value})}
+              />
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <button type="button" onClick={() => setResetPassModal({ isOpen: false, site: null, newPass: '' })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
+                <button type="button" onClick={() => setResetPassModal({ isOpen: false, site: null, newPass: '', adminPass: '' })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
                 <button type="submit" disabled={loading} style={{ flex: 1, padding: '14px', background: 'linear-gradient(135deg, #6366f1, #4f46e5)', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3)' }}>{loading ? '...' : 'Valider'}</button>
               </div>
             </form>
@@ -602,8 +618,14 @@ export function GovernanceView({
             <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
               Le site <strong style={{ color: 'white' }}>{confirmStatusModal.site.nom}</strong> {confirmStatusModal.site.is_active ? "ne pourra plus se connecter et synchroniser ses données." : "sera à nouveau autorisé à se connecter et synchroniser."}
             </p>
+            <input 
+              required type="password" placeholder="Mot de passe Super Admin (Confirmation)"
+              style={{ background: '#08090f', border: '1px solid #ef4444', borderRadius: 12, padding: '14px 18px', color: 'white', outline: 'none', fontSize: 14, width: '100%', boxSizing: 'border-box', marginBottom: 24 }}
+              value={confirmStatusModal.adminPass}
+              onChange={e => setConfirmStatusModal({...confirmStatusModal, adminPass: e.target.value})}
+            />
             <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={() => setConfirmStatusModal({ isOpen: false, site: null })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
+              <button onClick={() => setConfirmStatusModal({ isOpen: false, site: null, adminPass: '' })} style={{ flex: 1, padding: '14px', background: '#1e2235', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}>Annuler</button>
               <button onClick={handleToggleSiteStatus} disabled={loading} style={{ flex: 1, padding: '14px', background: confirmStatusModal.site.is_active ? '#ef4444' : '#10b981', border: 'none', borderRadius: 12, color: 'white', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: confirmStatusModal.site.is_active ? '0 4px 15px rgba(239, 68, 68, 0.3)' : '0 4px 15px rgba(16, 185, 129, 0.3)' }}>{loading ? '...' : 'Confirmer'}</button>
             </div>
           </div>

@@ -108,10 +108,23 @@ class SyncEngine extends EventEmitter {
     this.mainWindowRef = win;
   }
 
-  public init(): void {
+  /**
+   * Démarre le moteur de synchronisation.
+   *
+   * @param delayMs - Délai optionnel (ms) avant le premier appel à handleNetworkChange.
+   *   Utilisé pour garantir que la fenêtre est visible avant toute tentative réseau.
+   *   Par défaut : 0 (rétro-compatible), mais index.ts passe 3000ms.
+   */
+  public init(delayMs = 0): void {
     networkMonitor.start();
-    this.handleNetworkChange(networkMonitor.getState());
-    log.info('[SyncEngine] Moteur de synchronisation initialisé.');
+    if (delayMs > 0) {
+      setTimeout(() => {
+        this.handleNetworkChange(networkMonitor.getState());
+      }, delayMs);
+    } else {
+      this.handleNetworkChange(networkMonitor.getState());
+    }
+    log.info(`[SyncEngine] Moteur de synchronisation initialisé (délai réseau : ${delayMs}ms).`);
   }
 
   public destroy(): void {
@@ -308,6 +321,19 @@ class SyncEngine extends EventEmitter {
   // ── Gestion réseau ────────────────────────────────────────────────────────
 
   private handleNetworkChange(state: NetworkState): void {
+    // ── Garde PERMANENT_OFFLINE ───────────────────────────────────────────────
+    // Si l'état est PERMANENT_OFFLINE (3 tentatives épuisées), on stoppe TOUS
+    // les cycles et on n'autorise aucun nouveau démarrage automatique.
+    // Seul un appel à retryConnection() depuis le bouton "Réessayer" peut
+    // sortir de cet état.
+    if (state === 'PERMANENT_OFFLINE') {
+      log.warn('[SyncEngine] État PERMANENT_OFFLINE — tous les cycles de synchronisation sont suspendus.');
+      log.warn('[SyncEngine] Cliquez sur "Réessayer" dans l\'interface pour relancer la connexion.');
+      this.stopSyncCycle();
+      this.stopAutoDownstreamTimer();
+      return;
+    }
+
     if (state === 'ONLINE') {
       log.info('[SyncEngine] Réseau ONLINE — démarrage du cycle upstream.');
       this.startSyncCycle();
@@ -348,6 +374,23 @@ class SyncEngine extends EventEmitter {
     } else {
       log.info(`[SyncEngine] Réseau ${state} — arrêt du cycle upstream.`);
       this.stopSyncCycle();
+    }
+  }
+
+  /**
+   * Déclenche une nouvelle tentative de connexion réseau depuis l'UI (bouton "Réessayer").
+   * Réinitialise le NetworkMonitor depuis l'état PERMANENT_OFFLINE et relance les cycles
+   * si la connexion est rétablie.
+   */
+  public async retryConnection(): Promise<{ success: boolean; state: string }> {
+    log.info('[SyncEngine] retryConnection() déclenché depuis l\'UI.');
+    try {
+      const newState = await networkMonitor.resetAndRetry();
+      log.info(`[SyncEngine] retryConnection() terminé — état réseau : ${newState}`);
+      return { success: newState === 'ONLINE', state: newState };
+    } catch (err: any) {
+      log.error('[SyncEngine] Erreur lors de retryConnection() :', err);
+      return { success: false, state: 'PERMANENT_OFFLINE' };
     }
   }
 

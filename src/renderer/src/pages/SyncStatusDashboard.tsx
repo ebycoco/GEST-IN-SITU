@@ -20,7 +20,7 @@ export default function SyncStatusDashboard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [downstreamProgress, setDownstreamProgress] = useState<number>(-1);
   const [status, setStatus] = useState<{
-    state: 'ONLINE' | 'OFFLINE';
+    state: 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE';
     lastSync: string;
     queueCount: number;
     outboxCount: number;
@@ -39,7 +39,7 @@ export default function SyncStatusDashboard() {
       if (window.api?.sync?.getStatus) {
         const res = await window.api.sync.getStatus();
         setStatus({
-          state: (res.state as 'ONLINE' | 'OFFLINE') || 'OFFLINE',
+          state: (res.state as 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE') || 'OFFLINE',
           lastSync: res.lastSync || 'Jamais',
           queueCount: res.queueCount !== undefined ? res.queueCount : 0,
           outboxCount: res.outboxCount !== undefined ? res.outboxCount : 0,
@@ -72,7 +72,7 @@ export default function SyncStatusDashboard() {
       unsubscribe = window.api.sync.onStatusChanged((newStatus: any) => {
         setStatus((prev) => ({
           ...prev,
-          state: (newStatus.state as 'ONLINE' | 'OFFLINE') || prev.state,
+          state: (newStatus.state as 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE') || prev.state,
           lastSync: newStatus.lastSync || prev.lastSync,
           queueCount: newStatus.queueCount !== undefined ? newStatus.queueCount : prev.queueCount,
           outboxCount: newStatus.outboxCount !== undefined ? newStatus.outboxCount : prev.outboxCount,
@@ -133,18 +133,40 @@ export default function SyncStatusDashboard() {
     }
   };
 
+  const handleRetry = async () => {
+    if (isSyncing) return;
+    setIsSyncing(true);
+    const toastId = toast.loading("Tentative de reconnexion en cours...");
+    try {
+      if (window.api?.sync?.retryConnection) {
+        const res = await window.api.sync.retryConnection();
+        if (res && res.success) {
+          toast.success("✅ Reconnexion réussie !", { id: toastId });
+        } else {
+          toast.error("⚠️ La reconnexion a échoué. Toujours hors-ligne.", { id: toastId });
+        }
+      }
+      await loadStatus();
+    } catch (err: any) {
+      toast.error(`❌ Échec de la reconnexion : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const isOnline = status.state === 'ONLINE';
 
   // Calculer la santé de la synchronisation basée sur le réseau et la latence
   const getHealthStatus = () => {
     if (!isOnline) {
+      const isPermanent = status.state === 'PERMANENT_OFFLINE';
       return { 
-        label: 'HORS-LIGNE', 
-        desc: 'Aucune connexion avec le serveur cloud', 
+        label: isPermanent ? 'ÉCHEC CONNEXION' : 'HORS-LIGNE', 
+        desc: isPermanent ? 'Tentatives épuisées. Cliquez sur Réessayer.' : 'Aucune connexion avec le serveur cloud', 
         color: '#f87171', 
         bg: 'rgba(248, 113, 113, 0.1)', 
         border: 'rgba(248, 113, 113, 0.3)',
-        pulse: false 
+        pulse: !isPermanent 
       };
     }
     if (status.lastSync === 'Jamais') {
@@ -381,12 +403,25 @@ export default function SyncStatusDashboard() {
           {/* Bouton de synchronisation globale */}
           <button 
             className="btn-sync-soleil"
-            disabled={isSyncing }
+            disabled={isSyncing || status.state === 'PERMANENT_OFFLINE'}
             onClick={handleForceSync}
           >
             <RefreshCw size={16} className={isSyncing ? 'spin-animation' : ''} />
             <span>{isSyncing ? 'SYNCHRONISATION...' : 'SYNCHRONISER MAINTENANT'}</span>
           </button>
+
+          {/* Bouton Réessayer (affiché en cas de PERMANENT_OFFLINE) */}
+          {status.state === 'PERMANENT_OFFLINE' && (
+            <button 
+              className="btn-sync-soleil"
+              style={{ background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.25)', color: 'white' }}
+              disabled={isSyncing}
+              onClick={handleRetry}
+            >
+              <RefreshCw size={16} className={isSyncing ? 'spin-animation' : ''} color="white" />
+              <span>{isSyncing ? 'CONNEXION...' : 'RÉESSAYER'}</span>
+            </button>
+          )}
         </div>
       </div>
 
