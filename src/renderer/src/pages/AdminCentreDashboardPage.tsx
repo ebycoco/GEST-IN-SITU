@@ -270,8 +270,13 @@ export default function AdminCentreDashboardPage() {
       if (cache.cadence) setCadence(cache.cadence);
       setLoading(false);
       hasCache = true;
+      // Libérer le verrou global immédiatement
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    fetchDashboardData(hasCache);
+    
+    if (!hasCache) {
+      fetchDashboardData();
+    }
     // Auto-refresh toutes les 30 secondes (silencieusement)
     const interval = setInterval(() => fetchDashboardData(true), 30000);
     return () => clearInterval(interval);
@@ -528,8 +533,8 @@ export default function AdminCentreDashboardPage() {
               <AlertTriangle size={18} />
             </div>
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>
-            {stats.absentes.toLocaleString()}
+          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)', minHeight: 38 }}>
+            {loading ? <SkeletonValue /> : stats.absentes.toLocaleString()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Signalements d'anomalies en cours</div>
         </div>
@@ -549,8 +554,8 @@ export default function AdminCentreDashboardPage() {
               <TrendingUp size={18} />
             </div>
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>
-            {stats.total.toLocaleString()}
+          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)', minHeight: 38 }}>
+            {loading ? <SkeletonValue /> : stats.total.toLocaleString()}
           </div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Total des cartes rattachées au centre</div>
         </div>

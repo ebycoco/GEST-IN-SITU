@@ -166,12 +166,16 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       }
       setLoading(false);
       hasCache = true;
+      // Libérer immédiatement le verrou de chargement global puisque les données sont instantanées
+      useAuthStore.getState().setInitialDataLoading(false);
     }
 
-    if (isGovernanceView) {
-      loadGlobalData(hasCache);
-    } else {
-      loadStats(hasCache);
+    if (!hasCache) {
+      if (isGovernanceView) {
+        loadGlobalData();
+      } else {
+        loadStats();
+      }
     }
   }, [activeSiteId, isGovernanceView]);
 

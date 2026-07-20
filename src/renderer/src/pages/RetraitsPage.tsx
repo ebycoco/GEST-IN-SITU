@@ -132,8 +132,11 @@ export default function RetraitsPage() {
       if (cache.trend) setTrend(cache.trend);
       setLoading(false);
       hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    load(hasCache);
+    if (!hasCache) {
+      load();
+    }
   }, [load]);
 
   const kpis = [

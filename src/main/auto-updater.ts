@@ -52,7 +52,10 @@ export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
         return { success: false, error: 'Une synchronisation est en cours. Veuillez réessayer dans quelques instants.' };
       }
       log.info('[AutoUpdater] Installing update and quitting...');
-      autoUpdater.quitAndInstall();
+      mainWindow.webContents.send('updater:installing');
+      setTimeout(() => {
+        autoUpdater.quitAndInstall();
+      }, 1000);
       return { success: true };
     } catch (error: any) {
       log.error('[AutoUpdater] Install error:', error);

@@ -65,8 +65,11 @@ export default function DashboardView() {
       if (cache.cadence) setCadence(cache.cadence);
       setLoading(false);
       hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    fetchDashboardData(hasCache);
+    if (!hasCache) {
+      fetchDashboardData();
+    }
     const interval = setInterval(() => fetchDashboardData(true), 30000);
     return () => clearInterval(interval);
   }, [user, user?.site_id, user?.centre_id]);

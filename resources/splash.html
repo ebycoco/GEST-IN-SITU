@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GEST-IN-SITU - Chargement</title>
+  <style>
+    :root {
+      --bg-primary: #0a0e27;
+      --bg-card: #131722;
+      --accent-color: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.4);
+      --text-primary: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    body {
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+    }
+
+    .splash-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px;
+      position: relative;
+      background: radial-gradient(circle at 50% 30%, rgba(59, 130, 246, 0.15) 0%, transparent 70%);
+    }
+
+    .logo-wrapper {
+      width: 80px;
+      height: 80px;
+      border-radius: 20px;
+      background: linear-gradient(135deg, #1e293b, #0f172a);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 16px 32px -8px rgba(0, 0, 0, 0.6), 0 0 24px var(--accent-glow);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    .logo-icon {
+      width: 44px;
+      height: 44px;
+      color: var(--accent-color);
+      filter: drop-shadow(0 0 8px var(--accent-glow));
+    }
+
+    .title {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+
+    .subtitle {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 36px;
+      letter-spacing: 0.3px;
+      text-transform: uppercase;
+    }
+
+    .progress-container {
+      width: 220px;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+      margin-bottom: 16px;
+    }
+
+    .progress-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      width: 45%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa, #818cf8);
+      border-radius: 4px;
+      box-shadow: 0 0 12px var(--accent-color);
+      animation: progress-slide 1.8s ease-in-out infinite;
+    }
+
+    @keyframes progress-slide {
+      0% {
+        left: -45%;
+      }
+      50% {
+        left: 100%;
+      }
+      100% {
+        left: -45%;
+      }
+    }
+
+    .status-text {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 500;
+      transition: opacity 0.3s ease;
+    }
+
+    /* Motif décoratif en arrière-plan */
+    .grid-bg {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+      background-size: 20px 20px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .content-z {
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="splash-container">
+    <div class="content-z">
+      <div class="logo-wrapper">
+        <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <div class="title">GEST-IN-SITU</div>
+      <div class="subtitle">Logistique & Déploiement CMU</div>
+      <div class="progress-container">
+        <div class="progress-bar"></div>
+      </div>
+      <div id="status" class="status-text">Initialisation sécurisée du système...</div>
+    </div>
+  </div>
+  <script>
+    // Écouter des messages de statut si envoyés par IPC (optionnel)
+    const { ipcRenderer } = window;
+    if (ipcRenderer) {
+      ipcRenderer.on('splash:status', (_, text) => {
+        const el = document.getElementById('status');
+        if (el && text) el.innerText = text;
+      });
+    }
+  </script>
+</body>
+</html>

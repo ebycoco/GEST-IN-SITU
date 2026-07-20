@@ -87,6 +87,7 @@ export function SiteAdminView({
   handleClearCloudDatabase = async () => {},
   isBackgroundPulling = false,
   downstreamInfo = null,
+  loading: isStatsLoading = false,
 }: SiteAdminViewProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'system' | 'supervision'>('system');
@@ -454,20 +455,52 @@ export function SiteAdminView({
             loadStats(false, activeTab === 'supervision' ? { centreId, agentId, dateStr } : undefined);
             toast.success("Tableau de bord actualisé");
           }}
+          disabled={isStatsLoading}
           className="btn"
           style={{ 
             display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
-            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white', cursor: 'pointer', transition: 'all 0.2s'
+            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white', 
+            cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
           }}
-          onMouseOver={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
-          onMouseOut={(e) => { e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+          onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+          onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
         >
-          <RefreshCw size={16} />
-          Actualiser
+          <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
+          {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
         </button>
       </div>
 
-      {activeTab === 'supervision' ? (
+      {isStatsLoading && (!stats || stats.total === undefined) ? (
+        <div className="glass-card animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', minHeight: 420, border: '1px solid rgba(255, 215, 0, 0.15)', background: 'rgba(10, 14, 39, 0.6)' }}>
+          <div style={{ width: 68, height: 68, borderRadius: '50%', background: 'rgba(255, 215, 0, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 24px rgba(255, 215, 0, 0.15)' }}>
+            <RefreshCw size={34} color="#ffd700" style={{ animation: 'spin 1.5s linear infinite' }} />
+          </div>
+          <div>
+            <h3 style={{ fontSize: 19, fontWeight: 700, color: 'white', marginBottom: 8 }}>
+              Chargement des indicateurs du site...
+            </h3>
+            <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, lineHeight: 1.6 }}>
+              Veuillez patienter pendant le calcul et l&apos;agrégation des statistiques en temps réel depuis votre base de données locale. Vous pouvez librement naviguer dans les menus pendant ce traitement.
+            </p>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16, width: '100%', maxWidth: 960, marginTop: 12 }}>
+            {[
+              { label: 'Total Cartes', color: '#3b82f6' },
+              { label: 'En Stock', color: '#f59e0b' },
+              { label: 'Distribuées', color: '#10b981' },
+              { label: 'Conformité', color: '#8b5cf6' }
+            ].map((skel, idx) => (
+              <div key={idx} style={{ height: 104, borderRadius: 14, background: 'rgba(255, 255, 255, 0.03)', border: `1px solid ${skel.color}30`, padding: 18, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', animation: 'pulse 1.8s infinite' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>{skel.label}</span>
+                  <div style={{ width: 28, height: 28, borderRadius: 8, background: `${skel.color}15` }} />
+                </div>
+                <div style={{ width: '60%', height: 26, borderRadius: 6, background: 'rgba(255, 255, 255, 0.12)' }} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : activeTab === 'supervision' ? (
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           {/* En-tête avec sélecteur de centre + sous-onglets de rôle */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16, flexWrap: 'wrap', gap: 12 }}>

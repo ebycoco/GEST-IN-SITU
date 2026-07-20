@@ -4,9 +4,12 @@ import { toast } from 'react-hot-toast';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import { useSyncDownstreamStore } from '../../stores/syncDownstreamStore';
+import { useAuthStore } from '../../stores/authStore';
+import { Globe } from 'lucide-react';
 
 export default function MainLayout() {
   const [appVersion, setAppVersion] = useState('');
+  const initialDataLoading = useAuthStore((s) => s.initialDataLoading);
 
   useEffect(() => {
     if (window.api?.app?.getVersion) {
@@ -66,8 +69,46 @@ export default function MainLayout() {
       <Sidebar />
       <div className="main-content">
         <TopBar />
-        <div className="page-content">
-          <Outlet />
+        <div className="page-content" style={{ position: 'relative' }}>
+          {/* Overlay de chargement global */}
+          {initialDataLoading && (
+            <div style={{
+              position: 'absolute',
+              top: 0, left: 0, right: 0, bottom: 0,
+              zIndex: 9999,
+              background: 'rgba(10, 15, 28, 0.85)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '8px' // Pour s'adapter à l'espace s'il y a un rayon
+            }}>
+              <div className="dashboard-premium animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', border: '1px solid rgba(255, 215, 0, 0.15)', background: 'rgba(10, 14, 39, 0.9)', borderRadius: 20 }}>
+                <div style={{ width: 68, height: 68, borderRadius: '50%', background: 'rgba(255, 215, 0, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 24px rgba(255, 215, 0, 0.15)' }}>
+                  <Globe size={34} color="#ffd700" style={{ animation: 'spin 1.5s linear infinite' }} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: 19, fontWeight: 700, color: 'white', marginBottom: 8 }}>
+                    Chargement sécurisé en cours...
+                  </h3>
+                  <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, lineHeight: 1.6 }}>
+                    Veuillez patienter pendant l'initialisation de la page. Les actions sont temporairement verrouillées pour éviter toute erreur de concurrence.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <div style={{
+            opacity: initialDataLoading ? 0.3 : 1,
+            pointerEvents: initialDataLoading ? 'none' : 'auto',
+            transition: 'opacity 0.3s ease-in-out',
+            height: '100%',
+            overflow: 'auto'
+          }}>
+            <Outlet />
+          </div>
         </div>
         
         {/* Footer global présent sur toutes les pages */}

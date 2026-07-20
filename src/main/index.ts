@@ -28,6 +28,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
+let splashWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let isPreloadingUsers = true;
 
@@ -43,6 +44,35 @@ if (!gotTheLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
+  });
+}
+
+function createSplashWindow(): void {
+  splashWindow = new BrowserWindow({
+    width: 480,
+    height: 320,
+    show: false,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    center: true,
+    alwaysOnTop: true,
+    icon: join(__dirname, '../../resources/icon.ico'),
+    webPreferences: {
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    },
+    backgroundColor: '#0a0e27'
+  });
+
+  const splashPath = join(__dirname, '../../resources/splash.html');
+  splashWindow.loadFile(splashPath).catch((e) => {
+    log.error('Erreur chargement splash.html:', e);
+  });
+
+  splashWindow.once('ready-to-show', () => {
+    splashWindow?.show();
   });
 }
 
@@ -72,6 +102,10 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show();
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.close();
+      splashWindow = null;
+    }
     // ─── COLD START CHRONO ───────────────────────────────────────────────────
     // Calcul du temps total entre le lancement du processus et l'affichage
     // de la fenêtre principale (temps de démarrage réel perçu par l'utilisateur).
@@ -194,6 +228,8 @@ function setupTheme(): void {
 
 app.whenReady().then(async () => {
   log.info('GEST-IN-SITU starting...');
+  electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
+  createSplashWindow();
 
   // Initialize database
   await initDatabase();
@@ -207,7 +243,6 @@ app.whenReady().then(async () => {
   }
 
   // Create main window IMMÉDIATEMENT (non bloquant)
-  electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
   createWindow();
 
   // État global pour savoir si on est en train de preload

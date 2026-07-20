@@ -1,0 +1,31 @@
+%APPDATA%
+
+Agent, je lance une mission d'audit technique complet du module [INSÉRER LE NOM DE LA PAGE ICI, ex: Administrateur du Site]. Je veux que tu appliques une rigueur totale sur cette partie du projet.
+
+1. Scan Exhaustif :
+
+Scanne tout le code source lié à ce module (Front-end, Back-end, requêtes SQL/IPC).
+
+Examine chaque fonctionnalité, bouton, et interaction utilisateur.
+
+2. Analyse de Risque :
+
+Logique Métier : Y a-t-il des failles ? Les règles de gestion sont-elles respectées ?
+
+Stabilité & Performance : Y a-t-il des fuites de mémoire, des requêtes SQL non optimisées ou des risques de plantage sur gros volume ?
+
+Flux de Données : Chaque action de modification ou création respecte-t-elle notre règle unifiée (is_dirty = 1 + Audit Log + Transaction SQLite) ?
+
+Sécurité : Les accès sont-ils bien sécurisés par l'identité de l'agent connecté ? (Pas de privilèges excessifs, pas d'utilisation de comptes 'Maître' par défaut).
+
+3. Livrable attendu :
+
+Rapport d'Audit Complet : Identifie les problèmes (bugs, lenteurs, erreurs de logique, failles de sécurité).
+
+Plan de Remédiation : Propose un plan d'action structuré, étape par étape, pour corriger chaque point. Priorise par criticité.
+
+Consigne Finale :
+
+Sois impitoyable sur la qualité du code.
+
+Attends impérativement ma validation sur le 'Plan de Remédiation' avant de procéder à la moindre modification. Je veux relire ton plan pour m'assurer qu'il est parfait.

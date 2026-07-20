@@ -412,8 +412,11 @@ export default function QualiteAssainissementPage() {
       setStats(cache.stats);
       setStatsLoading(false);
       hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    loadStats(hasCache);
+    if (!hasCache) {
+      loadStats();
+    }
   }, [loadStats]);
 
   // ─── Réinitialiser la page sur changement ─────────────────────────────

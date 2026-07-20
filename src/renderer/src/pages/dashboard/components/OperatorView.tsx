@@ -25,8 +25,27 @@ export function OperatorView({
   isPullingCards,
   isBulkUploading,
   handleStartBulkUpload,
-  handlePullSiteCards
+  handlePullSiteCards,
+  loading: isStatsLoading = false
 }: OperatorViewProps) {
+  if (isStatsLoading && operatorTodayCount === undefined) {
+    return (
+      <div className="dashboard-premium animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', minHeight: 420 }}>
+        <div style={{ width: 68, height: 68, borderRadius: '50%', background: 'rgba(255, 215, 0, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Globe size={34} color="#ffd700" style={{ animation: 'spin 1.5s linear infinite' }} />
+        </div>
+        <div>
+          <h3 style={{ fontSize: 19, fontWeight: 700, color: 'white', marginBottom: 8 }}>
+            Chargement du tableau de bord opérateur...
+          </h3>
+          <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520 }}>
+            Veuillez patienter pendant l&apos;actualisation de vos fiches de la journée.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="dashboard-premium animate-fade-in" style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>

@@ -57,13 +57,18 @@ export default function SitesPage() {
   useEffect(() => { 
     setCurrentPage(1);
     const cache = useCacheStore.getState().sitesCache;
+    const cacheCentres = useCacheStore.getState().centresCache;
     let hasCache = false;
-    if (cache.cachedAt && cache.list.length > 0) {
+    if (cache.cachedAt && cache.list.length > 0 && cacheCentres.cachedAt && cacheCentres.list.length > 0) {
       setSites(cache.list);
+      setCentres(cacheCentres.list);
       setLoading(false);
       hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    loadData(hasCache);
+    if (!hasCache) {
+      loadData();
+    }
   }, [userContext?.site_id, activeTab]);
 
   const loadData = async (silent = false) => {
@@ -74,8 +79,12 @@ export default function SitesPage() {
       useCacheStore.getState().setSitesCache(s);
       const c = await window.api.hierarchy.getCentres(userContext?.role === 'SUPER ADMIN' ? undefined : userContext?.site_id);
       setCentres(c);
+      useCacheStore.getState().setCentresCache(c);
     } catch (e) { console.error(e); }
-    finally { if (!silent) setLoading(false); }
+    finally { 
+      if (!silent) setLoading(false);
+      useAuthStore.getState().setInitialDataLoading(false);
+    }
   };
 
   const handleCreateSite = async (e: React.FormEvent) => {

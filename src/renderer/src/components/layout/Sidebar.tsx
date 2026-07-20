@@ -286,7 +286,7 @@ export default function Sidebar() {
                   e.preventDefault();
                 }
               }}
-              className={({ isActive }) => `nav-item ${isActive && !initialDataLoading ? 'active' : ''}`}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
               style={{
                 opacity: initialDataLoading ? 0.45 : 1,
                 cursor: initialDataLoading ? 'not-allowed' : 'pointer',

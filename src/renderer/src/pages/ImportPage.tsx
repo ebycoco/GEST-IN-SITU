@@ -56,8 +56,11 @@ export default function ImportPage() {
     if (cache.cachedAt && cache.cardCount !== null) {
       setCardCount(cache.cardCount);
       hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
     }
-    fetchCardCount(hasCache);
+    if (!hasCache) {
+      fetchCardCount();
+    }
   }, []);
 
   // ─── ANTI-FREEZE (Couche 3) — Réconciliation au retour de focus ───────────

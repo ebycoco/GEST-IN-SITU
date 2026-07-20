@@ -30,7 +30,8 @@ export function GovernanceView({
   loadGlobalData,
   isForceSyncing,
   forceSyncResult,
-  handleForceGlobalSync
+  handleForceGlobalSync,
+  loading: isStatsLoading = false
 }: GovernanceViewProps) {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [resetPassModal, setResetPassModal] = useState<{ isOpen: boolean, site: any | null, newPass: string, adminPass: string }>({ isOpen: false, site: null, newPass: '', adminPass: '' });
@@ -121,6 +122,24 @@ export function GovernanceView({
   };
 
   const gs = globalStats || { total_sites: 0, active_sites: 0, total_cartes: 0, total_agents: 0 };
+
+  if (isStatsLoading && !globalStats) {
+    return (
+      <div className="dashboard-premium animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', minHeight: 420 }}>
+        <div style={{ width: 68, height: 68, borderRadius: '50%', background: 'rgba(255, 215, 0, 0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Globe size={34} color="#ffd700" style={{ animation: 'spin 1.5s linear infinite' }} />
+        </div>
+        <div>
+          <h3 style={{ fontSize: 19, fontWeight: 700, color: 'white', marginBottom: 8 }}>
+            Chargement de la gouvernance globale...
+          </h3>
+          <p style={{ fontSize: 14, color: '#94a3b8', maxWidth: 520 }}>
+            Veuillez patienter pendant l'agrégation des indicateurs multi-sites. Vous pouvez naviguer librement.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard-premium animate-fade-in">
