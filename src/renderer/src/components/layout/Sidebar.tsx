@@ -6,6 +6,7 @@ import {
   PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import iconLogo from '../../assets/icon.png';
 
 
 export default function Sidebar() {
@@ -71,11 +72,10 @@ export default function Sidebar() {
   const siteName = currentSite ? currentSite.nom : '';
   // Affiche un libellé de chargement tant que les sites n'ont pas été reçus depuis SQLite,
   // puis le nom du site s'il est trouvé, ou un libellé neutre si aucun site n'est associé.
-  const displayTitle = !sitesLoaded
+  const displayTitle = 'IN-SITU';
+  const displaySubtitle = !sitesLoaded
     ? '⏳ Chargement...'
-    : siteName
-      ? `IN-SITU - ${siteName}`
-      : 'IN-SITU';
+    : (siteName || 'Cartes CMU');
   const initials = user ? (user.nom_user || user.login).slice(0, 2).toUpperCase() : 'GI';
 
   // Navigation Items Logic
@@ -164,7 +164,9 @@ export default function Sidebar() {
     <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-header" style={{ display: 'flex', justifyContent: isCollapsed ? 'center' : 'space-between', alignItems: 'center', width: '100%', gap: '8px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0, flex: 1 }}>
-          <div className="sidebar-logo" style={{ flexShrink: 0 }}>GI</div>
+          <div className="sidebar-logo" style={{ width: '46px', height: '46px', minWidth: '46px', minHeight: '46px', flexShrink: 0, overflow: 'hidden', padding: 0, background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <img src={iconLogo} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', transform: 'scale(1.2)', borderRadius: '8px' }} />
+          </div>
           <div className="sidebar-text" style={{ minWidth: 0, flex: 1, display: isCollapsed ? 'none' : 'block' }}>
             <div 
               className="sidebar-title"
@@ -182,7 +184,19 @@ export default function Sidebar() {
             >
               {displayTitle}
             </div>
-            <div className="sidebar-subtitle">Cartes CMU</div>
+            <div 
+              className="sidebar-subtitle"
+              style={{
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                color: 'var(--text-accent, #3b82f6)',
+                fontWeight: 600
+              }}
+              title={displaySubtitle}
+            >
+              {displaySubtitle}
+            </div>
           </div>
         </div>
         <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(!isCollapsed)} style={{ flexShrink: 0 }}>

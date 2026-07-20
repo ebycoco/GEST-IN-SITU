@@ -1,32 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { IUser } from '../../../shared/types';
 import { 
   Users, Plus, Edit, Trash2, Shield, Search, 
   UserCheck, UserX, ShieldCheck, RefreshCw,
   MapPin, Mail, Phone, Calendar, Clock,
-  User, Lock, Building, Type, Key, Eye, EyeOff,
+  User as UserIcon, Lock, Building, Type, Key, Eye, EyeOff,
   CloudDownload, CloudUpload
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
 
-interface User { 
-  id_user: number; 
-  login: string; 
-  role: string; 
-  roles?: string[];
-  nom_user: string; 
-  prenom_user: string; 
-  statut_actif: number; 
-  last_login: string; 
-  site_id: number; 
-  centre_id: number; 
-  centre_nom: string; 
-  site_nom: string;
-  email?: string;
-  telephone?: string;
-  created_at?: string;
+interface User extends IUser {
+  centre_nom?: string;
+  site_nom?: string;
 }
 
 const AVAILABLE_ROLES = [
@@ -45,7 +33,11 @@ export default function AgentsPage() {
     if (userContext?.role === 'SUPER ADMIN') {
       return AVAILABLE_ROLES;
     }
-    return AVAILABLE_ROLES.filter(r => r.value !== 'SUPER ADMIN' && r.value !== 'ADMINISTRATEUR_SITE');
+    // M-2 fix : un ADMIN_CENTRE ne doit pas pouvoir créer un autre ADMIN_CENTRE
+    if (userContext?.role === 'ADMIN_CENTRE') {
+      return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(r.value));
+    }
+    return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(r.value));
   }, [userContext?.role]);
 
   const [users, setUsers] = useState<User[]>([]);
@@ -56,31 +48,28 @@ export default function AgentsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showResetModal, setShowResetModal] = useState(false);
-  const [resetTargetUser, setResetTargetUser] = useState<User | null>(null);
-  const [isResetting, setIsResetting] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  // OPTIM-1 fix : ne réinitialiser la page que sur le changement de filtre, pas sur chaque rechargement de la liste
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, users]);
+  }, [searchTerm]);
 
-  const handleOpenResetModal = (user: User) => {
-    setResetTargetUser(user);
-    setShowResetModal(true);
-  };
+  // OPTIM-4 fix : réinitialisation sécurisée via confirmService avec requirePassword: true
+  const handleConfirmAndResetPassword = async (user: User) => {
+    if (!userContext) return;
+    const isConfirmed = await confirmService.confirm({
+      title: "Réinitialisation du mot de passe",
+      message: `Voulez-vous réinitialiser le mot de passe de l'agent @${user.login} ? Un mot de passe temporaire par défaut lui sera attribué. Communiquez-le ensuite à l'agent de vive voix.`,
+      isDanger: true,
+      requirePassword: true,
+      actionName: `Réinitialisation du mot de passe de l'agent ${user.login}`
+    });
+    if (!isConfirmed) return;
 
-  const handleCloseResetModal = () => {
-    setResetTargetUser(null);
-    setShowResetModal(false);
-  };
-
-  const handleResetPassword = async () => {
-    if (!resetTargetUser || !userContext) return;
-    setIsResetting(true);
     try {
-      await window.api.users.resetAgentPassword(resetTargetUser.id_user, userContext.id_user);
+      await window.api.users.resetAgentPassword(user.id_user, userContext.id_user);
       
       toast.success(
         (t) => (
@@ -89,7 +78,8 @@ export default function AgentsPage() {
             <div>
               <div style={{ fontWeight: 800, color: '#ffffff' }}>Mot de passe réinitialisé !</div>
               <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>
-                Nouvelle valeur temporaire : <span style={{ textDecoration: 'underline', fontWeight: 'bold' }}>{import.meta.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026'}</span>
+                {/* C-4b fix : ne jamais afficher le mot de passe en clair dans l’UI */}
+                Communiquez le nouveau mot de passe temporaire à l’agent de vive voix.
               </div>
             </div>
           </div>
@@ -105,11 +95,8 @@ export default function AgentsPage() {
           },
         }
       );
-      handleCloseResetModal();
     } catch (err: any) {
       toast.error('Erreur: ' + err.message);
-    } finally {
-      setIsResetting(false);
     }
   };
   
@@ -151,6 +138,28 @@ export default function AgentsPage() {
     setFormData({ ...formData, roles: currentRoles, role: currentRoles[0] });
   };
 
+  // M-1 fix : loadData mémoïsé pour éviter les races conditions
+  // Les centres sont chargés séparément dans un useEffect dédié (OPTIM-3)
+  const loadData = useCallback(async (silent?: boolean) => {
+    const isSilent = !!silent;
+    if (!isSilent) setLoading(true);
+    try { 
+      const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
+      const centreIdToUse = userContext?.role === 'ADMIN_CENTRE' ? userContext?.centre_id : undefined;
+      
+      const fetchedUsers = await window.api.users.getAll(siteIdToUse || undefined, centreIdToUse || undefined);
+      console.log(`[AgentsPage] Loaded ${fetchedUsers.length} users for site_id=${siteIdToUse}, centre_id=${centreIdToUse}`);
+      setUsers(fetchedUsers);
+      useCacheStore.getState().setAgentsCache(fetchedUsers);
+    }
+    catch (e) { 
+      console.error('[AgentsPage] loadData error:', e);
+      toast.error("Erreur lors du chargement des données");
+    }
+    finally { if (!isSilent) setLoading(false); }
+  }, [userContext?.role, userContext?.site_id, userContext?.centre_id, activeSiteId]);
+
+  // Chargement initial des agents (avec gestion cache)
   useEffect(() => { 
     const cache = useCacheStore.getState().agentsCache;
     let hasCache = false;
@@ -160,29 +169,15 @@ export default function AgentsPage() {
       hasCache = true;
     }
     loadData(hasCache);
-  }, [userContext?.site_id, activeSiteId]);
+  }, [loadData]);
 
-  const loadData = async (silent?: boolean) => {
-    const isSilent = !!silent;
-    if (!isSilent) setLoading(true);
-    try { 
-      const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
-      const centreIdToUse = userContext?.role === 'ADMIN_CENTRE' ? userContext?.centre_id : undefined;
-      
-      const users = await window.api.users.getAll(siteIdToUse || undefined, centreIdToUse || undefined);
-      console.log(`[AgentsPage] Loaded ${users.length} users for site_id=${siteIdToUse}, centre_id=${centreIdToUse}`);
-      setUsers(users);
-      useCacheStore.getState().setAgentsCache(users);
-      
-      const c = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
-      setCentres(c);
-    }
-    catch (e) { 
-      console.error('[AgentsPage] loadData error:', e);
-      toast.error("Erreur lors du chargement des données");
-    }
-    finally { if (!isSilent) setLoading(false); }
-  };
+  // OPTIM-3 : Chargement des centres séparé — ne se déclenche que si le site change
+  useEffect(() => {
+    const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
+    window.api.hierarchy.getCentres(siteIdToUse || undefined)
+      .then(setCentres)
+      .catch((e) => console.error('[AgentsPage] getCentres error:', e));
+  }, [userContext?.role, userContext?.site_id, activeSiteId]);
 
   const [isPullingAgents, setIsPullingAgents] = useState(false);
   const [isPushingAgents, setIsPushingAgents] = useState(false);
@@ -255,12 +250,16 @@ export default function AgentsPage() {
     };
   }, [users]);
 
+  // OPTIM-2 fix : recherche étendue aux multi-rôles
   const filteredUsers = useMemo(() => {
-    return users.filter(u => 
-      u.login.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.nom_user?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.prenom_user?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.role.toLowerCase().includes(searchTerm.toLowerCase())
+    const term = searchTerm.toLowerCase();
+    if (!term) return users;
+    return users.filter(u =>
+      u.login.toLowerCase().includes(term) ||
+      u.nom_user?.toLowerCase().includes(term) ||
+      u.prenom_user?.toLowerCase().includes(term) ||
+      u.role.toLowerCase().includes(term) ||
+      (u.roles || []).some(r => r.toLowerCase().includes(term))
     );
   }, [users, searchTerm]);
 
@@ -338,6 +337,11 @@ export default function AgentsPage() {
       } else {
         if (!formData.password) {
           toast.error('Le mot de passe est obligatoire');
+          return;
+        }
+        // M-4 fix : validation de la complexité du mot de passe
+        if (formData.password.length < 6) {
+          toast.error('Le mot de passe doit contenir au moins 6 caractères');
           return;
         }
         const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;
@@ -443,7 +447,14 @@ export default function AgentsPage() {
             <CloudUpload size={18} className={isPushingAgents ? 'animate-bounce' : ''} />
             Envoyer vers le Cloud
           </button>
-          <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => loadData()}>
+          {/* OPTIM-5 fix : désactiver pendant synchro cloud pour éviter rechargement concurrent */}
+          <button 
+            className="btn btn-outline" 
+            style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} 
+            onClick={() => loadData()}
+            disabled={loading || isPullingAgents || isPushingAgents}
+            title="Rafraîchir la liste"
+          >
             <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
           </button>
         </div>
@@ -566,7 +577,7 @@ export default function AgentsPage() {
                   </button>
                   {u.role !== 'SUPER ADMIN' && u.id_user !== userContext?.id_user && (
                     <>
-                      <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleOpenResetModal(u)} title="Réinitialiser le mot de passe" style={{ borderColor: 'rgba(251, 191, 36, 0.3)' }}>
+                      <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleConfirmAndResetPassword(u)} title="Réinitialiser le mot de passe" style={{ borderColor: 'rgba(251, 191, 36, 0.3)' }}>
                         <Key size={14} color="#fbbf24" />
                       </button>
                       <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleToggleStatus(u)} title={u.statut_actif === 1 ? "Désactiver" : "Activer"}>
@@ -702,7 +713,7 @@ export default function AgentsPage() {
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Identifiant (Login)<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
                   <div style={{ position: 'relative' }}>
-                    <User size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)' }} />
+                    <UserIcon size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)' }} />
                     <input className="form-input" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }} type="text" placeholder="ex: agent_abobo" value={formData.login} onChange={e => setFormData({ ...formData, login: e.target.value })} required />
                   </div>
                 </div>
@@ -793,10 +804,20 @@ export default function AgentsPage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Affectation Centre<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
+                <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>
+                  Affectation Centre
+                  {formData.roles.some(r => r.startsWith('OPERATEUR_')) && <span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span>}
+                  {!formData.roles.some(r => r.startsWith('OPERATEUR_')) && <span style={{ color: 'var(--text-muted)', marginLeft: '4px', fontSize: 11 }}>(optionnel pour les admins)</span>}
+                </label>
                 <div style={{ position: 'relative' }}>
                   <Building size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-primary)', zIndex: 1 }} />
-                  <select className="form-select" style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', appearance: 'none', position: 'relative', outline: 'none' }} value={formData.centre_id} onChange={e => setFormData({ ...formData, centre_id: e.target.value })} required>
+                  <select 
+                    className="form-select" 
+                    style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 48, transition: 'all 0.2s', color: 'white', appearance: 'none', position: 'relative', outline: 'none' }} 
+                    value={formData.centre_id} 
+                    onChange={e => setFormData({ ...formData, centre_id: e.target.value })} 
+                    required={formData.roles.some(r => r.startsWith('OPERATEUR_'))}
+                  >
                     <option value="">-- Choisir un centre d'affectation --</option>
                     {centres.map(c => <option key={c.id} value={c.id}>{c.nom} ({c.site_nom})</option>)}
                   </select>
@@ -818,54 +839,6 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Modal Réinitialisation Mot de passe */}
-      {showResetModal && resetTargetUser && (
-        <div style={{ 
-          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
-          backgroundColor: 'rgba(2, 4, 12, 0.85)', 
-          backdropFilter: 'blur(24px)', 
-          display: 'flex', alignItems: 'center', justifyContent: 'center', 
-          zIndex: 1010,
-          animation: 'fadeIn 0.3s ease'
-        }}>
-          <div 
-            style={{ 
-              background: 'linear-gradient(145deg, rgba(45, 50, 85, 0.95) 0%, rgba(20, 22, 40, 0.98) 100%)', 
-              width: 'min(90vw, 480px)', 
-              padding: '32px 40px', 
-              borderRadius: 24,
-              border: '1px solid rgba(251, 191, 36, 0.25)',
-              boxShadow: '0 40px 80px rgba(0, 0, 0, 0.9), 0 0 40px rgba(251, 191, 36, 0.05)',
-              position: 'relative'
-            }}
-          >
-            <div style={{ position: 'absolute', top: 32, left: 0, width: 6, height: 32, background: '#fbbf24', borderRadius: '0 4px 4px 0' }} />
-            
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
-              <div style={{ width: 48, height: 48, borderRadius: 16, background: 'rgba(251, 191, 36, 0.1)', border: '1px solid rgba(251, 191, 36, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Key size={24} color="#fbbf24" />
-              </div>
-              <h3 style={{ margin: 0, fontSize: 22, color: 'white', fontWeight: 800 }}>
-                Réinitialisation
-              </h3>
-            </div>
-            
-            <p style={{ color: 'white', fontSize: 14, lineHeight: 1.6, marginBottom: 24 }}>
-              Voulez-vous réinitialiser le mot de passe de cet agent (<strong style={{ color: '#fbbf24' }}>@{resetTargetUser.login}</strong>) ? 
-              Un mot de passe temporaire <strong style={{ color: '#fbbf24' }}>'{import.meta.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026'}'</strong> lui sera attribué.
-            </p>
-
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16 }}>
-              <button type="button" className="btn btn-outline" onClick={handleCloseResetModal} disabled={isResetting} style={{ borderRadius: 12, padding: '0 20px', height: 44, fontWeight: 600, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' }}>
-                Annuler
-              </button>
-              <button type="button" className="btn btn-primary" onClick={handleResetPassword} disabled={isResetting} style={{ borderRadius: 12, padding: '0 24px', height: 44, fontWeight: 800, background: '#fbbf24', color: '#000', border: 'none', transition: 'all 0.3s', display: 'flex', alignItems: 'center', gap: 8 }}>
-                {isResetting ? 'Réinitialisation...' : 'Confirmer'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

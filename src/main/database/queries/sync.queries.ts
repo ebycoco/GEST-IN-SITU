@@ -1,6 +1,7 @@
 import { getDatabase } from '../connection';
 import { networkMonitor } from '../../sync/network-monitor';
 import { getSupabaseClient } from '../../sync/supabase-client';
+import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
 import log from 'electron-log';
 
 export function enqueueSyncOp(tableName: string, recordId: number, operation: string, syncId: string, siteId: number, lastUpdatedAtLocal?: string) {
@@ -105,88 +106,56 @@ export async function forceSiteAdminSync(siteId: number) {
 export async function forceAgentsSync(siteId: number): Promise<{ success: boolean; count: number; message?: string }> {
   const db = getDatabase()!;
   
-  // 1. Marquer d'abord tous les agents du site comme dirty
-  db.prepare("UPDATE t_users SET is_dirty = 1 WHERE site_id = ? AND role != 'SUPER ADMIN'").run(siteId);
-  
-  // 2. Récupérer la liste des utilisateurs dirty du site
+  // 1. Récupérer les agents non encore synchronisés (ou modifiés) du site
   const dirtyUsers = db.prepare(`
     SELECT id_user, login, password_hash, role, nom_user, prenom_user, email, telephone, site_id, centre_id, sync_id, statut_actif
     FROM t_users
-    WHERE site_id = ? AND is_dirty = 1 AND role != 'SUPER ADMIN'
+    WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL) AND role != 'SUPER ADMIN' AND statut_actif != -1
   `).all(siteId) as any[];
 
   if (dirtyUsers.length === 0) {
     return { success: true, count: 0 };
   }
 
-  // 3. On pousse les utilisateurs vers Supabase (la gestion réseau et les timeouts sont gérés par le client)
-  const supabase = getSupabaseClient();
-  if (!supabase) {
-    log.warn('[forceAgentsSync] Client Supabase non disponible — sync agents ignoré.');
-    return { success: false, count: 0, message: 'Client Supabase non disponible.' };
-  }
-  const mappedUsers = dirtyUsers.map(u => ({
-    login: u.login,
-    password_hash: u.password_hash,
-    role: u.role,
-    nom_user: u.nom_user || '',
-    prenom_user: u.prenom_user || '',
-    email: u.email || null,
-    telephone: u.telephone || null,
-    site_id: u.site_id,
-    centre_id: u.centre_id || null,
-    sync_id: u.sync_id,
-    statut_actif: u.statut_actif ?? 1,
-    updated_at: new Date().toISOString()
-  }));
+  // 2. Enfilage outbox pour chaque agent et leurs rôles (idempotent, géré par le moteur de synchro)
+  let count = 0;
+  for (const u of dirtyUsers) {
+    if (!u.sync_id) continue;
+    enqueueOutbox(u.sync_id, 't_users', 'UPDATE', {
+      sync_id: u.sync_id,
+      login: u.login,
+      password_hash: u.password_hash,
+      role: u.role,
+      nom_user: u.nom_user || '',
+      prenom_user: u.prenom_user || '',
+      email: u.email || null,
+      telephone: u.telephone || null,
+      site_id: u.site_id,
+      centre_id: u.centre_id || null,
+      statut_actif: u.statut_actif ?? 1,
+      updated_at: new Date().toISOString()
+    });
 
-  const { error } = await supabase
-    .from('t_users')
-    .upsert(mappedUsers, { onConflict: 'sync_id' });
-
-  if (error) {
-    log.error(`[forceAgentsSync] Échec du push vers Supabase : ${error.message}`);
-    throw new Error(`Erreur lors du push Supabase : ${error.message}`);
-  }
-
-  // 4. On extrait et on pousse les rôles multiples vers Supabase
-  const userIds = dirtyUsers.map(u => u.id_user);
-  const placeholders = userIds.map(() => '?').join(',');
-  const localRoles = db.prepare(`
-    SELECT u.sync_id AS user_sync_id, r.role
-    FROM t_user_roles r
-    JOIN t_users u ON r.id_user = u.id_user
-    WHERE r.id_user IN (${placeholders})
-  `).all(userIds) as { user_sync_id: string; role: string }[];
-
-  if (localRoles.length > 0) {
-    try {
-      const { error: rolesError } = await supabase
-        .from('t_user_roles')
-        .upsert(localRoles, { onConflict: 'user_sync_id,role' });
-
-      if (rolesError) {
-        log.warn(`[forceAgentsSync] Avertissement du push des rôles vers Supabase : ${rolesError.message}`);
-      }
-    } catch (e: any) {
-      log.warn(`[forceAgentsSync] Exception lors du push des rôles vers Supabase : ${e.message || e}`);
+    // Enfiler également les rôles multiples si présents
+    const roles = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(u.id_user) as { role: string }[];
+    for (const r of roles) {
+      const roleOutboxId = `${u.sync_id}_${r.role}`;
+      enqueueOutbox(roleOutboxId, 't_user_roles', 'UPDATE', {
+        user_sync_id: u.sync_id,
+        role: r.role
+      });
     }
+
+    count++;
   }
 
-  // 5. Mettre à jour localement is_dirty = 0
-  db.transaction(() => {
-    const updateStmt = db.prepare(`
-      UPDATE t_users
-      SET is_dirty = 0, synced_at = datetime('now')
-      WHERE id_user = ?
-    `);
-    for (const u of dirtyUsers) {
-      updateStmt.run(u.id_user);
-    }
-  })();
+  // 3. Déclencher le traitement si en ligne
+  if (networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
+  }
 
-  log.info(`[forceAgentsSync] ${dirtyUsers.length} agents synchronisés avec succès.`);
-  return { success: true, count: dirtyUsers.length };
+  log.info(`[forceAgentsSync] ${count} agents enfilés dans l'outbox pour synchronisation.`);
+  return { success: true, count };
 }
 
 export async function pullCentresFromCloud(siteId: number): Promise<{ success: boolean; count: number; message?: string }> {

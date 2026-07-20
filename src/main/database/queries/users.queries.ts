@@ -172,7 +172,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
   const transaction = db.transaction(() => {
     const existing = db.prepare('SELECT id_user, sync_id FROM t_users WHERE login = ?').get(data.login) as { id_user: number; sync_id: string } | undefined;
     
-    let localOutboxToEnqueue: { id: string; table: string; operation: 'INSERT' | 'UPDATE'; payload: Record<string, unknown> } | null = null;
+    const outboxItems: Array<{ id: string; table: string; operation: 'INSERT' | 'UPDATE' | 'DELETE'; payload: Record<string, unknown> }> = [];
 
     if (existing) {
       const userSyncId = existing.sync_id || syncId;
@@ -198,7 +198,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
         insertStmt.run(existing.id_user, r);
       }
 
-      localOutboxToEnqueue = {
+      outboxItems.push({
         id: userSyncId,
         table: 't_users',
         operation: 'UPDATE',
@@ -214,9 +214,25 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
           statut_actif: 1,
           updated_at: new Date().toISOString()
         }
-      };
+      });
 
-      return { result, outboxToEnqueue: localOutboxToEnqueue };
+      outboxItems.push({
+        id: `${userSyncId}_roles_del`,
+        table: 't_user_roles',
+        operation: 'DELETE',
+        payload: { sync_id: userSyncId }
+      });
+
+      for (const r of inputRoles) {
+        outboxItems.push({
+          id: `${userSyncId}_${r}`,
+          table: 't_user_roles',
+          operation: 'INSERT',
+          payload: { user_sync_id: userSyncId, role: r }
+        });
+      }
+
+      return { result, outboxItems };
     }
 
     const result = db.prepare(`
@@ -240,7 +256,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
       insertStmt.run(newUserId, r);
     }
 
-    localOutboxToEnqueue = {
+    outboxItems.push({
       id: syncId,
       table: 't_users',
       operation: 'INSERT',
@@ -255,14 +271,25 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
         centre_id: targetCentreId,
         statut_actif: 1
       }
-    };
+    });
 
-    return { result, outboxToEnqueue: localOutboxToEnqueue };
+    for (const r of inputRoles) {
+      outboxItems.push({
+        id: `${syncId}_${r}`,
+        table: 't_user_roles',
+        operation: 'INSERT',
+        payload: { user_sync_id: syncId, role: r }
+      });
+    }
+
+    return { result, outboxItems };
   });
   const txResult = transaction();
 
-  if (txResult.outboxToEnqueue) {
-    enqueueOutbox(txResult.outboxToEnqueue.id, txResult.outboxToEnqueue.table, txResult.outboxToEnqueue.operation, txResult.outboxToEnqueue.payload);
+  if (txResult.outboxItems && txResult.outboxItems.length > 0) {
+    for (const item of txResult.outboxItems) {
+      enqueueOutbox(item.id, item.table, item.operation, item.payload);
+    }
     if (networkMonitor.getState() === 'ONLINE') {
       scheduleOutboxProcessing();
     }
@@ -310,7 +337,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
     const user = db.prepare('SELECT sync_id FROM t_users WHERE id_user = ?').get(id) as { sync_id: string } | undefined;
 
     let result = { changes: 0 };
-    let localOutboxToEnqueue: { id: string; table: string; operation: 'INSERT' | 'UPDATE'; payload: Record<string, unknown> } | null = null;
+    const outboxItems: Array<{ id: string; table: string; operation: 'INSERT' | 'UPDATE' | 'DELETE'; payload: Record<string, unknown> }> = [];
 
     if (filteredKeys.length > 0) {
       const fields = filteredKeys.map(k => `${k} = @${k}`).join(', ');
@@ -359,7 +386,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
         throw err;
       }
 
-      localOutboxToEnqueue = {
+      outboxItems.push({
         id: user.sync_id,
         table: 't_users',
         operation: 'UPDATE',
@@ -368,15 +395,35 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
           ...updatedUser,
           updated_at: new Date().toISOString()
         }
-      };
+      });
+
+      if (inputRoles) {
+        outboxItems.push({
+          id: `${user.sync_id}_roles_del`,
+          table: 't_user_roles',
+          operation: 'DELETE',
+          payload: { sync_id: user.sync_id }
+        });
+
+        for (const r of inputRoles) {
+          outboxItems.push({
+            id: `${user.sync_id}_${r}`,
+            table: 't_user_roles',
+            operation: 'INSERT',
+            payload: { user_sync_id: user.sync_id, role: r }
+          });
+        }
+      }
     }
 
-    return { result, outboxToEnqueue: localOutboxToEnqueue };
+    return { result, outboxItems };
   });
   const txResult = transaction();
 
-  if (txResult.outboxToEnqueue) {
-    enqueueOutbox(txResult.outboxToEnqueue.id, txResult.outboxToEnqueue.table, txResult.outboxToEnqueue.operation, txResult.outboxToEnqueue.payload);
+  if (txResult.outboxItems && txResult.outboxItems.length > 0) {
+    for (const item of txResult.outboxItems) {
+      enqueueOutbox(item.id, item.table, item.operation, item.payload);
+    }
     if (networkMonitor.getState() === 'ONLINE') {
       scheduleOutboxProcessing();
     }
@@ -501,7 +548,9 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }
 
-  const newPasswordPlain = process.env.VITE_DEFAULT_TEMP_PASSWORD || 'cnam@2026';
+  // C-4a fix : VITE_* n'est pas accessible dans le Main Process (Electron).
+  // Utiliser DEFAULT_TEMP_PASSWORD (variable .env sans préfixe VITE_).
+  const newPasswordPlain = process.env.DEFAULT_TEMP_PASSWORD || 'cnam2026!';
   const hash = hashPassword(newPasswordPlain);
   
   // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────

@@ -109,26 +109,7 @@ export async function runUpstream(): Promise<number> {
 
   // 2. Traiter chaque table
   for (const [tableName, groups] of Object.entries(tableGroups)) {
-    // A. Traiter les Upserts (INSERT / UPDATE)
-    if (groups.upserts.length > 0) {
-      const CHUNK_SIZE = 50;
-      for (let i = 0; i < groups.upserts.length; i += CHUNK_SIZE) {
-        const chunk = groups.upserts.slice(i, i + CHUNK_SIZE);
-        const success = await processUpsertChunk(supabase, tableName, chunk);
-        if (success) {
-          successCount += chunk.length;
-        } else {
-          // Fallback unitaire pour isoler le coupable
-          log.warn(`Upstream: Bulk upsert failed for chunk on ${tableName}. Falling back to row-by-row processing.`);
-          for (const op of chunk) {
-            const singleSuccess = await processUpsertChunk(supabase, tableName, [op]);
-            if (singleSuccess) successCount++;
-          }
-        }
-      }
-    }
-
-    // B. Traiter les Deletes
+    // A. Traiter les Deletes en premier (évite qu'une suppression d'anciens rôles supprime un nouvel upsert du même lot)
     if (groups.deletes.length > 0) {
       const CHUNK_SIZE = 50;
       for (let i = 0; i < groups.deletes.length; i += CHUNK_SIZE) {
@@ -141,6 +122,25 @@ export async function runUpstream(): Promise<number> {
           log.warn(`Upstream: Bulk delete failed for chunk on ${tableName}. Falling back to row-by-row processing.`);
           for (const op of chunk) {
             const singleSuccess = await processDeleteChunk(supabase, tableName, [op]);
+            if (singleSuccess) successCount++;
+          }
+        }
+      }
+    }
+
+    // B. Traiter les Upserts (INSERT / UPDATE) en second
+    if (groups.upserts.length > 0) {
+      const CHUNK_SIZE = 50;
+      for (let i = 0; i < groups.upserts.length; i += CHUNK_SIZE) {
+        const chunk = groups.upserts.slice(i, i + CHUNK_SIZE);
+        const success = await processUpsertChunk(supabase, tableName, chunk);
+        if (success) {
+          successCount += chunk.length;
+        } else {
+          // Fallback unitaire pour isoler le coupable
+          log.warn(`Upstream: Bulk upsert failed for chunk on ${tableName}. Falling back to row-by-row processing.`);
+          for (const op of chunk) {
+            const singleSuccess = await processUpsertChunk(supabase, tableName, [op]);
             if (singleSuccess) successCount++;
           }
         }
@@ -185,9 +185,10 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
 
   try {
     console.log(`🌐 [SUPABASE UPLOAD] Envoi de ${payloadsToUpsert.length} lignes vers la table ${tableName} sur Supabase...`);
+    const conflictKey = tableName === 't_user_roles' ? 'user_sync_id,role' : 'sync_id';
     let { error } = await supabase
       .from(tableName)
-      .upsert(payloadsToUpsert, { onConflict: 'sync_id' });
+      .upsert(payloadsToUpsert, { onConflict: conflictKey });
 
     if (error && chunk.length === 1 && ['t_sites', 't_centres', 't_postes', 't_users'].includes(tableName) && error.message.includes('duplicate key value violates unique constraint')) {
       const pk = tableName === 't_users' ? 'id_user' : 'id';
@@ -290,11 +291,13 @@ async function processDeleteChunk(supabase: any, tableName: string, chunk: Pendi
   try {
     let error = null;
 
+    const deleteColumn = tableName === 't_user_roles' ? 'user_sync_id' : 'sync_id';
+
     if (syncIds.length > 0) {
       const { error: err } = await supabase
         .from(tableName)
         .delete()
-        .in('sync_id', syncIds);
+        .in(deleteColumn, syncIds);
       error = err;
     }
 
@@ -303,7 +306,7 @@ async function processDeleteChunk(supabase: any, tableName: string, chunk: Pendi
       const { error: err } = await supabase
         .from(tableName)
         .delete()
-        .eq('sync_id', recordId);
+        .eq(deleteColumn, recordId);
       if (err) error = err;
     }
 

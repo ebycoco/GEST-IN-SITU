@@ -2,12 +2,14 @@ import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import { ResolusTab } from '../../VerificationSearchPage/components/ResolusTab';
 import { NonResolusTab } from '../../VerificationSearchPage/components/NonResolusTab';
+import CentreContextSwitcher from '../../../components/layout/CentreContextSwitcher';
 
 export default function SignalementsView() {
   const [activeTab, setActiveTab] = useState<'NON_RESOLUS' | 'RESOLUS'>('NON_RESOLUS');
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1200, margin: '0 auto' }}>
+      <CentreContextSwitcher />
       
       {/* TABS pour les signalements */}
       <div style={{ display: 'flex', gap: 12, borderBottom: '1px solid var(--border-color)', paddingBottom: 16 }}>

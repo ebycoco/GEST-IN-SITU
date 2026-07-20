@@ -1355,7 +1355,7 @@ function migrateV21(db: Database.Database): void {
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         operator_id TEXT,
-        action_type TEXT CHECK(action_type IN ('CONNEXION', 'DECONNEXION', 'RETRAIT', 'IMPORT_CARTE', 'VALIDATION')),
+        action_type TEXT,
         details TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -1676,17 +1676,20 @@ function migrateV27_safetyNet(db: Database.Database): void {
     }
   };
 
-  // t_users : colonnes de synchronisation
+  // t_users : colonnes de synchronisation et mise à jour
   safeAlter('t_users', 'is_dirty', 'INTEGER DEFAULT 0');
   safeAlter('t_users', 'synced_at', 'TEXT');
+  safeAlter('t_users', 'updated_at', 'TEXT');
 
   // t_logs : colonnes de notification et de site
   safeAlter('t_logs', 'is_read', 'INTEGER DEFAULT 0');
   safeAlter('t_logs', 'site_id', 'INTEGER DEFAULT 1');
 
-  // t_cartes : colonne d'export et created_by
+  // t_cartes : colonne d'export, created_by, et synchronisation
   safeAlter('t_cartes', 'is_exported', 'INTEGER DEFAULT 0');
   safeAlter('t_cartes', 'created_by', 'INTEGER DEFAULT NULL');
+  safeAlter('t_cartes', 'is_dirty', 'INTEGER DEFAULT 0');
+  safeAlter('t_cartes', 'updated_at', 'TEXT');
   try {
     db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
   } catch (indexErr: any) {
@@ -1700,9 +1703,13 @@ function migrateV27_safetyNet(db: Database.Database): void {
     log.warn("[SAFETY NET] Impossible de créer les index de synchronisation :", indexErr.message);
   }
 
-  // t_centres : colonnes code et prefixe_rangement (V29)
+  // t_centres et t_sites : colonnes code, prefixe_rangement, is_dirty, et updated_at (V45 + sécurité permanente)
   safeAlter('t_centres', 'code', 'TEXT');
   safeAlter('t_centres', 'prefixe_rangement', 'TEXT');
+  safeAlter('t_centres', 'is_dirty', 'INTEGER DEFAULT 0');
+  safeAlter('t_centres', 'updated_at', 'TEXT');
+  safeAlter('t_sites', 'is_dirty', 'INTEGER DEFAULT 0');
+  safeAlter('t_sites', 'updated_at', 'TEXT');
 
   // t_import_anomalies : colonnes d'identité (V33)
   safeAlter('t_import_anomalies', 'noms', 'TEXT');
@@ -1723,7 +1730,7 @@ function migrateV27_safetyNet(db: Database.Database): void {
       CREATE TABLE IF NOT EXISTS audit_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         operator_id TEXT,
-        action_type TEXT CHECK(action_type IN ('CONNEXION', 'DECONNEXION', 'RETRAIT', 'IMPORT_CARTE', 'VALIDATION')),
+        action_type TEXT,
         details TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       );
@@ -1731,6 +1738,33 @@ function migrateV27_safetyNet(db: Database.Database): void {
     log.info('[SAFETY NET] Table audit_logs garantie.');
   } catch (e: any) {
     log.warn('[SAFETY NET] Impossible de garantir audit_logs :', e.message);
+  }
+
+  // Vérification et suppression automatique de l'ancienne contrainte CHECK sur action_type (pour bases existantes)
+  try {
+    const tableSqlRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='audit_logs'").get() as { sql?: string } | undefined;
+    if (tableSqlRow?.sql && tableSqlRow.sql.includes('CHECK(action_type IN')) {
+      log.info('[SAFETY NET] Table audit_logs possède une ancienne contrainte CHECK restrictive sur action_type. Reconstruction sans CHECK...');
+      db.exec('PRAGMA foreign_keys = OFF;');
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS audit_logs_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            operator_id TEXT,
+            action_type TEXT,
+            details TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+        `);
+        db.exec(`INSERT INTO audit_logs_new (id, operator_id, action_type, details, timestamp) SELECT id, operator_id, action_type, details, timestamp FROM audit_logs;`);
+        db.exec(`DROP TABLE audit_logs;`);
+        db.exec(`ALTER TABLE audit_logs_new RENAME TO audit_logs;`);
+      })();
+      db.exec('PRAGMA foreign_keys = ON;');
+      log.info('[SAFETY NET] Table audit_logs reconfigurée avec succès sans contrainte CHECK.');
+    }
+  } catch (fixErr: any) {
+    log.warn('[SAFETY NET] Erreur lors de la reconfiguration de audit_logs :', fixErr.message || fixErr);
   }
 
   // ── t_user_roles : table des rôles multiples (V22) ────────────────────────

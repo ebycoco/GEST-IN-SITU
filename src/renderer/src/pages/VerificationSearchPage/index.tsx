@@ -182,14 +182,21 @@ export default function VerificationSearchPage() {
     }
   }, [user, adminSiteFilter]);
 
+  const isCentrePrincipal = (c: any): boolean => {
+    if (!c) return false;
+    return Number(c.numero) === 1 ||
+           (typeof c.nom === 'string' && (c.nom.toUpperCase().includes('PRINCIPAL') || c.nom.toUpperCase().includes('MAIRIE')));
+  };
+
   // Étape C : Chargement du préfixe centre
   useEffect(() => {
     const loadUserCentre = async () => {
-      if (user?.centre_id) {
+      const targetCentreId = selectedCentreId || user?.centre_id;
+      if (targetCentreId) {
         try {
-          const siteIdToUse = user.site_id;
+          const siteIdToUse = user?.site_id || activeSiteId;
           const centres = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
-          const centreObj = centres.find((c: any) => c.id === user.centre_id);
+          const centreObj = centres.find((c: any) => c.id === targetCentreId);
           setUserCentre(centreObj);
         } catch (err) {
           console.error('Failed to load user centre prefix:', err);
@@ -198,7 +205,7 @@ export default function VerificationSearchPage() {
       useAuthStore.getState().setInitialDataLoading(false);
     };
     loadUserCentre();
-  }, [user]);
+  }, [user, selectedCentreId, activeSiteId]);
 
   // Hook 1 : Statistiques
   const { stats, cardsToday, loadStats, loadCardsToday } = useVerificationStats(user);
@@ -231,6 +238,10 @@ export default function VerificationSearchPage() {
     if (user?.role === 'SUPER ADMIN') return true;
     if (user?.site_id !== carteToCheck?.site_id) return false;
     if (user?.role === 'ADMINISTRATEUR_SITE') return true;
+
+    if (isCentrePrincipal(userCentre)) {
+      return true;
+    }
 
     if (!userCentre || !userCentre.prefixe_rangement || !carteToCheck?.rangement) {
       return user?.centre_id === carteToCheck?.centre_id;

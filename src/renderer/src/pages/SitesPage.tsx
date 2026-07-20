@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Edit, Trash2, MapPin, Building2, Save, X, Lock, Unlock, AlertTriangle, ShieldCheck, ChevronRight, Activity, Database, CloudDownload, CloudUpload, RefreshCw } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { Plus, Edit, Trash2, MapPin, Building2, Save, X, Lock, Unlock, AlertTriangle, ShieldCheck, ChevronRight, Activity, Database, CloudDownload, CloudUpload, RefreshCw, Globe } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
@@ -187,7 +188,9 @@ export default function SitesPage() {
       await window.api.hierarchy.updateCentre(editingCentre.id, {
         nom: editingCentre.nom,
         numero: num,
-        prefixe_rangement: editingCentre.prefixe_rangement || null
+        prefixe_rangement: editingCentre.prefixe_rangement || null,
+        lieu: editingCentre.lieu || null,
+        code: editingCentre.code || null
       });
       toast.success('Centre modifié avec succès');
       setEditingCentre(null);
@@ -312,9 +315,9 @@ export default function SitesPage() {
   }
 
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, height: '100%', padding: '24px 32px' }}>
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, height: '100%', padding: 'clamp(16px, 2.5vw, 32px)', overflowY: 'auto' }}>
       
-      {/* Header Professionnel */}
+      {/* Header Professionnel Responsive */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -326,7 +329,7 @@ export default function SitesPage() {
           <p style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 48 }}>Gestion centrale des sites géographiques et des quotas de centres.</p>
         </div>
 
-        <div style={{ display: 'flex', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
           {userContext?.role === 'SUPER ADMIN' ? (
             <div className="tabs-premium">
               <button className={activeTab === 'SITES' ? 'active' : ''} onClick={() => { setActiveTab('SITES'); setCurrentPage(1); }}>
@@ -387,77 +390,83 @@ export default function SitesPage() {
         </div>
       </div>
 
-      {/* Statistiques Rapides */}
-      <div style={{ display: 'grid', gridTemplateColumns: userContext?.role === 'SUPER ADMIN' ? 'repeat(3, 1fr)' : 'repeat(2, 1fr)', gap: 20 }}>
+      {/* Statistiques Rapides Responsive */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
         {userContext?.role === 'SUPER ADMIN' && (
-          <div className="stat-card-mini">
-            <div className="icon"><MapPin size={16} /></div>
-            <div className="content">
-              <span className="label">Sites Total</span>
-              <span className="value">{sites.length}</span>
+          <div className="stat-card-mini" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(255, 255, 255, 0.025)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16 }}>
+            <div className="icon" style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(99, 102, 241, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#818cf8', flexShrink: 0 }}>
+              <MapPin size={20} />
+            </div>
+            <div className="content" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Sites Total</span>
+              <span className="value" style={{ fontSize: 22, fontWeight: 800, color: 'white' }}>{sites.length}</span>
             </div>
           </div>
         )}
-        <div className="stat-card-mini">
-          <div className="icon"><Building2 size={16} /></div>
-          <div className="content">
-            <span className="label">Centres Actifs</span>
-            <span className="value">{centres.length}</span>
+        <div className="stat-card-mini" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(255, 255, 255, 0.025)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16 }}>
+          <div className="icon" style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(59, 130, 246, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa', flexShrink: 0 }}>
+            <Building2 size={20} />
+          </div>
+          <div className="content" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Centres Actifs</span>
+            <span className="value" style={{ fontSize: 22, fontWeight: 800, color: 'white' }}>{centres.length}</span>
           </div>
         </div>
-        <div className="stat-card-mini">
-          <div className="icon"><Activity size={16} /></div>
-          <div className="content">
-            <span className="label">
-              {userContext?.role === 'SUPER ADMIN' ? 'Disponibilité Réseau' : `Disponibilité : ${(() => {
+        <div className="stat-card-mini" style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px', background: 'rgba(255, 255, 255, 0.025)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16 }}>
+          <div className="icon" style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(16, 185, 129, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399', flexShrink: 0 }}>
+            <Activity size={20} />
+          </div>
+          <div className="content" style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span className="label" style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              {userContext?.role === 'SUPER ADMIN' ? 'Disponibilité Réseau' : `Disponibilité (${(() => {
                 const s = sites.find(x => x.id === userContext?.site_id);
                 return s ? s.nom : 'Mon Site';
-              })()}`}
+              })()})`}
             </span>
-            <span className="value" style={{ color: 'var(--accent-green)' }}>100%</span>
+            <span className="value" style={{ fontSize: 22, fontWeight: 800, color: '#34d399' }}>100%</span>
           </div>
         </div>
       </div>
 
-      {/* Main Content Table */}
-      <div className="card card-premium" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {/* Main Content Table Responsive */}
+      <div className="card card-premium" style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 420 }}>
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {activeTab === 'SITES' ? (
             <>
-              <div className="table-container" style={{ overflowX: 'auto', width: '100%' }}>
-              <table className="table-premium">
-                <thead>
+              <div className="table-container" style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+              <table className="table-premium" style={{ width: '100%', minWidth: 880, borderCollapse: 'collapse' }}>
+                <thead style={{ background: 'rgba(255, 255, 255, 0.03)', borderBottom: '2px solid rgba(255, 255, 255, 0.08)' }}>
                   <tr>
-                    <th>ÉTAT SYSTÈME</th>
-                    <th>IDENTIFIANT</th>
-                    <th>DÉSIGNATION DU SITE</th>
-                    <th>CAPACITÉ</th>
-                    <th>DÉPLOIEMENT</th>
-                    <th>LICENCE</th>
-                    <th style={{ textAlign: 'right' }}>ACTIONS</th>
+                    <th style={{ width: '14%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>ÉTAT SYSTÈME</th>
+                    <th style={{ width: '12%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>IDENTIFIANT</th>
+                    <th style={{ width: '28%', textAlign: 'left', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>DÉSIGNATION DU SITE</th>
+                    <th style={{ width: '16%', textAlign: 'left', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>CAPACITÉ</th>
+                    <th style={{ width: '15%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>DÉPLOIEMENT</th>
+                    <th style={{ width: '15%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>LICENCE</th>
+                    <th style={{ width: '12%', textAlign: 'right', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sites.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(s => (
-                    <tr key={s.id} className={!s.is_active ? 'row-inactive' : ''}>
-                      <td>
-                        <div className={`status-badge ${s.is_active ? 'active' : 'banned'}`}>
+                    <tr key={s.id} className={!s.is_active ? 'row-inactive' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', transition: 'background 0.2s ease' }}>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
+                        <div className={`status-badge ${s.is_active ? 'active' : 'banned'}`} style={{ display: 'inline-flex', justifyContent: 'center' }}>
                           <div className="pulse-dot" />
                           {s.is_active ? 'OPÉRATIONNEL' : 'ACCÈS RÉVOQUÉ'}
                         </div>
                       </td>
-                      <td><code className="code-tag">{s.code}</code></td>
-                      <td><span style={{ fontWeight: 700, fontSize: 14 }}>{s.nom}</span></td>
-                      <td>
+                      <td style={{ textAlign: 'center', padding: '16px' }}><code className="code-tag">{s.code}</code></td>
+                      <td style={{ textAlign: 'left', padding: '16px' }}><span style={{ fontWeight: 700, fontSize: 14, color: 'white' }}>{s.nom}</span></td>
+                      <td style={{ textAlign: 'left', padding: '16px' }}>
                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <div className="progress-bar-mini"><div style={{ width: '60%' }} /></div>
-                            <span style={{ fontSize: 12 }}>{s.max_centres} Centres</span>
+                            <div className="progress-bar-mini" style={{ width: 60 }}><div style={{ width: '60%' }} /></div>
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#cbd5e1' }}>{s.max_centres} Centres</span>
                          </div>
                       </td>
-                      <td style={{ color: 'var(--text-muted)', fontSize: 12 }}>{new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
-                      <td>
+                      <td style={{ textAlign: 'center', padding: '16px', color: 'var(--text-muted)', fontSize: 13 }}>{new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
                         {s.is_permanent === 1 ? (
-                          <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 600 }}>PERMANENTE</span>
+                          <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 700, background: 'rgba(16, 185, 129, 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(16, 185, 129, 0.2)' }}>PERMANENTE</span>
                         ) : s.expiry_date ? (
                           <span style={{ color: new Date(s.expiry_date) < new Date() ? 'var(--accent-red)' : 'var(--text-muted)', fontSize: 12 }}>
                             {new Date(s.expiry_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -466,7 +475,7 @@ export default function SitesPage() {
                           <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Non définie</span>
                         )}
                       </td>
-                      <td>
+                      <td style={{ textAlign: 'right', padding: '16px' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                           <button className="btn-action" onClick={() => setEditingSite(s)} title="Paramètres"><Edit size={14} /></button>
                           {s.is_active ? (
@@ -485,47 +494,91 @@ export default function SitesPage() {
             </>
           ) : (
             <>
-              <div className="table-container" style={{ overflowX: 'auto', width: '100%' }}>
-              <table className="table-premium">
-                <thead>
+              <div className="table-container" style={{ overflowX: 'auto', width: '100%', WebkitOverflowScrolling: 'touch' }}>
+              <table className="table-premium" style={{ width: '100%', minWidth: 980, borderCollapse: 'collapse' }}>
+                <thead style={{ background: 'rgba(255, 255, 255, 0.03)', borderBottom: '2px solid rgba(255, 255, 255, 0.08)' }}>
                   <tr>
-                    <th>RÉFÉRENCE</th>
-                    <th>NOM DU CENTRE</th>
-                    <th>LOCALISATION GÉOGRAPHIQUE</th>
-                    <th>PRÉFIXE CSV</th>
-                    <th>SITE DE RATTACHEMENT</th>
-                    <th style={{ textAlign: 'right' }}>STATUT</th>
+                    <th style={{ width: '11%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>RÉFÉRENCE</th>
+                    <th style={{ width: '29%', textAlign: 'left', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>DÉSIGNATION DU CENTRE</th>
+                    <th style={{ width: '18%', textAlign: 'left', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>LOCALISATION</th>
+                    <th style={{ width: '13%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>PRÉFIXE CSV</th>
+                    <th style={{ width: '14%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>SITE D'ATTACHEMENT</th>
+                    <th style={{ width: '13%', textAlign: 'center', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>STATUT</th>
+                    <th style={{ width: '10%', textAlign: 'right', padding: '14px 16px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>ACTIONS</th>
                   </tr>
                 </thead>
                 <tbody>
                   {centres.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
-                    <tr key={c.sync_id || c.id}>
-                      <td><span className="id-badge">ID-{c.numero.toString().padStart(2, '0')}</span></td>
-                      <td style={{ fontWeight: 700 }}>{c.nom}</td>
-                      <td>{c.lieu || 'Zone non définie'}</td>
-                      <td>
+                    <tr key={c.sync_id || c.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', transition: 'background 0.2s ease' }}>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
+                        <span style={{ display: 'inline-block', padding: '5px 12px', borderRadius: 8, background: 'rgba(255, 255, 255, 0.06)', border: '1px solid rgba(255, 255, 255, 0.1)', fontFamily: 'monospace', fontWeight: 800, fontSize: 12, color: 'white', letterSpacing: '0.04em' }}>
+                          ID-{c.numero.toString().padStart(2, '0')}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'left', padding: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 700, fontSize: 14, color: 'white' }}>{c.nom}</span>
+                          {(c.numero === 1 || (c.nom && c.nom.toUpperCase().includes('PRINCIPAL'))) && (
+                            <span style={{ fontSize: 10, fontWeight: 800, background: 'linear-gradient(135deg, rgba(251, 191, 36, 0.2), rgba(245, 158, 11, 0.1))', color: '#fbbf24', border: '1px solid rgba(251, 191, 36, 0.35)', padding: '2px 8px', borderRadius: 12, letterSpacing: '0.05em', textTransform: 'uppercase', boxShadow: '0 2px 6px rgba(251, 191, 36, 0.1)', whiteSpace: 'nowrap' }}>
+                              ★ PRINCIPAL
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'left', padding: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: c.lieu ? '#e2e8f0' : 'var(--text-muted)', fontSize: 13, fontWeight: 500 }}>
+                          <MapPin size={14} color={c.lieu ? '#818cf8' : 'var(--text-muted)'} style={{ flexShrink: 0 }} />
+                          <span>{c.lieu || 'Zone non définie'}</span>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
                         {c.prefixe_rangement ? (
-                          <code className="code-tag" style={{ color: '#FFD700', border: '1px solid #FFD700' }}>
+                          <code style={{ display: 'inline-block', background: 'rgba(251, 191, 36, 0.12)', color: '#fbbf24', border: '1px solid rgba(251, 191, 36, 0.3)', borderRadius: 6, padding: '4px 10px', fontFamily: 'monospace', fontWeight: 800, fontSize: 12 }}>
                             {c.prefixe_rangement}
                           </code>
                         ) : (
-                          <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Aucun</span>
+                          <span style={{ display: 'inline-block', background: 'rgba(255, 255, 255, 0.04)', color: 'var(--text-muted)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                            Central / Non requis
+                          </span>
                         )}
                       </td>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <MapPin size={12} color="var(--accent-primary)" />
-                          <span className="badge-site">{c.site_nom || 'SITE PRINCIPAL'}</span>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(99, 102, 241, 0.12)', color: '#818cf8', border: '1px solid rgba(99, 102, 241, 0.22)', padding: '4px 12px', borderRadius: 14, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          <Globe size={12} color="#818cf8" style={{ flexShrink: 0 }} />
+                          <span>{c.site_nom || 'SITE PRINCIPAL'}</span>
                         </div>
                       </td>
-                      <td style={{ textAlign: 'right' }}>
-                          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
-                            <span className="status-badge active">EN SERVICE</span>
-                            <button className="btn-action" onClick={() => setEditingCentre(c)} title="Modifier le Centre"><Edit size={14} /></button>
-                            {!(c.numero === 1 || (c.nom && c.nom.toUpperCase().includes('PRINCIPAL'))) && (
-                              <button className="btn-action" style={{ color: 'var(--accent-red)' }} onClick={() => handleDeleteCentre(c.id)} title="Supprimer ce centre"><Trash2 size={14} /></button>
-                            )}
-                          </div>
+                      <td style={{ textAlign: 'center', padding: '16px' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '5px 12px', borderRadius: 20, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>
+                          <div className="pulse-dot" style={{ background: '#10b981' }} />
+                          OPÉRATIONNEL
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '16px' }}>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
+                          <button 
+                            className="btn-action" 
+                            onClick={() => setEditingCentre(c)} 
+                            title="Modifier le Centre"
+                            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255, 255, 255, 0.04)', border: '1px solid rgba(255, 255, 255, 0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', cursor: 'pointer', transition: 'all 0.2s' }}
+                          >
+                            <Edit size={14} />
+                          </button>
+                          {!(c.numero === 1 || (c.nom && c.nom.toUpperCase().includes('PRINCIPAL'))) ? (
+                            <button 
+                              className="btn-action" 
+                              onClick={() => handleDeleteCentre(c.id)} 
+                              title="Supprimer ce centre"
+                              style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171', cursor: 'pointer', transition: 'all 0.2s' }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          ) : (
+                            <div style={{ width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.3 }} title="Centre principal (protégé contre la suppression)">
+                              <Lock size={14} color="var(--text-muted)" />
+                            </div>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -568,9 +621,9 @@ export default function SitesPage() {
       </div>
 
       {/* MODAL MODIFICATION PARAMÈTRES */}
-      {editingSite && (
-        <div className="modal-overlay-premium">
-          <div className="modal-content-premium" style={{ maxWidth: 450 }}>
+      {editingSite && createPortal(
+        <div className="modal-overlay-premium" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110000, backgroundColor: 'rgba(5, 7, 15, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="modal-content-premium" style={{ maxWidth: 450, width: '100%', maxHeight: '90vh', background: '#131722', borderRadius: 24, border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 32px 64px -12px rgba(0,0,0,0.6)', overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <div className="icon-wrapper primary"><Edit size={24} /></div>
               <div className="title-group">
@@ -657,13 +710,14 @@ export default function SitesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL DE CONFIRMATION SÉCURISÉE (LOOK PREMIUM) */}
-      {confirmModal && (
-        <div className="modal-overlay-premium">
-          <div className={`modal-content-premium ${confirmModal.type === 'DELETE' ? 'danger' : 'secure'}`}>
+      {confirmModal && createPortal(
+        <div className="modal-overlay-premium" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110000, backgroundColor: 'rgba(5, 7, 15, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className={`modal-content-premium ${confirmModal.type === 'DELETE' ? 'danger' : 'secure'}`} style={{ maxWidth: 450, width: '100%', maxHeight: '90vh', background: '#131722', borderRadius: 24, border: confirmModal.type === 'DELETE' ? '1px solid #ef4444' : '1px solid rgba(255,255,255,0.08)', boxShadow: '0 32px 64px -12px rgba(0,0,0,0.6)', overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <div className="icon-wrapper">
                 {confirmModal.type === 'DELETE' ? <AlertTriangle size={24} /> : <ShieldCheck size={24} />}
@@ -721,13 +775,14 @@ export default function SitesPage() {
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL CRÉATION SITE */}
-      {showSiteModal && (
-        <div className="modal-overlay-premium">
-          <div className="modal-content-premium" style={{ maxWidth: 500 }}>
+      {showSiteModal && createPortal(
+        <div className="modal-overlay-premium" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110000, backgroundColor: 'rgba(5, 7, 15, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="modal-content-premium" style={{ maxWidth: 500, width: '100%', maxHeight: '90vh', background: '#131722', borderRadius: 24, border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 32px 64px -12px rgba(0,0,0,0.6)', overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <div className="icon-wrapper primary"><Plus size={24} /></div>
               <div className="title-group">
@@ -835,13 +890,14 @@ export default function SitesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL CRÉATION CENTRE */}
-      {showCentreModal && (
-        <div className="modal-overlay-premium">
-          <div className="modal-content-premium" style={{ maxWidth: 450 }}>
+      {showCentreModal && createPortal(
+        <div className="modal-overlay-premium" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110000, backgroundColor: 'rgba(5, 7, 15, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="modal-content-premium" style={{ maxWidth: 450, width: '100%', maxHeight: '90vh', background: '#131722', borderRadius: 24, border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 32px 64px -12px rgba(0,0,0,0.6)', overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <div className="icon-wrapper primary"><Plus size={24} /></div>
               <div className="title-group">
@@ -907,13 +963,14 @@ export default function SitesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* MODAL MODIFICATION CENTRE */}
-      {editingCentre && (
-        <div className="modal-overlay-premium">
-          <div className="modal-content-premium" style={{ maxWidth: 450 }}>
+      {editingCentre && createPortal(
+        <div className="modal-overlay-premium" style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 110000, backgroundColor: 'rgba(5, 7, 15, 0.85)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="modal-content-premium" style={{ maxWidth: 450, width: '100%', maxHeight: '90vh', background: '#131722', borderRadius: 24, border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 32px 64px -12px rgba(0,0,0,0.6)', overflowY: 'auto', position: 'relative', display: 'flex', flexDirection: 'column' }}>
             <div className="modal-header">
               <div className="icon-wrapper primary"><Edit size={24} /></div>
               <div className="title-group">
@@ -950,7 +1007,8 @@ export default function SitesPage() {
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
     </div>

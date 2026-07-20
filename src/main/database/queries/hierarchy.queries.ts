@@ -7,18 +7,55 @@ import { insertAuditLog } from './audit.queries';
 import log from 'electron-log';
 
 // Cache du schéma de t_centres pour éviter de répéter PRAGMA table_info à chaque appel
+// Cache du schéma de t_centres pour éviter de répéter PRAGMA table_info à chaque appel
 let _centresColumns: Set<string> | null = null;
 function getCentresColumns(): Set<string> {
   if (!_centresColumns) {
     const db = getDatabase()!;
-    const info = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
-    _centresColumns = new Set(info.map(c => c.name));
+    let info = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
+    let colSet = new Set(info.map(c => c.name));
+    if (!colSet.has('updated_at') || !colSet.has('is_dirty')) {
+      try {
+        if (!colSet.has('is_dirty')) db.exec("ALTER TABLE t_centres ADD COLUMN is_dirty INTEGER DEFAULT 0;");
+        if (!colSet.has('updated_at')) db.exec("ALTER TABLE t_centres ADD COLUMN updated_at TEXT;");
+        info = db.prepare("PRAGMA table_info(t_centres)").all() as { name: string }[];
+        colSet = new Set(info.map(c => c.name));
+        log.info('[hierarchy.queries][auto-heal] Colonnes updated_at/is_dirty ajoutées à t_centres.');
+      } catch (e: any) {
+        log.warn('[hierarchy.queries][auto-heal] Erreur ajout colonnes sur t_centres:', e.message);
+      }
+    }
+    _centresColumns = colSet;
     log.info('[hierarchy.queries][cache] PRAGMA table_info(t_centres) chargé en cache. Colonnes:', [..._centresColumns].join(', '));
   }
   return _centresColumns;
 }
-// Invalider le cache après migration
-export function invalidateCentresColumnsCache(): void { _centresColumns = null; }
+
+let _sitesColumns: Set<string> | null = null;
+function getSitesColumns(): Set<string> {
+  if (!_sitesColumns) {
+    const db = getDatabase()!;
+    let info = db.prepare("PRAGMA table_info(t_sites)").all() as { name: string }[];
+    let colSet = new Set(info.map(c => c.name));
+    if (!colSet.has('updated_at') || !colSet.has('is_dirty')) {
+      try {
+        if (!colSet.has('is_dirty')) db.exec("ALTER TABLE t_sites ADD COLUMN is_dirty INTEGER DEFAULT 0;");
+        if (!colSet.has('updated_at')) db.exec("ALTER TABLE t_sites ADD COLUMN updated_at TEXT;");
+        info = db.prepare("PRAGMA table_info(t_sites)").all() as { name: string }[];
+        colSet = new Set(info.map(c => c.name));
+        log.info('[hierarchy.queries][auto-heal] Colonnes updated_at/is_dirty ajoutées à t_sites.');
+      } catch (e: any) {
+        log.warn('[hierarchy.queries][auto-heal] Erreur ajout colonnes sur t_sites:', e.message);
+      }
+    }
+    _sitesColumns = colSet;
+    log.info('[hierarchy.queries][cache] PRAGMA table_info(t_sites) chargé en cache. Colonnes:', [..._sitesColumns].join(', '));
+  }
+  return _sitesColumns;
+}
+
+// Invalider le cache après migration ou modification de schéma
+export function invalidateCentresColumnsCache(): void { _centresColumns = null; _sitesColumns = null; }
 
 export function getSites() {
   const db = getDatabase()!;
@@ -192,8 +229,9 @@ export function updateSite(id: number, data: { nom?: string; code?: string; max_
   if (data.is_permanent !== undefined) { sets.push('is_permanent = ?'); params.push(data.is_permanent); }
 
   if (sets.length === 0) return null;
-  sets.push("updated_at = datetime('now')");
-  sets.push("is_dirty = 1");
+  const siteColumns = getSitesColumns();
+  if (siteColumns.has('updated_at')) sets.push("updated_at = datetime('now')");
+  if (siteColumns.has('is_dirty')) sets.push("is_dirty = 1");
   params.push(id);
 
   // ── 1. Mise à jour locale immédiate ───────────────────────────────────────────
@@ -479,8 +517,8 @@ export function updateCentre(id: number, data: { nom?: string; code?: string; li
   }
 
   if (sets.length === 0) return null;
-  sets.push("updated_at = datetime('now')");
-  sets.push("is_dirty = 1");
+  if (hasColumn('updated_at')) sets.push("updated_at = datetime('now')");
+  if (hasColumn('is_dirty')) sets.push("is_dirty = 1");
   params.push(id);
 
   // ── 1. Mise à jour locale immédiate ───────────────────────────────────────────

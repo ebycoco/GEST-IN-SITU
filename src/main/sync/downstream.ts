@@ -724,6 +724,47 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     db.exec('PRAGMA foreign_keys = ON;');
   }
 
+  // ── Synchronisation descendante des rôles multiples (t_user_roles) ──
+  const userSyncIds = cloudUsers.map(u => u.sync_id).filter(Boolean);
+  if (userSyncIds.length > 0) {
+    try {
+      const { data: cloudRoles, error: rolesErr } = await supabase
+        .from('t_user_roles')
+        .select('user_sync_id, role')
+        .in('user_sync_id', userSyncIds);
+
+      if (!rolesErr && cloudRoles) {
+        db.exec('PRAGMA foreign_keys = OFF;');
+        try {
+          db.transaction(() => {
+            for (const u of cloudUsers) {
+              if (!u.sync_id && !u.login) continue;
+              const localRow = db.prepare('SELECT id_user FROM t_users WHERE sync_id = ? OR login = ?').get(u.sync_id, u.login) as { id_user: number } | undefined;
+              if (localRow) {
+                db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localRow.id_user);
+                const userRoles = cloudRoles.filter(r => r.user_sync_id === u.sync_id);
+                for (const r of userRoles) {
+                  if (validRoles.includes(r.role)) {
+                    db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, r.role);
+                  }
+                }
+                if (u.role && validRoles.includes(u.role)) {
+                  db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, u.role);
+                }
+              }
+            }
+          })();
+        } finally {
+          db.exec('PRAGMA foreign_keys = ON;');
+        }
+      } else if (rolesErr) {
+        log.warn(`[syncUsersFromCloud] Erreur lors de la récupération des multi-rôles depuis Supabase : ${rolesErr.message}`);
+      }
+    } catch (roleCatchErr: any) {
+      log.warn(`[syncUsersFromCloud] Exception lors du rapatriement de t_user_roles : ${roleCatchErr.message}`);
+    }
+  }
+
   if (count > 0) {
     log.info(`Downstream: ${count} utilisateur(s) inséré(s)/mis à jour depuis Supabase pour le site ${siteId}.`);
   } else {
@@ -937,6 +978,49 @@ export async function preloadUsersFromCloud(): Promise<void> {
     } finally {
       db.exec('PRAGMA foreign_keys = ON;');
       log.info('Preload: Contraintes de clés étrangères (foreign_keys) réactivées.');
+    }
+
+    // ── Synchronisation descendante des rôles multiples pour tous les comptes préchargés ──
+    try {
+      const { data: cloudRoles, error: rolesErr } = await supabase
+        .from('t_user_roles')
+        .select('user_sync_id, role');
+
+      if (!rolesErr && cloudRoles) {
+        db.exec('PRAGMA foreign_keys = OFF;');
+        try {
+          db.transaction(() => {
+            const validRolesPreload = [
+              'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
+              'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
+              'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE'
+            ];
+            for (const u of cloudUsers) {
+              if (!u.sync_id && !u.login) continue;
+              const localRow = db.prepare('SELECT id_user FROM t_users WHERE sync_id = ? OR login = ?').get(u.sync_id, u.login) as { id_user: number } | undefined;
+              if (localRow) {
+                db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localRow.id_user);
+                const userRoles = cloudRoles.filter(r => r.user_sync_id === u.sync_id);
+                for (const r of userRoles) {
+                  if (validRolesPreload.includes(r.role)) {
+                    db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, r.role);
+                  }
+                }
+                if (u.role && validRolesPreload.includes(u.role)) {
+                  db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, u.role);
+                }
+              }
+            }
+          })();
+          log.info(`Preload: ${cloudRoles.length} multi-rôles synchronisés dans t_user_roles.`);
+        } finally {
+          db.exec('PRAGMA foreign_keys = ON;');
+        }
+      } else if (rolesErr) {
+        log.warn(`Preload: Erreur lors du pré-chargement de t_user_roles : ${rolesErr.message}`);
+      }
+    } catch (roleCatchErr: any) {
+      log.warn(`Preload: Exception lors du pré-chargement de t_user_roles : ${roleCatchErr.message}`);
     }
   } catch (err: any) {
     log.error('Preload: Exception attrapée lors de la synchronisation des utilisateurs (mode hors-ligne ou erreur réseau) :', err.message || err);

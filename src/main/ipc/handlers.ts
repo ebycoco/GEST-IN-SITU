@@ -2051,16 +2051,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         if (u) callerUserId = u.id_user;
       }
     }
-    const res = await queries.createUser(data, callerUserId);
-    queries.insertAuditLog(
-      userLogin || 'ADMIN',
-      'VALIDATION',
-      `Création de l'utilisateur ${data.login} (Rôle : ${data.role}).`
-    );
+    // createUser appelle déjà insertAuditLog en interne — pas de doublon ici (C-3 fix)
+    const res = await queries.createUser(data, callerUserId, userLogin || undefined);
     return res;
   });
   ipcMain.handle('users:update', async (_, id, data, currentUser) => {
-    const res = await queries.updateUser(id, data);
+    // C-1 fix : passer currentUser pour que updateUser valide le périmètre de site
+    const res = await queries.updateUser(id, data, currentUser);
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
 
     setImmediate(() => {
@@ -2091,20 +2088,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return res;
   });
   ipcMain.handle('users:delete', async (_, id, currentUser) => {
-    const res = await queries.deleteUser(id);
+    // C-2 fix : passer currentUser pour que deleteUser valide le périmètre de site
+    const res = await queries.deleteUser(id, currentUser);
     queries.insertAuditLog(
       currentUser?.login || 'ADMIN',
       'VALIDATION',
-      `DÃ©sactivation du compte utilisateur ID ${id}.`
+      `Désactivation du compte utilisateur ID ${id}.`
     );
     return res;
   });
   ipcMain.handle('users:hardDelete', async (_, id, currentUser) => {
-    const res = await queries.hardDeleteUser(id);
+    // C-2 fix : vérification de rôle explicite + transmission du currentUser
+    if (!verifyUserRole(currentUser?.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès non autorisé : rôle insuffisant pour supprimer définitivement un agent.");
+    }
+    const res = await queries.hardDeleteUser(id, currentUser);
     queries.insertAuditLog(
       currentUser?.login || 'ADMIN',
       'VALIDATION',
-      `Suppression physique dÃ©finitive de l'utilisateur ID ${id}.`
+      `Suppression physique définitive de l'utilisateur ID ${id}.`
     );
     return res;
   });

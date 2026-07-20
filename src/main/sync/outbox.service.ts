@@ -218,18 +218,19 @@ export async function processOutboxPending(): Promise<{ processed: number; error
         let supabaseError: { message: string } | null = null;
 
         if (entry.operation === 'DELETE') {
-          // Un payload DELETE ne contient que { sync_id }
-          const syncIdToDelete = payload['sync_id'] as string | undefined;
+          // Un payload DELETE ne contient que { sync_id } (ou { user_sync_id } pour t_user_roles)
+          const syncIdToDelete = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
           if (!syncIdToDelete) {
             _markOutboxError(db, entry.id, newAttempts, 'Payload DELETE invalide : champ sync_id manquant.');
             log.error(`[OutboxService] Payload DELETE invalide pour ${entry.table_name} (id=${entry.id}).`);
             errors++;
             continue;
           }
+          const deleteColumn = entry.table_name === 't_user_roles' ? 'user_sync_id' : 'sync_id';
           const { error } = await supabase
             .from(entry.table_name)
             .delete()
-            .eq('sync_id', syncIdToDelete);
+            .eq(deleteColumn, syncIdToDelete);
           supabaseError = error;
 
           if (!supabaseError) {
@@ -280,11 +281,12 @@ export async function processOutboxPending(): Promise<{ processed: number; error
 
           const finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
 
-          // INSERT ou UPDATE → upsert idempotent sur sync_id
+          // INSERT ou UPDATE → upsert idempotent sur sync_id (ou user_sync_id,role pour t_user_roles)
           log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(finalPayload));
+          const conflictKey = entry.table_name === 't_user_roles' ? 'user_sync_id,role' : 'sync_id';
           let { error } = await supabase
             .from(entry.table_name)
-            .upsert(finalPayload, { onConflict: 'sync_id' });
+            .upsert(finalPayload, { onConflict: conflictKey });
 
           if (error && ['t_sites', 't_centres', 't_postes', 't_users'].includes(entry.table_name) && error.message.includes('duplicate key value violates unique constraint')) {
             const pk = entry.table_name === 't_users' ? 'id_user' : 'id';

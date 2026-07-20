@@ -47,32 +47,38 @@ export default function RoleSelectorPage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
+      height: '100vh',
+      width: '100vw',
+      overflowY: 'auto',
       background: 'var(--bg-primary, #0a0f1c)',
-      padding: 24,
+      padding: '32px 20px',
+      boxSizing: 'border-box',
     }}>
       <div style={{
+        minHeight: 'calc(100vh - 64px)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        margin: '0 auto',
         width: '100%',
         maxWidth: 520,
         animation: 'slideUp 0.3s ease',
       }}>
         {/* En-tête */}
-        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+        <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{
-            width: 72, height: 72, borderRadius: 20, margin: '0 auto 16px',
+            width: 60, height: 60, borderRadius: 16, margin: '0 auto 12px',
             background: 'var(--gradient-button, linear-gradient(135deg, #6c63ff, #a855f7))',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 8px 32px rgba(108, 99, 255, 0.35)',
           }}>
-            <Shield size={36} color="white" />
+            <Shield size={32} color="white" />
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 900, color: 'white', margin: '0 0 8px 0' }}>
+          <h1 style={{ fontSize: 22, fontWeight: 900, color: 'white', margin: '0 0 6px 0' }}>
             Sélection du Rôle
           </h1>
-          <p style={{ fontSize: 14, color: 'var(--text-muted, #9ca3af)', margin: 0, lineHeight: 1.6 }}>
+          <p style={{ fontSize: 13, color: 'var(--text-muted, #9ca3af)', margin: 0, lineHeight: 1.5 }}>
             Bonjour <strong style={{ color: 'white' }}>{user.prenom_user ?? user.login}</strong>,
             votre compte possède <strong style={{ color: 'white' }}>{roles.length} rôles</strong>.
             Choisissez celui à utiliser pour cette session.
@@ -80,7 +86,7 @@ export default function RoleSelectorPage() {
         </div>
 
         {/* Liste des rôles */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 24 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', marginBottom: 20 }}>
           {roles.map((role) => {
             const meta = ROLE_META[role] ?? { label: role, description: 'Rôle personnalisé', color: '#9ca3af', icon: '🔑' };
             return (
@@ -90,8 +96,8 @@ export default function RoleSelectorPage() {
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 16,
-                  padding: '18px 20px',
+                  gap: 14,
+                  padding: '14px 18px',
                   borderRadius: 14,
                   border: `1px solid rgba(255,255,255,0.08)`,
                   background: 'rgba(255,255,255,0.03)',
@@ -114,10 +120,10 @@ export default function RoleSelectorPage() {
               >
                 {/* Icône */}
                 <div style={{
-                  width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                  width: 44, height: 44, borderRadius: 12, flexShrink: 0,
                   background: `${meta.color}20`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 22,
+                  fontSize: 20,
                   border: `1px solid ${meta.color}30`,
                 }}>
                   {meta.icon}
@@ -125,7 +131,7 @@ export default function RoleSelectorPage() {
 
                 {/* Texte */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, fontSize: 15, color: meta.color }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: meta.color }}>
                     {meta.label}
                   </div>
                   <div style={{ fontSize: 12, color: 'var(--text-muted, #9ca3af)', marginTop: 2 }}>
@@ -141,7 +147,7 @@ export default function RoleSelectorPage() {
         </div>
 
         {/* Déconnexion */}
-        <div style={{ textAlign: 'center' }}>
+        <div style={{ textAlign: 'center', paddingBottom: 16 }}>
           <button
             onClick={() => {
               useAuthStore.getState().logout();

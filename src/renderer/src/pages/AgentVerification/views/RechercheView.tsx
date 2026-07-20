@@ -8,6 +8,7 @@ import { useDeliveryFlow } from '../../VerificationSearchPage/hooks/useDeliveryF
 import { SearchForm } from '../../VerificationSearchPage/components/SearchForm';
 import { SearchResults } from '../../VerificationSearchPage/components/SearchResults';
 import { DeliveryModal } from '../../VerificationSearchPage/components/DeliveryModal';
+import CentreContextSwitcher from '../../../components/layout/CentreContextSwitcher';
 
 export default function RechercheView() {
   const { user, selectedCentreId, activeSiteId } = useAuthStore();
@@ -21,13 +22,20 @@ export default function RechercheView() {
   const loadStatsMock = async () => {};
   const loadCardsTodayMock = async () => {};
 
+  const isCentrePrincipal = (c: any): boolean => {
+    if (!c) return false;
+    return Number(c.numero) === 1 ||
+           (typeof c.nom === 'string' && (c.nom.toUpperCase().includes('PRINCIPAL') || c.nom.toUpperCase().includes('MAIRIE')));
+  };
+
   useEffect(() => {
     const loadUserCentre = async () => {
-      if (user?.centre_id) {
+      const targetCentreId = selectedCentreId || user?.centre_id;
+      if (targetCentreId) {
         try {
-          const siteIdToUse = user.site_id;
+          const siteIdToUse = user?.site_id || activeSiteId;
           const centres = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
-          const centreObj = centres.find((c: any) => c.id === user.centre_id);
+          const centreObj = centres.find((c: any) => c.id === targetCentreId);
           setUserCentre(centreObj);
         } catch (err) {
           console.error('Failed to load user centre prefix:', err);
@@ -35,13 +43,14 @@ export default function RechercheView() {
       }
     };
     loadUserCentre();
-  }, [user]);
+  }, [user, selectedCentreId, activeSiteId]);
 
   useEffect(() => {
     const fetchTotal = async () => {
       if (activeSiteId) {
         try {
-          const stats = await window.api.stats.get(activeSiteId, selectedCentreId || undefined);
+          const isPrincipal = isCentrePrincipal(userCentre) || Number(selectedCentreId || user?.centre_id) === 1;
+          const stats = await window.api.stats.get(activeSiteId, isPrincipal ? undefined : (selectedCentreId || undefined));
           setTotalCards(stats?.total || 0);
         } catch (e) {
           setTotalCards(0);
@@ -49,7 +58,7 @@ export default function RechercheView() {
       }
     };
     fetchTotal();
-  }, [activeSiteId, selectedCentreId]);
+  }, [activeSiteId, selectedCentreId, userCentre, user]);
 
   const {
     nomRetirant, setNomRetirant, telRetirant, setTelRetirant,
@@ -77,6 +86,10 @@ export default function RechercheView() {
     if (user?.site_id !== carteToCheck?.site_id) return false;
     if (user?.role === 'ADMINISTRATEUR_SITE') return true;
 
+    if (isCentrePrincipal(userCentre)) {
+      return true;
+    }
+
     if (!userCentre || !userCentre.prefixe_rangement || !carteToCheck?.rangement) {
       return user?.centre_id === carteToCheck?.centre_id;
     }
@@ -89,6 +102,7 @@ export default function RechercheView() {
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1200, margin: '0 auto' }}>
+      <CentreContextSwitcher />
       
       {totalCards === 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '60px 20px', textAlign: 'center', background: 'rgba(255,255,255,0.02)', borderRadius: 16, border: '1px dashed rgba(255,255,255,0.1)' }}>

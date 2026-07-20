@@ -2,6 +2,7 @@ import React from 'react';
 import { Activity, Calendar, Clock, Target, CalendarDays } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import { useVerificationStats } from '../../VerificationSearchPage/hooks/useVerificationStats';
+import CentreContextSwitcher from '../../../components/layout/CentreContextSwitcher';
 
 export default function Overview() {
   const { user } = useAuthStore();
@@ -9,6 +10,7 @@ export default function Overview() {
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1000, margin: '0 auto' }}>
+      <CentreContextSwitcher />
       
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 24 }}>
         
