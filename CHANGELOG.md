@@ -7,20 +7,19 @@ et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0
 ## [2.6.0] - 2026-07-20
 
 ### Ajouté
-- **UX (Splash Screen) :** Ajout d'un écran de démarrage léger (`splash.html`) affiché immédiatement au lancement, éliminant l'écran noir pendant le chargement du processus principal Electron.
-- **UX (Mise à jour) :** Intégration d'un Splash Screen dédié aux mises à jour (`splash.html`) avec barre de progression — s'affiche pendant que l'auto-updater applique les fichiers en arrière-plan.
-- **UX (Loading States) :** Système global de chargement visuel sur toutes les pages (overlay spinner + verrouillage de la navigation) pour éliminer les "faux zéros" pendant les requêtes initiales SQLite.
-- **Performance (Cache intelligent) :** Mécanisme `cache-first` sur tous les dashboards et pages majeures — navigation instantanée depuis la RAM (`useCacheStore`) sans re-sollicitation de SQLite sur les vues déjà chargées.
-- **Qualité :** Audit rétroactif des dates invalides avec progression UI et traçabilité via `electron-log`.
-- **Qualité :** Validation calendaire stricte des dates dans tous les formulaires de saisie.
-- **Import :** Pagination interactive et comptage précis des cartes en trop dans le module d'importation.
+- **UX (Démarrage) :** Intégration d'un Splash Screen léger (`splash.html`) affiché immédiatement au lancement et lors des mises à jour, éliminant tout écran noir d'attente et rassurant l'utilisateur pendant l'initialisation.
+- **UX (Chargement Global) :** Implémentation d'un système de chargement visuel et sécurisé sur l'intégralité des interfaces — overlay élégant avec spinner "Plein Soleil" et verrouillage temporaire de la navigation (Sidebar) pendant le premier chargement initial pour prévenir les race conditions.
+- **UX (Opérateur / Admin Centre) :** Ajout d'un écran de chargement Skeleton sur la vue dashboard opérateur (`OperatorView`) et d'indicateurs visuels animés sur la vue Administrateur de Site (`SiteAdminView`) pendant la récupération des statistiques.
+
+### Optimisé
+- **Performance (Cache-First) :** Toutes les pages majeures (Dashboard, Qualité, Retraits, Sites, Importation) adoptent désormais une stratégie **cache-first** stricte : si les données sont déjà présentes en mémoire (`useCacheStore`), aucun appel SQLite n'est effectué, la navigation est instantanée et le verrou global est relâché immédiatement.
+- **Performance (MainLayout) :** Le verrouillage de la Sidebar est limité au strict premier chargement initial. Les visites ultérieures sur une page déjà chargée sont fluides et instantanées, sans aucun rechargement de base de données.
 
 ### Corrigé
-- **Sync/Base de Données :** Auto-healing SQLite au démarrage : réconciliation automatique des `sync_id` manquants et réparation des colonnes (`lieu`) sur les centres existants.
-- **UI/Modaux :** Uniformisation de la profondeur z-index (`110000`) sur toutes les modales critiques pour éviter les superpositions avec l'overlay de chargement.
-- **Hiérarchie :** Synchronisation du champ `lieu` lors des mises à jour des centres via l'IPC et l'outbox.
-- **Import :** Isolation stricte multi-sites (les données d'un site ne peuvent pas contaminer un autre), support du BOM UTF-8 dans les fichiers CSV et traçabilité du statut `STATUT_INCONNU`.
-- **Performance :** Le verrou global `initialDataLoading` est désormais libéré immédiatement si les données proviennent du cache, garantissant une navigation fluide sans micro-blocages résiduels.
+- **Synchronisation (SQLite / Supabase) :** Auto-réparation (`auto-healing`) de la base de données locale au démarrage — détection et correction automatique des colonnes manquantes (`lieu`, `prefixe_rangement`) dans `t_centres` via `PRAGMA table_info`.
+- **Hiérarchie (Centres) :** Correction de la requête de mise à jour des centres (`updateCentre`) pour inclure le champ `lieu` lors de l'upsert Supabase, garantissant la cohérence complète des données entre local et cloud.
+- **UI/UX (Modales) :** Correction du `z-index` des modales à `110000` pour qu'elles s'affichent correctement au-dessus de tous les composants de l'interface, notamment le Splash Screen et les overlays de chargement.
+- **Multi-Sites (Isolation) :** Renforcement de l'isolation des données par `site_id` dans les requêtes d'import et de correction qualité pour prévenir toute fuite de données inter-sites.
 
 ## [2.5.7] - 2026-07-17
 
