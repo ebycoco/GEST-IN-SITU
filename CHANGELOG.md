@@ -4,6 +4,24 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-07-20
+
+### Ajouté
+- **UX (Splash Screen) :** Ajout d'un écran de démarrage léger (`splash.html`) affiché immédiatement au lancement, éliminant l'écran noir pendant le chargement du processus principal Electron.
+- **UX (Mise à jour) :** Intégration d'un Splash Screen dédié aux mises à jour (`splash.html`) avec barre de progression — s'affiche pendant que l'auto-updater applique les fichiers en arrière-plan.
+- **UX (Loading States) :** Système global de chargement visuel sur toutes les pages (overlay spinner + verrouillage de la navigation) pour éliminer les "faux zéros" pendant les requêtes initiales SQLite.
+- **Performance (Cache intelligent) :** Mécanisme `cache-first` sur tous les dashboards et pages majeures — navigation instantanée depuis la RAM (`useCacheStore`) sans re-sollicitation de SQLite sur les vues déjà chargées.
+- **Qualité :** Audit rétroactif des dates invalides avec progression UI et traçabilité via `electron-log`.
+- **Qualité :** Validation calendaire stricte des dates dans tous les formulaires de saisie.
+- **Import :** Pagination interactive et comptage précis des cartes en trop dans le module d'importation.
+
+### Corrigé
+- **Sync/Base de Données :** Auto-healing SQLite au démarrage : réconciliation automatique des `sync_id` manquants et réparation des colonnes (`lieu`) sur les centres existants.
+- **UI/Modaux :** Uniformisation de la profondeur z-index (`110000`) sur toutes les modales critiques pour éviter les superpositions avec l'overlay de chargement.
+- **Hiérarchie :** Synchronisation du champ `lieu` lors des mises à jour des centres via l'IPC et l'outbox.
+- **Import :** Isolation stricte multi-sites (les données d'un site ne peuvent pas contaminer un autre), support du BOM UTF-8 dans les fichiers CSV et traçabilité du statut `STATUT_INCONNU`.
+- **Performance :** Le verrou global `initialDataLoading` est désormais libéré immédiatement si les données proviennent du cache, garantissant une navigation fluide sans micro-blocages résiduels.
+
 ## [2.5.7] - 2026-07-17
 
 ### Corrigé
