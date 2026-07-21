@@ -9,12 +9,16 @@ parentPort.on('message', (msg) => {
 
     if (!db) {
       db = new Database(workerData.dbPath, { readonly: true, timeout: 60000 });
-      db.pragma('journal_mode = WAL');
-      db.pragma('synchronous = NORMAL');
-      db.pragma('cache_size = -64000'); // 64MB cache
-      db.pragma('temp_store = MEMORY');
-      db.pragma('mmap_size = 268435456'); // 256MB mmap
-      db.pragma('busy_timeout = 60000');
+      try {
+        db.pragma('journal_mode = WAL');
+        db.pragma('synchronous = NORMAL');
+        db.pragma('cache_size = -64000'); // 64MB cache
+        db.pragma('temp_store = MEMORY');
+        db.pragma('mmap_size = 268435456'); // 256MB mmap
+        db.pragma('busy_timeout = 60000');
+      } catch(e) {
+        // Ignorer si readonly
+      }
 
       db.function('regexp', (pattern, text) => {
         if (text === null) return 0;
@@ -48,6 +52,7 @@ parentPort.on('message', (msg) => {
         anomaliesCount = row ? row.count : 0;
       }
       stats.dates_invalides = anomaliesCount;
+      stats.total = (stats.total || 0) + anomaliesCount;
       const t2 = performance.now();
 
       const andSite = siteId ? `AND site_id = @siteId` : '';
@@ -111,98 +116,231 @@ parentPort.on('message', (msg) => {
         }
       });
     } else if (type === 'getBulkAnomalies') {
-      const strictCountRow = db.prepare(`
+      // Cartes avec champs critiques manquants (Nom, Prénom, Date, Rangement)
+      const missingCountRow = db.prepare(`
         SELECT COUNT(*) as count FROM t_cartes 
-        WHERE site_id = ? AND is_dirty = 1 AND cle_doublon IN (
-          SELECT cle_doublon FROM t_cartes 
-          WHERE site_id = ?
-          GROUP BY cle_doublon HAVING cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' AND COUNT(*) > 1
+        WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL OR synced_at = '') AND (
+          (noms IS NULL OR noms = '') OR
+          (prenoms IS NULL OR prenoms = '') OR
+          (date_de_naissance IS NULL OR date_de_naissance = '') OR
+          (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
         )
-      `).get(siteId, siteId);
+        AND (date_de_naissance IS NULL OR date_de_naissance = '' OR date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$')
+        AND NOT (
+          (noms IS NULL OR noms = '') AND
+          (prenoms IS NULL OR prenoms = '') AND
+          (num_secu IS NULL OR num_secu = '') AND
+          (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+        )
+      `).get(siteId);
+
+      const strictCountRow = db.prepare(`
+        SELECT COUNT(*) as count FROM t_cartes AS c
+        WHERE c.site_id = ? AND (c.is_dirty = 1 OR c.synced_at IS NULL OR c.synced_at = '')
+        AND (c.noms IS NOT NULL AND c.noms != '') AND (c.prenoms IS NOT NULL AND c.prenoms != '')
+        AND (c.date_de_naissance IS NOT NULL AND c.date_de_naissance != '')
+        AND (c.rangement IS NOT NULL AND c.rangement != '' AND c.rangement != 'NON CLASSE')
+        AND c.date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
+        AND c.cle_doublon IS NOT NULL AND c.cle_doublon != '' AND c.cle_doublon != '||||'
+        AND EXISTS (
+          SELECT 1 FROM t_cartes AS c2 
+          WHERE c2.site_id = c.site_id AND c2.cle_doublon = c.cle_doublon AND c2.id_carte != c.id_carte
+        )
+      `).get(siteId);
 
       const probableCountRow = db.prepare(`
-        SELECT COUNT(*) as count FROM t_cartes 
-        WHERE site_id = ? AND is_dirty = 1 AND (noms || '||' || prenoms || '||' || date_de_naissance) IN (
-          SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes 
-          WHERE site_id = ?
-          GROUP BY noms, prenoms, date_de_naissance HAVING noms IS NOT NULL AND COUNT(DISTINCT cle_doublon) > 1
+        SELECT COUNT(*) as count FROM t_cartes AS c
+        WHERE c.site_id = ? AND (c.is_dirty = 1 OR c.synced_at IS NULL OR c.synced_at = '')
+        AND (c.noms IS NOT NULL AND c.noms != '') AND (c.prenoms IS NOT NULL AND c.prenoms != '')
+        AND (c.date_de_naissance IS NOT NULL AND c.date_de_naissance != '')
+        AND (c.rangement IS NOT NULL AND c.rangement != '' AND c.rangement != 'NON CLASSE')
+        AND c.date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
+        AND EXISTS (
+          SELECT 1 FROM t_cartes AS c2 
+          WHERE c2.site_id = c.site_id 
+            AND c2.noms = c.noms AND c2.prenoms = c.prenoms AND c2.date_de_naissance = c.date_de_naissance 
+            AND c2.cle_doublon != c.cle_doublon
         )
-      `).get(siteId, siteId);
+      `).get(siteId);
 
       const invalidDateCountRow = db.prepare(`
         SELECT COUNT(*) as count FROM t_cartes 
-        WHERE site_id = ? AND is_dirty = 1 AND (
-          date_de_naissance IS NOT NULL AND date_de_naissance != '' AND 
-          (
-            date_de_naissance NOT REGEXP '^([0-2][0-9]|3[0-1])/(0[1-9]|1[0-2])/[0-9]{4}$' 
-            AND date_de_naissance NOT REGEXP '^[0-9]{4}$'
-          )
+        WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL OR synced_at = '')
+        AND date_de_naissance IS NOT NULL AND date_de_naissance != ''
+        AND date_de_naissance NOT REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
+        AND NOT (
+          (noms IS NULL OR noms = '') AND
+          (prenoms IS NULL OR prenoms = '') AND
+          (num_secu IS NULL OR num_secu = '') AND
+          (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
         )
       `).get(siteId);
+
+      const invalidAnomaliesRow = db.prepare(`
+        SELECT COUNT(*) as count FROM t_import_anomalies
+        WHERE site_id = ? AND type_anomalie = 'DATE_INVALIDE'
+      `).get(siteId);
+
+      const totalInvalidCount = (invalidDateCountRow ? invalidDateCountRow.count : 0) + 
+                                (invalidAnomaliesRow ? invalidAnomaliesRow.count : 0);
+
 
       parentPort.postMessage({
         success: true,
         messageId,
         data: {
+          missingCount: missingCountRow ? missingCountRow.count : 0,
           strictCount: strictCountRow ? strictCountRow.count : 0,
           probableCount: probableCountRow ? probableCountRow.count : 0,
-          invalidCount: invalidDateCountRow ? invalidDateCountRow.count : 0
+          invalidCount: totalInvalidCount
         }
       });
     } else if (type === 'getDetailedSyncStats') {
+      // ─── OPTIMISATION PERF : 100% SQL agrégé, zéro boucle JS, zéro chargement en mémoire ───
+      // Ancien algo : boucle JS sur N cartes × 2 requêtes SQL/carte → 227s pour 200k cartes
+      // Nouveau algo : 6 COUNT() SQL directs exploitant les index existants → <1s attendu
       const t0 = performance.now();
-      const dirtyCards = db.prepare(`
-        SELECT cle_doublon, noms, prenoms, date_de_naissance 
-        FROM t_cartes 
-        WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL OR synced_at = '')
-      `).all(siteId);
 
-      const strictDuplicates = db.prepare(`
-          SELECT cle_doublon FROM t_cartes 
+      // ── 0. Cartes supprimées en attente (is_dirty = -1) ──────────────────────────────────────
+      const deletedCountRow = db.prepare(`
+        SELECT COUNT(*) as count FROM t_cartes
+        WHERE site_id = ? AND is_dirty = -1 AND statut != 'BROUILLON'
+      `).get(siteId);
+      const deletedCount = deletedCountRow ? deletedCountRow.count : 0;
+
+      // ── 1. Anomalies DATE_INVALIDE depuis la table d'import ──────────────────────────────────
+      const invalidAnomaliesRow = db.prepare(`
+        SELECT COUNT(*) as count FROM t_import_anomalies
+        WHERE site_id = ? AND type_anomalie = 'DATE_INVALIDE'
+      `).get(siteId);
+      const invalidFromAnomalies = invalidAnomaliesRow ? invalidAnomaliesRow.count : 0;
+
+      // CTE de base : cartes dirty non-supprimées, non-brouillon, non-fantômes
+      // Utilisée dans TOUTES les requêtes ci-dessous pour éviter la répétition et garder les index actifs
+      const BASE_CTE = `
+        WITH dirty_base AS (
+          SELECT id_carte, cle_doublon, noms, prenoms, date_de_naissance, rangement, num_secu, synced_at, is_dirty
+          FROM t_cartes
           WHERE site_id = ?
-          GROUP BY cle_doublon HAVING cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||' AND COUNT(*) > 1
-      `).all(siteId).reduce((acc, row) => { acc.add(row.cle_doublon); return acc; }, new Set());
+            AND is_dirty = 1
+            AND statut != 'BROUILLON'
+            AND NOT (
+              (noms IS NULL OR noms = '') AND
+              (prenoms IS NULL OR prenoms = '') AND
+              (num_secu IS NULL OR num_secu = '') AND
+              (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+            )
+        )
+      `;
 
-      const probableDuplicates = db.prepare(`
-          SELECT noms || '||' || prenoms || '||' || date_de_naissance as hash 
-          FROM t_cartes 
-          WHERE site_id = ?
-          GROUP BY noms, prenoms, date_de_naissance HAVING noms IS NOT NULL AND COUNT(DISTINCT cle_doublon) > 1
-      `).all(siteId).reduce((acc, row) => { acc.add(row.hash); return acc; }, new Set());
+      // ── 2. invalidCount : date présente mais format invalide → BLOQUÉ (Étape 3) ─────────────
+      const invalidDateCountRow = db.prepare(`${BASE_CTE}
+        SELECT COUNT(*) as count FROM dirty_base
+        WHERE date_de_naissance IS NOT NULL
+          AND date_de_naissance != ''
+          AND date_de_naissance NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+      `).get(siteId);
+      const invalidCount = (invalidDateCountRow ? invalidDateCountRow.count : 0) + invalidFromAnomalies;
 
-      let invalidCount = 0;
-      let strictCount = 0;
-      let probableCount = 0;
-      let cleanCount = 0;
+      // ── 3. missingCount : champ critique manquant (Étape 2) ──────────────────────────────────
+      // Exclut les cartes déjà comptées dans invalidCount
+      const missingCountRow = db.prepare(`${BASE_CTE}
+        SELECT COUNT(*) as count FROM dirty_base
+        WHERE (
+          date_de_naissance IS NULL OR date_de_naissance = '' OR
+          date_de_naissance GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        )
+        AND (
+          (noms IS NULL OR noms = '') OR
+          (prenoms IS NULL OR prenoms = '') OR
+          (date_de_naissance IS NULL OR date_de_naissance = '') OR
+          (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+        )
+      `).get(siteId);
+      const missingCount = missingCountRow ? missingCountRow.count : 0;
 
-      const dateRegex = /^\\d{4}-\\d{2}-\\d{2}$/;
+      // ── 4. strictCount : doublons stricts parmi les cartes complètes dirty (Étape 2) ─────────
+      // Utilise une auto-jointure groupée sur cle_doublon : aucune boucle JS
+      const strictCountRow = db.prepare(`${BASE_CTE}
+        SELECT COUNT(*) as count FROM dirty_base AS d
+        WHERE (d.noms IS NOT NULL AND d.noms != '')
+          AND (d.prenoms IS NOT NULL AND d.prenoms != '')
+          AND (d.date_de_naissance IS NOT NULL AND d.date_de_naissance != '')
+          AND (d.rangement IS NOT NULL AND d.rangement != '' AND d.rangement != 'NON CLASSE')
+          AND d.date_de_naissance GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          AND d.cle_doublon IS NOT NULL AND d.cle_doublon != '' AND d.cle_doublon != '||||'
+          AND EXISTS (
+            SELECT 1 FROM t_cartes c2
+            WHERE c2.site_id = ? AND c2.cle_doublon = d.cle_doublon AND c2.id_carte != d.id_carte
+          )
+      `).get(siteId, siteId);
+      const strictCount = strictCountRow ? strictCountRow.count : 0;
 
-      for (const card of dirtyCards) {
-        if (!card.date_de_naissance || !dateRegex.test(card.date_de_naissance)) {
-          invalidCount++;
-        } else if (card.cle_doublon && card.cle_doublon !== '||||' && strictDuplicates.has(card.cle_doublon)) {
-          strictCount++;
-        } else if (card.noms && probableDuplicates.has(card.noms + '||' + card.prenoms + '||' + card.date_de_naissance)) {
-          probableCount++;
-        } else {
-          cleanCount++;
-        }
-      }
+      // ── 5. probableCount : doublons probables parmi les cartes non-strictes complètes (Étape 2)
+      const probableCountRow = db.prepare(`${BASE_CTE}
+        SELECT COUNT(*) as count FROM dirty_base AS d
+        WHERE (d.noms IS NOT NULL AND d.noms != '')
+          AND (d.prenoms IS NOT NULL AND d.prenoms != '')
+          AND (d.date_de_naissance IS NOT NULL AND d.date_de_naissance != '')
+          AND (d.rangement IS NOT NULL AND d.rangement != '' AND d.rangement != 'NON CLASSE')
+          AND d.date_de_naissance GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          AND (d.cle_doublon IS NULL OR d.cle_doublon = '' OR d.cle_doublon = '||||' OR NOT EXISTS (
+            SELECT 1 FROM t_cartes c2
+            WHERE c2.site_id = ? AND c2.cle_doublon = d.cle_doublon AND c2.id_carte != d.id_carte
+          ))
+          AND EXISTS (
+            SELECT 1 FROM t_cartes c3
+            WHERE c3.site_id = ?
+              AND c3.noms = d.noms AND c3.prenoms = d.prenoms AND c3.date_de_naissance = d.date_de_naissance
+              AND (c3.cle_doublon != d.cle_doublon OR d.cle_doublon IS NULL OR d.cle_doublon = '' OR d.cle_doublon = '||||')
+          )
+      `).get(siteId, siteId, siteId);
+      const probableCount = probableCountRow ? probableCountRow.count : 0;
+
+      // ── 6. Cartes saines : nouvelles (cleanCount) et modifications valides (modifiedCount) ───
+      // Une carte saine = complète, date valide, pas de doublon strict ni probable
+      const cleanModifiedRow = db.prepare(`${BASE_CTE}
+        SELECT
+          SUM(CASE WHEN synced_at IS NULL OR synced_at = '' THEN 1 ELSE 0 END) as cleanCount,
+          SUM(CASE WHEN synced_at IS NOT NULL AND synced_at != '' THEN 1 ELSE 0 END) as modifiedCount
+        FROM dirty_base AS d
+        WHERE (d.noms IS NOT NULL AND d.noms != '')
+          AND (d.prenoms IS NOT NULL AND d.prenoms != '')
+          AND (d.date_de_naissance IS NOT NULL AND d.date_de_naissance != '')
+          AND (d.rangement IS NOT NULL AND d.rangement != '' AND d.rangement != 'NON CLASSE')
+          AND d.date_de_naissance GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+          AND (d.cle_doublon IS NULL OR d.cle_doublon = '' OR d.cle_doublon = '||||' OR NOT EXISTS (
+            SELECT 1 FROM t_cartes c2
+            WHERE c2.site_id = ? AND c2.cle_doublon = d.cle_doublon AND c2.id_carte != d.id_carte
+          ))
+          AND NOT EXISTS (
+            SELECT 1 FROM t_cartes c3
+            WHERE c3.site_id = ?
+              AND c3.noms = d.noms AND c3.prenoms = d.prenoms AND c3.date_de_naissance = d.date_de_naissance
+              AND (c3.cle_doublon != d.cle_doublon OR d.cle_doublon IS NULL OR d.cle_doublon = '' OR d.cle_doublon = '||||')
+          )
+      `).get(siteId, siteId, siteId);
+
+      const cleanCount = (cleanModifiedRow ? (cleanModifiedRow.cleanCount || 0) : 0);
+      // modifiedCount = modifications valides + suppressions en attente
+      const modifiedCount = (cleanModifiedRow ? (cleanModifiedRow.modifiedCount || 0) : 0) + deletedCount;
 
       const t1 = performance.now();
       parentPort.postMessage({
         type: 'log',
-        message: `[WORKER PERF] getDetailedSyncStats for siteId ${siteId} took ${(t1-t0).toFixed(2)}ms`
+        message: `[WORKER PERF] getDetailedSyncStats (SQL agrégé) siteId=${siteId} → ${(t1-t0).toFixed(2)}ms | clean=${cleanCount} modified=${modifiedCount} missing=${missingCount} strict=${strictCount} probable=${probableCount} invalid=${invalidCount} deleted=${deletedCount}`
       });
 
       parentPort.postMessage({
         success: true,
         messageId,
         data: {
-          invalidCount,
+          cleanCount,
+          missingCount,
           strictCount,
           probableCount,
-          cleanCount
+          invalidCount,
+          modifiedCount
         }
       });
     }

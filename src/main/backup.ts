@@ -6,7 +6,12 @@ import log from 'electron-log';
 export function initBackupScheduler(): void {
   // Run backup every 24 hours
   const INTERVAL = 24 * 60 * 60 * 1000;
-  performBackup().catch(err => log.error('Initial backup failed:', err));
+  
+  // R3: Retarder le premier backup de 60s pour éviter la contention I/O au démarrage
+  setTimeout(() => {
+    performBackup().catch(err => log.error('Initial backup failed:', err));
+  }, 60000);
+  
   setInterval(() => {
     performBackup().catch(err => log.error('Scheduled backup failed:', err));
   }, INTERVAL);

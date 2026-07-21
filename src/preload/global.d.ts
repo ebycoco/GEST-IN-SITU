@@ -30,7 +30,7 @@ declare global {
         getRetraitsTrend: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<Array<{ label: string; total: number }>>;
         getUnsyncedCardsCount: (siteId: number) => Promise<number>;
         getUnsyncedUsersCount: (siteId: number) => Promise<number>;
-        getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number }>;
+        getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number }>;
       };
       cartes: {
         searchAllRecords: (siteId: number, filters: any, limit: number) => Promise<any[]>;
@@ -104,6 +104,7 @@ declare global {
         fusionnerDoublons: (payload: { id_carte_source: number; id_carte_cible: number; champs_fusionnes: string[] }) => Promise<any>;
         corrigerFormat: (payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => Promise<any>;
         supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }) => Promise<any>;
+        assainirGlobal: (payload: { site_id: number }) => Promise<{ success: boolean; deleted: number; details: any }>;
       };
       export: {
         csv: (filters?: any) => Promise<any>;
@@ -150,6 +151,7 @@ declare global {
         clearDatabaseCartes: (siteId?: number, currentUser?: any) => Promise<any>;
         clearCloudCartes: (siteId: number, currentUser?: any) => Promise<{ success: boolean }>;
         fullReset: (currentUser?: any) => Promise<{success: boolean}>;
+        purgeEmptyRows: () => Promise<void>;
         getLogs: (limit?: number, offset?: number, searchTerm?: string, filterLevel?: string) => Promise<{logs: any[], total: number}>;
         clearLogs: (password: string, currentUser?: any) => Promise<{ success: boolean }>;
         exportLogs: () => Promise<{ success: boolean; canceled?: boolean; filePath?: string; error?: string }>;
@@ -201,13 +203,16 @@ declare global {
         startBulk: (
           siteId: number,
           allowProbable?: boolean,
-          allowInvalid?: boolean
+          allowInvalid?: boolean,
+          allowMissing?: boolean,
+          onlyModified?: boolean
         ) => Promise<{
           success: boolean;
           message: string;
-          status?: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID';
+          status?: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID' | 'BLOCKED_MISSING';
           count?: number;
           uploadedCount?: number;
+          missingCount?: number;
           strictCount?: number;
           probableCount?: number;
           invalidCount?: number;
@@ -235,6 +240,9 @@ declare global {
         onDownloadProgress: (callback: (progress: any) => void) => () => void;
         onUpdateDownloaded: (callback: (info: any) => void) => () => void;
         onError: (callback: (error: string) => void) => () => void;
+      };
+      debug: {
+        getAllAnomalies: () => Promise<any[]>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };

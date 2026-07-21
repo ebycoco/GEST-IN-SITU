@@ -38,12 +38,23 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     };
   }, []);
 
-  const handleBulkProgress = useVisibilityBufferedCallback((progress: number) => {
-    setBulkProgress(progress);
-    if (progress >= 100) {
-      setIsBulkUploading(false);
-      setBulkProgress(-1);
+  // Action 3: Verrouillage Global Anti-Spam
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.api?.sync?.getStatus) {
+      window.api.sync.getStatus().then((status) => {
+        if (status && status.isSyncing) {
+          setIsBulkUploading(true);
+        }
+      }).catch(console.error);
     }
+  }, []);
+
+  const handleBulkProgress = useVisibilityBufferedCallback((progress: number) => {
+    // On met à jour uniquement la barre de progression.
+    // Le déverrouillage de l'interface (setIsBulkUploading(false)) 
+    // et l'auto-rafraîchissement (loadStats) sont exclusivement gérés 
+    // à la résolution de la promesse globale (startBulk)
+    setBulkProgress(progress);
   });
 
   // Listen to bulk progress
@@ -84,7 +95,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     return undefined;
   }, [handleDownstreamProgress]);
 
-  const handleStartBulkUpload = async (forceProbable = false, forceInvalid = false) => {
+  const handleStartBulkUpload = async (forceProbable = false, forceInvalid = false, forceMissing = false, onlyModified = false) => {
     return cloudGuard(async () => {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
@@ -97,16 +108,22 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     const toastId = toast.loading("Initialisation du transfert de masse...");
 
     try {
-      const res = await window.api.sync.startBulk(Number(siteIdToUse), forceProbable, forceInvalid);
+      const res = await window.api.sync.startBulk(Number(siteIdToUse), forceProbable, forceInvalid, forceMissing, onlyModified);
+      
+      // Auto-rafraîchissement dynamique pour déclencher la transition d'étape
+      await loadStats();
+
       if (res.success) {
         toast.success(res.message, { id: toastId });
         setAllowProbable(false);
         setAllowInvalid(false);
-        await loadStats();
       } else if ((res as any).cancelled) {
         toast('⚠️ Transfert annulé par l\'agent.', { id: toastId, icon: '🛑' });
       } else {
         toast.dismiss(toastId);
+        if ((res as any).uploadedCount > 0) {
+          toast.success(`Étape terminée : ${(res as any).uploadedCount} cartes envoyées.`);
+        }
       }
       return res;
     } catch (err: any) {

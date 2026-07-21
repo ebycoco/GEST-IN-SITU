@@ -808,15 +808,23 @@ export async function preloadUsersFromCloud(): Promise<void> {
       }
     }
 
-    // --- ÉTAPE PRÉALABLE : RÉCUPÉRATION DE TOUS LES SITES ---
-    // On télécharge d'abord tous les sites pour éviter les violations de clés étrangères
-    // sur site_id pour n'importe quel compte utilisateur inséré.
-    try {
-      log.info('Preload: Rapatriement préliminaire de tous les sites depuis Supabase...');
-      const { data: sitesData, error: sitesError } = await supabase
-        .from('t_sites')
-        .select('id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent');
+    log.info('Preload: Récupération parallèle (sites, centres, users, roles) depuis Supabase...');
+    
+    // R2: Paralléliser les 4 requêtes Supabase pour réduire le temps de Cold Start (P1)
+    const [sitesPromise, centresPromise, usersPromise, rolesPromise] = await Promise.all([
+      supabase.from('t_sites').select('id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent'),
+      supabase.from('t_centres').select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, lieu'),
+      supabase.from('t_users').select('login, password_hash, role, nom_user, prenom_user, email, telephone, statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id'),
+      supabase.from('t_user_roles').select('user_sync_id, role')
+    ]);
 
+    const { data: sitesData, error: sitesError } = sitesPromise;
+    const { data: centresData, error: centresError } = centresPromise;
+    const { data: cloudUsers, error: error } = usersPromise;
+    const { data: cloudRoles, error: rolesErr } = rolesPromise;
+
+    // --- 1. INSERTION DES SITES ---
+    try {
       if (sitesError) {
         log.error('Preload: Impossible de pré-charger les sites parents :', sitesError.message);
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: sitesError.message });
@@ -850,15 +858,8 @@ export async function preloadUsersFromCloud(): Promise<void> {
       logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: siteErr.message || String(siteErr) });
     }
 
-    // --- ÉTAPE PRÉALABLE 2 : RÉCUPÉRATION DE TOUS LES CENTRES ---
-    // De même, on charge tous les centres pour t_centres avant d'insérer les utilisateurs
-    // qui pourraient référencer un centre_id.
+    // --- 2. INSERTION DES CENTRES ---
     try {
-      log.info('Preload: Rapatriement préliminaire de tous les centres depuis Supabase...');
-      const { data: centresData, error: centresError } = await supabase
-        .from('t_centres')
-        .select('id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, lieu');
-
       if (centresError) {
         log.error('Preload: Impossible de pré-charger les centres parents :', centresError.message);
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: centresError.message });
@@ -892,10 +893,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
       logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: centreErr.message || String(centreErr) });
     }
     
-    const { data: cloudUsers, error } = await supabase
-      .from('t_users')
-      .select('login, password_hash, role, nom_user, prenom_user, email, telephone, statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, created_at, updated_at, sync_id');
-
+    // --- 3. INSERTION DES UTILISATEURS ---
     if (error) {
       log.error(`Preload error querying t_users on Supabase: ${error.message}`);
       log.error(`❌ [SUPABASE] Échec du préchargement des utilisateurs : ${error.message}`);
@@ -982,10 +980,6 @@ export async function preloadUsersFromCloud(): Promise<void> {
 
     // ── Synchronisation descendante des rôles multiples pour tous les comptes préchargés ──
     try {
-      const { data: cloudRoles, error: rolesErr } = await supabase
-        .from('t_user_roles')
-        .select('user_sync_id, role');
-
       if (!rolesErr && cloudRoles) {
         db.exec('PRAGMA foreign_keys = OFF;');
         try {

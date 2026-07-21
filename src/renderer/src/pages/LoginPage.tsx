@@ -11,15 +11,9 @@ export default function LoginPage() {
   const { login: doLogin, isLoading } = useAuthStore();
   const navigate = useNavigate();
 
-  const [isPreloading, setIsPreloading] = useState(false);
-
   useEffect(() => {
-    if (window.api.auth.isPreloadingUsers) {
-      window.api.auth.isPreloadingUsers().then(setIsPreloading).catch(console.error);
-    }
-    if (window.api.auth.onPreloadStatus) {
-      return window.api.auth.onPreloadStatus(setIsPreloading);
-    }
+    // Les logs de diagnostique IPC ont été supprimés ici s'ils n'étaient plus nécessaires, 
+    // ou remplacés par l'initialisation de l'API.
   }, []);
 
 
@@ -243,7 +237,7 @@ export default function LoginPage() {
               <>
                 <Loader size={32} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-primary)' }} />
                 <p style={{ color: 'var(--text-secondary)', textAlign: 'center', fontSize: 14 }}>
-                  Veuillez patienter pendant le téléchargement des données...
+                  Premier démarrage : Rapatriement des comptes...
                 </p>
               </>
             ) : null}

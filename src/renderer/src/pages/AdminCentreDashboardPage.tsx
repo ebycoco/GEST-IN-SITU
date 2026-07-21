@@ -65,6 +65,7 @@ export default function AdminCentreDashboardPage() {
   const [bulkProgress, setBulkProgress] = useState<number>(-1);
   const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
+  const [detailedSyncStats, setDetailedSyncStats] = useState<any>(null);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   // Anomaly stats state
@@ -151,9 +152,15 @@ export default function AdminCentreDashboardPage() {
       }
       if (siteIdToUse) {
         // Fetch unsynced cards count for the push button badge
-        const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(siteIdToUse);
+        const [unsyncedRes, syncStats] = await Promise.all([
+          window.api.stats.getUnsyncedCardsCount(siteIdToUse),
+          window.api.stats.getDetailedSyncStats(siteIdToUse)
+        ]);
         if (typeof unsyncedRes === 'number') {
           setDirtyCartesCount(unsyncedRes);
+        }
+        if (syncStats) {
+          setDetailedSyncStats(syncStats);
         }
         window.api.sync.getCloudCartesCount(siteIdToUse).then(count => {
           setCloudCartesCount(count);
@@ -192,7 +199,8 @@ export default function AdminCentreDashboardPage() {
     await new Promise(resolve => setTimeout(resolve, 50));
     
     try {
-      const res = await window.api.sync.startBulk(Number(user.site_id), false, false);
+      const isDelta = (detailedSyncStats?.modifiedCount || 0) > 0;
+      const res = await window.api.sync.startBulk(Number(user.site_id), false, false, false, isDelta);
       if (res.success) {
         toast.success(res.message, { id: toastId });
       } else {
@@ -428,19 +436,16 @@ export default function AdminCentreDashboardPage() {
                   border: '1px solid #FFE600',
                   cursor: (isBulkUploading || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
                   opacity: (isBulkUploading || dirtyCartesCount === 0) ? 0.5 : 1,
-                  boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
-                  position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: '8px',
-                  transition: 'all 0.2s ease-in-out',
                   flex: '1 1 auto',
                   whiteSpace: 'nowrap'
                 }}
               >
                 <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+                {isBulkUploading ? 'ENVOI...' : ((detailedSyncStats?.modifiedCount || 0) > 0 ? 'Synchroniser [Delta]' : 'Synchroniser mes saisies')}
                 <OnlineBadge />
               </button>
             </div>

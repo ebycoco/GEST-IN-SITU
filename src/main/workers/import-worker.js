@@ -148,8 +148,8 @@ async function run() {
   );
 
   const insertAnomalyStmt = db.prepare(`
-    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description, noms, prenoms, date_de_naissance, num_secu, contact, site_id, erreur_message, lieu_de_naissance, rangement)
-    VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message, @lieu_de_naissance, @rangement)
+    INSERT INTO t_import_anomalies (carte_id, type_anomalie, description, noms, prenoms, date_de_naissance, num_secu, contact, site_id, erreur_message, lieu_de_naissance, rangement, lieu_enrolement, statut, date_delivrance)
+    VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message, @lieu_de_naissance, @rangement, @lieu_enrolement, @statut, @date_delivrance)
   `);
 
   const BATCH_SIZE = 1000;
@@ -556,6 +556,7 @@ async function run() {
         var ddn      = cleanBirthDate(getCol(cols, colMap, 'date_de_naissance', 'ddn') || '');
         var lieuN    = removeAccents(getCol(cols, colMap, 'lieu_de_naissance') || '');
         var contact  = normalizeContact(getCol(cols, colMap, 'contact', 'telephone') || '');
+        var lieuE    = removeAccents(getCol(cols, colMap, 'lieu_enrolement') || '');
 
         // ============================================================
         // MISSION 2 — ParseStatutSemantique : Arbre de décision complet
@@ -638,7 +639,10 @@ async function run() {
                 site_id: siteId,
                 erreur_message: errMsg,
                 lieu_de_naissance: lieuN,
-                rangement: (getCol(cols, colMap, 'rangement') || '').toUpperCase().trim()
+                rangement: (getCol(cols, colMap, 'rangement') || '').toUpperCase().trim(),
+                lieu_enrolement: lieuE,
+                statut: finalStatut,
+                date_delivrance: dateDelivrance
               });
               totalRejected++;
             }
@@ -670,7 +674,10 @@ async function run() {
             site_id: siteId,
             erreur_message: dateError,
             lieu_de_naissance: lieuN,
-            rangement: resolved.rangement
+            rangement: resolved.rangement,
+            lieu_enrolement: lieuE,
+            statut: finalStatut,
+            date_delivrance: dateDelivrance
           });
         } else {
           batch.push({
@@ -680,7 +687,7 @@ async function run() {
             num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
             lieu_de_naissance: lieuN,
             contact: contact,
-            lieu_enrolement: removeAccents(getCol(cols, colMap, 'lieu_enrolement') || ''),
+            lieu_enrolement: lieuE,
             rangement: resolved.rangement,
             statut: finalStatut,
             date_delivrance: dateDelivrance,
@@ -825,6 +832,22 @@ async function run() {
   parentPort.postMessage({ type: 'progress', value: 98 });
 
   db.prepare('DELETE FROM t_import_temp').run();
+
+  try {
+    const purgeResult = db.prepare(`
+      DELETE FROM t_cartes 
+      WHERE (noms IS NULL OR noms = '') 
+        AND (prenoms IS NULL OR prenoms = '') 
+        AND (num_secu IS NULL OR num_secu = '') 
+        AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+    `).run();
+    if (purgeResult.changes > 0) {
+      console.log(`[AUTO-PURGE] ${purgeResult.changes} lignes fantômes supprimées après import.`);
+    }
+  } catch (err) {
+    console.error("[AUTO-PURGE] Échec de la purge après import:", err);
+  }
+
   db.close();
 
   const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));

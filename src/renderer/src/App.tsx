@@ -5,6 +5,7 @@ import MainLayout from './components/layout/MainLayout';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/dashboard';
 import CartesPage from './pages/CartesPage';
+import TableCartesPage from './pages/TableCartesPage';
 import ImportPage from './pages/ImportPage';
 import SearchPage from './pages/SearchPage';
 import AgentsPage from './pages/AgentsPage';
@@ -26,6 +27,7 @@ import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
 import RoleSelectorPage from './pages/RoleSelectorPage';
+import AnomaliesView from './pages/AnomaliesView';
 
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
@@ -146,7 +148,7 @@ export default function App() {
               <Route path="doublons" element={<DoublonsView />} />
               <Route path="manquants" element={<MissingDataView />} />
               <Route path="invalides" element={<InvalidFormatView />} />
-              <Route path="anomalies-brutes" element={<AnomaliesBrutesView />} />
+              <Route path="anomalies" element={<AnomaliesView />} />
               <Route path="recherche-universelle" element={<GlobalSearchView />} />
             </Route>
 
@@ -157,6 +159,7 @@ export default function App() {
             
             {/* Routes Admin */}
             <Route path="import" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ImportPage /></ProtectedRoute>} />
+            <Route path="table-cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><TableCartesPage /></ProtectedRoute>} />
             <Route path="agents" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentsPage /></ProtectedRoute>} />
             <Route path="sites" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><SitesPage /></ProtectedRoute>} />
             <Route path="export" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ExportPage /></ProtectedRoute>} />
@@ -165,6 +168,7 @@ export default function App() {
             <Route path="maintenance" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><MaintenancePage /></ProtectedRoute>} />
             <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><LogsPage /></ProtectedRoute>} />
             <Route path="retraits" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><RetraitsPage /></ProtectedRoute>} />
+            <Route path="anomalies" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AnomaliesView /></ProtectedRoute>} />
           </Route>
         </Routes>
       </HashRouter>

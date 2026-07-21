@@ -6,15 +6,17 @@ import { networkMonitor } from '../sync/network-monitor';
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let currentSessionToken: string | null = null;
 let currentUserLogin: string | null = null;
+let secureCurrentUser: any = null;
 
-export function startSessionHeartbeat(login: string, sessionToken: string): void {
+export function startSessionHeartbeat(user: any, sessionToken: string): void {
   // Nettoyer un intervalle existant
   stopSessionHeartbeat();
 
   currentSessionToken = sessionToken;
-  currentUserLogin = login;
+  currentUserLogin = user.login;
+  secureCurrentUser = user;
 
-  log.info(`Démarrage du Heartbeat de session pour l'utilisateur : ${login}`);
+  log.info(`Démarrage du Heartbeat de session pour l'utilisateur : ${user.login}`);
 
   // Ping local toutes les 2 minutes (120 000 ms) pour la forme et traçabilité locale
   heartbeatInterval = setInterval(async () => {
@@ -31,9 +33,13 @@ export async function stopSessionHeartbeat(): Promise<void> {
 
   currentSessionToken = null;
   currentUserLogin = null;
+  secureCurrentUser = null;
 }
 
 export function getCurrentUserLogin(): string | null {
   return currentUserLogin;
 }
 
+export function getSecureCurrentUser(): any | null {
+  return secureCurrentUser;
+}

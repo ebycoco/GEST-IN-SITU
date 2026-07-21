@@ -97,3 +97,36 @@ export interface ILog {
   is_dirty: number;
   is_read: number;
 }
+
+export interface StatsKpi {
+  total: number;
+  en_stock: number;
+  distribuees: number;
+  absentes: number;
+  sans_num_secu: number;
+  sans_rangement: number;
+  sans_nom: number;
+  sans_prenom: number;
+  dates_invalides: number;
+  [key: string]: any; // Pour les autres champs de graphes et stats
+}
+
+export interface AgentPerformance {
+  agent_nom: string;
+  total_saisies?: number;
+  total_actions?: number;
+  total_distributions?: number;
+  total_validations?: number;
+  centre_nom?: string;
+  centre_id?: number;
+  agent_id?: number;
+}
+
+export interface DetailedSyncStats {
+  cleanCount: number;
+  missingCount: number;
+  probableCount: number;
+  strictCount: number;
+  invalidCount: number;
+  modifiedCount: number;
+}

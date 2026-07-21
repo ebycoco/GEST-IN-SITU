@@ -5,7 +5,7 @@ const Database = require(workerData.sqlitePath);
 const { createClient } = require('@supabase/supabase-js');
 
 async function run() {
-  const { siteId, dbPath, supabaseUrl, supabaseAnonKey, allowProbable, allowInvalid } = workerData;
+  const { siteId, centreId, dbPath, supabaseUrl, supabaseAnonKey, allowProbable, allowInvalid, allowMissing, onlyModified } = workerData;
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
@@ -38,16 +38,42 @@ async function run() {
   }
 
   let filterClause = `
-    WHERE site_id = ? AND (is_dirty = 1 OR synced_at IS NULL OR synced_at = '')
-    AND (cle_doublon IS NULL OR cle_doublon = '' OR cle_doublon = '||||' OR cle_doublon NOT IN (
-      SELECT cle_doublon FROM t_cartes 
-      WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
-      GROUP BY cle_doublon HAVING COUNT(*) > 1
-    ))
+    WHERE site_id = ? 
   `;
-  const queryParams = [siteId, siteId];
+  const queryParams = [siteId];
+
+  if (centreId) {
+    filterClause += ` AND centre_id = ? `;
+    queryParams.push(centreId);
+  }
+
+  if (onlyModified) {
+    filterClause += ` AND ((is_dirty = 1 AND synced_at IS NOT NULL AND synced_at != '') OR is_dirty = -1) AND statut != 'BROUILLON' `;
+  } else {
+    filterClause += ` AND (is_dirty = 1 OR is_dirty = -1 OR synced_at IS NULL OR synced_at = '') AND statut != 'BROUILLON' `;
+  }
+
+  filterClause += `
+    AND NOT (
+      (noms IS NULL OR noms = '') AND
+      (prenoms IS NULL OR prenoms = '') AND
+      (num_secu IS NULL OR num_secu = '') AND
+      (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+    )
+  `;
 
   if (!allowProbable) {
+    // Étape 1 : Exclure les doublons stricts
+    filterClause += `
+      AND (cle_doublon IS NULL OR cle_doublon = '' OR cle_doublon = '||||' OR cle_doublon NOT IN (
+        SELECT cle_doublon FROM t_cartes 
+        WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
+        GROUP BY cle_doublon HAVING COUNT(*) > 1
+      ))
+    `;
+    queryParams.push(siteId);
+
+    // Étape 1 : Exclure les doublons probables
     filterClause += `
       AND (noms || '||' || prenoms || '||' || date_de_naissance) NOT IN (
         SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes
@@ -58,11 +84,19 @@ async function run() {
     queryParams.push(siteId);
   }
 
+  if (!allowMissing) {
+    // Étape 1 : exclure les cartes avec des données critiques manquantes
+    filterClause += `
+      AND (noms IS NOT NULL AND noms != '')
+      AND (prenoms IS NOT NULL AND prenoms != '')
+      AND (date_de_naissance IS NOT NULL AND date_de_naissance != '')
+      AND (rangement IS NOT NULL AND rangement != '' AND rangement != 'NON CLASSE')
+    `;
+  }
+
   if (!allowInvalid) {
     filterClause += `
-      AND date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$'
-      AND date_de_naissance IS NOT NULL
-      AND date_de_naissance != ''
+      AND (date_de_naissance IS NULL OR date_de_naissance = '' OR date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$')
     `;
   }
 
@@ -105,8 +139,11 @@ async function run() {
     }
 
     const validCards = [];
+    const deleteCards = [];
     for (const c of cards) {
-      if (!allowInvalid && !isValidDate(c.date_de_naissance)) {
+      if (c.is_dirty === -1) {
+        deleteCards.push(c);
+      } else if (!allowInvalid && !isValidDate(c.date_de_naissance)) {
         // skipped
       } else {
         validCards.push(c);
@@ -114,6 +151,34 @@ async function run() {
     }
 
     const chunkStart = Date.now();
+
+    if (deleteCards.length > 0) {
+      const deleteSyncIds = deleteCards.map(c => c.sync_id).filter(Boolean);
+      try {
+        let hasError = false;
+        if (deleteSyncIds.length > 0) {
+          const { error } = await supabase.from('t_cartes').delete().in('sync_id', deleteSyncIds);
+          if (error) {
+            parentPort.postMessage({ type: 'log', level: 'error', message: `ÉCHEC SUPPRESSION bloc ${blockIndex} : ${error.message}` });
+            hasError = true;
+          }
+        }
+        
+        if (!hasError) {
+          try {
+            const deleteIds = deleteCards.map(c => c.id_carte);
+            const placeholders = deleteIds.map(() => '?').join(',');
+            const deleteStmt = db.prepare(`DELETE FROM t_cartes WHERE id_carte IN (${placeholders})`);
+            db.transaction(() => { deleteStmt.run(...deleteIds); })();
+            uploadedCount += deleteCards.length;
+          } catch (txErr) {
+            parentPort.postMessage({ type: 'log', level: 'error', message: `Erreur suppression locale bloc ${blockIndex} : ${txErr.message}` });
+          }
+        }
+      } catch (e) {
+        parentPort.postMessage({ type: 'log', level: 'error', message: `Erreur réseau suppression bloc ${blockIndex} : ${e.message}` });
+      }
+    }
 
     if (validCards.length > 0) {
       const mappedCards = validCards.map(c => ({

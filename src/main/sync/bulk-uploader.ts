@@ -41,6 +41,9 @@ export async function runBulkUpload(
   siteId: number,
   allowProbable: boolean,
   allowInvalid: boolean,
+  allowMissing: boolean,
+  onlyModified: boolean = false,
+  centreId: number | null = null,
   progressCallback: (progress: number) => void,
   userLogin: string = 'system'
 ): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean }> {
@@ -83,8 +86,11 @@ export async function runBulkUpload(
     const worker = new Worker(workerPath, {
       workerData: {
         siteId,
+        centreId,
         allowProbable,
         allowInvalid,
+        allowMissing,
+        onlyModified,
         dbPath,
         supabaseUrl,
         supabaseAnonKey,

@@ -187,7 +187,7 @@ const api = {
       ipcRenderer.invoke('stats:getRetraitsTrend', siteId, centreId, period, customDate ?? null),
     getUnsyncedCardsCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedCardsCount', siteId),
-    getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number }> => 
+    getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number }> => 
       ipcRenderer.invoke('stats:getDetailedSyncStats', siteId),
     getUnsyncedUsersCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedUsersCount', siteId),
@@ -289,11 +289,15 @@ const api = {
       ipcRenderer.invoke('qualite:corrigerFormat', payload),
     supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }): Promise<any> =>
       ipcRenderer.invoke('qualite:supprimerIncoherences', payload),
+    assainirGlobal: (payload: { site_id: number }): Promise<{ success: boolean; deleted: number; details: any }> =>
+      ipcRenderer.invoke('qualite:assainirGlobal', payload),
     auditDates: (): Promise<{ success: boolean; movedCount: number; total: number }> =>
       ipcRenderer.invoke('qualite:auditDates'),
     onAuditProgress: (callback: (event: any, data: { processed: number; total: number; movedCount: number }) => void) => {
-      ipcRenderer.removeAllListeners('qualite:auditProgress');
       ipcRenderer.on('qualite:auditProgress', callback);
+      return () => {
+        ipcRenderer.removeListener('qualite:auditProgress', callback);
+      };
     }
   },
   // Hierarchy
@@ -429,15 +433,22 @@ const api = {
     startBulk: (
       siteId: number,
       allowProbable?: boolean,
-      allowInvalid?: boolean
+      allowInvalid?: boolean,
+      allowMissing?: boolean,
+      onlyModified?: boolean,
+      currentUser?: any
     ): Promise<{
       success: boolean;
       message: string;
-      status?: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID';
+      status?: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID' | 'BLOCKED_MISSING';
       count?: number;
       uploadedCount?: number;
+      missingCount?: number;
+      strictCount?: number;
+      probableCount?: number;
+      invalidCount?: number;
     }> => 
-      ipcRenderer.invoke('sync:startBulk', siteId, allowProbable, allowInvalid),
+      ipcRenderer.invoke('sync:startBulk', siteId, allowProbable, allowInvalid, allowMissing, onlyModified, currentUser),
     onBulkProgress: (callback: (p: number) => void) => {
       const listener = (_: any, p: number) => callback(p);
       ipcRenderer.on('sync:bulk-progress', listener);
@@ -493,6 +504,8 @@ const api = {
       ipcRenderer.invoke('maintenance:clearCloudCartes', siteId, true, currentUser),
     fullReset: (currentUser?: any): Promise<void> => 
       ipcRenderer.invoke('maintenance:fullReset', currentUser),
+    purgeEmptyRows: (): Promise<void> => 
+      ipcRenderer.invoke('maintenance:purgeEmptyRows'),
     getLogs: (limit?: number, offset?: number, searchTerm?: string, filterLevel?: string): Promise<{logs: any[], total: number}> =>
       ipcRenderer.invoke('maintenance:getLogs', limit, offset, searchTerm, filterLevel),
     clearLogs: (password: string, currentUser?: any): Promise<{ success: boolean }> =>
@@ -545,6 +558,10 @@ const api = {
       ipcRenderer.on('updater:error', listener);
       return () => ipcRenderer.removeListener('updater:error', listener);
     },
+  },
+  // Debug
+  debug: {
+    getAllAnomalies: (): Promise<any[]> => ipcRenderer.invoke('debug:getAllAnomalies')
   }
 };
 

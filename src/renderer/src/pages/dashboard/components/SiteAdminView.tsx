@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { OnlineBadge } from '../../../components/OnlineBadge';
+import { StatsKpi, AgentPerformance, DetailedSyncStats } from '../../../../../shared/types';
 
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -27,15 +28,15 @@ import {
 import { toast } from 'react-hot-toast';
 
 interface SiteAdminViewProps {
-  stats: any;
-  siteSaisiesStats: any[];
-  siteQualiteStats: any[];
-  siteLogistiqueStats: any[];
+  stats: StatsKpi | null;
+  siteSaisiesStats: AgentPerformance[];
+  siteQualiteStats: AgentPerformance[];
+  siteLogistiqueStats: AgentPerformance[];
   dirtyCartesCount: number;
   dirtyUsersCount: number;
   cloudCartesCount: number;
   totalCloudCartesCount?: number;
-  detailedSyncStats: { cleanCount: number, probableCount: number, strictCount: number, invalidCount: number } | null;
+  detailedSyncStats: DetailedSyncStats | null;
   isOnline: boolean;
   user: any;
   activeSiteId: number | null;
@@ -50,7 +51,7 @@ interface SiteAdminViewProps {
   handleForceSiteSync: () => Promise<void>;
   handleForceAgentsSync: () => Promise<void>;
   handlePullSiteCards?: () => Promise<void>;
-  handleStartBulkUpload?: (forceProbable?: boolean, forceInvalid?: boolean) => Promise<any>;
+  handleStartBulkUpload?: (forceProbable?: boolean, forceInvalid?: boolean, forceMissing?: boolean, onlyModified?: boolean) => Promise<any>;
   isClearingCloud?: boolean;
   purgeCloudProgress?: number;
   handleClearCloudDatabase?: () => Promise<void>;
@@ -125,7 +126,7 @@ export function SiteAdminView({
         loadStats(true, { centreId, agentId, dateStr }).catch(console.error);
       }
     }
-  }, [activeTab, selectedCentreId, selectedAgentId, selectedDate, activeSiteId, user]);
+  }, [activeTab, selectedCentreId, selectedAgentId, selectedDate, activeSiteId, user, loadStats]);
 
   // Filtrer les agents affichés dans le sélecteur d'agent en fonction du centre sélectionné
   const filteredAgentsForSelect = React.useMemo(() => {
@@ -166,12 +167,75 @@ export function SiteAdminView({
     return siteLogistiqueStats;
   }, [siteLogistiqueStats, selectedCentreId, user]);
 
+  const unifiedRoleMapping = React.useMemo(() => [
+    {
+      key: 'saisie' as const,
+      roleName: 'OPERATEUR_SAISIE',
+      label: '✏️ Performance Saisie',
+      data: filteredSaisies,
+      description: "Nombre de fiches saisies aujourd'hui par chaque opérateur de saisie.",
+      colHeader: "SAISIES DU JOUR",
+      noDataText: "Aucun opérateur de saisie pour ce périmètre.",
+      colorAccent: '#ffd700',
+      suffix: 'fiche(s)',
+      countKey: 'total_saisies'
+    },
+    {
+      key: 'qualite' as const,
+      roleName: 'OPERATEUR_QUALITE',
+      label: '🛡️ Contrôle & Conformité',
+      data: filteredQualite,
+      description: "Nombre d'actions enregistrées aujourd'hui par chaque opérateur de contrôle & conformité.",
+      colHeader: "ACTIONS DU JOUR",
+      noDataText: "Aucun opérateur de contrôle & conformité pour ce périmètre.",
+      colorAccent: '#a78bfa',
+      suffix: 'action(s)',
+      countKey: 'total_actions'
+    },
+    {
+      key: 'logistique' as const,
+      roleName: 'OPERATEUR_LOGISTIQUE',
+      label: '🚚 Distribution & Logistique',
+      data: filteredLogistique,
+      description: "Nombre de cartes distribuées aujourd'hui par chaque opérateur de distribution & logistique.",
+      colHeader: "DISTRIBUTIONS DU JOUR",
+      noDataText: "Aucun opérateur de distribution & logistique pour ce périmètre.",
+      colorAccent: '#34d399',
+      suffix: 'carte(s)',
+      countKey: 'total_distributions'
+    },
+    {
+      key: 'distributeur' as const,
+      roleName: 'DISTRIBUTEUR',
+      label: '🤝 Distributeur',
+      data: [] as any[], // Réservé pour évolution
+      description: "Nombre de distributions effectuées aujourd'hui par les distributeurs.",
+      colHeader: "DISTRIBUTIONS DU JOUR",
+      noDataText: "Aucun distributeur actif sur ce périmètre.",
+      colorAccent: '#60a5fa',
+      suffix: 'distribution(s)',
+      countKey: 'total_distributions'
+    },
+    {
+      key: 'superviseur' as const,
+      roleName: 'SUPERVISEUR',
+      label: '👁️ Superviseur',
+      data: [] as any[], // Réservé pour évolution
+      description: "Nombre d'actions de supervision validées aujourd'hui.",
+      colHeader: "ACTIONS DU JOUR",
+      noDataText: "Aucun superviseur actif sur ce périmètre.",
+      colorAccent: '#f472b6',
+      suffix: 'validation(s)',
+      countKey: 'total_validations'
+    }
+  ], [filteredSaisies, filteredQualite, filteredLogistique]);
+
   const [supervisionTab, setSupervisionTab] = useState<'saisie' | 'qualite' | 'logistique'>('saisie');
   const [isQuickAccessVisible, setIsQuickAccessVisible] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [syncAlert, setSyncAlert] = useState<{
-    status: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID';
+    status: 'BLOCKED_STRICT' | 'BLOCKED_PROBABLE' | 'BLOCKED_INVALID' | 'BLOCKED_MISSING';
     count: number;
     message: string;
   } | null>(null);
@@ -179,14 +243,28 @@ export function SiteAdminView({
   const [isAuditing, setIsAuditing] = useState(false);
   const [auditProgress, setAuditProgress] = useState<{ processed: number; total: number; movedCount: number } | null>(null);
 
+  React.useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    
+    if (isAuditing) {
+      unsubscribe = (window as any).api.qualite.onAuditProgress((_: any, data: { processed: number; total: number; movedCount: number }) => {
+        setAuditProgress(data);
+      });
+    }
+
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [isAuditing]);
+
   const handleAuditDates = async () => {
     setIsAuditing(true);
     setAuditProgress({ processed: 0, total: 0, movedCount: 0 });
     
-    // S'abonner aux événements de progression
-    (window as any).api.qualite.onAuditProgress((_: any, data: { processed: number; total: number; movedCount: number }) => {
-      setAuditProgress(data);
-    });
+    // S'abonner aux événements de progression est maintenant géré par useEffect
+    // pour éviter les fuites de mémoire.
 
     try {
       const res = await (window as any).api.qualite.auditDates();
@@ -241,7 +319,7 @@ export function SiteAdminView({
     };
   }, []);
 
-  const handleStartBulkUploadClick = async (forceProbable = false, forceInvalid = false) => {
+  const handleStartBulkUploadClick = async (forceProbable = false, forceInvalid = false, forceMissing = false, onlyModified = false) => {
     if (isBulkUploading) return;
     
     setSyncAlert(null);
@@ -253,7 +331,7 @@ export function SiteAdminView({
 
     const triggerUpload = async () => {
       try {
-        const res = await handleStartBulkUpload(forceProbable, forceInvalid);
+        const res = await handleStartBulkUpload(forceProbable, forceInvalid, forceMissing, onlyModified);
         if (!res.success && res.status) {
           setSyncAlert({
             status: res.status,
@@ -266,14 +344,21 @@ export function SiteAdminView({
       }
     };
 
-    if (!forceProbable && !forceInvalid) {
+    if (forceProbable || forceMissing) {
+      openConfirmModal({
+        title: "2E ÉTAPE : ENVOYER LES ANOMALIES",
+        message: "Attention, vous vous apprêtez à envoyer des cartes comportant des doublons ou des données manquantes. Voulez-vous continuer ?",
+        isDanger: true,
+        onConfirm: triggerUpload
+      });
+    } else if (forceInvalid) {
+      await triggerUpload();
+    } else {
       openConfirmModal({
         title: "Transfert de Masse Cloud",
         message: "Êtes-vous sûr de vouloir lancer la synchronisation de masse vers le Cloud ? Cette opération peut prendre plusieurs minutes si vous avez beaucoup de cartes en attente.",
         onConfirm: triggerUpload
       });
-    } else {
-      await triggerUpload();
     }
   };
 
@@ -291,6 +376,8 @@ export function SiteAdminView({
           if (!isCorrect) {
             toast.error("❌ Mot de passe administrateur incorrect. Action annulée.");
             setLoading(false);
+            setConfirmModal(null);
+            setConfirmInputVal('');
             return;
           }
 
@@ -299,6 +386,8 @@ export function SiteAdminView({
           if (result.success) {
             toast.success(`${result.count} cartes supprimées.`);
             loadStats();
+            setConfirmModal(null);
+            setConfirmInputVal('');
           }
         } catch (e) {
           toast.error("Erreur lors du vidage de la base.");
@@ -349,19 +438,44 @@ export function SiteAdminView({
   const distributionRate = s.total > 0 ? Math.round((s.distribuees / s.total) * 100) : 0;
   
   const cleanCount = detailedSyncStats?.cleanCount || 0;
+  const missingCount = detailedSyncStats?.missingCount || 0;
   const probableCount = detailedSyncStats?.probableCount || 0;
   const strictCount = detailedSyncStats?.strictCount || 0;
   const invalidCount = detailedSyncStats?.invalidCount || 0;
-  const totalSyncableCards = cleanCount + probableCount + strictCount + invalidCount;
+  const modifiedCount = detailedSyncStats?.modifiedCount || 0;
+  const totalSyncableCards = cleanCount + missingCount + probableCount + strictCount + invalidCount + modifiedCount;
 
-  let uploadBtnLabel = 'ENVOYER LES CARTES VERS LE CLOUD';
-  if (totalSyncableCards > 0) {
-    const parts: string[] = [];
-    if (cleanCount > 0) parts.push(`${cleanCount.toLocaleString('fr')} Parfaites`);
-    if (probableCount > 0) parts.push(`${probableCount.toLocaleString('fr')} Probables`);
-    if (strictCount > 0) parts.push(`${strictCount.toLocaleString('fr')} Stricts`);
-    if (invalidCount > 0) parts.push(`${invalidCount.toLocaleString('fr')} Invalides`);
-    uploadBtnLabel += ` (${parts.join(', ')})`;
+  let step = 0;
+  let btnLabel = 'SYSTÈME À JOUR (Aucune donnée à synchroniser)';
+  let btnColor = 'rgba(255, 255, 255, 0.05)';
+  let btnAction = () => {};
+  let btnDisabled = true;
+
+  if (modifiedCount > 0) {
+    step = 1;
+    btnLabel = `ENVOYER LES MODIFICATIONS (${modifiedCount.toLocaleString('fr')} cartes)`;
+    btnColor = '#3b82f6'; // Bleu distinctif pour la delta-sync
+    btnAction = () => handleStartBulkUploadClick(false, false, false, true);
+    btnDisabled = isBulkUploading;
+  } else if (cleanCount > 0) {
+    step = 1;
+    btnLabel = `ENVOYER LES CARTES VERS LE CLOUD (${cleanCount.toLocaleString('fr')} Parfaites)`;
+    btnColor = 'var(--accent-primary)';
+    btnAction = () => handleStartBulkUploadClick(false, false, false);
+    btnDisabled = isBulkUploading;
+  } else if (missingCount > 0 || probableCount > 0 || strictCount > 0) {
+    step = 2;
+    const count = missingCount + probableCount + strictCount;
+    btnLabel = `2E ÉTAPE : ENVOYER LES ANOMALIES (${count.toLocaleString('fr')} à traiter)`;
+    btnColor = '#f97316';
+    btnAction = () => handleStartBulkUploadClick(true, false, true);
+    btnDisabled = isBulkUploading;
+  } else if (invalidCount > 0) {
+    step = 3;
+    btnLabel = `BLOQUÉ : ${invalidCount.toLocaleString('fr')} DATES INVALIDES`;
+    btnColor = '#e74c3c';
+    btnAction = () => { toast.error("Veuillez corriger les dates invalides avant de pouvoir synchroniser."); };
+    btnDisabled = isBulkUploading;
   }
   const kpis = [
     { label: 'Total Cartes', value: (s.total || 0).toLocaleString('fr'), icon: CreditCard, color: '#3498db', gradient: 'linear-gradient(135deg, #3498db, #2980b9)', tabKey: null },
@@ -506,69 +620,11 @@ export function SiteAdminView({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: 16, flexWrap: 'wrap', gap: 12 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               {(() => {
-                const ROLE_MAPPING = [
-                  {
-                    key: 'saisie' as const,
-                    roleName: 'OPERATEUR_SAISIE',
-                    label: '✏️ Performance Saisie',
-                    data: filteredSaisies,
-                    description: "Nombre de fiches saisies aujourd'hui par chaque opérateur de saisie.",
-                    colHeader: "SAISIES DU JOUR",
-                    noDataText: "Aucun opérateur de saisie pour ce périmètre.",
-                    colorAccent: '#ffd700',
-                    suffix: 'fiche(s)'
-                  },
-                  {
-                    key: 'qualite' as const,
-                    roleName: 'OPERATEUR_QUALITE',
-                    label: '🛡️ Contrôle & Conformité',
-                    data: filteredQualite,
-                    description: "Nombre d'actions enregistrées aujourd'hui par chaque opérateur de qualité & assainissement.",
-                    colHeader: "ACTIONS DU JOUR",
-                    noDataText: "Aucun opérateur qualité pour ce périmètre.",
-                    colorAccent: '#a78bfa',
-                    suffix: 'action(s)'
-                  },
-                  {
-                    key: 'logistique' as const,
-                    roleName: 'OPERATEUR_LOGISTIQUE',
-                    label: '🚚 Distribution & Logistique',
-                    data: filteredLogistique,
-                    description: "Nombre de cartes distribuées aujourd'hui par chaque opérateur logistique / inventaire.",
-                    colHeader: "DISTRIBUTIONS DU JOUR",
-                    noDataText: "Aucun opérateur logistique / inventaire pour ce périmètre.",
-                    colorAccent: '#34d399',
-                    suffix: 'carte(s)'
-                  },
-                  {
-                    key: 'distributeur' as const,
-                    roleName: 'DISTRIBUTEUR',
-                    label: '🤝 Distributeur',
-                    data: [] as any[], // Réservé pour évolution future
-                    description: "Activités de distribution enregistrées aujourd'hui.",
-                    colHeader: "DISTRIBUTIONS DU JOUR",
-                    noDataText: "Aucun distributeur actif sur ce périmètre.",
-                    colorAccent: '#60a5fa',
-                    suffix: 'distribution(s)'
-                  },
-                  {
-                    key: 'superviseur' as const,
-                    roleName: 'SUPERVISEUR',
-                    label: '👁️ Superviseur',
-                    data: [] as any[], // Réservé pour évolution future
-                    description: "Actions de supervision et validations effectuées aujourd'hui.",
-                    colHeader: "ACTIONS DU JOUR",
-                    noDataText: "Aucun superviseur actif sur ce périmètre.",
-                    colorAccent: '#f472b6',
-                    suffix: 'validation(s)'
-                  }
-                ];
-
                 // Rendre les onglets configurables
                 return (
                   <>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {ROLE_MAPPING.map((item) => (
+                      {unifiedRoleMapping.filter(item => !['distributeur', 'superviseur'].includes(item.key)).map((item) => (
                         <button
                           key={item.key}
                           onClick={() => setSupervisionTab(item.key as any)}
@@ -689,60 +745,7 @@ export function SiteAdminView({
 
           {/* Rendu dynamique des données selon l'onglet configuré */}
           {(() => {
-            const ROLE_MAPPING = [
-              {
-                key: 'saisie',
-                data: filteredSaisies,
-                description: "Nombre de fiches saisies aujourd'hui par chaque opérateur de saisie.",
-                colHeader: "SAISIES DU JOUR",
-                noDataText: "Aucun opérateur de saisie pour ce périmètre.",
-                colorAccent: '#ffd700',
-                suffix: 'fiche(s)',
-                countKey: 'total_saisies'
-              },
-              {
-                key: 'qualite',
-                data: filteredQualite,
-                description: "Nombre d'actions enregistrées aujourd'hui par chaque opérateur de contrôle & conformité.",
-                colHeader: "ACTIONS DU JOUR",
-                noDataText: "Aucun opérateur de contrôle & conformité pour ce périmètre.",
-                colorAccent: '#a78bfa',
-                suffix: 'action(s)',
-                countKey: 'total_actions'
-              },
-              {
-                key: 'logistique',
-                data: filteredLogistique,
-                description: "Nombre de cartes distribuées aujourd'hui par chaque opérateur de distribution & logistique.",
-                colHeader: "DISTRIBUTIONS DU JOUR",
-                noDataText: "Aucun opérateur de distribution & logistique pour ce périmètre.",
-                colorAccent: '#34d399',
-                suffix: 'carte(s)',
-                countKey: 'total_distributions'
-              },
-              {
-                key: 'distributeur',
-                data: [] as any[], // Réservé pour évolution
-                description: "Nombre de distributions effectuées aujourd'hui par les distributeurs.",
-                colHeader: "DISTRIBUTIONS DU JOUR",
-                noDataText: "Aucun distributeur actif sur ce périmètre.",
-                colorAccent: '#60a5fa',
-                suffix: 'distribution(s)',
-                countKey: 'total_distributions'
-              },
-              {
-                key: 'superviseur',
-                data: [] as any[], // Réservé pour évolution
-                description: "Nombre d'actions de supervision validées aujourd'hui.",
-                colHeader: "ACTIONS DU JOUR",
-                noDataText: "Aucun superviseur actif sur ce périmètre.",
-                colorAccent: '#f472b6',
-                suffix: 'validation(s)',
-                countKey: 'total_actions'
-              }
-            ];
-
-            const activeRole = ROLE_MAPPING.find(r => r.key === supervisionTab);
+            const activeRole = unifiedRoleMapping.find(r => r.key === supervisionTab);
             if (!activeRole) return null;
 
             return (
@@ -977,12 +980,12 @@ export function SiteAdminView({
 
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                   <button
-                    onClick={() => handleStartBulkUploadClick(false, false)}
+                    onClick={() => handleStartBulkUploadClick(false, false, false, modifiedCount > 0)}
                     disabled={isBulkUploading || totalSyncableCards === 0}
                     style={{
                       flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                       padding: '11px 18px', borderRadius: 12, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                      background: (isBulkUploading || totalSyncableCards === 0) ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #34d399, #059669)',
+                      background: (isBulkUploading || totalSyncableCards === 0) ? 'rgba(255,255,255,0.05)' : (modifiedCount > 0 ? '#3b82f6' : 'linear-gradient(135deg, #34d399, #059669)'),
                       color: (isBulkUploading || totalSyncableCards === 0) ? 'var(--text-muted)' : 'white',
                       opacity: (isBulkUploading || totalSyncableCards === 0) ? 0.5 : 1,
                       transition: 'all 0.2s',
@@ -990,23 +993,24 @@ export function SiteAdminView({
                     }}
                   >
                     <RefreshCw size={16} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                    {isBulkUploading ? 'ENVOI...' : `↑ Envoyer${totalSyncableCards > 0 ? ` (${totalSyncableCards.toLocaleString('fr')})` : ''}`}
+                    {isBulkUploading ? 'ENVOI...' : (totalSyncableCards > 0 ? `↑ Envoyer (${totalSyncableCards.toLocaleString('fr')})` : 'Système à jour (Aucune donnée)')}
                   </button>
 
                   <button
                     onClick={() => handlePullSiteCards()}
-                    disabled={isPullingCards || isBackgroundPulling }
+                    disabled={isPullingCards || isBackgroundPulling || cloudCartesCount === 0}
                     style={{
                       flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                      padding: '11px 18px', borderRadius: 12, border: '1px solid rgba(52, 211, 153, 0.3)', fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                      padding: '11px 18px', borderRadius: 12, border: '1px solid rgba(52, 211, 153, 0.3)', fontWeight: 700, fontSize: 13, 
+                      cursor: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
                       background: 'transparent',
-                      color: (isPullingCards || isBackgroundPulling ) ? 'var(--text-muted)' : '#34d399',
-                      opacity: (isPullingCards || isBackgroundPulling ) ? 0.5 : 1,
+                      color: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'var(--text-muted)' : '#34d399',
+                      opacity: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 0.5 : 1,
                       transition: 'all 0.2s',
                     }}
                   >
                     <RefreshCw size={16} style={{ animation: (isPullingCards || isBackgroundPulling) ? 'spin 1.5s linear infinite' : 'none' }} />
-                    {isBackgroundPulling ? 'TÉLÉCHARGEMENT...' : isPullingCards ? 'RÉCUPÉRATION...' : '↓ Récupérer du Cloud'}
+                    {isBackgroundPulling ? 'TÉLÉCHARGEMENT...' : isPullingCards ? 'RÉCUPÉRATION...' : (cloudCartesCount > 0 ? `↓ Télécharger (${cloudCartesCount.toLocaleString('fr')} cartes)` : '↓ À jour (0 carte)')}
                   </button>
                 </div>
 
@@ -1045,17 +1049,18 @@ export function SiteAdminView({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                     <div>
                       <button 
-                        onClick={() => handleStartBulkUploadClick(false, false)} 
-                        disabled={isBulkUploading || totalSyncableCards === 0}
-                        className="btn-primary" 
+                        onClick={btnAction} 
+                        disabled={btnDisabled}
+                        className={step === 1 ? "btn-primary" : ""} 
                         style={{ 
                           padding: '12px 24px', 
                           borderRadius: 12, 
                           fontWeight: 700,
-                          backgroundColor: (isBulkUploading || totalSyncableCards === 0) ? 'var(--bg-secondary)' : 'var(--accent-primary)',
-                          cursor: (isBulkUploading || totalSyncableCards === 0) ? 'not-allowed' : 'pointer',
-                          opacity: (isBulkUploading || totalSyncableCards === 0) ? 0.5 : 1,
-                          boxShadow: '0 4px 15px rgba(99, 102, 241, 0.3)',
+                          backgroundColor: isBulkUploading ? 'var(--bg-secondary)' : btnColor,
+                          color: (step === 2 || step === 3) ? '#fff' : (step === 0 ? 'var(--text-muted)' : undefined),
+                          cursor: btnDisabled ? 'not-allowed' : 'pointer',
+                          opacity: btnDisabled ? (step === 3 ? 1 : 0.6) : 1,
+                          boxShadow: step === 1 ? '0 4px 15px rgba(99, 102, 241, 0.3)' : (step === 2 ? '0 4px 15px rgba(249, 115, 22, 0.3)' : 'none'),
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -1065,7 +1070,7 @@ export function SiteAdminView({
                         }}
                       >
                         <RefreshCw size={18} style={{ flexShrink: 0, animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                        {isBulkUploading ? 'TRANSFERT EN COURS...' : uploadBtnLabel}
+                        {isBulkUploading ? 'TRANSFERT EN COURS...' : btnLabel}
                       </button>
                       <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
                         Transmet au serveur en ligne (Supabase) toutes les nouvelles cartes CMU importées ou créées sur ce PC.
@@ -1099,12 +1104,10 @@ export function SiteAdminView({
                                   }
 
                                   let totalDeleted = 0;
-                                  // Supprimer les incohérences pour les 3 types
-                                  const res1 = await window.api.qualite.supprimerIncoherences({ type_incoherence: 'DATES_INVALIDES', site_id: siteIdToUse });
-                                  const res2 = await window.api.qualite.supprimerIncoherences({ type_incoherence: 'SANS_SECU', site_id: siteIdToUse });
-                                  const res3 = await window.api.qualite.supprimerIncoherences({ type_incoherence: 'SANS_RANGEMENT', site_id: siteIdToUse });
+                                  // Assainissement global atomique
+                                  const res = await window.api.qualite.assainirGlobal({ site_id: siteIdToUse });
                                   
-                                  totalDeleted = (res1?.deleted || 0) + (res2?.deleted || 0) + (res3?.deleted || 0);
+                                  totalDeleted = res.deleted;
                                   toast.success(`✅ Assainissement global terminé. ${totalDeleted} anomalie(s) nettoyée(s).`);
                                   loadStats();
                                 } catch (err: any) {
@@ -1188,6 +1191,11 @@ export function SiteAdminView({
                               <strong>⚠️ Doublons Probables détectés :</strong> {syncAlert.count} cartes partagent le même état civil mais des informations divergentes. Voulez-vous forcer l'envoi de ces cartes ou les examiner ?
                             </>
                           )}
+                          {syncAlert.status === 'BLOCKED_MISSING' && (
+                            <>
+                              <strong>⚠️ Données Manquantes détectées :</strong> {syncAlert.count} anomalies (données incomplètes ou doublons probables) ont été écartées de ce transfert. Voulez-vous forcer l'envoi de ces anomalies ?
+                            </>
+                          )}
                           {syncAlert.status === 'BLOCKED_INVALID' && (
                             <>
                               <strong>⚠️ Dates Non Conformes détectées :</strong> {syncAlert.count} cartes possèdent des dates de naissance invalides. Vous devez obligatoirement corriger ces erreurs de saisie avant de pouvoir les envoyer sur le cloud.
@@ -1206,11 +1214,20 @@ export function SiteAdminView({
                           )}
                           {syncAlert.status === 'BLOCKED_PROBABLE' && (
                             <button 
-                              onClick={() => handleStartBulkUploadClick(true, false)} 
+                              onClick={() => handleStartBulkUploadClick(true, false, false)} 
                               className="btn-plein-soleil"
                               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: 'none', background: '#ffd700', color: 'black' }}
                             >
                               Forcer l'envoi (+Probables)
+                            </button>
+                          )}
+                          {syncAlert.status === 'BLOCKED_MISSING' && (
+                            <button 
+                              onClick={() => handleStartBulkUploadClick(true, false, true)} 
+                              className="btn-plein-soleil"
+                              style={{ padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: 'none', background: '#f97316', color: 'white' }}
+                            >
+                              Forcer l'envoi (+Anomalies)
                             </button>
                           )}
                           {syncAlert.status === 'BLOCKED_INVALID' && (
@@ -1256,7 +1273,7 @@ export function SiteAdminView({
                         }}
                       >
                         <Database size={18} style={{ flexShrink: 0, animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
-                        {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+                        {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : (cloudCartesCount > 0 ? `TÉLÉCHARGER ${cloudCartesCount.toLocaleString('fr')} CARTES DEPUIS LE CLOUD` : 'DONNÉES DISTANTES À JOUR (0 CARTE À TÉLÉCHARGER)')}
                       </button>
                       <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
                         Télécharge et fusionne avec votre base locale toutes les cartes modifiées ou enregistrées sur le Cloud pour ce site.

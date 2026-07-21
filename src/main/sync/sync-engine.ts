@@ -6,6 +6,7 @@ import { runUpstream } from './upstream';
 import { runDownstream, syncUsersFromCloud, runSyncInitiale } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount } from './outbox.service';
+import { purgeEmptyRows } from '../database/queries/maintenance.queries';
 
 // ─── INTERVALLE DU CYCLE DOWNSTREAM AUTOMATIQUE (POST-LOGIN) ────────────────
 // 2 heures — déclenché après authentification de l'utilisateur.
@@ -495,6 +496,13 @@ class SyncEngine extends EventEmitter {
         reason: 'already-syncing'
       } as AutoDownstreamEvent);
       return;
+    }
+
+    // Exécution de la purge locale discrète (maintenance)
+    try {
+      purgeEmptyRows();
+    } catch (e) {
+      log.error('[SyncEngine] Erreur lors de purgeEmptyRows :', e);
     }
 
     // Exécution effective du downstream

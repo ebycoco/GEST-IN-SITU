@@ -304,31 +304,38 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     return formatted;
   };
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = async (e?: React.FormEvent, isDraft: boolean = false) => {
+    if (e) e.preventDefault();
     if (isSavingRef.current) return;
 
-    if (!formData.noms.trim() || !formData.prenoms.trim() || !formData.lieu_de_naissance.trim()) {
-      toast.error('Les champs Nom de famille, Prénom(s) et Lieu de naissance sont obligatoires.');
-      return;
-    }
-    const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
-    if (normalizedBirthDate.length !== 10) {
-      toast.error('La date de naissance est invalide ou incomplète.');
-      return;
-    }
-    if (!isValidCalendarDate(formData.date_de_naissance)) {
-      setDateError(DATE_ERROR_MESSAGE);
-      toast.error('Date impossible dans le calendrier (ex: 30/02). Veuillez corriger.');
-      return;
-    }
-    if (!formData.num_secu.trim() || formData.num_secu.trim().length !== 13) {
-      toast.error('Le N° de Sécurité Sociale (CMU) est obligatoire et doit faire exactement 13 chiffres.');
-      return;
-    }
-    if (user?.role === 'ADMINISTRATEUR_SITE' && !selectedCentreId) {
-      toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
-      return;
+    if (!isDraft) {
+      if (!formData.noms.trim() || !formData.prenoms.trim() || !formData.lieu_de_naissance.trim()) {
+        toast.error('Les champs Nom de famille, Prénom(s) et Lieu de naissance sont obligatoires.');
+        return;
+      }
+      const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
+      if (normalizedBirthDate.length !== 10) {
+        toast.error('La date de naissance est invalide ou incomplète.');
+        return;
+      }
+      if (!isValidCalendarDate(formData.date_de_naissance)) {
+        setDateError(DATE_ERROR_MESSAGE);
+        toast.error('Date impossible dans le calendrier (ex: 30/02). Veuillez corriger.');
+        return;
+      }
+      if (!formData.num_secu.trim() || formData.num_secu.trim().length !== 13) {
+        toast.error('Le N° de Sécurité Sociale (CMU) est obligatoire et doit faire exactement 13 chiffres.');
+        return;
+      }
+      if (user?.role === 'ADMINISTRATEUR_SITE' && !selectedCentreId) {
+        toast.error('Veuillez sélectionner un centre de travail en haut de la page.');
+        return;
+      }
+    } else {
+      if (!formData.noms.trim() && !formData.prenoms.trim() && !formData.num_secu.trim()) {
+        toast.error('Veuillez au moins saisir un nom, un prénom ou un numéro CMU pour le brouillon.');
+        return;
+      }
     }
 
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -341,6 +348,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     isSavingRef.current = true;
     try {
       setSaved(false);
+      const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
       const finalData = {
         ...formData,
         date_de_naissance: normalizedBirthDate,
@@ -351,7 +359,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         agent_saisie: `${user?.nom_user || ''} ${user?.prenom_user || ''}`.trim() || user?.login || 'OPERATEUR_SAISIE',
         created_by: user?.id_user || null,
         centre_id: selectedCentreId,
-        statut: 'BROUILLON',
+        statut: isDraft ? 'BROUILLON' : ((formData as any).statut || 'EN STOCK'),
         statut_physique: 'OK',
       };
 
@@ -732,10 +740,8 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         >
           <Sparkles size={14} style={{ color: '#facc15', flexShrink: 0 }} />
           <span>
-            La carte sera enregistrée avec le statut&nbsp;
-            <strong style={{ color: '#facc15' }}>EN STOCK</strong> et affectée à l&apos;agent&nbsp;
-            <strong style={{ color: 'var(--text-primary)' }}>{user?.nom_user || user?.login || '—'}</strong>.
-            Le formulaire se réinitialise automatiquement après chaque enregistrement.
+            En enregistrement standard, la carte aura le statut&nbsp;
+            <strong style={{ color: '#facc15' }}>EN STOCK</strong>. En choisissant <strong>Brouillon</strong>, elle sera isolée pour modification ultérieure.
           </span>
         </div>
 
@@ -764,9 +770,32 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
           </button>
 
           <button
-            type="submit"
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => handleSave(undefined, true)}
             disabled={isSaving}
             tabIndex={12}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              background: 'rgba(249, 115, 22, 0.15)',
+              color: '#f97316',
+              border: '1px solid rgba(249, 115, 22, 0.3)',
+              borderRadius: 12,
+              padding: '13px 20px',
+              fontWeight: 700,
+              fontSize: 15,
+            }}
+          >
+            <Archive size={18} />
+            Enregistrer en brouillon
+          </button>
+
+          <button
+            type="submit"
+            disabled={isSaving}
+            tabIndex={13}
             style={{
               display: 'flex',
               alignItems: 'center',

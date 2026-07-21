@@ -17,6 +17,7 @@ export default function AdminCentreLayout() {
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
   const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
+  const [detailedSyncStats, setDetailedSyncStats] = useState<any>(null);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   useEffect(() => {
@@ -51,6 +52,9 @@ export default function AdminCentreLayout() {
             setCloudCartesCount(count);
           }).catch(console.error);
 
+          const syncStats = await window.api.stats.getDetailedSyncStats(user.site_id);
+          if (syncStats) setDetailedSyncStats(syncStats);
+
         } catch (error) {
           console.error("Erreur lors du chargement des infos de base:", error);
         }
@@ -73,6 +77,8 @@ export default function AdminCentreLayout() {
         // Force refresh dirty count
         const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(user.site_id);
         if (typeof unsyncedRes === 'number') setDirtyCartesCount(unsyncedRes);
+        const detailedSyncStats = await window.api.stats.getDetailedSyncStats(user.site_id);
+        if (detailedSyncStats) setDetailedSyncStats(detailedSyncStats);
       } else {
         toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 6000 });
       }
@@ -106,7 +112,8 @@ export default function AdminCentreLayout() {
     setIsBulkUploading(true);
     const toastId = toast.loading("Envoi des données vers le cloud...");
     try {
-      const res = await window.api.sync.startBulk(Number(user.site_id), false, false);
+      const isDelta = (detailedSyncStats?.modifiedCount || 0) > 0;
+      const res = await window.api.sync.startBulk(Number(user.site_id), false, false, false, isDelta);
       if (res.success) {
         toast.success(res.message, { id: toastId });
         if ((res.strictCount || 0) > 0 || (res.probableCount || 0) > 0 || (res.invalidCount || 0) > 0) {
@@ -169,23 +176,30 @@ export default function AdminCentreLayout() {
               {isPullingCards ? 'RÉCUPÉRATION...' : `RÉCUPÉRER${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
-            <button 
-              onClick={handleStartBulkUpload} 
-              disabled={pushDisabled}
-              className="btn-plein-soleil" 
-              style={{ 
-                ...syncBtnStyle, 
-                backgroundColor: pushDisabled ? '#555555' : '#FFE600',
-                color: pushDisabled ? '#ffffff' : '#000000',
-                border: '1px solid #FFE600',
-                cursor: pushDisabled ? 'not-allowed' : 'pointer',
-                opacity: pushDisabled ? 0.5 : 1,
-                boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)'
-              }}
-            >
-              <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : `ENVOYER${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
-            </button>
+              <button
+                onClick={handleStartBulkUpload}
+                disabled={pushDisabled}
+                className="btn-plein-soleil"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  backgroundColor: pushDisabled ? '#555555' : '#FFE600',
+                  color: pushDisabled ? '#ffffff' : '#000000',
+                  border: '1px solid #FFE600',
+                  cursor: pushDisabled ? 'not-allowed' : 'pointer',
+                  opacity: pushDisabled ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  flex: '1 1 auto',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isBulkUploading ? 'ENVOI...' : ((detailedSyncStats?.modifiedCount || 0) > 0 ? 'Synchroniser [Delta]' : 'Synchroniser mes saisies')}
+              </button>
           </div>
         </div>
 

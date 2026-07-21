@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Edit2, AlertCircle, FileText, Search, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Edit2, AlertCircle, FileText, Search, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { confirmService } from '../../../components/confirmService';
 import { useAuthStore } from '../../../stores/authStore';
 import SaisieEditModal from '../components/SaisieEditModal';
 
@@ -24,6 +26,25 @@ export default function MesBrouillonsView() {
       console.error("Erreur lors de la récupération des brouillons:", err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDelete = async (carte: any) => {
+    const isConfirmed = await confirmService.confirm({
+      title: "Supprimer le brouillon",
+      message: `Voulez-vous vraiment supprimer le brouillon de ${carte.noms} ${carte.prenoms} ? Cette action est irréversible.`,
+      isDanger: true
+    });
+
+    if (isConfirmed) {
+      try {
+        await window.api.cartes.delete(carte.id_carte, user);
+        toast.success("Brouillon supprimé avec succès.");
+        fetchBrouillons();
+      } catch (err: any) {
+        console.error("Erreur de suppression:", err);
+        toast.error("Erreur lors de la suppression : " + err.message);
+      }
     }
   };
 
@@ -99,16 +120,28 @@ export default function MesBrouillonsView() {
                     </td>
                     <td style={{ padding: '16px 24px', textAlign: 'right' }}>
                       {canEdit ? (
-                        <button 
-                          title="Modifier"
-                          className="btn-outline"
-                          style={{ padding: '6px 12px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: 'white', cursor: 'pointer', transition: 'background 0.2s' }}
-                          onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                          onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                          onClick={() => setSelectedCarte(saisie)}
-                        >
-                          <Edit2 size={14} /> Modifier
-                        </button>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                          <button 
+                            title="Modifier"
+                            className="btn-outline"
+                            style={{ padding: '6px 12px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: 'white', cursor: 'pointer', transition: 'background 0.2s' }}
+                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                            onClick={() => setSelectedCarte(saisie)}
+                          >
+                            <Edit2 size={14} /> Modifier
+                          </button>
+                          <button 
+                            title="Supprimer"
+                            className="btn-outline"
+                            style={{ padding: '6px 12px', borderRadius: 8, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, border: '1px solid rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', transition: 'background 0.2s' }}
+                            onMouseOver={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.2)'}
+                            onMouseOut={(e) => e.currentTarget.style.background = 'rgba(239,68,68,0.1)'}
+                            onClick={() => handleDelete(saisie)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       ) : (
                         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Verrouillé</span>
                       )}

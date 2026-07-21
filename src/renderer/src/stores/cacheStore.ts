@@ -13,7 +13,7 @@ interface CacheState {
     dirtyCartesCount: number;
     dirtyUsersCount: number;
     cloudCartesCount: number;
-    detailedSyncStats?: { cleanCount: number, probableCount: number, strictCount: number, invalidCount: number } | null;
+    detailedSyncStats?: { cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number } | null;
     cachedAt: number | null;
   };
   importCache: {

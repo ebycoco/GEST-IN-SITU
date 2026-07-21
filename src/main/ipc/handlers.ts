@@ -13,7 +13,7 @@ import { syncEngine } from '../sync/sync-engine';
 import { runBulkUpload } from '../sync/bulk-uploader';
 import { runDownstream } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
-import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin } from '../auth/session-heartbeat';
+import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser } from '../auth/session-heartbeat';
 import { logAudit } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
@@ -122,7 +122,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         event.sender.send('auth:warning', user.warning);
       }
       if (user && user.sessionToken) {
-        startSessionHeartbeat(user.login, user.sessionToken);
+        startSessionHeartbeat(user, user.sessionToken);
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion rÃ©ussie de l'utilisateur ${user.login}.`);
         if (user.site_id) {
           try {
@@ -230,6 +230,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e: any) {
       log.error('auth:registerSuperAdmin error:', e);
       return { success: false, reason: String(e.message || e) };
+    }
+  });
+
+  // DEBUG
+  ipcMain.handle('debug:getAllAnomalies', async () => {
+    try {
+      const db = getDatabase();
+      if (!db) return [];
+      
+      const anomalies = db.prepare('SELECT * FROM t_import_anomalies ORDER BY id_import DESC LIMIT 1000').all();
+      return anomalies;
+    } catch (e) {
+      log.error('IPC Error: debug:getAllAnomalies', e);
+      throw e;
     }
   });
 
@@ -3298,9 +3312,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('sync:startBulk', async (_, siteId: number, allowProbable: boolean = false, allowInvalid: boolean = false, currentUser?: any) => {
+  ipcMain.handle('sync:startBulk', async (_, siteId: number, allowProbable: boolean = false, allowInvalid: boolean = false, allowMissing: boolean = false, onlyModified: boolean = false, currentUser?: any) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       logAudit(
         userLogin,
         'MASS_UPLOAD_INIT',
@@ -3311,12 +3329,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       let uploadResult: { success: boolean; uploadedCount: number; message: string };
       try {
-        uploadResult = await runBulkUpload(Number(siteId), allowProbable, allowInvalid, (progress: number) => {
+        const centreId = secureUser?.role === 'ADMIN_CENTRE' && secureUser?.centre_id ? secureUser.centre_id : null;
+        uploadResult = await runBulkUpload(Number(siteId), allowProbable, allowInvalid, allowMissing, onlyModified, centreId, (progress: number) => {
           if (mainWindow && !mainWindow.isDestroyed()) {
             log.info(`[PROGRESSION BULK UPLOAD] Site ID ${siteId} : ${progress}% envoyes vers Supabase.`);
             mainWindow.webContents.send('sync:bulk-progress', progress);
           }
-        });
+        }, secureUser?.login || 'system');
       } finally {
         // Nettoyage : aucun ecouteur focus attache a ce handler
       }
@@ -3446,6 +3465,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // SITE ADMIN â€” Synchronisation ForcÃ©e du Site
   ipcMain.handle('sync:forceSite', async (_, siteId: number, currentUser) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       queries.insertAuditLog(
         currentUser?.login || 'ADMIN',
         'VALIDATION',
@@ -3461,6 +3484,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // SITE ADMIN â€” Synchronisation ForcÃ©e des Agents du Site
   ipcMain.handle('sync:forceAgents', async (_, siteId: number, currentUser) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       queries.insertAuditLog(
         currentUser?.login || 'ADMIN',
         'VALIDATION',
@@ -3495,6 +3522,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       JSON.stringify({ site_id: siteId })
     );
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la récupération.");
       }
@@ -3521,6 +3552,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('sync:pullAgents', async (_, siteId: number, currentUser?: any) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la rÃ©cupÃ©ration.");
       }
@@ -3626,6 +3661,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // DB MAINTENANCE - Synchronisation forcée (Full Downstream Pull)
   ipcMain.handle('sync:forceFullPull', async (_, siteId: number, currentUser) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la synchronisation forcée.");
       }
@@ -4595,6 +4634,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('sync:pullCentres', async (_, siteId: number, currentUser?: any) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       return await queries.pullCentresFromCloud(Number(siteId));
     } catch (error: any) {
       log.error('Erreur lors de la recup des centres :', error);
@@ -4604,6 +4647,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('sync:forceCentres', async (_, siteId: number, currentUser?: any) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+
       return await queries.forceCentresSync(Number(siteId));
     } catch (error: any) {
       log.error("Erreur lors de l'envoi des centres :", error);

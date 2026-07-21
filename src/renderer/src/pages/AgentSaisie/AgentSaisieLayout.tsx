@@ -41,7 +41,7 @@ export default function AgentSaisieLayout() {
     };
   }, []);
 
-  const { dirtyCartesCount, cloudCartesCount, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -102,7 +102,7 @@ export default function AgentSaisieLayout() {
             </button>
 
             <button
-              onClick={() => handleStartBulkUpload(false, false)}
+              onClick={() => handleStartBulkUpload(false, false, false, (detailedSyncStats?.modifiedCount || 0) > 0)}
               disabled={pushDisabled}
               className="btn-plein-soleil"
               style={{
@@ -114,18 +114,16 @@ export default function AgentSaisieLayout() {
                 border: '1px solid #FFE600',
                 cursor: pushDisabled ? 'not-allowed' : 'pointer',
                 opacity: pushDisabled ? 0.5 : 1,
-                boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: '8px',
-                transition: 'all 0.2s ease-in-out',
                 flex: '1 1 auto',
                 whiteSpace: 'nowrap'
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'SYNCHRONISATION EN COURS...' : `SYNCHRONISER AVEC LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount.toLocaleString('fr')})` : ''}`}
+              {isBulkUploading ? 'ENVOI...' : 'Synchroniser mes saisies'}
             </button>
 
             {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}

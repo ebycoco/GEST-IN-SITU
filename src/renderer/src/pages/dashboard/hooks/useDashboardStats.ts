@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useCacheStore } from '../../../stores/cacheStore';
 import { useAuthStore } from '../../../stores/authStore';
 
@@ -16,7 +16,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const [dirtyUsersCount, setDirtyUsersCount] = useState<number>(0);
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
   const [totalCloudCartesCount, setTotalCloudCartesCount] = useState<number>(0);
-  const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, probableCount: number, strictCount: number, invalidCount: number } | null>(null);
+  const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number } | null>(null);
 
   const loadGlobalData = async (silent = false) => {
     try {
@@ -39,7 +39,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
   };
 
-  const loadStats = async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => {
+  const loadStats = useCallback(async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => {
     try {
       if (!silent) setLoading(true);
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -51,15 +51,17 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       const targetDateStr = supervisionFilters?.dateStr;
 
       if (user?.role === 'OPERATEUR_SAISIE') {
-        const [todayCount, recentsRes, cartesCount] = await Promise.all([
+        const [todayCount, recentsRes, cartesCount, syncStats] = await Promise.all([
           window.api.stats.getAgentToday(user.id_user),
           window.api.stats.getAgentRecentSaisies(user.id_user, 15),
-          window.api.stats.getUnsyncedCardsCount(siteIdToUse!)
+          window.api.stats.getUnsyncedCardsCount(siteIdToUse!),
+          window.api.stats.getDetailedSyncStats(siteIdToUse!)
         ]);
         const recents = (recentsRes as any).rows || [];
         setOperatorTodayCount(todayCount);
         setOperatorRecentSaisies(recents);
         setDirtyCartesCount(cartesCount);
+        setDetailedSyncStats(syncStats);
 
         window.api.sync.getCloudCartesCount(siteIdToUse!).then(count => {
           setCloudCartesCount(count);
@@ -90,7 +92,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         let cloudCartes = -1;
         let syncStats: any = null;
  
-        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE')) {
+        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE' || user?.role === 'OPERATEUR_VERIFICATION')) {
           [saisiesToday, cartesCount, usersCount, syncStats] = await Promise.all([
             window.api.stats.getSiteSaisieToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
             window.api.stats.getUnsyncedCardsCount(siteIdToUse),
@@ -144,7 +146,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       if (!silent) setLoading(false); 
       useAuthStore.getState().setInitialDataLoading(false);
     }
-  };
+  }, [user?.role, user?.site_id, user?.centre_id, user?.id_user, activeSiteId]);
 
   useEffect(() => {
     const cache = useCacheStore.getState().dashboardCache;

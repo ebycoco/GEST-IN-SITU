@@ -2,7 +2,7 @@ import Database from 'better-sqlite3';
 import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 
-export const SCHEMA_VERSION = 45;
+export const SCHEMA_VERSION = 48;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -235,6 +235,21 @@ export function runMigrations(db: Database.Database): void {
       migrateV45(db);
     }
 
+    if (currentVersion < 46) {
+      log.info('Running migration v46: Add composite indexes for stats-worker performance');
+      migrateV46(db);
+    }
+
+    if (currentVersion < 47) {
+      log.info('Running migration v47: Add lieu_enrolement, statut, date_delivrance to t_import_anomalies');
+      migrateV47(db);
+    }
+
+    if (currentVersion < 48) {
+      log.info('Running migration v48: Add updated_by column to t_cartes');
+      migrateV48(db);
+    }
+
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
 
     // ─── FILET DE SÉCURITÉ UNIVERSEL ───────────────────────────────────────────
@@ -282,6 +297,7 @@ export function runMigrations(db: Database.Database): void {
       migrateV39(db); // Add contact_retirant column to t_cartes
       migrateV40(db); // Add expiry_date and is_permanent to t_sites
       migrateV41(db); // has_invalid_date flag + index
+      migrateV48(db); // Add updated_by to t_cartes
       migrateV27_safetyNet(db);
       log.info('[MIGRATION] Reconstruction d\'urgence terminée. Schéma réinstallé en V38.');
 
@@ -615,6 +631,7 @@ function migrateV1(db: Database.Database): void {
       synced_at TEXT,
       is_dirty INTEGER DEFAULT 0,
       created_by INTEGER DEFAULT NULL,
+      updated_by INTEGER DEFAULT NULL,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
@@ -1661,14 +1678,20 @@ function migrateV33(db: Database.Database): void {
 // même celles corrompues entre deux versions de migration.
 // =====================================================
 function migrateV27_safetyNet(db: Database.Database): void {
-  log.info('[SAFETY NET] Vérification et correction des colonnes critiques...');
+  // R6: Optimisation conditionnelle pour éviter de multiplier les appels PRAGMA au démarrage
+  const tableInfos: Record<string, string[]> = {};
 
   const safeAlter = (table: string, col: string, definition: string) => {
     try {
-      const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-      const hasColumn = tableInfo.some(c => c.name === col);
+      if (!tableInfos[table]) {
+        const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+        tableInfos[table] = tableInfo.map(c => c.name);
+      }
+      
+      const hasColumn = tableInfos[table].includes(col);
       if (!hasColumn) {
         db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${definition};`);
+        tableInfos[table].push(col); // Met à jour le cache
         log.info(`[SAFETY NET] Colonne '${col}' ajoutée à '${table}'.`);
       }
     } catch (e: any) {
@@ -2126,5 +2149,77 @@ function migrateV45(db: Database.Database): void {
   } catch (e: any) {
     log.error('[MIGRATION V45] Erreur :', e.message);
     throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V46 : Index composites pour stats-worker (performance critique)
+// Cible : remplacer les full-scan de 200k lignes par des lookups indexés < 10ms
+// =====================================================
+function migrateV46(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V46] Création des index composites pour le stats-worker...');
+
+    // Index principal pour la CTE dirty_base : (site_id, is_dirty, statut)
+    // Accélère le filtre de base de toutes les requêtes getDetailedSyncStats
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_dirty_statut ON t_cartes(site_id, is_dirty, statut);');
+
+    // Index pour la séparation clean/modified (filtre sur synced_at)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_dirty_synced ON t_cartes(site_id, is_dirty, synced_at, statut);');
+
+    // Index pour la détection des doublons stricts (filtre sur cle_doublon par site)
+    // Déjà couvert par idx_cartes_site_cle_doublon - vérification defensive
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_cle_doublon ON t_cartes(site_id, cle_doublon);');
+
+    // Index pour la détection des doublons probables (filtre identité par site)
+    // Déjà couvert par idx_cartes_stats_dp_v2 - vérification defensive
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_identite ON t_cartes(site_id, noms, prenoms, date_de_naissance);');
+
+    // Index pour t_import_anomalies (filtre site_id + type_anomalie)
+    db.exec('CREATE INDEX IF NOT EXISTS idx_import_anomalies_site_type ON t_import_anomalies(site_id, type_anomalie);');
+
+    log.info('[MIGRATION V46] Index composites créés avec succès. Performance stats-worker optimisée.');
+  } catch (e: any) {
+    log.error('[MIGRATION V46] Erreur :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V47 : Ajout de lieu_enrolement, statut, date_delivrance sur t_import_anomalies
+// =====================================================
+function migrateV47(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V47] Ajout de lieu_enrolement, statut, date_delivrance sur t_import_anomalies...');
+    
+    const tableInfo = db.prepare("PRAGMA table_info(t_import_anomalies)").all() as { name: string }[];
+    const hasColumn = (colName: string) => tableInfo.some(col => col.name === colName);
+
+    if (!hasColumn('lieu_enrolement')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN lieu_enrolement TEXT;");
+      log.info("[MIGRATION V47] Column 'lieu_enrolement' added to t_import_anomalies.");
+    }
+    if (!hasColumn('statut')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN statut TEXT;");
+      log.info("[MIGRATION V47] Column 'statut' added to t_import_anomalies.");
+    }
+    if (!hasColumn('date_delivrance')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN date_delivrance TEXT;");
+      log.info("[MIGRATION V47] Column 'date_delivrance' added to t_import_anomalies.");
+    }
+    
+    log.info('[MIGRATION V47] Migration V47 terminee avec succes.');
+  } catch (e: any) {
+    log.error('[MIGRATION V47] Erreur :', e.message);
+    throw e;
+  }
+}
+
+function migrateV48(db: Database.Database): void {
+  try {
+    db.exec('ALTER TABLE t_cartes ADD COLUMN updated_by INTEGER DEFAULT NULL;');
+    log.info('Migration V48: Added updated_by to t_cartes');
+  } catch (e) {
+    log.warn('Migration V48: Column might already exist');
   }
 }

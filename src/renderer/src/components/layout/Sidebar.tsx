@@ -3,7 +3,7 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
-  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2
+  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import iconLogo from '../../assets/icon.png';
@@ -112,9 +112,11 @@ export default function Sidebar() {
         
         { isHeader: true, label: '⚙️ SYSTÈME & DONNÉES' },
         { label: 'Infrastructures', icon: MapPin, path: '/sites' },
+        { label: 'Table des Cartes', icon: Database, path: '/table-cartes' },
         { label: 'Agents', icon: Users, path: '/agents' },
         { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
         { label: 'Importation', icon: Upload, path: '/import' },
+        { label: 'Audit Anomalies', icon: Database, path: '/anomalies' },
         { label: 'Exportation', icon: Download, path: '/export' },
         { label: 'Journaux', icon: FileText, path: '/logs' },
         ...(user.role === 'SUPER ADMIN' ? [{ label: 'Maintenance System', icon: Shield, path: '/maintenance' }] : []),

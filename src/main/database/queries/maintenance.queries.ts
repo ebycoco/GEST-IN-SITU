@@ -234,6 +234,24 @@ export function purgeExpiredDeadLetters(): void {
   }
 }
 
+export function purgeEmptyRows(): void {
+  const db = getDatabase()!;
+  try {
+    const result = db.prepare(`
+      DELETE FROM t_cartes 
+      WHERE (noms IS NULL OR noms = '') 
+        AND (prenoms IS NULL OR prenoms = '') 
+        AND (num_secu IS NULL OR num_secu = '') 
+        AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+    `).run();
+    if (result.changes > 0) {
+      log.info(`[AUTO-PURGE] ${result.changes} lignes fantômes (totalement vides) supprimées de la base locale.`);
+    }
+  } catch (err) {
+    log.error("[AUTO-PURGE] Échec de la suppression des lignes fantômes:", err);
+  }
+}
+
 /**
  * Réinitialisation TOTALE du système : cartes, queue de sync, logs, utilisateurs (hors SUPER ADMIN).
  *

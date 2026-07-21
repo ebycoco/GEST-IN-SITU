@@ -21,7 +21,7 @@ export class NetworkMonitor extends EventEmitter {
    * et on stoppe DÉFINITIVEMENT le setInterval pour protéger le service réseau d'Electron.
    * L'utilisateur doit cliquer sur "Réessayer" pour relancer une session de 3 pings.
    */
-  private readonly MAX_BOOT_RETRIES = 3;
+  private readonly MAX_BOOT_RETRIES = 2; // R5: Réduit de 3 à 2 pour accélérer le repli hors-ligne
   private bootPingCount = 0;
   private isPermanentOffline = false;
 
@@ -200,11 +200,11 @@ export class NetworkMonitor extends EventEmitter {
         redirect: 'manual'
       });
 
-      // Timeout à 3 secondes pour ne pas bloquer l'UI
+      // R5: Timeout à 2 secondes (au lieu de 3) pour ne pas bloquer l'UI
       const timeout = setTimeout(() => {
         request.abort();
         resolve(false);
-      }, 3_000);
+      }, 2_000);
 
       request.on('response', (response) => {
         clearTimeout(timeout);

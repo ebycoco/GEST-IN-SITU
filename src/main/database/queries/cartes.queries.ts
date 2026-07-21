@@ -319,9 +319,12 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
     'lieu_enrolement', 'contact', 'rangement', 'statut', 'date_delivrance',
     'agent_saisie', 'nom_retirant', 'num_retirant', 'agent_distributeur',
     'centre_retrait', 'cle_doublon', 'cle_doublon_flex', 'statut_physique',
-    'site_id', 'centre_id', 'poste_id', 'qr_code_data', 'sync_id', 'is_dirty', 'is_exported', 'created_by'
+    'site_id', 'centre_id', 'poste_id', 'qr_code_data', 'sync_id', 'is_dirty', 'is_exported', 'created_by', 'updated_by'
   ];
   
+  if (currentUser && (currentUser as any).id_user) {
+    data.updated_by = (currentUser as any).id_user;
+  }
   const filteredKeys = Object.keys(data).filter(k => k !== '_recordType' && allowedColumns.includes(k));
   if (filteredKeys.length === 0) {
     return { changes: 0 };
@@ -355,16 +358,26 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
 
 export function deleteCarte(id: number, currentUser?: { role: string; site_id?: number; login?: string }) {
   const db = getDatabase()!;
-  
-  // 1. Validation de l'autorisation : réservé aux administrateurs et opérateurs qualité
-  if (currentUser && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'].includes(currentUser.role)) {
-    throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer une carte.");
-  }
 
-  // Lire les données de la carte
-  const carte = db.prepare('SELECT sync_id, site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { sync_id: string | null; site_id: number; centre_id: number } | undefined;
+  // Lire les données de la carte en premier pour vérifier son statut
+  const carte = db.prepare('SELECT sync_id, site_id, centre_id, statut FROM t_cartes WHERE id_carte = ?').get(id) as { sync_id: string | null; site_id: number; centre_id: number; statut: string } | undefined;
   if (!carte) {
     return { changes: 0 };
+  }
+
+  // 1. Validation de l'autorisation : réservé aux administrateurs et opérateurs qualité
+  // OU si c'est un OPERATEUR_SAISIE qui supprime un BROUILLON
+  let isAllowed = false;
+  if (!currentUser) {
+    isAllowed = true;
+  } else if (['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'].includes(currentUser.role)) {
+    isAllowed = true;
+  } else if (currentUser.role === 'OPERATEUR_SAISIE' && carte.statut === 'BROUILLON') {
+    isAllowed = true;
+  }
+
+  if (!isAllowed) {
+    throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer une carte.");
   }
 
   if (currentUser && currentUser.role !== 'SUPER ADMIN' && carte.site_id !== currentUser.site_id) {
@@ -419,6 +432,7 @@ export function delivrerCarte(
       centre_retrait = @centre_retrait,
       rangement = COALESCE(@rangement, rangement),
       updated_at = @now,
+      updated_by = @updated_by,
       is_dirty = 1
     WHERE id_carte = @id
   `;
@@ -430,7 +444,8 @@ export function delivrerCarte(
     agent_distributeur: data.agent_distributeur,
     centre_retrait: data.centre_retrait || null,
     rangement: data.rangement || null,
-    now
+    now,
+    updated_by: (currentUser as any)?.id_user || null
   };
   const result = db.prepare(query).run(params);
   if (result.changes === 0) {
@@ -441,7 +456,8 @@ export function delivrerCarte(
 
 export function transfererCarte(
   id: number, 
-  data: { centre_id: number; rangement?: string; agent_transfert: string }
+  data: { centre_id: number; rangement?: string; agent_transfert: string },
+  currentUser?: { role: string; site_id?: number, login?: string, id_user?: number }
 ) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
@@ -451,6 +467,7 @@ export function transfererCarte(
       centre_id = @centre_id,
       rangement = COALESCE(@rangement, rangement),
       updated_at = @now,
+      updated_by = @updated_by,
       is_dirty = 1
     WHERE id_carte = @id AND statut = 'EN STOCK'
   `;
@@ -458,7 +475,8 @@ export function transfererCarte(
     id,
     centre_id: data.centre_id,
     rangement: data.rangement || null,
-    now
+    now,
+    updated_by: currentUser?.id_user || null
   };
   const result = db.prepare(query).run(params);
   if (result.changes === 0) {

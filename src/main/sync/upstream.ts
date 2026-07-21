@@ -56,7 +56,8 @@ function mapCardPayload(c: any): any {
     qr_code_data: c.qr_code_data || null,
     is_exported: c.is_exported || 0,
     created_by: c.created_by || null,
-    updated_at: c.updated_at || new Date().toISOString()
+    updated_at: c.updated_at || new Date().toISOString(),
+    ...(c.updated_by !== undefined ? { updated_by: c.updated_by } : {})
   };
 }
 
@@ -171,6 +172,12 @@ async function processUpsertChunk(supabase: any, tableName: string, chunk: Pendi
         }
       }
       const mappedPayload = tableName === 't_cartes' ? mapCardPayload(rawPayload) : rawPayload;
+      
+      // Sécurité Sync: Supprimer updated_by pour éviter le crash Supabase si la colonne n'y est pas encore
+      if (mappedPayload && typeof mappedPayload === 'object' && 'updated_by' in mappedPayload) {
+        delete mappedPayload.updated_by;
+      }
+      
       payloadsToUpsert.push(mappedPayload);
       validOps.push(op);
     } catch (err: any) {

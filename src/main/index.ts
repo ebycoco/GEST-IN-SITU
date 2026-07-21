@@ -30,7 +30,7 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let isQuitting = false;
-let isPreloadingUsers = true;
+let isPreloadingUsers = false; // R1: Déchaîner le Login, ne plus bloquer
 
 // Sécurisation de l'instance unique
 const gotTheLock = app.requestSingleInstanceLock();
@@ -132,19 +132,28 @@ function createWindow(): void {
     // Retardé de 3.5s (après le premier ping SyncEngine) pour éviter que
     // SupabaseClient ne crashe le service réseau.
     setTimeout(() => {
-      preloadUsersFromCloud().then(() => {
-        log.info('[INIT] Preload initial terminé — les comptes locaux sont prêts pour le Login.');
-        isPreloadingUsers = false;
-        if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
-      }).catch((preloadError: any) => {
-        log.error(
-          '[INIT] Échec du preload au démarrage (Supabase inaccessible ?) :',
-          preloadError?.message ?? preloadError
-        );
-        log.warn('[INIT] Ouverture du Login avec les comptes locaux existants (mode dégradé).');
-        isPreloadingUsers = false;
-        if (mainWindow) mainWindow.webContents.send('auth:preload-status', false);
-      });
+      // Garde de Premier Démarrage (Base Vide)
+      let hasUsers = false;
+      try {
+        const db = getDatabase();
+        if (db) {
+          const userCountRow = db.prepare("SELECT COUNT(*) as count FROM t_users").get() as { count: number };
+          hasUsers = userCountRow.count > 0;
+        }
+      } catch (err) {
+        log.error('[INIT] Erreur lors de la vérification des utilisateurs locaux :', err);
+      }
+
+      if (hasUsers) {
+        log.info('[INIT] Comptes locaux détectés (count > 0). Exécution de R1: preload silencieux en arrière-plan.');
+        preloadUsersFromCloud().then(() => {
+          log.info('[INIT] Preload silencieux terminé.');
+        }).catch((err) => {
+          log.warn('[INIT] Échec du preload silencieux (mode hors-ligne) :', err?.message);
+        });
+      } else {
+        log.info('[INIT] Base locale vide (Nouvelle machine). On délègue le rapatriement à la page Login (forceGlobal).');
+      }
     }, 3500);
 
   });
