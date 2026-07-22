@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, CheckCircle, Package, ArrowRight, ShieldCheck, AlertTriangle, Loader, MessageSquare } from 'lucide-react';
+import { useAuthStore } from '../../../stores/authStore';
 
 
 interface DeliveryModalProps {
@@ -42,8 +43,28 @@ export function DeliveryModal({
   isUnclassifiedCard
 }: DeliveryModalProps) {
   const [absenceComment, setAbsenceComment] = useState('');
+  const [fullCarte, setFullCarte] = useState<any>(null);
+
+  const user = useAuthStore(s => s.user);
+
+  React.useEffect(() => {
+    if (selectedCarte) {
+      const carteId = selectedCarte.id_carte || selectedCarte.id;
+      if (carteId && (window as any).api?.cartes?.getById) {
+        (window as any).api.cartes.getById(carteId).then((data: any) => {
+          if (data) setFullCarte(data);
+        }).catch((err: any) => console.error("Erreur chargement carte complète:", err));
+      }
+    } else {
+      setFullCarte(null);
+    }
+  }, [selectedCarte]);
 
   if (!showReportModal || !selectedCarte) return null;
+
+  const displayCarte = fullCarte || selectedCarte;
+  const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_SITE';
+  const canDeliver = isAdmin || (user && displayCarte && user.centre_id === displayCarte.centre_id && user.site_id === displayCarte.site_id);
 
   return (
     <div style={{
@@ -53,20 +74,20 @@ export function DeliveryModal({
       zIndex: 999, padding: 20
     }}>
       <div className="card animate-scale-in" style={{
-        maxWidth: 600, width: '100%',
+        maxWidth: 600, width: '100%', maxHeight: '90vh', display: 'flex', flexDirection: 'column',
         background: 'linear-gradient(145deg, rgba(30, 32, 50, 0.98) 0%, rgba(15, 16, 28, 0.99) 100%)',
         border: '1px solid rgba(255, 255, 255, 0.08)',
         borderRadius: 24, boxShadow: '0 50px 100px rgba(0,0,0,0.9)',
         overflow: 'hidden'
       }}>
         {/* Modal Header */}
-        <div style={{ padding: '24px 32px', borderBottom: '1px solid rgba(255, 255, 255, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255, 255, 255, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div>
             <h3 style={{ fontSize: 20, fontWeight: 900, color: 'white', margin: 0 }}>
               {modalStep === 1 ? 'Vérification Physique' : modalStep === 2 ? 'Validation du Retrait' : 'Signalement d\'Absence'}
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-              Carte CMU n° {selectedCarte.num_secu || 'non spécifié'}
+              Carte CMU n° {displayCarte.num_secu || 'non spécifié'}
             </p>
           </div>
           <button onClick={resetModal} className="btn-close" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', width: 36, height: 36, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
@@ -75,47 +96,50 @@ export function DeliveryModal({
         </div>
 
         {/* Modal Content */}
-        <div style={{ padding: '32px' }}>
+        <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>
           {modalStep === 1 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
               {/* Card Summary Card */}
               <div style={{ padding: 20, background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', borderRadius: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <div style={{ fontSize: 20, fontWeight: 900, color: 'white', textTransform: 'uppercase', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <span>{selectedCarte.noms}</span>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.8)' }}>{selectedCarte.prenoms}</span>
+                  <span>{displayCarte.noms}</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.8)' }}>{displayCarte.prenoms}</span>
                 </div>
                 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
-                  <Package size={14} />
-                  <span>Emplacement de rangement :</span>
-                  <span style={{ color: '#fbbf24', fontWeight: 800, background: 'rgba(251, 191, 36, 0.1)', padding: '2px 8px', borderRadius: 4 }}>
-                    {selectedCarte.rangement || 'NON CLASSÉ'}
-                  </span>
+                {/* Rangement mis en évidence */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, padding: 16, background: 'rgba(251, 191, 36, 0.1)', border: '2px solid rgba(251, 191, 36, 0.4)', borderRadius: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, color: '#fbbf24', fontWeight: 700, textTransform: 'uppercase' }}>
+                    <Package size={20} />
+                    <span>Emplacement de rangement exact</span>
+                  </div>
+                  <div style={{ color: '#fbbf24', fontWeight: 900, fontSize: 32, lineHeight: 1.2, wordBreak: 'break-all' }}>
+                    {displayCarte.rangement || 'NON CLASSÉ'}
+                  </div>
                 </div>
 
                 {/* Additional Info Grid */}
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', marginTop: 8, paddingTop: 16, borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Num Sécu</span>
-                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{selectedCarte.num_secu || '-'}</span>
+                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{displayCarte.num_secu || '-'}</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Contact</span>
-                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{selectedCarte.contact || '-'}</span>
+                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{displayCarte.contact || '-'}</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Date de Naissance</span>
                     <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>
-                      {selectedCarte.date_naissance ? new Date(selectedCarte.date_naissance).toLocaleDateString('fr-FR') : '-'}
+                      {displayCarte.date_de_naissance || displayCarte.date_naissance ? new Date(displayCarte.date_de_naissance || displayCarte.date_naissance).toLocaleDateString('fr-FR') : '-'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Lieu de Naissance</span>
-                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{selectedCarte.lieu_naissance || '-'}</span>
+                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{displayCarte.lieu_de_naissance || displayCarte.lieu_naissance || '-'}</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, gridColumn: '1 / -1' }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Lieu d'enrôlement</span>
-                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{selectedCarte.lieu_enrolement || '-'}</span>
+                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{displayCarte.lieu_enrolement || displayCarte.site_enrolement || '-'}</span>
                   </div>
                 </div>
               </div>
@@ -131,19 +155,23 @@ export function DeliveryModal({
               </div>
 
               {/* Choice Buttons */}
-              <div style={{ display: 'flex', gap: 16 }}>
+              <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                 <button
                   onClick={() => setModalStep(2)}
+                  disabled={!canDeliver}
                   className="btn btn-primary"
-                  style={{ flex: 1, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}
+                  style={{ flex: 1, minWidth: 200, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, opacity: !canDeliver ? 0.5 : 1, cursor: !canDeliver ? 'not-allowed' : 'pointer' }}
+                  title={!canDeliver ? "Vous n'avez pas l'autorisation de délivrer cette carte." : ""}
                 >
                   <CheckCircle size={18} />
                   Oui, j'ai la carte
                 </button>
                 <button
                   onClick={() => setModalStep(3)}
+                  disabled={!canDeliver}
                   className="btn btn-secondary"
-                  style={{ flex: 1, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, borderColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171', background: 'rgba(239, 68, 68, 0.02)' }}
+                  style={{ flex: 1, minWidth: 200, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, borderColor: 'rgba(239, 68, 68, 0.2)', color: '#f87171', background: 'rgba(239, 68, 68, 0.02)', opacity: !canDeliver ? 0.5 : 1, cursor: !canDeliver ? 'not-allowed' : 'pointer' }}
+                  title={!canDeliver ? "Vous n'avez pas l'autorisation de délivrer cette carte." : ""}
                 >
                   <AlertTriangle size={18} />
                   Non, absente
@@ -158,7 +186,13 @@ export function DeliveryModal({
                 <div style={{ display: 'flex', gap: 12 }}>
                   <button
                     type="button"
-                    onClick={() => setRetirantType('lui-meme')}
+                    onClick={() => {
+                      setRetirantType('lui-meme');
+                      if (displayCarte) {
+                        setNomRetirant(`${displayCarte.noms || ''} ${displayCarte.prenoms || ''}`.trim());
+                        if (displayCarte.contact) setTelRetirant(displayCarte.contact);
+                      }
+                    }}
                     style={{
                       flex: 1, padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 700,
                       background: retirantType === 'lui-meme' ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
@@ -171,7 +205,11 @@ export function DeliveryModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setRetirantType('tiers')}
+                    onClick={() => {
+                      setRetirantType('tiers');
+                      setNomRetirant('');
+                      setTelRetirant('');
+                    }}
                     style={{
                       flex: 1, padding: 12, borderRadius: 10, fontSize: 13, fontWeight: 700,
                       background: retirantType === 'tiers' ? 'rgba(79, 70, 229, 0.15)' : 'rgba(255,255,255,0.02)',
@@ -227,7 +265,7 @@ export function DeliveryModal({
                   />
                 </div>
 
-                {isUnclassifiedCard(selectedCarte) && (
+                {isUnclassifiedCard(displayCarte) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 16, background: 'rgba(251, 191, 36, 0.05)', border: '1px solid rgba(251, 191, 36, 0.2)', borderRadius: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24' }}>
                       ⚠️ RANGEMENT D'URGENCE OBLIGATOIRE (Carte non classée)

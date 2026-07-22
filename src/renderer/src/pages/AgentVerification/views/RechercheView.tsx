@@ -8,12 +8,14 @@ import { useDeliveryFlow } from '../../VerificationSearchPage/hooks/useDeliveryF
 import { SearchForm } from '../../VerificationSearchPage/components/SearchForm';
 import { SearchResults } from '../../VerificationSearchPage/components/SearchResults';
 import { DeliveryModal } from '../../VerificationSearchPage/components/DeliveryModal';
+import { DeliveryProofModal } from '../../VerificationSearchPage/components/DeliveryProofModal';
 import CentreContextSwitcher from '../../../components/layout/CentreContextSwitcher';
 
 export default function RechercheView() {
   const { user, selectedCentreId, activeSiteId } = useAuthStore();
   const [adminSiteFilter, setAdminSiteFilter] = useState<number | null>(null);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
+  const [showProofModal, setShowProofModal] = useState<boolean>(false);
   const [userCentre, setUserCentre] = useState<any>(null);
   const [totalCards, setTotalCards] = useState<number | null>(null);
   const nomInputRef = useRef<HTMLInputElement>(null);
@@ -78,7 +80,7 @@ export default function RechercheView() {
     handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString
   } = useVerificationSearch(
     user, activeSiteId, false, adminSiteFilter, setAdminSiteFilter,
-    setSelectedCarte, setShowReportModal, setModalStep
+    setSelectedCarte, setShowReportModal, setModalStep, setShowProofModal
   );
 
   const isAgentAuthorisedForCard = (carteToCheck: any): boolean => {
@@ -147,6 +149,7 @@ export default function RechercheView() {
             setSelectedCarte={setSelectedCarte}
             setShowReportModal={setShowReportModal}
             setModalStep={setModalStep}
+            setShowProofModal={setShowProofModal}
             isAgentAuthorisedForCard={isAgentAuthorisedForCard}
           />
         </>
@@ -202,6 +205,12 @@ export default function RechercheView() {
         handleDeliver={handleDeliver}
         handleSignalerAbsence={handleSignalerAbsence}
         isUnclassifiedCard={isUnclassifiedCard}
+      />
+
+      <DeliveryProofModal
+        isOpen={showProofModal}
+        onClose={() => setShowProofModal(false)}
+        carte={selectedCarte}
       />
     </div>
   );

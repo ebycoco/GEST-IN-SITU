@@ -39,6 +39,9 @@ export default function TableCartesPage() {
 
   useEffect(() => {
     loadData(0);
+    const handleDataUpdated = () => loadData(0);
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
   }, [loadData]);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {

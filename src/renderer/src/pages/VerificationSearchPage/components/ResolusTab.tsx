@@ -12,11 +12,15 @@ export const ResolusTab = () => {
   const ITEMS_PER_PAGE = 10;
 
   useEffect(() => {
-    const loadArchived = () => {
+    const loadArchived = async () => {
       if (user?.login) {
-        const stored = localStorage.getItem(`archived_resolus_${user.login}`);
-        if (stored) {
-          setArchivedIds(JSON.parse(stored));
+        try {
+          const stored = await window.api.cartes.getArchivedSignalements(user.login);
+          if (stored) {
+            setArchivedIds(stored);
+          }
+        } catch (err) {
+          console.error("Erreur chargement archives:", err);
         }
       }
     };
@@ -42,13 +46,16 @@ export const ResolusTab = () => {
     loadData();
   }, [user]);
 
-  const handleArchive = (id: number) => {
-    const newArchived = [...archivedIds, id];
-    setArchivedIds(newArchived);
+  const handleArchive = async (id: number) => {
     if (user?.login) {
-      localStorage.setItem(`archived_resolus_${user.login}`, JSON.stringify(newArchived));
+      try {
+        await window.api.cartes.archiveSignalement(id, user.login);
+        setArchivedIds(prev => [...prev, id]);
+        toast.success("Signalement archivé.");
+      } catch (err) {
+        toast.error("Erreur lors de l'archivage.");
+      }
     }
-    toast.success("Signalement archivé.");
   };
 
   const visibleResolus = resolus.filter(r => !archivedIds.includes(r.id_carte));

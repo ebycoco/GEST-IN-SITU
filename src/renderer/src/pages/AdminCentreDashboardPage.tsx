@@ -118,7 +118,7 @@ export default function AdminCentreDashboardPage() {
     return undefined;
   }, []);
 
-  const fetchDashboardData = async (silent?: boolean) => {
+  const fetchDashboardData = React.useCallback(async (silent?: boolean) => {
     const isSilent = !!silent;
     try {
       if (!isSilent) setLoading(true);
@@ -186,7 +186,7 @@ export default function AdminCentreDashboardPage() {
       if (!isSilent) setLoading(false);
       useAuthStore.getState().setInitialDataLoading(false);
     }
-  };
+  }, [user, user?.site_id, user?.centre_id]);
 
   const handleStartBulkUpload = async () => {
     return cloudGuard(async () => {
@@ -287,8 +287,15 @@ export default function AdminCentreDashboardPage() {
     }
     // Auto-refresh toutes les 30 secondes (silencieusement)
     const interval = setInterval(() => fetchDashboardData(true), 30000);
-    return () => clearInterval(interval);
-  }, [user, user?.site_id, user?.centre_id]);
+
+    const handleDataUpdated = () => fetchDashboardData(true);
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:data-updated', handleDataUpdated);
+    };
+  }, [fetchDashboardData]);
 
   // Synchronisation automatique et silencieuse des utilisateurs au chargement
   useEffect(() => {

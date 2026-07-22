@@ -12,7 +12,6 @@ export interface ICarte {
   date_de_naissance?: string;
   lieu_de_naissance?: string;
   contact?: string;
-  sexe?: string;
   rangement?: string;
 }
 
@@ -36,7 +35,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
         date_de_naissance: record.date_de_naissance || '',
         lieu_de_naissance: record.lieu_de_naissance || '',
         contact: record.contact || '',
-        sexe: record.sexe || '',
+        rangement: record.rangement || (record as any).code_rangement || '',
         num_secu: record.num_secu || '',
       });
     }
@@ -137,25 +136,14 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
               style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white' }} />
           </div>
 
-          <div style={{ display: 'flex', gap: 16 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1 }}>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Date de Naissance</label>
-              <DateInput
-                value={formData.date_de_naissance || ''}
-                onChange={(val: string) => handleChange('date_de_naissance', val)}
-                className="w-full"
-                style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white', width: '100%' }}
-              />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, width: 100 }}>
-              <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Sexe</label>
-              <select value={formData.sexe || ''} onChange={e => handleChange('sexe', e.target.value)}
-                style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white' }}>
-                <option value="" style={{ color: '#000', background: '#fff' }}>-</option>
-                <option value="M" style={{ color: '#000', background: '#fff' }}>M</option>
-                <option value="F" style={{ color: '#000', background: '#fff' }}>F</option>
-              </select>
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Date de Naissance</label>
+            <DateInput
+              value={formData.date_de_naissance || ''}
+              onChange={(val: string) => handleChange('date_de_naissance', val)}
+              className="w-full"
+              style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white', width: '100%' }}
+            />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

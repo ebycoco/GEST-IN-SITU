@@ -148,6 +148,7 @@ export default function AgentQualiteLayout() {
           onSave={async (id, updates) => {
             await window.api.cartes.updateCarte(id, updates, user);
             triggerRefresh();
+            window.dispatchEvent(new CustomEvent('app:data-updated'));
           }}
         />
       )}

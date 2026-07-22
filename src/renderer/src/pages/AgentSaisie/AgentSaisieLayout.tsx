@@ -14,21 +14,40 @@ export default function AgentSaisieLayout() {
   const [draftsCount, setDraftsCount] = useState<number>(0);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
-  const fetchDraftsCount = async () => {
+  const fetchDraftsCount = React.useCallback(async () => {
     if (!activeSiteId) return;
     try {
-      const count = await window.api.cartes.countDrafts(activeSiteId);
+      const count = await window.api.cartes.countDrafts(activeSiteId, user);
       setDraftsCount(count);
-    } catch (e) {
-      console.error('Erreur chargement brouillons:', e);
+    } catch (err) {
+      console.error("Erreur chargement nombre de brouillons:", err);
     }
-  };
+  }, [activeSiteId, user]);
+
+  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const {
+    isPullingCards,
+    isBackgroundPulling,
+    isBulkUploading,
+    handlePullSiteCards,
+    handleStartBulkUpload
+  } = useForceSyncActions(user, activeSiteId, loadStats);
 
   useEffect(() => {
     fetchDraftsCount();
     const interval = setInterval(fetchDraftsCount, 5000);
-    return () => clearInterval(interval);
-  }, [activeSiteId]);
+
+    const handleDataUpdated = () => {
+      fetchDraftsCount();
+      loadStats(true); // Silent reload
+    };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:data-updated', handleDataUpdated);
+    };
+  }, [fetchDraftsCount, loadStats]);
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -41,14 +60,6 @@ export default function AgentSaisieLayout() {
     };
   }, []);
 
-  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
-  const {
-    isPullingCards,
-    isBackgroundPulling,
-    isBulkUploading,
-    handlePullSiteCards,
-    handleStartBulkUpload
-  } = useForceSyncActions(user, activeSiteId, loadStats);
 
   const pullDisabled = isPullingCards || cloudCartesCount === 0;
   const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
@@ -98,7 +109,7 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards && !isBackgroundPulling ? 'TÉLÉCHARGEMENT EN COURS...' : `Télécharger depuis le Cloud${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             <button
@@ -123,7 +134,7 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : 'Synchroniser mes saisies'}
+              {isBulkUploading ? 'ENVOI...' : 'Synchroniser vers le Cloud'}
             </button>
 
             {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}
@@ -132,10 +143,11 @@ export default function AgentSaisieLayout() {
                 if (!activeSiteId) return;
                 setIsPublishing(true);
                 try {
-                  const res = await window.api.cartes.publishDrafts(activeSiteId);
+                  const res = await window.api.cartes.publishDrafts(activeSiteId, user);
                   toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation.`);
                   fetchDraftsCount();
                   loadStats();
+                  window.dispatchEvent(new CustomEvent('app:data-updated'));
                 } catch (e: any) {
                   toast.error("Erreur lors de l'envoi des brouillons: " + e.message);
                 } finally {
@@ -164,7 +176,7 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Send size={18} style={{ animation: isPublishing ? 'pulse 1.5s linear infinite' : 'none' }} />
-              {isPublishing ? 'ENVOI EN COURS...' : `ENVOYER MES BROUILLONS${draftsCount > 0 ? ` (${draftsCount})` : ''}`}
+              {isPublishing ? 'VALIDATION EN COURS...' : `VALIDER MES BROUILLONS${draftsCount > 0 ? ` (${draftsCount})` : ''}`}
             </button>
           </div>
         </div>

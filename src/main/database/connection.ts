@@ -53,6 +53,23 @@ export async function initDatabase(): Promise<Database.Database> {
 
 
 
+  // FTS5 Integrity Check & Auto-rebuild
+  try {
+    db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('integrity-check');");
+    log.info('FTS5 Index integrity check passed.');
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || err.message.includes('malformed') || err.message.includes('corrupt')) {
+      log.warn('FTS5 Index is corrupted. Rebuilding...');
+      try {
+        db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild');");
+        log.info('FTS5 Index successfully rebuilt.');
+      } catch (rebuildErr) {
+        log.error('Failed to rebuild FTS5 index:', rebuildErr);
+      }
+    } else {
+      log.error('FTS5 Integrity check failed with unknown error:', err);
+    }
+  }
 
   // Add Regexp support
   db.function('regexp', (pattern: string, text: string) => {

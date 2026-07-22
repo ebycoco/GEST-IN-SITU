@@ -19,7 +19,8 @@ export function useVerificationSearch(
   setAdminSiteFilter: (id: number | null) => void,
   setSelectedCarte: (c: any) => void,
   setShowReportModal: (b: boolean) => void,
-  setModalStep: (s: number) => void
+  setModalStep: (s: number) => void,
+  setShowProofModal: (b: boolean) => void
 ) {
   const [nomComplet, setNomComplet] = useState('');
   const [ddn, setDdn] = useState('');
@@ -121,8 +122,12 @@ export function useVerificationSearch(
         setHasSearched(true);
         if (directMatches.length === 1 && directMatches[0].statut_physique !== 'ABSENT') {
           setSelectedCarte(directMatches[0]);
-          setShowReportModal(true);
-          setModalStep(1);
+          if (directMatches[0].statut === 'DELIVRE') {
+            setShowProofModal(true);
+          } else {
+            setShowReportModal(true);
+            setModalStep(1);
+          }
         } else {
           setSelectedCarte(null);
         }
@@ -162,8 +167,12 @@ export function useVerificationSearch(
     setHasSearched(true);
     if (carte.statut_physique !== 'ABSENT') {
       setSelectedCarte(carte);
-      setShowReportModal(true);
-      setModalStep(1);
+      if (carte.statut === 'DELIVRE') {
+        setShowProofModal(true);
+      } else {
+        setShowReportModal(true);
+        setModalStep(1);
+      }
     } else {
       setSelectedCarte(null);
     }
@@ -232,8 +241,12 @@ export function useVerificationSearch(
       
       if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT') {
         setSelectedCarte(searchResults[0]);
-        setShowReportModal(true);
-        setModalStep(1);
+        if (searchResults[0].statut === 'DELIVRE') {
+          setShowProofModal(true);
+        } else {
+          setShowReportModal(true);
+          setModalStep(1);
+        }
       } else {
         setSelectedCarte(null);
       }

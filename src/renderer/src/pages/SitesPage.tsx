@@ -54,24 +54,7 @@ export default function SitesPage() {
   const [isPullingCentres, setIsPullingCentres] = useState(false);
   const [isPushingCentres, setIsPushingCentres] = useState(false);
 
-  useEffect(() => { 
-    setCurrentPage(1);
-    const cache = useCacheStore.getState().sitesCache;
-    const cacheCentres = useCacheStore.getState().centresCache;
-    let hasCache = false;
-    if (cache.cachedAt && cache.list.length > 0 && cacheCentres.cachedAt && cacheCentres.list.length > 0) {
-      setSites(cache.list);
-      setCentres(cacheCentres.list);
-      setLoading(false);
-      hasCache = true;
-      useAuthStore.getState().setInitialDataLoading(false);
-    }
-    if (!hasCache) {
-      loadData();
-    }
-  }, [userContext?.site_id, activeTab]);
-
-  const loadData = async (silent = false) => {
+  const loadData = React.useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
       const s = await window.api.hierarchy.getSites();
@@ -85,7 +68,31 @@ export default function SitesPage() {
       if (!silent) setLoading(false);
       useAuthStore.getState().setInitialDataLoading(false);
     }
-  };
+  }, [userContext]);
+
+  useEffect(() => { 
+    setCurrentPage(1);
+    const cache = useCacheStore.getState().sitesCache;
+    const cacheCentres = useCacheStore.getState().centresCache;
+    let hasCache = false;
+
+    if (cache.cachedAt && cache.list.length > 0 && cacheCentres.cachedAt && cacheCentres.list.length > 0) {
+      setSites(cache.list);
+      setCentres(cacheCentres.list);
+      setLoading(false);
+      hasCache = true;
+      useAuthStore.getState().setInitialDataLoading(false);
+    }
+
+    if (!hasCache) {
+      loadData();
+    }
+
+    const handleDataUpdated = () => loadData(true);
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [userContext?.site_id, activeTab, loadData]);
 
   const handleCreateSite = async (e: React.FormEvent) => {
     e.preventDefault();

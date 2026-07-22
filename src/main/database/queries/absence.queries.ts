@@ -1,53 +1,56 @@
 import { getDatabase } from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import log from 'electron-log';
+import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
 
 export function signalerAbsence(id: number, agentLogin: string, agentInfo: string, commentaire: string = '', currentUser?: { role: string; site_id?: number; id_user?: number; centre_id?: number }) {
   const db = getDatabase()!;
-  const now = new Date().toISOString();
-  let query = `
-    UPDATE t_cartes SET statut_physique = 'ABSENT',
-      agent_signalement_absence = @agentLogin, date_signalement_absence = @now,
-      note_signalement_absence = @commentaire, escalade_niveau = 'CENTRE',
-      updated_at = @now, is_dirty = 1
-  `;
-  const params: any = { agentLogin, now, commentaire, id };
-  
-  if (currentUser?.centre_id) {
-    query += `, centre_id = @centre_id`;
-    params.centre_id = currentUser.centre_id;
-  }
-  
-  query += ` WHERE id_carte = @id`;
-  
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = @site_id';
-    params.site_id = currentUser.site_id;
-  }
-  const result = db.prepare(query).run(params);
-  if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
-  }
-
-  const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
-  if (card) {
-    const siteId = card.site_id;
-    const message = `🚨 [SIGNALEMENT - ABSENCE] La carte de ${card.noms} ${card.prenoms} est signalée absente par ${agentInfo}. ${commentaire ? 'Note: ' + commentaire : ''}`;
-    const userId = currentUser?.id_user || null;
-    const userLogin = agentLogin;
-    const logPayload = JSON.stringify({ read: false, id_carte: id });
-
-    try {
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-        VALUES (?, ?, 'CARTE_ABSENTE_SIGNALEE', ?, ?, ?, 1, ?)
-      `).run(userId, userLogin, message, logPayload, uuidv4(), siteId);
-    } catch (err) {
-      log.error('Failed to log CARTE_ABSENTE_SIGNALEE:', err);
+  return db.transaction(() => {
+    const now = new Date().toISOString();
+    let query = `
+      UPDATE t_cartes SET statut_physique = 'ABSENT',
+        agent_signalement_absence = @agentLogin, date_signalement_absence = @now,
+        note_signalement_absence = @commentaire, escalade_niveau = 'CENTRE',
+        updated_at = @now, is_dirty = 1
+    `;
+    const params: any = { agentLogin, now, commentaire, id };
+    
+    if (currentUser?.centre_id) {
+      query += `, centre_id = @centre_id`;
+      params.centre_id = currentUser.centre_id;
     }
-  }
+    
+    query += ` WHERE id_carte = @id`;
+    
+    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+      query += ' AND site_id = @site_id';
+      params.site_id = currentUser.site_id;
+    }
+    const result = db.prepare(query).run(params);
+    if (result.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
 
-  return result;
+    const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    if (card) {
+      const siteId = card.site_id;
+      const message = `🚨 [SIGNALEMENT - ABSENCE] La carte de ${card.noms} ${card.prenoms} est signalée absente par ${agentInfo}. ${commentaire ? 'Note: ' + commentaire : ''}`;
+      const userId = currentUser?.id_user || null;
+      const userLogin = agentLogin;
+      const logPayload = JSON.stringify({ read: false, id_carte: id });
+
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+          VALUES (?, ?, 'CARTE_ABSENTE_SIGNALEE', ?, ?, ?, 1, ?)
+        `).run(userId, userLogin, message, logPayload, uuidv4(), siteId);
+      } catch (err) {
+        log.error('Failed to log CARTE_ABSENTE_SIGNALEE:', err);
+      }
+    }
+
+    return result;
+  })();
 }
 
 export function getAbsencesReportees(siteId?: number): any[] {
@@ -100,63 +103,75 @@ export function getSignalementsResolus(agent: string, siteId?: number): any[] {
 
 export function resoudreAbsence(id: number, data: { status: string; agent: string; note: string; rangement: string }, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
-  const now = new Date().toISOString();
-  let query = `
-    UPDATE t_cartes 
-    SET statut_physique = @status, rangement = @rangement, escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
-    WHERE id_carte = @id
-  `;
-  const params: any = { status: data.status, rangement: data.rangement ? data.rangement.toUpperCase().trim() : null, now, id };
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = @site_id';
-    params.site_id = currentUser.site_id;
-  }
-  const result = db.prepare(query).run(params);
-  if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
-  }
-
-  const card = db.prepare('SELECT site_id, noms, prenoms, rangement, contact FROM t_cartes WHERE id_carte = ?').get(id) as any;
-  if (card) {
-    const siteId = card.site_id;
-    const message = `Carte de ${card.noms} ${card.prenoms} retrouvée (Rangement: ${card.rangement || 'non spécifié'}) par ${data.agent}.`;
-
-    try {
-      const unreadLog = db.prepare(`
-        SELECT id_log FROM t_logs 
-        WHERE action = 'CARTE_ABSENTE_SIGNALEE' 
-        AND json_extract(valeur_apres, '$.read') = false
-        AND json_extract(valeur_apres, '$.id_carte') = ?
-      `).get(id) as { id_log: number } | undefined;
-
-      if (unreadLog) {
-        db.prepare(`
-          UPDATE t_logs 
-          SET valeur_apres = '{"read": true}', is_read = 1, is_dirty = 1 
-          WHERE id_log = ?
-        `).run(unreadLog.id_log);
-      } else {
-        log.error("Log introuvable pour la carte ID:", id);
-      }
-
-      const payload = {
-        read: false,
-        noms: card.noms,
-        prenoms: card.prenoms,
-        rangement: card.rangement,
-        contact: card.contact,
-        site_id: siteId
-      };
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-        VALUES (NULL, 'SYSTEM', 'CARTE_ABSENTE_RETROUVEE', ?, ?, ?, 1, ?)
-      `).run(message, JSON.stringify(payload), uuidv4(), siteId);
-    } catch (err) {
-      log.error('Failed to log or notify CARTE_ABSENTE_RETROUVEE:', err);
+  return db.transaction(() => {
+    const now = new Date().toISOString();
+    let query = `
+      UPDATE t_cartes 
+      SET statut_physique = @status, rangement = @rangement, escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
+      WHERE id_carte = @id
+    `;
+    const params: any = { status: data.status, rangement: data.rangement ? data.rangement.toUpperCase().trim() : null, now, id };
+    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+      query += ' AND site_id = @site_id';
+      params.site_id = currentUser.site_id;
     }
-  }
+    const result = db.prepare(query).run(params);
+    if (result.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
 
-  return result;
+    const card = db.prepare('SELECT site_id, noms, prenoms, rangement, contact, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    if (card) {
+      const siteId = card.site_id;
+      const message = `Carte de ${card.noms} ${card.prenoms} retrouvée (Rangement: ${card.rangement || 'non spécifié'}) par ${data.agent}.`;
+
+      try {
+        const unreadLog = db.prepare(`
+          SELECT id_log FROM t_logs 
+          WHERE action = 'CARTE_ABSENTE_SIGNALEE' 
+          AND json_extract(valeur_apres, '$.read') = false
+          AND json_extract(valeur_apres, '$.id_carte') = ?
+        `).get(id) as { id_log: number } | undefined;
+
+        if (unreadLog) {
+          db.prepare(`
+            UPDATE t_logs 
+            SET valeur_apres = '{"read": true}', is_read = 1, is_dirty = 1 
+            WHERE id_log = ?
+          `).run(unreadLog.id_log);
+        } else {
+          log.error("Log introuvable pour la carte ID:", id);
+        }
+
+        const payload = {
+          read: false,
+          noms: card.noms,
+          prenoms: card.prenoms,
+          rangement: card.rangement,
+          contact: card.contact,
+          site_id: siteId
+        };
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+          VALUES (NULL, 'SYSTEM', 'CARTE_ABSENTE_RETROUVEE', ?, ?, ?, 1, ?)
+        `).run(message, JSON.stringify(payload), uuidv4(), siteId);
+      } catch (err) {
+        log.error('Failed to log or notify CARTE_ABSENTE_RETROUVEE:', err);
+      }
+      
+      if (card.sync_id) {
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', {
+          statut_physique: data.status,
+          rangement: card.rangement,
+          escalade_niveau: 'RESOLU',
+          updated_at: now
+        });
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return result;
+  })();
 }
 
 export function declarerPerdue(id: number, currentUser?: { role: string; site_id?: number }) {
@@ -344,4 +359,29 @@ export function escaladerAuSite(id: number, currentUser?: { id_user?: number; lo
     }
   }
   return result;
+}
+
+export function archiveSignalement(id_carte: number, login_user: string) {
+  const db = getDatabase()!;
+  try {
+    db.prepare(`
+      INSERT OR IGNORE INTO t_agent_archives (id_carte, login_user)
+      VALUES (?, ?)
+    `).run(id_carte, login_user);
+    return true;
+  } catch (err) {
+    log.error('Failed to archive signalement:', err);
+    return false;
+  }
+}
+
+export function getArchivedSignalements(login_user: string): number[] {
+  const db = getDatabase()!;
+  try {
+    const records = db.prepare(`SELECT id_carte FROM t_agent_archives WHERE login_user = ?`).all(login_user) as {id_carte: number}[];
+    return records.map(r => r.id_carte);
+  } catch (err) {
+    // Si la table n'existe pas encore
+    return [];
+  }
 }

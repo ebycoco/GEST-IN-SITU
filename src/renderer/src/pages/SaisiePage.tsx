@@ -34,6 +34,7 @@ export interface FormState {
   rangement: string;
   site: string;
   centre: string;
+  centre_id?: number | null;
   poste: string;
 }
 
@@ -98,6 +99,7 @@ interface InputWithIconProps {
   required?: boolean;
   style?: React.CSSProperties;
   inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
+  disabled?: boolean;
 }
 
 function InputWithIcon({
@@ -110,6 +112,7 @@ function InputWithIcon({
   required,
   style,
   inputMode,
+  disabled,
 }: InputWithIconProps) {
   return (
     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
@@ -137,6 +140,7 @@ function InputWithIcon({
         autoFocus={autoFocus}
         required={required}
         inputMode={inputMode}
+        disabled={disabled}
         style={{ paddingLeft: 42, width: '100%', ...style }}
       />
     </div>
@@ -275,15 +279,28 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     }
   };
 
+  const prevSelectedCentreId = useRef(selectedCentreId);
+
   // Synchronise les valeurs site/centre au montage ou au changement de site/centre actif
   React.useEffect(() => {
-    if (mode !== 'create') return;
-    setFormData(prev => ({
-      ...prev,
-      site: activeSiteName,
-      centre: activeCentreName
-    }));
-  }, [activeSiteName, activeCentreName, mode]);
+    if (mode === 'create') {
+      setFormData(prev => ({
+        ...prev,
+        site: activeSiteName,
+        centre: activeCentreName,
+        centre_id: selectedCentreId
+      }));
+    } else if (mode === 'edit' && user?.role === 'ADMINISTRATEUR_SITE') {
+      if (prevSelectedCentreId.current !== selectedCentreId) {
+        setFormData(prev => ({
+          ...prev,
+          centre: activeCentreName,
+          centre_id: selectedCentreId
+        }));
+      }
+    }
+    prevSelectedCentreId.current = selectedCentreId;
+  }, [activeSiteName, activeCentreName, selectedCentreId, mode, user?.role]);
 
   // Formatage de téléphone dynamique style Ivoirien (+225 XX XX XX XX XX)
   const formatPhoneNumber = (value: string) => {
@@ -370,6 +387,8 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         await window.api.cartes.create(finalData);
         toast.success('✅ Carte enregistrée avec succès !');
       }
+
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
 
       setSaved(true);
       if (mode === 'create') {
@@ -615,6 +634,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
                 placeholder="Site de rattachement"
                 tabIndex={7}
                 style={{ opacity: 0.75, background: 'rgba(255,255,255,0.02)', cursor: 'not-allowed' }}
+                disabled={true}
                 required
               />
             </FormField>
@@ -626,6 +646,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
                 placeholder="Centre de travail"
                 tabIndex={8}
                 style={{ opacity: 0.75, background: 'rgba(255,255,255,0.02)', cursor: 'not-allowed' }}
+                disabled={true}
                 required
               />
             </FormField>
@@ -724,25 +745,32 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
           </FormField>
         </div>
 
-        {/* ── Info Banner ──────────────────────────────────────────────────── */}
+        {/* ── Guide de Saisie ──────────────────────────────────────────────────── */}
         <div
           style={{
             display: 'flex',
-            alignItems: 'center',
+            flexDirection: 'column',
             gap: 10,
-            padding: '12px 16px',
-            background: 'rgba(250,204,21,0.06)',
-            border: '1px solid rgba(250,204,21,0.18)',
+            padding: '16px',
+            background: 'rgba(59,130,246,0.06)',
+            border: '1px solid rgba(59,130,246,0.18)',
             borderRadius: 12,
-            fontSize: 12,
+            fontSize: 13,
             color: 'var(--text-muted)',
           }}
         >
-          <Sparkles size={14} style={{ color: '#facc15', flexShrink: 0 }} />
-          <span>
-            En enregistrement standard, la carte aura le statut&nbsp;
-            <strong style={{ color: '#facc15' }}>EN STOCK</strong>. En choisissant <strong>Brouillon</strong>, elle sera isolée pour modification ultérieure.
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#60a5fa', fontWeight: 600 }}>
+            <Sparkles size={16} />
+            <span>💡 Guide de saisie :</span>
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 24, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <li>
+              <strong style={{ color: '#f97316' }}>Sauvegarder en brouillon :</strong> Utilisez cette option si des informations manquent. La carte reste uniquement sur votre ordinateur.
+            </li>
+            <li>
+              <strong style={{ color: '#8b5cf6' }}>Valider la saisie :</strong> Utilisez cette option quand la saisie est complète et vérifiée. La carte sera stockée et transmise au serveur.
+            </li>
+          </ul>
         </div>
 
         {/* ── Actions ──────────────────────────────────────────────────────── */}
@@ -750,7 +778,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
-            alignItems: 'center',
+            alignItems: 'flex-start',
             gap: 12,
             flexWrap: 'wrap',
             paddingTop: 8,
@@ -769,74 +797,86 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
             Réinitialiser
           </button>
 
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => handleSave(undefined, true)}
-            disabled={isSaving}
-            tabIndex={12}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              background: 'rgba(249, 115, 22, 0.15)',
-              color: '#f97316',
-              border: '1px solid rgba(249, 115, 22, 0.3)',
-              borderRadius: 12,
-              padding: '13px 20px',
-              fontWeight: 700,
-              fontSize: 15,
-            }}
-          >
-            <Archive size={18} />
-            Enregistrer en brouillon
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => handleSave(undefined, true)}
+              disabled={isSaving}
+              tabIndex={12}
+              title="💾 Enregistrement 100% local. Ne sera pas envoyé sur le Cloud tant que la fiche n'est pas validée."
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background: 'rgba(249, 115, 22, 0.15)',
+                color: '#f97316',
+                border: '1px solid rgba(249, 115, 22, 0.3)',
+                borderRadius: 12,
+                padding: '13px 20px',
+                fontWeight: 700,
+                fontSize: 15,
+              }}
+            >
+              <Archive size={18} />
+              Sauvegarder en brouillon
+            </button>
+            <span style={{ fontSize: 11, color: 'rgba(249, 115, 22, 0.8)', textAlign: 'center', maxWidth: 220, lineHeight: 1.3 }}>
+              💾 Enregistrement 100% local. Ne sera pas envoyé sur le Cloud tant que la fiche n'est pas validée.
+            </span>
+          </div>
 
-          <button
-            type="submit"
-            disabled={isSaving}
-            tabIndex={13}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              padding: '13px 32px',
-              background: isSaving
-                ? 'rgba(139,92,246,0.4)'
-                : 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 12,
-              fontWeight: 700,
-              fontSize: 15,
-              cursor: isSaving ? 'not-allowed' : 'pointer',
-              boxShadow: isSaving ? 'none' : '0 4px 20px rgba(139,92,246,0.4)',
-              transition: 'all 0.2s ease',
-              letterSpacing: '0.02em',
-            }}
-          >
-            {isSaving ? (
-              <>
-                <span
-                  style={{
-                    width: 16,
-                    height: 16,
-                    border: '2px solid rgba(255,255,255,0.3)',
-                    borderTopColor: 'white',
-                    borderRadius: '50%',
-                    animation: 'spin 0.8s linear infinite',
-                    display: 'inline-block',
-                  }}
-                />
-                {mode === 'edit' ? 'Mise à jour…' : 'Enregistrement…'}
-              </>
-            ) : (
-              <>
-                <Save size={18} />
-                {mode === 'edit' ? 'Mettre à jour la carte' : 'Enregistrer la carte'}
-              </>
-            )}
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+            <button
+              type="submit"
+              disabled={isSaving}
+              tabIndex={13}
+              title="☁️ Valide la fiche et active l'envoi automatique vers le Cloud Supabase."
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '13px 32px',
+                background: isSaving
+                  ? 'rgba(139,92,246,0.4)'
+                  : 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
+                color: 'white',
+                border: 'none',
+                borderRadius: 12,
+                fontWeight: 700,
+                fontSize: 15,
+                cursor: isSaving ? 'not-allowed' : 'pointer',
+                boxShadow: isSaving ? 'none' : '0 4px 20px rgba(139,92,246,0.4)',
+                transition: 'all 0.2s ease',
+                letterSpacing: '0.02em',
+              }}
+            >
+              {isSaving ? (
+                <>
+                  <span
+                    style={{
+                      width: 16,
+                      height: 16,
+                      border: '2px solid rgba(255,255,255,0.3)',
+                      borderTopColor: 'white',
+                      borderRadius: '50%',
+                      animation: 'spin 0.8s linear infinite',
+                      display: 'inline-block',
+                    }}
+                  />
+                  {mode === 'edit' ? 'Mise à jour…' : 'Enregistrement…'}
+                </>
+              ) : (
+                <>
+                  <Save size={18} />
+                  {mode === 'edit' ? 'Enregistrer les modifications' : 'Valider la saisie'}
+                </>
+              )}
+            </button>
+            <span style={{ fontSize: 11, color: 'rgba(139, 92, 246, 0.9)', textAlign: 'center', maxWidth: 240, lineHeight: 1.3 }}>
+              ☁️ Valide la fiche et active l'envoi automatique vers le Cloud Supabase.
+            </span>
+          </div>
         </div>
       </form>
     </div>

@@ -39,8 +39,8 @@ declare global {
         search: (query: string, limit?: number, filters?: any) => Promise<any[]>;
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
-        countDrafts: (siteId: number) => Promise<number>;
-        publishDrafts: (siteId: number) => Promise<{ publishedCount: number }>;
+        countDrafts: (siteId: number, currentUser?: any) => Promise<number>;
+        publishDrafts: (siteId: number, currentUser?: any) => Promise<{ publishedCount: number }>;
         updateCarte: (id: number, data: any, currentUser?: any) => Promise<any>;
         update: (id: number, data: any, currentUser?: any) => Promise<any>;
         delete: (id: number, currentUser?: any) => Promise<boolean>;
@@ -53,6 +53,8 @@ declare global {
         escaladerAuSite: (id: number, currentUser?: any) => Promise<any>;
         getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;
         getSignalementsResolus: (agent: string, siteId?: number) => Promise<any[]>;
+        archiveSignalement: (id: number, agentLogin: string) => Promise<boolean>;
+        getArchivedSignalements: (agentLogin: string) => Promise<number[]>;
         resoudreAbsence: (id: number, data: any) => Promise<boolean>;
         declarerPerdue: (id: number) => Promise<boolean>;
         getHistoriquePertes: (siteId?: number) => Promise<any[]>;

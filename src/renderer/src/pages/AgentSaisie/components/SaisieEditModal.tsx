@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { X } from 'lucide-react';
 import SaisiePage, { FormState } from '../../SaisiePage';
 import { useAuthStore } from '../../../stores/authStore';
+import { useCacheStore } from '../../../stores/cacheStore';
 
 interface SaisieEditModalProps {
   carte: any;
@@ -10,10 +11,18 @@ interface SaisieEditModalProps {
 }
 
 export default function SaisieEditModal({ carte, onClose, onSuccess }: SaisieEditModalProps) {
-  const { user } = useAuthStore();
+  const { user, activeSiteId, selectedCentreId } = useAuthStore();
+  const { sitesCache, centresCache } = useCacheStore();
 
   const initialData = useMemo<FormState | undefined>(() => {
     if (!carte) return undefined;
+    
+    const siteIdToUse = carte.site_id || activeSiteId || user?.site_id;
+    const centreIdToUse = carte.centre_id || selectedCentreId;
+
+    const resolvedSiteName = sitesCache.list?.find(s => s.id === siteIdToUse)?.nom || '';
+    const resolvedCentreName = centresCache.list?.find(c => c.id === centreIdToUse)?.nom || '';
+
     return {
       noms: carte.noms || '',
       prenoms: carte.prenoms || '',
@@ -22,19 +31,29 @@ export default function SaisieEditModal({ carte, onClose, onSuccess }: SaisieEdi
       contact: carte.contact || '',
       num_secu: carte.num_secu || '',
       rangement: carte.rangement || '',
-      site: carte.site || '',
-      centre: carte.centre || '',
-      poste: carte.poste || '',
+      site: resolvedSiteName,
+      centre: resolvedCentreName,
+      centre_id: carte.centre_id || null,
+      poste: carte.lieu_enrolement || '',
     };
-  }, [carte?.id_carte]);
+  }, [carte?.id_carte, sitesCache.list, centresCache.list, activeSiteId, user?.site_id, selectedCentreId]);
 
   const handleUpdate = async (data: FormState) => {
     const carteId = carte.id_carte;
     if (!carteId) throw new Error("ID de la carte manquant");
 
-    await window.api.cartes.updateCarte(carteId, data, user);
+    const payload = {
+      ...data,
+      lieu_enrolement: data.poste, // Maps form UI "poste" back to DB "lieu_enrolement"
+      centre_id: data.centre_id, // Ensure centre_id is preserved if edited by ADMIN_SITE
+    };
+
+    await window.api.cartes.updateCarte(carteId, payload, user);
     
-    // Après succès, on notifie le parent pour rafraîchir et fermer
+    // Après succès, on déclenche le rafraîchissement global
+    window.dispatchEvent(new CustomEvent('app:data-updated'));
+
+    // On notifie le parent pour fermer
     setTimeout(() => {
       onSuccess();
     }, 1000);

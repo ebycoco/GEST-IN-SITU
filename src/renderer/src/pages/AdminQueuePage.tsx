@@ -139,8 +139,8 @@ export default function AdminQueuePage() {
   return (
     <div className="animate-fade-in" style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto', color: 'var(--text-primary)' }}>
       {/* HEADER SECTION */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 32, gap: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', marginBottom: 32, gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div style={{ 
             display: 'flex', 
             alignItems: 'center', 
@@ -241,6 +241,7 @@ export default function AdminQueuePage() {
         marginBottom: 32,
         display: 'flex',
         alignItems: 'center',
+        flexWrap: 'wrap',
         gap: 16
       }}>
         <Search size={20} style={{ color: 'var(--text-secondary)' }} />
@@ -300,13 +301,14 @@ export default function AdminQueuePage() {
                   borderRadius: 16,
                   padding: 24,
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   justifyContent: 'space-between',
+                  flexWrap: 'wrap',
                   gap: 24,
                   transition: 'transform 0.2s ease',
                 }} className="hover-scale">
                   {/* Left Column: Beneficiary */}
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: '1 1 300px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                       <span style={{ 
                         background: 'rgba(239, 68, 68, 0.1)', 
@@ -334,7 +336,7 @@ export default function AdminQueuePage() {
 
                   {/* Middle Column: Initial Location & Agent */}
                   <div style={{ 
-                    flex: 1, 
+                    flex: '1 1 250px', 
                     background: 'rgba(255, 255, 255, 0.02)', 
                     border: '1px solid rgba(255, 255, 255, 0.04)', 
                     borderRadius: 12, 
@@ -355,7 +357,7 @@ export default function AdminQueuePage() {
                   </div>
 
                   {/* Right Column: Actions */}
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 300px' }}>
                     <input 
                       type="text" 
                       placeholder="Nouveau Rangement (Ex: TK 180)"
@@ -478,13 +480,14 @@ export default function AdminQueuePage() {
                   borderRadius: 16,
                   padding: 24,
                   display: 'flex',
-                  alignItems: 'center',
+                  alignItems: 'flex-start',
                   justifyContent: 'space-between',
+                  flexWrap: 'wrap',
                   gap: 24,
                   transition: 'transform 0.2s ease',
                 }} className="hover-scale">
                   {/* Left Column: Beneficiary */}
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: '1 1 300px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                       <span style={{ 
                         background: 'rgba(239, 68, 68, 0.1)', 
@@ -514,7 +517,7 @@ export default function AdminQueuePage() {
                   </div>
 
                   {/* Right Column: Actions */}
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 300px' }}>
                     <button 
                       onClick={() => {
                         setReactivateCardId(r.id_carte);

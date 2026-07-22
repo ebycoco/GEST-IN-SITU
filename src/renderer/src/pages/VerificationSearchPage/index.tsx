@@ -13,6 +13,7 @@ import { useDeliveryFlow } from './hooks/useDeliveryFlow';
 import { SearchForm } from './components/SearchForm';
 import { SearchResults } from './components/SearchResults';
 import { DeliveryModal } from './components/DeliveryModal';
+import { DeliveryProofModal } from './components/DeliveryProofModal';
 import { StatsPanel } from './components/StatsPanel';
 import { ResolusTab } from './components/ResolusTab';
 import { NonResolusTab } from './components/NonResolusTab';
@@ -31,6 +32,7 @@ export default function VerificationSearchPage() {
   const [centres, setCentres] = useState<any[]>([]);
   const [userCentre, setUserCentre] = useState<any>(null);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
+  const [showProofModal, setShowProofModal] = useState<boolean>(false);
   const setSelectedCentreId = useAuthStore((s) => s.setSelectedCentreId);
 
   const location = useLocation();
@@ -230,7 +232,7 @@ export default function VerificationSearchPage() {
     handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString
   } = useVerificationSearch(
     user, activeSiteId, isAdmin, adminSiteFilter, setAdminSiteFilter,
-    setSelectedCarte, setShowReportModal, setModalStep
+    setSelectedCarte, setShowReportModal, setModalStep, setShowProofModal
   );
 
   // Sécurité Box / Prefixes
@@ -491,6 +493,7 @@ export default function VerificationSearchPage() {
             setSelectedCarte={setSelectedCarte}
             setShowReportModal={setShowReportModal}
             setModalStep={setModalStep}
+            setShowProofModal={setShowProofModal}
             isAgentAuthorisedForCard={isAgentAuthorisedForCard}
           />
         </>
@@ -554,6 +557,13 @@ export default function VerificationSearchPage() {
         handleDeliver={handleDeliver}
         handleSignalerAbsence={handleSignalerAbsence}
         isUnclassifiedCard={isUnclassifiedCard}
+      />
+
+      {/* Modale de preuve de retrait */}
+      <DeliveryProofModal
+        isOpen={showProofModal}
+        onClose={() => setShowProofModal(false)}
+        carte={selectedCarte}
       />
     </div>
   );

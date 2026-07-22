@@ -16,6 +16,8 @@ export const GlobalConfirmModal: React.FC = () => {
     requirePassword?: boolean;
     actionName?: string;
     isAlert?: boolean;
+    confirmText?: string;
+    cancelText?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -133,7 +135,7 @@ export const GlobalConfirmModal: React.FC = () => {
               opacity: loading ? 0.7 : 1
             }}
           >
-            {loading ? "Vérification..." : options.isAlert ? "OK" : "Confirmer"}
+            {loading ? "Vérification..." : options.isAlert ? (options.confirmText || "OK") : (options.confirmText || "Confirmer")}
           </button>
           {!options.isAlert && (
             <button
@@ -154,7 +156,7 @@ export const GlobalConfirmModal: React.FC = () => {
                 cursor: loading ? 'not-allowed' : 'pointer'
               }}
             >
-              Annuler
+              {options.cancelText || "Annuler"}
             </button>
           )}
         </div>

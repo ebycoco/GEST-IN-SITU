@@ -4,6 +4,47 @@ import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '..
 import { networkMonitor } from '../../sync/network-monitor';
 import { insertAuditLog } from './audit.queries';
 import { QualityFilters } from '../../../shared/types/quality.types';
+import log from 'electron-log';
+
+/** Reset nucléaire de l'index FTS5 : DROP + CREATE + REBUILD pour réparer une corruption profonde */
+function nuclearResetFts5(): void {
+  setImmediate(() => {
+    const db = getDatabase();
+    if (!db) return;
+    try {
+      log.warn('[FTS5] Début du reset nucléaire (DROP + CREATE + REBUILD)...');
+      // 1. Supprimer les 3 triggers FTS5 liés à t_cartes
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_ai;');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_ad;');
+      // 2. Supprimer la table virtuelle FTS5 (et toutes ses shadow tables)
+      db.exec('DROP TABLE IF EXISTS t_cartes_fts;');
+      // 3. Recréer la table FTS5 proprement
+      db.exec(`CREATE VIRTUAL TABLE t_cartes_fts USING fts5(
+        noms, prenoms, num_secu, contact, lieu_de_naissance, rangement,
+        content='t_cartes', content_rowid='id_carte'
+      );`);
+      // 4. Repeupler depuis t_cartes (content table)
+      db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild');");
+      // 5. Recréer les 3 triggers
+      db.exec(`CREATE TRIGGER trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;`);
+      db.exec(`CREATE TRIGGER trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
+        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+      END;`);
+      db.exec(`CREATE TRIGGER trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
+        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;`);
+      log.info('[FTS5] Reset nucléaire terminé avec succès. Recherche plein texte restaurée.');
+    } catch (resetErr) {
+      log.error('[FTS5] Échec du reset nucléaire FTS5 :', resetErr);
+    }
+  });
+}
 
 function removeAccents(str: string): string {
   if (!str) return '';
@@ -345,8 +386,24 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
     params.site_id = currentUser.site_id;
   }
   
-  const result = db.prepare(query).run(params);
-  if (result.changes === 0) {
+  let result: any;
+  try {
+    result = db.prepare(query).run(params);
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[updateCarte] FTS5 shadow tables corrompues. Suppression du trigger pour UPDATE sécurisé...');
+      // Étape 1 : supprimer IMMÉDIATEMENT le trigger de mise à jour FTS5
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      // Étape 2 : exécuter l'UPDATE sans trigger (pas de contact avec FTS5)
+      result = db.prepare(query).run(params);
+      log.info('[updateCarte] Mise à jour exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      // Étape 3 : reset nucléaire complet FTS5 en arrière-plan (non bloquant)
+      nuclearResetFts5();
+    } else {
+      throw err;
+    }
+  }
+  if (!result || result.changes === 0) {
     throw new Error("Accès non autorisé aux données de ce site ou ligne introuvable.");
   }
 
@@ -416,42 +473,97 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
 
 export function delivrerCarte(
   id: number, 
-  data: { nom_retirant: string; num_retirant: string; contact_retirant?: string; agent_distributeur: string; centre_retrait?: string; rangement?: string }, 
-  currentUser?: { role: string; site_id?: number }
+  data: { nom_retirant: string; num_retirant: string; contact_retirant?: string; type_retirant?: string; agent_distributeur: string; centre_retrait?: string; rangement?: string }, 
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
 ) {
   const db = getDatabase()!;
-  const now = new Date().toISOString();
-  const query = `
-    UPDATE t_cartes SET
-      statut = 'DELIVRE',
-      date_delivrance = @now,
-      nom_retirant = @nom_retirant,
-      num_retirant = @num_retirant,
-      contact_retirant = @contact_retirant,
-      agent_distributeur = @agent_distributeur,
-      centre_retrait = @centre_retrait,
-      rangement = COALESCE(@rangement, rangement),
-      updated_at = @now,
-      updated_by = @updated_by,
-      is_dirty = 1
-    WHERE id_carte = @id
-  `;
-  const params: any = { 
-    id,
-    nom_retirant: data.nom_retirant,
-    num_retirant: data.num_retirant,
-    contact_retirant: data.contact_retirant || null,
-    agent_distributeur: data.agent_distributeur,
-    centre_retrait: data.centre_retrait || null,
-    rangement: data.rangement || null,
-    now,
-    updated_by: (currentUser as any)?.id_user || null
-  };
-  const result = db.prepare(query).run(params);
-  if (result.changes === 0) {
-    throw new Error("Carte introuvable ou déjà distribuée.");
-  }
-  return result;
+  
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    // Vérifier l'existence et l'accès à la carte
+    const carte = db.prepare('SELECT contact, sync_id, site_id, centre_id FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { contact: string | null; sync_id: string | null; site_id: number; centre_id: number | null } | undefined;
+
+    if (!carte) {
+      throw new Error("Carte introuvable, déjà distribuée, ou accès non autorisé pour votre site.");
+    }
+
+    if (currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
+      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
+    let contactToUpdate = null;
+    let contactChanged = false;
+
+    // Si le retirant est l'ASSURE, on met à jour le contact si celui fourni est différent
+    if (data.type_retirant === 'ASSURE' && data.num_retirant) {
+      if (carte.contact !== data.num_retirant) {
+        contactToUpdate = data.num_retirant;
+        contactChanged = true;
+      }
+    }
+
+    const now = new Date().toISOString();
+    
+    // Traçabilité de la modification
+    if (contactChanged) {
+      insertAuditLog(
+        currentUser?.login || 'ADMIN',
+        'UPDATE_CONTACT',
+        `[MISE A JOUR CONTACT] Retrait par l'assuré: ancien ${carte.contact || 'vide'}, nouveau ${contactToUpdate} (ID: ${id})`
+      );
+    }
+
+    const query = `
+      UPDATE t_cartes SET
+        statut = 'DELIVRE',
+        date_delivrance = @now,
+        nom_retirant = @nom_retirant,
+        num_retirant = @num_retirant,
+        contact_retirant = @contact_retirant,
+        contact = COALESCE(@contact_to_update, contact),
+        agent_distributeur = @agent_distributeur,
+        centre_retrait = @centre_retrait,
+        rangement = COALESCE(@rangement, rangement),
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `;
+    
+    const params: any = { 
+      id,
+      nom_retirant: data.nom_retirant,
+      num_retirant: data.num_retirant,
+      contact_retirant: data.contact_retirant || null,
+      contact_to_update: contactToUpdate,
+      agent_distributeur: data.agent_distributeur,
+      centre_retrait: data.centre_retrait || null,
+      rangement: data.rangement || null,
+      now,
+      updated_by: currentUser?.id_user || null
+    };
+    
+    const result = db.prepare(query).run(params);
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de la mise à jour de la carte.");
+    }
+
+    // Synchroniser vers Supabase
+    if (carte.sync_id) {
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', { sync_id: carte.sync_id });
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return result;
+  });
+
+  return runTx();
 }
 
 export function transfererCarte(

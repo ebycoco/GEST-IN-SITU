@@ -30,7 +30,7 @@ export default function DashboardView() {
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
 
-  const fetchDashboardData = async (silent?: boolean) => {
+  const fetchDashboardData = React.useCallback(async (silent?: boolean) => {
     const isSilent = !!silent;
     try {
       if (!isSilent) setLoading(true);
@@ -55,7 +55,7 @@ export default function DashboardView() {
       if (!isSilent) setLoading(false);
       useAuthStore.getState().setInitialDataLoading(false);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     const cache = useCacheStore.getState().centreDashboardCache;
@@ -71,8 +71,15 @@ export default function DashboardView() {
       fetchDashboardData();
     }
     const interval = setInterval(() => fetchDashboardData(true), 30000);
-    return () => clearInterval(interval);
-  }, [user, user?.site_id, user?.centre_id]);
+    
+    const handleDataUpdated = () => fetchDashboardData(true);
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:data-updated', handleDataUpdated);
+    };
+  }, [fetchDashboardData]);
 
   const formatLastActivity = (isoString: string | null) => {
     if (!isoString) return '—';

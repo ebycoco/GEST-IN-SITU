@@ -27,7 +27,13 @@ export default function Overview() {
     
     // Auto-refresh toutes les minutes
     const interval = setInterval(fetchStats, 60000);
-    return () => clearInterval(interval);
+    
+    window.addEventListener('app:data-updated', fetchStats);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:data-updated', fetchStats);
+    };
   }, [user]);
 
   return (

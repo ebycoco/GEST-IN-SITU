@@ -251,7 +251,12 @@ export default function CartesPage() {
     }
   }, [filters, user, activeSiteId, pageSize]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { 
+    loadData(); 
+    const handleDataUpdated = () => loadData();
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [loadData]);
 
   useEffect(() => {
     if (user?.role !== 'ADMIN_CENTRE' && user?.role !== 'OPERATEUR_SAISIE') {

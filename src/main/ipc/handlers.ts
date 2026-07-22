@@ -57,6 +57,22 @@ function verifyUserRole(userId: number | null | undefined, allowedRoles: string[
   }
 }
 
+// Variables globales pour le suivi anti-fuite (en mémoire)
+const rechercheHistoriqueConsultations: Map<string, { id_carte: number; timestamp: number }[]> = new Map();
+
+// Purge automatique de la map pour éviter la fuite mémoire (toutes les 30 min)
+setInterval(() => {
+  const limit = Date.now() - 30 * 60 * 1000;
+  for (const [key, list] of rechercheHistoriqueConsultations) {
+    const filtered = list.filter(e => e.timestamp > limit);
+    if (filtered.length === 0) {
+      rechercheHistoriqueConsultations.delete(key);
+    } else {
+      rechercheHistoriqueConsultations.set(key, filtered);
+    }
+  }
+}, 30 * 60 * 1000);
+
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // Ã‰couteur de changement d'Ã©tat rÃ©seau pour notifier le Renderer
   networkMonitor.on('change', async ({ newState }) => {
@@ -236,10 +252,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // DEBUG
   ipcMain.handle('debug:getAllAnomalies', async () => {
     try {
+      const userLogin = getCurrentUserLogin();
       const db = getDatabase();
-      if (!db) return [];
+      if (!db || !userLogin) return [];
       
-      const anomalies = db.prepare('SELECT * FROM t_import_anomalies ORDER BY id_import DESC LIMIT 1000').all();
+      const user = db.prepare('SELECT id_user, role, site_id FROM t_users WHERE login = ?').get(userLogin) as { id_user: number, role: string, site_id: number } | undefined;
+      
+      if (!user || !verifyUserRole(user.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        throw new Error("Accès refusé. Réservé aux administrateurs.");
+      }
+      
+      const siteId = user.role === 'SUPER ADMIN' ? null : user.site_id;
+      const query = siteId 
+        ? 'SELECT * FROM t_import_anomalies WHERE site_id = ? ORDER BY id DESC LIMIT 500'
+        : 'SELECT * FROM t_import_anomalies ORDER BY id DESC LIMIT 500';
+        
+      const anomalies = siteId ? db.prepare(query).all(siteId) : db.prepare(query).all();
       return anomalies;
     } catch (e) {
       log.error('IPC Error: debug:getAllAnomalies', e);
@@ -272,8 +300,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:getPage', e); throw e; }
   });
-  // Variables globales pour le suivi anti-fuite (en mémoire)
-  const rechercheHistoriqueConsultations: Map<string, { id_carte: number; timestamp: number }[]> = new Map();
+
 
   ipcMain.handle('cartes:search', async (_, query, limit, filters) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
@@ -282,7 +309,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let finalFilters = filters || {};
       if (userLogin && db) {
         const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        if (user && user.role === 'ADMINISTRATEUR_SITE') {
+        if (user && user.role !== 'SUPER ADMIN') {
           finalFilters = {
             ...finalFilters,
             site_id: String(user.site_id)
@@ -832,10 +859,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('cartes:delivrer', async (_, id, data, currentUser) => {
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = currentUser?.id_user ? currentUser : (secureSession ? {
+      id_user: secureSession.id_user || secureSession.id,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id || secureSession.siteId,
+      centre_id: secureSession.centre_id || secureSession.centreId
+    } : null);
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_RECHERCHE'])) {
+      throw new Error("Accès refusé. Privilèges insuffisants pour délivrer une carte.");
+    }
     try {
-      const res = await queries.delivrerCarte(id, data, currentUser);
+      const res = await queries.delivrerCarte(id, data, resolvedUser);
       queries.insertAuditLog(
-        currentUser?.login || 'SYSTEM',
+        resolvedUser?.login || 'SYSTEM',
         'RETRAIT',
         `Retrait de la carte ID ${id} par le retirant ${data.nom_retirant} (N° pièce: ${data.num_retirant}). Agent distributeur: ${data.agent_distributeur}. Montant: N/A (service gratuit).`
       );
@@ -888,12 +928,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:escaladerAuSite', e); throw e; }
   });
   ipcMain.handle('cartes:getAgentAbsences', async (_, agent: string, siteId?: number) => {
-    try { return queries.getAgentReportedAbsences(agent, siteId); }
+    try { return queries.getAgentAbsences(agent, siteId); }
     catch (e) { log.error('IPC Error: cartes:getAgentAbsences', e); throw e; }
   });
   ipcMain.handle('cartes:getSignalementsResolus', async (_, agent: string, siteId?: number) => {
     try { return queries.getSignalementsResolus(agent, siteId); }
     catch (e) { log.error('IPC Error: cartes:getSignalementsResolus', e); throw e; }
+  });
+  
+  ipcMain.handle('cartes:archiveSignalement', async (_, id: number, agentLogin: string) => {
+    try { return queries.archiveSignalement(id, agentLogin); }
+    catch (e) { log.error('IPC Error: cartes:archiveSignalement', e); throw e; }
+  });
+
+  ipcMain.handle('cartes:getArchivedSignalements', async (_, agentLogin: string) => {
+    try { return queries.getArchivedSignalements(agentLogin); }
+    catch (e) { log.error('IPC Error: cartes:getArchivedSignalements', e); throw e; }
   });
   ipcMain.handle('cartes:resoudreAbsence', async (_, id, data, currentUser) => {
     try {

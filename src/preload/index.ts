@@ -43,10 +43,10 @@ const api = {
   },
   // Cartes
   cartes: {
-    countDrafts: (siteId: number): Promise<number> => 
-      ipcRenderer.invoke('cartes:countDrafts', siteId),
-    publishDrafts: (siteId: number): Promise<{ publishedCount: number }> => 
-      ipcRenderer.invoke('cartes:publishDrafts', siteId),
+    countDrafts: (siteId: number, currentUser?: any): Promise<number> => 
+      ipcRenderer.invoke('cartes:countDrafts', siteId, currentUser),
+    publishDrafts: (siteId: number, currentUser?: any): Promise<{ publishedCount: number }> => 
+      ipcRenderer.invoke('cartes:publishDrafts', siteId, currentUser),
     searchAllRecords: (siteId: number, filters: any, limit: number): Promise<any[]> => 
       ipcRenderer.invoke('cartes:searchAllRecords', siteId, filters, limit),
     getRecordForCorrection: (originalId: number | string, recordType: string): Promise<any> => 
@@ -91,6 +91,10 @@ const api = {
       ipcRenderer.invoke('cartes:getAgentAbsences', agent, siteId),
     getSignalementsResolus: (agent: string, siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getSignalementsResolus', agent, siteId),
+    archiveSignalement: (id: number, agentLogin: string): Promise<boolean> =>
+      ipcRenderer.invoke('cartes:archiveSignalement', id, agentLogin),
+    getArchivedSignalements: (agentLogin: string): Promise<number[]> =>
+      ipcRenderer.invoke('cartes:getArchivedSignalements', agentLogin),
     resoudreAbsence: (
       id: number, 
       data: { status: string; agent: string; note: string; rangement: string }

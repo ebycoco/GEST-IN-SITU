@@ -50,7 +50,38 @@ export default function MesBrouillonsView() {
 
   useEffect(() => {
     fetchBrouillons();
+
+    const handleDataUpdated = () => fetchBrouillons();
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
   }, [user, activeSiteId, page]);
+
+  const handlePublishAll = async () => {
+    if (total === 0) return;
+    const isConfirmed = await confirmService.confirm({
+      title: `Valider et publier ${total} brouillon(s) ?`,
+      message: `Attention : Ces fiches vont passer au statut "En Stock". Elles seront automatiquement transmises vers le serveur Cloud (Supabase) dès que votre poste est connecté à Internet.`,
+      isDanger: false,
+      confirmText: "Oui, valider et envoyer vers le Cloud",
+      cancelText: "Conserver en brouillon"
+    });
+
+    if (isConfirmed) {
+      try {
+        setIsLoading(true);
+        const res = await window.api.cartes.publishDrafts(activeSiteId as number, user);
+        toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès !`);
+        setPage(0);
+        fetchBrouillons();
+        window.dispatchEvent(new CustomEvent('app:data-updated'));
+      } catch (err: any) {
+        console.error("Erreur de publication:", err);
+        toast.error("Erreur lors de la publication : " + err.message);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
 
   const filteredBrouillons = brouillons.filter(s => 
     s.noms.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -67,16 +98,27 @@ export default function MesBrouillonsView() {
           <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Ces cartes ne seront pas synchronisées vers Supabase tant que vous ne cliquerez pas sur "Envoyer mes brouillons".</p>
         </div>
         
-        <div style={{ position: 'relative', width: 300 }}>
-          <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-          <input 
-            type="text" 
-            placeholder="Rechercher par nom ou N° CMU..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="form-input"
-            style={{ paddingLeft: 36, width: '100%', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}
-          />
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <button 
+            onClick={handlePublishAll}
+            disabled={total === 0 || isLoading}
+            className="btn btn-primary"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', background: 'linear-gradient(135deg, #10b981, #059669)', border: 'none', borderRadius: 8, color: 'white', fontWeight: 600, cursor: total === 0 ? 'not-allowed' : 'pointer', opacity: total === 0 ? 0.5 : 1 }}
+          >
+            VALIDER TOUS LES BROUILLONS ({total})
+          </button>
+          
+          <div style={{ position: 'relative', width: 250 }}>
+            <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input 
+              type="text" 
+              placeholder="Rechercher par nom ou N° CMU..." 
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="form-input"
+              style={{ paddingLeft: 36, width: '100%', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)' }}
+            />
+          </div>
         </div>
       </div>
 

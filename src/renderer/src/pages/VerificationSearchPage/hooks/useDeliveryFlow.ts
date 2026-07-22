@@ -81,14 +81,18 @@ export function useDeliveryFlow(
 
       await window.api.cartes.delivrer(selectedCarte.id_carte, {
         nom_retirant: nomRetirant.trim().toUpperCase(),
-        num_retirant: '', // Dans VerificationSearchPage, pas de N° de Pièce demandé
+        num_retirant: telRetirant.trim(), 
         contact_retirant: telRetirant.trim(),
+        type_retirant: retirantType === 'lui-meme' ? 'ASSURE' : 'TIERS',
         agent_distributeur: agent,
         centre_retrait: centreName,
         rangement: isUnclassifiedCard(selectedCarte) ? emergencyRangement.trim().toUpperCase() : undefined
       }, {
+        id_user: user?.id_user,
+        login: user?.login,
         role: user?.role,
-        site_id: user?.site_id
+        site_id: user?.site_id,
+        centre_id: user?.centre_id
       });
 
       toast.success('Carte délivrée avec succès !');

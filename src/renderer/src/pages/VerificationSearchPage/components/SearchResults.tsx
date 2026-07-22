@@ -10,6 +10,7 @@ interface SearchResultsProps {
   setSelectedCarte: (c: any) => void;
   setShowReportModal: (b: boolean) => void;
   setModalStep: (s: number) => void;
+  setShowProofModal: (b: boolean) => void;
   isAgentAuthorisedForCard: (carte: any) => boolean;
 }
 
@@ -22,6 +23,7 @@ export function SearchResults({
   setSelectedCarte,
   setShowReportModal,
   setModalStep,
+  setShowProofModal,
   isAgentAuthorisedForCard
 }: SearchResultsProps) {
   if (!hasSearched) return null;
@@ -173,21 +175,28 @@ export function SearchResults({
                     ⏳ En cours de traitement par l'administration
                   </button>
                 ) : carte.statut === 'DELIVRE' ? (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
-                    gap: 4
-                  }}>
-                    <span style={{ fontSize: 12, fontWeight: 800, color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', padding: '6px 12px', borderRadius: 8 }}>
-                      DÉJÀ DISTRIBUÉE
-                    </span>
-                    {carte.date_delivrance && (
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600 }}>
-                        Le {new Date(carte.date_delivrance).toLocaleDateString('fr-FR')} par {carte.agent_distributeur || 'un agent'}
-                      </span>
-                    )}
-                  </div>
+                  <button
+                    onClick={() => {
+                      setSelectedCarte(carte);
+                      setShowProofModal(true);
+                    }}
+                    className="btn btn-secondary"
+                    style={{
+                      padding: '12px 20px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      borderColor: 'rgba(56, 189, 248, 0.3)',
+                      color: '#38bdf8',
+                      background: 'rgba(56, 189, 248, 0.05)'
+                    }}
+                  >
+                    <ShieldCheck size={16} />
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                      <span style={{ fontSize: 13, fontWeight: 800 }}>Déjà distribuée</span>
+                      <span style={{ fontSize: 10, fontWeight: 600, opacity: 0.8 }}>Voir la preuve de retrait</span>
+                    </div>
+                  </button>
                 ) : (
                   <button
                     onClick={() => {

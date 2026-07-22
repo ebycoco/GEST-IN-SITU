@@ -169,6 +169,11 @@ export default function AgentsPage() {
       hasCache = true;
     }
     loadData(hasCache);
+
+    const handleDataUpdated = () => loadData(true);
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
   }, [loadData]);
 
   // OPTIM-3 : Chargement des centres séparé — ne se déclenche que si le site change

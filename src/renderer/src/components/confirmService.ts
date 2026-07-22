@@ -7,6 +7,8 @@ interface ConfirmOptions {
   requirePassword?: boolean;
   actionName?: string;
   isAlert?: boolean;
+  confirmText?: string;
+  cancelText?: string;
 }
 
 let activeConfirmResolver: ConfirmResolver | null = null;
