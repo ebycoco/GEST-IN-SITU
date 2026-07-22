@@ -1,40 +1,28 @@
-## GEST-IN-SITU v2.6.0 — Notes de Version
+# GEST-IN-SITU v2.7.0 — Notes de Release
 
-**Date de publication :** 20 Juillet 2026  
-**Type de release :** Mineure (MINOR)  
-**Validé par :** Agent 12 (Validateur QA) ✅
-
----
-
-### ✨ Nouvelles Fonctionnalités
-
-- **Splash Screen de démarrage :** Une fenêtre légère et élégante s'affiche instantanément au lancement de l'application, éliminant définitivement les écrans noirs d'attente lors du démarrage et des mises à jour.
-- **Système de chargement global sécurisé :** Overlay animé (spinner "Plein Soleil") avec verrouillage temporaire de la navigation pendant les chargements initiaux pour éviter toute race condition et navigation anarchique.
-- **Skeleton Loading (Opérateur & Admin Site) :** Les tableaux de bord affichent des indicateurs de chargement animés (cartes skeleton) plutôt que des zéros trompeurs pendant la récupération des statistiques.
+**Date de publication :** 22 juillet 2026
+**Validée par :** Agent 12 (Deploy Validator) ✅
+**Documentée par :** Agent 11 (Release Manager) ✅
 
 ---
 
-### ⚡ Optimisations de Performance
+## 🚀 Nouvelles Fonctionnalités
 
-- **Stratégie Cache-First (RAM Shield) :** Navigation instantanée sur toutes les pages déjà visitées — les données en cache (`useCacheStore`) sont servies immédiatement sans solliciter SQLite, avec libération immédiate du verrou de la Sidebar.
-- **Chargements SQLite exclusivement au premier accès :** Les modules Qualité, Retraits, Importation, Sites et tous les dashboards ne rechargent la base de données que lors d'un vrai premier chargement ou d'un rafraîchissement explicite.
+- **Module Table Cartes :** Implémentation complète d'une vue tabulaire avancée des cartes CMU avec gestion des statuts de synchronisation, verrouillage global anti-spam et filtres multicritères.
+- **DeliveryProofModal :** Création d'une modale dédiée (`DeliveryProofModal`) en lecture seule affichant l'historique et la preuve de retrait sécurisée dès lors qu'une carte possède le statut `DELIVRE`.
+- **Routage Intelligent (Délivrance) :** Bypass automatique de l'étape de vérification physique lors d'une recherche de carte déjà délivrée — ouverture instantanée de la preuve de retrait.
 
----
+## 🛠️ Corrections & Sécurité
 
-### 🐛 Correctifs
+- **Droits et Permissions :** Résolution d'un blocage critique (« Accès refusé ») qui empêchait les agents habilités de délivrer les cartes.
+- **Canaux IPC :** Déclaration des handlers manquants (`debug:getAllAnomalies`) pour prévenir les erreurs de communication asynchrone entre le processus Renderer et le Main Process.
+- **Isolation Multi-Sites :** Renforcement du cloisonnement des données par `site_id` sur le module de délivrance pour prévenir toute fuite inter-sites.
 
-- **Auto-healing SQLite :** Détection et correction automatique des colonnes manquantes au démarrage (`lieu`, `prefixe_rangement` dans `t_centres`).
-- **Synchronisation Supabase :** Le champ `lieu` des centres est maintenant correctement inclus lors des upserts vers Supabase.
-- **Z-Index des modales :** Les fenêtres modales s'affichent correctement au-dessus de tous les overlays (`z-index: 110000`).
-- **Isolation multi-sites :** Les données d'import et de correction qualité sont strictement filtrées par `site_id`.
+## ⚡ Performances & Optimisations
 
----
-
-### 📦 Installation / Mise à jour
-
-- **Nouvelle installation :** Télécharger `GEST-IN-SITU-Setup-v2.6.0.exe` et exécuter l'installateur.
-- **Mise à jour automatique :** L'application se met à jour silencieusement en arrière-plan via `electron-updater`. Un Splash Screen de mise à jour s'affiche pendant l'application des fichiers, puis l'application redémarre automatiquement.
+- **Responsive Design (Admin) :** Refonte visuelle de la page « File d'attente de traitement » (`AdminQueuePage`) via une structure Flexbox ultra-fluide (`flexWrap`, `flex-basis`), garantissant un affichage optimal sur toutes tailles d'écran.
+- **Synchronisation Cloud :** Améliorations ciblées de la logique `Delta Sync` et du bouton de synchronisation pour réduire la charge réseau et prévenir les crashs du moteur de synchronisation.
 
 ---
 
-> _GEST-IN-SITU — Application de gestion logistique des cartes CMU — © Ebychoco 2026_
+*GEST-IN-SITU — Application desktop offline-first de gestion des cartes CMU — Centre Abobo*
