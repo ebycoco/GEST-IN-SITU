@@ -6,16 +6,17 @@ et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0
 
 ## [2.6.1] - 2026-07-22
 
-### Ajouté
-- **UI/UX (Modales) :** Création de `DeliveryProofModal` en lecture seule permettant de visualiser la preuve détaillée du retrait (date, heure, agent, lieu) pour les cartes au statut `DELIVRE`.
-- **Module Cartes :** Implémentation du module de visualisation globale "Table Cartes" pour les administrateurs avec gestion avancée des statuts de synchronisation.
+### 🚀 Nouveautés & Ergonomie
+- **Interface Utilisateur :** Création d'une modale dédiée (`DeliveryProofModal`) en lecture seule pour afficher l'historique et la preuve de retrait de façon claire lorsqu'une carte a déjà le statut `DELIVRE`.
 
-### Optimisé
-- **UI/UX (File d'attente) :** Refonte dynamique de la page Administrateur "File d'attente de Traitement" via Flexbox pour une parfaite adaptabilité (responsiveness) sur toutes les tailles d'écran.
-- **Sécurité (Anti-spam) :** Verrouillage global des actions répétitives pour limiter la charge sur la base de données.
+### 🛠️ Corrections & Sécurité
+- **Droits et Permissions :** Résolution d'un blocage critique ("Accès refusé") qui empêchait les agents ayant le rôle adéquat de délivrer les cartes.
+- **Routage Intelligent :** Lors de la recherche d'une carte déjà délivrée, l'application bypasse automatiquement l'étape obsolète de vérification physique pour ouvrir instantanément la preuve de retrait.
+- **Canaux IPC :** Déclaration des handlers manquants (`debug:getAllAnomalies`) pour prévenir les erreurs de communication asynchrone entre l'interface et le processus principal.
 
-### Corrigé
-- **Routage de Recherche :** Lors d'une recherche aboutissant sur une carte déjà délivrée, l'application bypasse automatiquement la vérification physique inutile pour ouvrir directement la Preuve de Retrait.
+### ⚡ Performances & Optimisations
+- **Responsive Design (Admin) :** Refonte visuelle de la page "File d'attente de traitement" (`AdminQueuePage`) via une structure Flexbox ultra-fluide (`flexWrap`, `flex-basis`), garantissant un affichage optimal et réactif sur toutes les tailles d'écrans.
+- **Synchronisation Cloud :** Améliorations ciblées de la logique `Delta Sync` et du bouton de synchronisation pour réduire la charge réseau et prévenir les crashs du moteur de synchronisation.
 
 ## [2.6.0] - 2026-07-20
 
