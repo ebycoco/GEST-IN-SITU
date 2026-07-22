@@ -4,6 +4,19 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-07-22
+
+### Ajouté
+- **UI/UX (Modales) :** Création de `DeliveryProofModal` en lecture seule permettant de visualiser la preuve détaillée du retrait (date, heure, agent, lieu) pour les cartes au statut `DELIVRE`.
+- **Module Cartes :** Implémentation du module de visualisation globale "Table Cartes" pour les administrateurs avec gestion avancée des statuts de synchronisation.
+
+### Optimisé
+- **UI/UX (File d'attente) :** Refonte dynamique de la page Administrateur "File d'attente de Traitement" via Flexbox pour une parfaite adaptabilité (responsiveness) sur toutes les tailles d'écran.
+- **Sécurité (Anti-spam) :** Verrouillage global des actions répétitives pour limiter la charge sur la base de données.
+
+### Corrigé
+- **Routage de Recherche :** Lors d'une recherche aboutissant sur une carte déjà délivrée, l'application bypasse automatiquement la vérification physique inutile pour ouvrir directement la Preuve de Retrait.
+
 ## [2.6.0] - 2026-07-20
 
 ### Ajouté
