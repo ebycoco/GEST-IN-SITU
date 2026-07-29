@@ -8,6 +8,10 @@ const readline = require('readline');
 async function run() {
   const startTime = Date.now();
   var totalRejected = 0;
+  // Sous-ensemble de totalRejected : lignes réellement absentes de t_import_temp (dates
+  // invalides), par opposition aux anomalies STATUT_INCONNU qui restent importées malgré
+  // l'anomalie tracée. Sert à ne pas gonfler artificiellement le compteur "duplicates".
+  var totalExcludedFromBatch = 0;
   const { dbPath, filePath, agent, totalEstimate, siteId, routingTable } = workerData;
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -662,6 +666,7 @@ async function run() {
         if (dateError) {
           console.log(`[IMPORT DIAGNOSTIC] ❌ Ligne rejetée (Date Invalide) - Nom: ${noms} ${prenoms} | Erreur: ${dateError}`);
           totalRejected++;
+          totalExcludedFromBatch++;
           anomaliesBatch.push({
             carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn),
             type_anomalie: 'DATE_INVALIDE',
@@ -804,7 +809,16 @@ async function run() {
     '@now, @now, 1 ' +
     'FROM t_import_temp ' +
     'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
-    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id)'
+    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id) ' +
+    // Garde anti-doublon intra-chunk : si plusieurs lignes du CSV partagent la même
+    // cle_doublon dans CE chunk, seule la première (MIN id_tmp) est retenue. Sans ce filtre,
+    // NOT EXISTS ci-dessus ne voit pas les lignes du même INSERT...SELECT en cours d'exécution
+    // et laisserait passer chaque doublon comme une fiche distincte dans t_cartes.
+    'AND t_import_temp.id_tmp = (' +
+    '  SELECT MIN(t2.id_tmp) FROM t_import_temp t2 ' +
+    '  WHERE t2.cle_doublon = t_import_temp.cle_doublon AND t2.site_id = t_import_temp.site_id ' +
+    '  AND t2.id_tmp BETWEEN @startId AND @endId' +
+    ')'
   );
 
   if (maxId >= minId && minId > 0) {
@@ -827,6 +841,31 @@ async function run() {
       const chunkProgress = 82 + Math.round((chunkIndex / totalChunks) * 16);
       parentPort.postMessage({ type: 'progress', value: chunkProgress });
     }
+  }
+
+  // MISSION 4 — DétecterDoublonsProbables : la table temp est encore présente à ce stade
+  // (purgée juste après), donc c'est le dernier moment pour l'interroger. On compte les
+  // lignes qui ont fini par créer une NOUVELLE fiche (aucune correspondance exacte via
+  // cle_doublon) mais qui partagent une identité approximative (cle_doublon_flex, sans le
+  // lieu de naissance) avec une fiche déjà existante — signe d'un doublon probable (variante
+  // d'orthographe/lieu) que la clé stricte ne peut pas détecter. Purement en lecture, aucun
+  // impact sur la logique d'insertion/fusion ci-dessus.
+  let probableDuplicatesCount = 0;
+  try {
+    const probableRow = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM t_import_temp t
+      WHERE NOT EXISTS (
+        SELECT 1 FROM t_cartes c WHERE c.cle_doublon = t.cle_doublon AND c.site_id = t.site_id
+      )
+      AND EXISTS (
+        SELECT 1 FROM t_cartes c2
+        WHERE c2.cle_doublon_flex = t.cle_doublon_flex AND c2.site_id = t.site_id AND c2.cle_doublon != t.cle_doublon
+      )
+    `).get();
+    probableDuplicatesCount = (probableRow && probableRow.count) || 0;
+  } catch (err) {
+    console.error('[CSV WORKER] Échec du comptage des doublons probables:', err);
   }
 
   parentPort.postMessage({ type: 'progress', value: 98 });
@@ -859,8 +898,12 @@ async function run() {
       updated: totalUpdated, 
       inserted: totalInserted,
       rejected: totalRejected,
-      duplicates: Math.max(0, processedRows - totalInserted - totalUpdated),
-      probableDuplicates: 0,
+      // totalExcludedFromBatch (dates invalides) est soustrait car ces lignes ne rentrent jamais
+      // dans t_import_temp et ne peuvent donc jamais contribuer à totalInserted/totalUpdated ;
+      // sans cette soustraction elles gonflaient artificiellement "duplicates". Les anomalies
+      // STATUT_INCONNU restent importées malgré l'anomalie tracée, donc déjà comptées plus haut.
+      duplicates: Math.max(0, processedRows - totalInserted - totalUpdated - totalExcludedFromBatch),
+      probableDuplicates: probableDuplicatesCount,
       duration: durationSeconds,
       totalProcessed: processedRows
     }

@@ -28,16 +28,12 @@ export default function ImportPage() {
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number } | null>(null);
   
-  const [showPurgeModal, setShowPurgeModal] = useState(false);
   const [showFixCentreModal, setShowFixCentreModal] = useState(false);
   const [showConfirmSetupModal, setShowConfirmSetupModal] = useState(false);
   const [existingCentres, setExistingCentres] = useState<any[]>([]);
-  const [purgeConfirmText, setPurgeConfirmText] = useState('');
   const [isPurging, setIsPurging] = useState(false);
   const [isEmergencyPurging, setIsEmergencyPurging] = useState(false);
   const [purgeProgress, setPurgeProgress] = useState(0);
-  const [showEmergencyPurgeModal, setShowEmergencyPurgeModal] = useState(false);
-  const [emergencyPurgeConfirmText, setEmergencyPurgeConfirmText] = useState('');
   const [cardCount, setCardCount] = useState<number>(0);
 
   const fetchCardCount = async (silent = false) => {
@@ -224,8 +220,6 @@ export default function ImportPage() {
       const res = await window.api.db.purge(Number(siteIdToUse), user);
       if (res.success) {
         toast.success("Base de données locale purgée avec succès !");
-        setPurgeConfirmText('');
-        setShowPurgeModal(false);
         setCardCount(0);
       }
     } catch (e) {
@@ -234,15 +228,6 @@ export default function ImportPage() {
       removePurgeListener();
       setIsPurging(false);
     }
-  };
-
-  // Appelée depuis le modal interne avec saisie manuelle du texte
-  const handlePurge = async () => {
-    if (purgeConfirmText !== 'CONFIRMER') {
-      toast.error('Veuillez saisir "CONFIRMER" pour valider');
-      return;
-    }
-    await executePurge();
   };
 
   // ─── Logique interne de réparation (sans vérification de texte) ─────────────
@@ -286,23 +271,12 @@ export default function ImportPage() {
       setProgress(0);
       setResult(null);
       setCardCount(0);
-      setShowEmergencyPurgeModal(false);
-      setEmergencyPurgeConfirmText('');
     } catch (err: any) {
       toast.error("Échec de la purge forcée : " + err.message);
     } finally {
       removePurgeListener();
       setIsEmergencyPurging(false);
     }
-  };
-
-  // Appelée depuis le modal interne avec saisie manuelle du texte
-  const handleEmergencyPurge = async () => {
-    if (emergencyPurgeConfirmText !== 'RÉPARER') {
-      toast.error("Veuillez saisir RÉPARER pour confirmer.");
-      return;
-    }
-    await executeEmergencyPurge();
   };
 
   const currentStep = result ? 3 : (importing ? 2 : 1);
@@ -773,161 +747,6 @@ export default function ImportPage() {
         </button>
         )}
       </div>
-
-      {/* Purge Modal */}
-      {showPurgeModal && (
-        <div className="modal-overlay animate-fade-in" style={{ 
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(12px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 24
-        }}>
-          <div className="premium-glass animate-slide-up" style={{ 
-            width: '100%', maxWidth: 500, padding: 48, borderRadius: 40, 
-            border: '1px solid rgba(231, 76, 60, 0.3)', background: 'rgba(20, 10, 10, 0.95)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
-              <div style={{ 
-                width: 96, height: 96, borderRadius: 32, background: 'rgba(231, 76, 60, 0.1)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-red)'
-              }}>
-                <ShieldAlert size={56} />
-              </div>
-            </div>
-            <h3 style={{ textAlign: 'center', marginBottom: 16, fontSize: 28, color: 'white', fontWeight: 950, letterSpacing: '-0.5px' }}>DANGER</h3>
-            <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.5)', fontSize: 16, lineHeight: 1.6, marginBottom: 40, fontWeight: 500 }}>
-              Êtes-vous sûr de vouloir vider les cartes locales de ce site ? Vos comptes utilisateurs et les données distantes sur Supabase ne seront pas affectés.
-            </p>
-            
-            <div style={{ marginBottom: 40 }}>
-              <label style={{ display: 'block', fontSize: 12, fontWeight: 900, color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', marginBottom: 12, textAlign: 'center', letterSpacing: 1 }}>
-                Saisissez <span style={{ color: 'white' }}>CONFIRMER</span>
-              </label>
-              <input 
-                className="form-input" 
-                type="text" 
-                placeholder="---"
-                value={purgeConfirmText}
-                onChange={e => setPurgeConfirmText(e.target.value.toUpperCase())}
-                style={{ 
-                  textAlign: 'center', fontSize: 20, fontWeight: 950, letterSpacing: 6, 
-                  background: 'rgba(0,0,0,0.4)', border: '1px solid rgba(255,255,255,0.05)',
-                  borderRadius: 20, height: 64
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: 16 }}>
-              <button 
-                className="btn btn-outline" 
-                disabled={isPurging}
-                style={{ flex: 1, borderRadius: 20, padding: '18px', cursor: isPurging ? 'not-allowed' : 'pointer' }} 
-                onClick={() => { if (!isPurging) { setShowPurgeModal(false); setPurgeConfirmText(''); } }}
-              >
-                Annuler
-              </button>
-              <button 
-                className="btn" 
-                disabled={purgeConfirmText !== 'CONFIRMER' || isPurging}
-                style={{ 
-                  flex: 1, 
-                  borderRadius: 20, 
-                  background: (purgeConfirmText === 'CONFIRMER' && !isPurging) ? 'var(--accent-red)' : 'rgba(255,255,255,0.05)', 
-                  color: 'white', 
-                  fontWeight: 900, 
-                  border: 'none',
-                  cursor: (purgeConfirmText !== 'CONFIRMER' || isPurging) ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8
-                }}
-                onClick={handlePurge}
-              >
-                {isPurging && <Loader className="animate-spin" size={16} />}
-                {isPurging ? `Purge: ${purgeProgress}%` : 'Purger'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Emergency Purge Modal */}
-      {showEmergencyPurgeModal && (
-        <div className="modal-overlay animate-fade-in" style={{ 
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(16px)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 24
-        }}>
-          <div className="premium-glass animate-slide-up" style={{ 
-            width: '100%', maxWidth: 500, padding: 48, borderRadius: 40, 
-            border: '1px solid rgba(239, 68, 68, 0.4)', background: 'rgba(15, 5, 5, 0.98)',
-            boxShadow: '0 24px 50px rgba(239, 68, 68, 0.15)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 32 }}>
-              <div style={{ 
-                width: 96, height: 96, borderRadius: 32, background: 'rgba(239, 68, 68, 0.1)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ef4444'
-              }}>
-                <ShieldAlert size={56} />
-              </div>
-            </div>
-            <h3 style={{ textAlign: 'center', marginBottom: 16, fontSize: 24, color: 'white', fontWeight: 950, letterSpacing: '-0.5px' }}>
-              Réparer & Forcer la Synchronisation Locale
-            </h3>
-            <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.6)', fontSize: 14, lineHeight: 1.6, marginBottom: 32, fontWeight: 500 }}>
-              Cette action répare la structure locale des cartes de ce PC en réinitialisant l'index FTS5 et en vidant la file d'attente de synchronisation locale pour ce site. Vos comptes utilisateurs et les données cloud de Supabase restent en parfaite sécurité.
-            </p>
-            
-            <div style={{ marginBottom: 32 }}>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 900, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', marginBottom: 12, textAlign: 'center', letterSpacing: 1 }}>
-                Saisissez <span style={{ color: '#ef4444' }}>RÉPARER</span>
-              </label>
-              <input 
-                className="form-input" 
-                type="text" 
-                placeholder="---"
-                value={emergencyPurgeConfirmText}
-                onChange={e => setEmergencyPurgeConfirmText(e.target.value.toUpperCase())}
-                style={{ 
-                  textAlign: 'center', fontSize: 20, fontWeight: 950, letterSpacing: 6, 
-                  background: 'rgba(0,0,0,0.5)', border: '1px solid rgba(239, 68, 68, 0.2)',
-                  borderRadius: 20, height: 64, color: 'white', width: '100%', outline: 'none'
-                }}
-              />
-            </div>
-
-            <div style={{ display: 'flex', gap: 16 }}>
-              <button 
-                className="btn btn-outline" 
-                disabled={isEmergencyPurging}
-                style={{ flex: 1, borderRadius: 20, padding: '18px', cursor: isEmergencyPurging ? 'not-allowed' : 'pointer' }} 
-                onClick={() => { if (!isEmergencyPurging) { setShowEmergencyPurgeModal(false); setEmergencyPurgeConfirmText(''); } }}
-              >
-                Annuler
-              </button>
-              <button 
-                className="btn" 
-                disabled={emergencyPurgeConfirmText !== 'RÉPARER' || isEmergencyPurging}
-                style={{ 
-                  flex: 1, 
-                  borderRadius: 20, 
-                  background: (emergencyPurgeConfirmText === 'RÉPARER' && !isEmergencyPurging) ? '#ef4444' : 'rgba(255,255,255,0.05)', 
-                  color: 'white', 
-                  fontWeight: 900, 
-                  border: 'none',
-                  cursor: (emergencyPurgeConfirmText !== 'RÉPARER' || isEmergencyPurging) ? 'not-allowed' : 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8
-                }}
-                onClick={handleEmergencyPurge}
-              >
-                {isEmergencyPurging && <Loader className="animate-spin" size={16} />}
-                {isEmergencyPurging ? 'Réparation...' : 'Confirmer'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* MODAL ACTION REQUISE : PERSONNALISER LE CENTRE */}
       {showFixCentreModal && (
