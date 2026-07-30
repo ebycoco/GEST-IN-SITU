@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, AlertTriangle, Fingerprint, Calendar, Activity } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
+import { useQualityUIStore } from '../../../stores/qualityUIStore';
 
 interface QualityStats {
   doublons: number;
@@ -11,6 +12,8 @@ interface QualityStats {
   sansRangement: number;
   sansNom: number;
   sansPrenom: number;
+  datesVides: number;
+  autresAnomalies: number;
 }
 
 function QualityCounter({
@@ -70,41 +73,38 @@ export default function Overview() {
   const navigate = useNavigate();
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
+  const { refreshTrigger, setIsFetchingQuery } = useQualityUIStore();
 
   const [stats, setStats] = useState<QualityStats>({
     doublons: 0, doublonsProbables: 0, datesInvalides: 0,
-    sansSecu: 0, sansRangement: 0, sansNom: 0, sansPrenom: 0
+    sansSecu: 0, sansRangement: 0, sansNom: 0, sansPrenom: 0,
+    datesVides: 0, autresAnomalies: 0
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
+    setIsFetchingQuery(true);
     try {
-      const [rawDates, rawDoublons, rawDoublonsProbables, rawSansSecu, rawSansRang, rawSansNom, rawSansPrenom] = await Promise.all([
-        window.api.import.getAnomalies(siteIdToUse, 0, 1),
-        window.api.cartes.getDoublonsPage(siteIdToUse, 0, 1, ''),
-        window.api.cartes.getDoublonsProbablesPage(siteIdToUse, 0, 1, ''),
-        window.api.cartes.getSansNumSecuPage(siteIdToUse, 0, 1, ''),
-        window.api.cartes.getSansRangementPage(siteIdToUse, 0, 1, ''),
-        window.api.cartes.getSansNomPage(siteIdToUse, 0, 1, ''),
-        window.api.cartes.getSansPrenomPage(siteIdToUse, 0, 1, '')
-      ]);
-
+      const rawStats = await window.api.stats.get(siteIdToUse);
       setStats({
-        datesInvalides: rawDates?.total ?? 0,
-        doublons: rawDoublons.total,
-        doublonsProbables: rawDoublonsProbables.total,
-        sansSecu: rawSansSecu.total,
-        sansRangement: rawSansRang.total,
-        sansNom: rawSansNom.total,
-        sansPrenom: rawSansPrenom.total
+        datesInvalides: rawStats.dates_invalides || 0,
+        doublons: rawStats.doublons_stricts || 0,
+        doublonsProbables: rawStats.doublons_probables || 0,
+        sansSecu: rawStats.sans_num_secu || 0,
+        sansRangement: rawStats.sans_rangement || 0,
+        sansNom: rawStats.sans_nom || 0,
+        sansPrenom: rawStats.sans_prenom || 0,
+        datesVides: rawStats.dates_naissance_vide || 0,
+        autresAnomalies: rawStats.autres_anomalies || 0
       });
     } catch (error) {
       console.error('Erreur lors du chargement des statistiques de qualité:', error);
     } finally {
       setStatsLoading(false);
+      setIsFetchingQuery(false);
     }
-  }, [siteIdToUse]);
+  }, [siteIdToUse, refreshTrigger, setIsFetchingQuery]);
 
   useEffect(() => {
     loadStats();
@@ -165,12 +165,28 @@ export default function Overview() {
           onClick={() => navigate('/agent-qualite/manquants')}
         />
         <QualityCounter
-          label="Dates Invalides"
+          label="Dates Invalides ou Absentes"
           value={stats.datesInvalides}
           icon={Calendar}
           accent="#ff6348"
           sublabel="Format 1900-01-01 à corriger"
           onClick={() => navigate('/agent-qualite/invalides')}
+        />
+        <QualityCounter
+          label="Date de Naissance Vide"
+          value={stats.datesVides || 0}
+          icon={Calendar}
+          accent="#f43f5e"
+          sublabel="Champs date de naissance non renseignés"
+          onClick={() => navigate('/agent-qualite/manquants')}
+        />
+        <QualityCounter
+          label="Autres Anomalies"
+          value={stats.autresAnomalies || 0}
+          icon={AlertTriangle}
+          accent="#6366f1"
+          sublabel="Anomalies résiduelles à corriger"
+          onClick={() => navigate('/agent-qualite/anomalies-brutes')}
         />
       </div>
     </div>

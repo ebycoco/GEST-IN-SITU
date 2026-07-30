@@ -39,6 +39,12 @@ parentPort.on('message', (msg) => {
           IFNULL(SUM(CASE WHEN rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE' THEN 1 ELSE 0 END), 0) as sans_rangement,
           IFNULL(SUM(CASE WHEN noms IS NULL OR noms = '' THEN 1 ELSE 0 END), 0) as sans_nom,
           IFNULL(SUM(CASE WHEN prenoms IS NULL OR prenoms = '' THEN 1 ELSE 0 END), 0) as sans_prenom,
+          IFNULL(SUM(CASE WHEN
+            (noms IS NULL OR noms = '') AND
+            (prenoms IS NULL OR prenoms = '') AND
+            (num_secu IS NULL OR num_secu = '' OR num_secu LIKE '-%') AND
+            (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+          THEN 1 ELSE 0 END), 0) as cartes_fantomes,
           0 as dates_invalides
         FROM t_cartes
         ${whereClause}
@@ -47,16 +53,55 @@ parentPort.on('message', (msg) => {
 
       let anomaliesCount = 0;
       const tableCheck = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='t_import_anomalies'").get();
-      if (tableCheck) {
-        const row = db.prepare('SELECT COUNT(*) as count FROM t_import_anomalies').get();
-        anomaliesCount = row ? row.count : 0;
-      }
-      stats.dates_invalides = anomaliesCount;
-      stats.total = (stats.total || 0) + anomaliesCount;
-      const t2 = performance.now();
-
+      
       const andSite = siteId ? `AND site_id = @siteId` : '';
       const andCentre = centreId ? `AND centre_id = @centreId` : '';
+
+      let datesNaissanceVideCount = 0;
+      let autresAnomaliesCount = 0;
+
+      if (tableCheck) {
+        // dates_invalides (format de date invalide dans t_cartes ou DATE_INVALIDE dans t_import_anomalies)
+        const rowInvalid = db.prepare(`
+          SELECT COUNT(*) as count FROM (
+            SELECT id_carte FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND TRIM(date_de_naissance) != '' AND LENGTH(TRIM(date_de_naissance)) < 10) ${andSite} ${andCentre}
+            UNION ALL
+            SELECT id FROM t_import_anomalies WHERE type_anomalie = 'DATE_INVALIDE' ${andSite} ${andCentre}
+          )
+        `).get(params);
+        anomaliesCount = rowInvalid ? rowInvalid.count : 0;
+
+        // dates_naissance_vide (date vide dans t_cartes)
+        const rowVides = db.prepare(`
+          SELECT COUNT(*) as count FROM t_cartes WHERE (date_de_naissance IS NULL OR TRIM(date_de_naissance) = '') ${andSite} ${andCentre}
+        `).get(params);
+        datesNaissanceVideCount = rowVides ? rowVides.count : 0;
+
+        // autres_anomalies (tout ce qui n'est pas DATE_INVALIDE dans t_import_anomalies)
+        const rowAutres = db.prepare(`
+          SELECT COUNT(*) as count FROM t_import_anomalies WHERE type_anomalie != 'DATE_INVALIDE' ${andSite} ${andCentre}
+        `).get(params);
+        autresAnomaliesCount = rowAutres ? rowAutres.count : 0;
+      } else {
+        // Fallback s'il n'y a pas de table d'anomalies
+        const rowInvalid = db.prepare(`
+          SELECT COUNT(*) as count FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND TRIM(date_de_naissance) != '' AND LENGTH(TRIM(date_de_naissance)) < 10) ${andSite} ${andCentre}
+        `).get(params);
+        anomaliesCount = rowInvalid ? rowInvalid.count : 0;
+
+        const rowVides = db.prepare(`
+          SELECT COUNT(*) as count FROM t_cartes WHERE (date_de_naissance IS NULL OR TRIM(date_de_naissance) = '') ${andSite} ${andCentre}
+        `).get(params);
+        datesNaissanceVideCount = rowVides ? rowVides.count : 0;
+      }
+
+      stats.dates_invalides = anomaliesCount;
+      stats.dates_naissance_vide = datesNaissanceVideCount;
+      stats.autres_anomalies = autresAnomaliesCount;
+      // stats.total reste un COUNT(*) pur sur t_cartes : le nombre réel de cartes sur ce
+      // poste, sans y ajouter les anomalies encore en attente de correction (t_import_anomalies).
+      const t2 = performance.now();
+
       const andSiteT = siteId ? `AND t.site_id = @siteId` : '';
       const andCentreT = centreId ? `AND t.centre_id = @centreId` : '';
 
@@ -233,7 +278,23 @@ parentPort.on('message', (msg) => {
         )
       `;
 
-      // ── 2. invalidCount : date présente mais format invalide → BLOQUÉ (Étape 3) ─────────────
+      // ── 1bis. ghostCount : cartes dirty totalement vides (noms+prénoms+num_secu+rangement) ──
+      // Exclues de dirty_base (BASE_CTE) donc invisibles de tous les autres compteurs ci-dessous ;
+      // jamais envoyables au cloud même en Étape 2 (upload-worker.js les exclut sans condition) →
+      // Étape 3 dédiée, avant le blocage définitif des dates invalides (Étape 4).
+      const ghostCountRow = db.prepare(`
+        SELECT COUNT(*) as count FROM t_cartes
+        WHERE site_id = ?
+          AND is_dirty = 1
+          AND statut != 'BROUILLON'
+          AND (noms IS NULL OR noms = '')
+          AND (prenoms IS NULL OR prenoms = '')
+          AND (num_secu IS NULL OR num_secu = '')
+          AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+      `).get(siteId);
+      const ghostCount = ghostCountRow ? ghostCountRow.count : 0;
+
+      // ── 2. invalidCount : date présente mais format invalide → BLOQUÉ (Étape 4) ─────────────
       const invalidDateCountRow = db.prepare(`${BASE_CTE}
         SELECT COUNT(*) as count FROM dirty_base
         WHERE date_de_naissance IS NOT NULL
@@ -328,7 +389,7 @@ parentPort.on('message', (msg) => {
       const t1 = performance.now();
       parentPort.postMessage({
         type: 'log',
-        message: `[WORKER PERF] getDetailedSyncStats (SQL agrégé) siteId=${siteId} → ${(t1-t0).toFixed(2)}ms | clean=${cleanCount} modified=${modifiedCount} missing=${missingCount} strict=${strictCount} probable=${probableCount} invalid=${invalidCount} deleted=${deletedCount}`
+        message: `[WORKER PERF] getDetailedSyncStats (SQL agrégé) siteId=${siteId} → ${(t1-t0).toFixed(2)}ms | clean=${cleanCount} modified=${modifiedCount} missing=${missingCount} strict=${strictCount} probable=${probableCount} invalid=${invalidCount} ghost=${ghostCount} deleted=${deletedCount}`
       });
 
       parentPort.postMessage({
@@ -340,7 +401,8 @@ parentPort.on('message', (msg) => {
           strictCount,
           probableCount,
           invalidCount,
-          modifiedCount
+          modifiedCount,
+          ghostCount
         }
       });
     }

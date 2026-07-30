@@ -23,7 +23,13 @@ import {
   FileText,
   Search,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  CloudUpload,
+  CloudDownload,
+  DatabaseZap,
+  Server,
+  Network,
+  Loader
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 
@@ -50,11 +56,11 @@ interface SiteAdminViewProps {
   loading?: boolean;
   handleForceSiteSync: () => Promise<void>;
   handleForceAgentsSync: () => Promise<void>;
-  handlePullSiteCards?: () => Promise<void>;
-  handleStartBulkUpload?: (forceProbable?: boolean, forceInvalid?: boolean, forceMissing?: boolean, onlyModified?: boolean) => Promise<any>;
+  handlePullSiteCards: () => Promise<void>;
+  handleStartBulkUpload: (forceProbable?: boolean, forceInvalid?: boolean, forceMissing?: boolean, onlyModified?: boolean) => Promise<any>;
   isClearingCloud?: boolean;
   purgeCloudProgress?: number;
-  handleClearCloudDatabase?: () => Promise<void>;
+  handleClearCloudDatabase: () => Promise<void>;
   isBackgroundPulling?: boolean;
   downstreamInfo?: { progress: number; merged: number; total: number } | null;
 }
@@ -82,10 +88,10 @@ export function SiteAdminView({
   purgeCloudProgress = -1,
   handleForceSiteSync,
   handleForceAgentsSync,
-  handlePullSiteCards = async () => {},
-  handleStartBulkUpload = async () => ({ success: false, message: "" }),
+  handlePullSiteCards,
+  handleStartBulkUpload,
   isClearingCloud = false,
-  handleClearCloudDatabase = async () => {},
+  handleClearCloudDatabase,
   isBackgroundPulling = false,
   downstreamInfo = null,
   loading: isStatsLoading = false,
@@ -110,7 +116,7 @@ export function SiteAdminView({
       window.api.hierarchy.getCentres(siteIdToUse).then(setCentres).catch(console.error);
       window.api.users.getAll(siteIdToUse).then(setSiteAgents).catch(console.error);
     }
-  }, [activeSiteId, user]);
+  }, [activeSiteId, user?.role, user?.site_id]);
 
   // Déclencheur de chargement réactif des statistiques avec filtres
   React.useEffect(() => {
@@ -126,7 +132,7 @@ export function SiteAdminView({
         loadStats(true, { centreId, agentId, dateStr }).catch(console.error);
       }
     }
-  }, [activeTab, selectedCentreId, selectedAgentId, selectedDate, activeSiteId, user, loadStats]);
+  }, [activeTab, selectedCentreId, selectedAgentId, selectedDate, activeSiteId, user?.role, user?.site_id, user?.centre_id, loadStats]);
 
   // Filtrer les agents affichés dans le sélecteur d'agent en fonction du centre sélectionné
   const filteredAgentsForSelect = React.useMemo(() => {
@@ -376,8 +382,6 @@ export function SiteAdminView({
           if (!isCorrect) {
             toast.error("❌ Mot de passe administrateur incorrect. Action annulée.");
             setLoading(false);
-            setConfirmModal(null);
-            setConfirmInputVal('');
             return;
           }
 
@@ -434,7 +438,6 @@ export function SiteAdminView({
 
   const s = stats || { total: 0, en_stock: 0, distribuees: 0, absentes: 0, doublons_stricts: 0, doublons_probables: 0, sans_num_secu: 0, sans_rangement: 0, sans_nom: 0, sans_prenom: 0, dates_invalides: 0, distribParJour: [], distribParCentre: [] };
   const totalAnomalies = (s.doublons_stricts || 0) + (s.doublons_probables || 0) + (s.dates_invalides || 0) + (s.sans_num_secu || 0) + (s.sans_rangement || 0) + (s.sans_nom || 0) + (s.sans_prenom || 0);
-  const autoClearableAnomalies = (s.dates_invalides || 0) + (s.sans_num_secu || 0) + (s.sans_rangement || 0) + (s.sans_nom || 0) + (s.sans_prenom || 0);
   const distributionRate = s.total > 0 ? Math.round((s.distribuees / s.total) * 100) : 0;
   
   const cleanCount = detailedSyncStats?.cleanCount || 0;
@@ -443,6 +446,7 @@ export function SiteAdminView({
   const strictCount = detailedSyncStats?.strictCount || 0;
   const invalidCount = detailedSyncStats?.invalidCount || 0;
   const modifiedCount = detailedSyncStats?.modifiedCount || 0;
+  const ghostCount = detailedSyncStats?.ghostCount || 0;
   const totalSyncableCards = cleanCount + missingCount + probableCount + strictCount + invalidCount + modifiedCount;
 
   let step = 0;
@@ -451,15 +455,15 @@ export function SiteAdminView({
   let btnAction = () => {};
   let btnDisabled = true;
 
-  if (modifiedCount > 0) {
+  // Fusionné avec cleanCount : plus de bouton dédié "ENVOYER LES MODIFICATIONS" — les cartes
+  // déjà synchronisées puis re-modifiées (modifiedCount) partent avec le même bouton que les
+  // cartes parfaites jamais envoyées, via handleStartBulkUploadClick(false, false, false)
+  // (onlyModified=false envoie déjà tout is_dirty=1 conforme, neuf ou modifié).
+  const totalCleanCount = cleanCount + modifiedCount;
+
+  if (totalCleanCount > 0) {
     step = 1;
-    btnLabel = `ENVOYER LES MODIFICATIONS (${modifiedCount.toLocaleString('fr')} cartes)`;
-    btnColor = '#3b82f6'; // Bleu distinctif pour la delta-sync
-    btnAction = () => handleStartBulkUploadClick(false, false, false, true);
-    btnDisabled = isBulkUploading;
-  } else if (cleanCount > 0) {
-    step = 1;
-    btnLabel = `ENVOYER LES CARTES VERS LE CLOUD (${cleanCount.toLocaleString('fr')} Parfaites)`;
+    btnLabel = `ENVOYER LES CARTES VERS LE CLOUD (${totalCleanCount.toLocaleString('fr')} Parfaites)`;
     btnColor = 'var(--accent-primary)';
     btnAction = () => handleStartBulkUploadClick(false, false, false);
     btnDisabled = isBulkUploading;
@@ -470,23 +474,35 @@ export function SiteAdminView({
     btnColor = '#f97316';
     btnAction = () => handleStartBulkUploadClick(true, false, true);
     btnDisabled = isBulkUploading;
-  } else if (invalidCount > 0) {
+  } else if (ghostCount > 0) {
+    // Étape 3 : cartes dirty totalement vides (noms+prénoms+num_secu+rangement) — jamais
+    // envoyables au cloud (upload-worker.js les exclut sans condition), donc aucune action
+    // d'envoi possible ici : on redirige directement vers la page Qualité pour correction.
     step = 3;
-    btnLabel = `BLOQUÉ : ${invalidCount.toLocaleString('fr')} DATES INVALIDES`;
+    btnLabel = `3E ÉTAPE : CORRIGER LES CARTES VIDES (${ghostCount.toLocaleString('fr')})`;
+    btnColor = '#a855f7';
+    btnAction = () => navigate('/agent-qualite/manquants');
+    btnDisabled = isBulkUploading;
+  } else if (invalidCount > 0) {
+    step = 4;
+    btnLabel = `4E ÉTAPE : CORRIGER LES DATES INVALIDES (${invalidCount.toLocaleString('fr')})`;
     btnColor = '#e74c3c';
-    btnAction = () => { toast.error("Veuillez corriger les dates invalides avant de pouvoir synchroniser."); };
+    btnAction = () => navigate('/agent-qualite/invalides');
     btnDisabled = isBulkUploading;
   }
   const kpis = [
     { label: 'Total Cartes', value: (s.total || 0).toLocaleString('fr'), icon: CreditCard, color: '#3498db', gradient: 'linear-gradient(135deg, #3498db, #2980b9)', tabKey: null },
+    { label: 'Cartes Fantômes', value: (s.cartes_fantomes || 0).toLocaleString('fr'), icon: EyeOff, color: '#a855f7', gradient: 'linear-gradient(135deg, #a855f7, #7e22ce)', tabKey: 'CARTES_FANTOMES' },
     { label: 'En Stock', value: (s.en_stock || 0).toLocaleString('fr'), icon: Package, color: '#f39c12', gradient: 'linear-gradient(135deg, #f39c12, #e67e22)', tabKey: null },
     { label: 'Distribuées', value: (s.distribuees || 0).toLocaleString('fr'), icon: Truck, color: '#27ae60', gradient: 'linear-gradient(135deg, #27ae60, #2ecc71)', tabKey: null },
-    { label: 'Dates Non Conformes', value: (s.dates_invalides || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#e74c3c', gradient: 'linear-gradient(135deg, #e74c3c, #c0392b)', tabKey: 'DATES_INVALIDES' },
+    { label: 'Dates Invalides', value: (s.dates_invalides || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#e74c3c', gradient: 'linear-gradient(135deg, #e74c3c, #c0392b)', tabKey: 'DATES_INVALIDES' },
     { label: 'Sans Rangement', value: (s.sans_rangement || 0).toLocaleString('fr'), icon: MapPin, color: '#9b59b6', gradient: 'linear-gradient(135deg, #9b59b6, #8e44ad)', tabKey: 'SANS_RANGEMENT' },
     { label: 'Doublons Probables', value: (s.doublons_probables || 0).toLocaleString('fr'), icon: AlertTriangle, color: '#f97316', gradient: 'linear-gradient(135deg, #f97316, #d97706)', tabKey: 'DOUBLONS_PROBABLES' },
     { label: 'Doublons Stricts', value: (s.doublons_stricts || 0).toLocaleString('fr'), icon: GitMerge, color: '#eab308', gradient: 'linear-gradient(135deg, #eab308, #ca8a04)', tabKey: 'DOUBLONS' },
     { label: 'Sans Nom', value: (s.sans_nom || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#ec4899', gradient: 'linear-gradient(135deg, #ec4899, #be185d)', tabKey: 'SANS_NOM' },
-    { label: 'Sans Prénom', value: (s.sans_prenom || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#14b8a6', gradient: 'linear-gradient(135deg, #14b8a6, #0f766e)', tabKey: 'SANS_PRENOM' }
+    { label: 'Sans Prénom', value: (s.sans_prenom || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#14b8a6', gradient: 'linear-gradient(135deg, #14b8a6, #0f766e)', tabKey: 'SANS_PRENOM' },
+    { label: 'Date Vide', value: (s.dates_naissance_vide || 0).toLocaleString('fr'), icon: ShieldAlert, color: '#f43f5e', gradient: 'linear-gradient(135deg, #f43f5e, #be123c)', tabKey: 'DATES_VIDES' },
+    { label: 'Autres Anomalies', value: (s.autres_anomalies || 0).toLocaleString('fr'), icon: AlertTriangle, color: '#6366f1', gradient: 'linear-gradient(135deg, #6366f1, #4338ca)', tabKey: 'AUTRES_ANOMALIES' }
   ];
 
   return (
@@ -808,28 +824,38 @@ export function SiteAdminView({
                     </div>
                   )}
                   {s.sans_num_secu > 0 && (
-                    <div className="badge-alert" onClick={() => navigate('/qualite?anomalie=sans_num_secu')} style={{ cursor: 'pointer', background: 'rgba(243, 156, 18, 0.15)', borderColor: 'rgba(243, 156, 18, 0.3)', color: 'var(--accent-orange)', margin: 0 }}>
+                    <div className="badge-alert" onClick={() => navigate('/agent-qualite/manquants')} style={{ cursor: 'pointer', background: 'rgba(243, 156, 18, 0.15)', borderColor: 'rgba(243, 156, 18, 0.3)', color: 'var(--accent-orange)', margin: 0 }}>
                       Sans Num Sécu : {s.sans_num_secu.toLocaleString('fr')}
                     </div>
                   )}
                   {s.dates_invalides > 0 && (
-                    <div className="badge-alert" onClick={() => navigate('/qualite?anomalie=dates_invalides')} style={{ cursor: 'pointer', background: 'rgba(239, 68, 68, 0.15)', borderColor: 'rgba(239, 68, 68, 0.3)', color: '#f87171', margin: 0 }}>
+                    <div className="badge-alert" onClick={() => navigate('/agent-qualite/invalides')} style={{ cursor: 'pointer', background: 'rgba(239, 68, 68, 0.15)', borderColor: 'rgba(239, 68, 68, 0.3)', color: '#f87171', margin: 0 }}>
                       Dates Invalides : {s.dates_invalides.toLocaleString('fr')}
                     </div>
                   )}
                   {s.sans_rangement > 0 && (
-                    <span onClick={() => navigate('/logistique?anomalie=sans_rangement')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(155, 89, 182, 0.2)', color: '#9b59b6', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+                    <span onClick={() => navigate('/agent-qualite/manquants')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(155, 89, 182, 0.2)', color: '#9b59b6', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
                       Sans Rangement : {s.sans_rangement.toLocaleString('fr')}
                     </span>
                   )}
                   {s.sans_nom > 0 && (
-                    <span onClick={() => navigate('/qualite?anomalie=sans_nom')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(236, 72, 153, 0.2)', color: '#ec4899', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+                    <span onClick={() => navigate('/agent-qualite/manquants')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(236, 72, 153, 0.2)', color: '#ec4899', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
                       Sans Nom : {s.sans_nom.toLocaleString('fr')}
                     </span>
                   )}
                   {s.sans_prenom > 0 && (
-                    <span onClick={() => navigate('/qualite?anomalie=sans_prenom')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(20, 184, 166, 0.2)', color: '#14b8a6', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+                    <span onClick={() => navigate('/agent-qualite/manquants')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(20, 184, 166, 0.2)', color: '#14b8a6', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
                       Sans Prénom : {s.sans_prenom.toLocaleString('fr')}
+                    </span>
+                  )}
+                  {(s.dates_naissance_vide || 0) > 0 && (
+                    <span onClick={() => navigate('/agent-qualite/manquants')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(244, 63, 94, 0.2)', color: '#f43f5e', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+                      Date Vide : {(s.dates_naissance_vide || 0).toLocaleString('fr')}
+                    </span>
+                  )}
+                  {(s.autres_anomalies || 0) > 0 && (
+                    <span onClick={() => navigate('/agent-qualite/invalides')} style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(99, 102, 241, 0.2)', color: '#6366f1', padding: '4px 10px', borderRadius: 20, fontSize: 11, fontWeight: 700 }}>
+                      Autres Anomalies : {(s.autres_anomalies || 0).toLocaleString('fr')}
                     </span>
                   )}
                 </div>
@@ -862,7 +888,20 @@ export function SiteAdminView({
                   key={i} 
                   className={`glass-card ${kpi.tabKey ? 'clickable-kpi' : ''}`}
                   onClick={() => {
-                    if (kpi.tabKey) navigate(`/qualite?tab=${kpi.tabKey}`);
+                    if (kpi.tabKey) {
+                      const routeByTabKey: Record<string, string> = {
+                        DATES_INVALIDES: '/agent-qualite/invalides',
+                        SANS_RANGEMENT: '/agent-qualite/manquants',
+                        DOUBLONS_PROBABLES: '/agent-qualite/doublons',
+                        DOUBLONS: '/agent-qualite/doublons',
+                        SANS_NOM: '/agent-qualite/manquants',
+                        SANS_PRENOM: '/agent-qualite/manquants',
+                        DATES_VIDES: '/agent-qualite/manquants',
+                        AUTRES_ANOMALIES: '/agent-qualite/anomalies-brutes',
+                        CARTES_FANTOMES: '/agent-qualite/manquants'
+                      };
+                      navigate(routeByTabKey[kpi.tabKey] || '/agent-qualite');
+                    }
                   }}
                   style={{ 
                     display: 'flex', alignItems: 'center', gap: 20, padding: 24, borderRadius: 16,
@@ -1057,9 +1096,9 @@ export function SiteAdminView({
                           borderRadius: 12, 
                           fontWeight: 700,
                           backgroundColor: isBulkUploading ? 'var(--bg-secondary)' : btnColor,
-                          color: (step === 2 || step === 3) ? '#fff' : (step === 0 ? 'var(--text-muted)' : undefined),
+                          color: (step === 2 || step === 3 || step === 4) ? '#fff' : (step === 0 ? 'var(--text-muted)' : undefined),
                           cursor: btnDisabled ? 'not-allowed' : 'pointer',
-                          opacity: btnDisabled ? (step === 3 ? 1 : 0.6) : 1,
+                          opacity: btnDisabled ? ((step === 3 || step === 4) ? 1 : 0.6) : 1,
                           boxShadow: step === 1 ? '0 4px 15px rgba(99, 102, 241, 0.3)' : (step === 2 ? '0 4px 15px rgba(249, 115, 22, 0.3)' : 'none'),
                           display: 'flex',
                           alignItems: 'center',
@@ -1073,83 +1112,18 @@ export function SiteAdminView({
                         {isBulkUploading ? 'TRANSFERT EN COURS...' : btnLabel}
                       </button>
                       <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                        Transmet au serveur en ligne (Supabase) toutes les nouvelles cartes CMU importées ou créées sur ce PC.
+                        {step === 3
+                          ? "⚠️ Ces cartes n'ont ni nom, ni prénom, ni numéro de sécu, ni rangement — elles ne peuvent pas être envoyées au Cloud. Cliquez pour aller les corriger sur la page Qualité."
+                          : step === 4
+                          ? "⚠️ Ce compteur ignore les cartes déjà envoyées et les dates vides (celles-ci sont comptées dans les Données Manquantes). Cliquez pour aller corriger ces dates sur la page Qualité."
+                          : "Transmet au serveur en ligne (Supabase) toutes les nouvelles cartes CMU importées ou créées sur ce PC."}
                       </p>
                     </div>
-
-                    {stats && autoClearableAnomalies > 0 && (
-                      <div>
-                        <button
-                          onClick={() => {
-                            const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-                            if (!siteIdToUse) {
-                              toast.error("Veuillez d'abord sélectionner un site actif.");
-                              return;
-                            }
-                            openConfirmModal({
-                              title: "Validation de l'Assainissement Global",
-                              message: "Veuillez saisir votre mot de passe administrateur pour valider le nettoyage et l'assainissement de toutes les anomalies locales de ce site.",
-                              isDanger: true,
-                              isPassword: true,
-                              confirmText: "Vérifier et Assainir",
-                              onConfirm: async (inputVal: string) => {
-                                try {
-                                  setLoading(true);
-                                  // Vérifier le mot de passe administrateur en arrière-plan
-                                  const isCorrect = await window.api.hierarchy.verifyPassword(inputVal, undefined, user?.login);
-                                  if (!isCorrect) {
-                                    toast.error("❌ Mot de passe administrateur incorrect. Action annulée.");
-                                    setLoading(false);
-                                    return;
-                                  }
-
-                                  let totalDeleted = 0;
-                                  // Assainissement global atomique
-                                  const res = await window.api.qualite.assainirGlobal({ site_id: siteIdToUse });
-                                  
-                                  totalDeleted = res.deleted;
-                                  toast.success(`✅ Assainissement global terminé. ${totalDeleted} anomalie(s) nettoyée(s).`);
-                                  loadStats();
-                                } catch (err: any) {
-                                  console.error(err);
-                                  toast.error("Erreur lors de l'assainissement : " + (err.message || err));
-                                } finally {
-                                  setLoading(false);
-                                }
-                              }
-                            });
-                          }}
-                          disabled={isBulkUploading || loading}
-                          className="btn"
-                          title="Nettoyer les fiches erronées après transfert"
-                          style={{
-                            padding: '12px 24px',
-                            borderRadius: 12,
-                            fontWeight: 700,
-                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                            color: '#f87171',
-                            border: '1px solid rgba(239, 68, 68, 0.25)',
-                            cursor: (isBulkUploading || loading) ? 'not-allowed' : 'pointer',
-                            opacity: (isBulkUploading || loading) ? 0.5 : 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '8px',
-                            width: 'fit-content'
-                          }}
-                        >
-                          <Trash2 size={18} />
-                          Assainir tout ({autoClearableAnomalies})
-                        </button>
-                        <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                          Lance un nettoyage automatique pour fusionner les doublons stricts et corriger les incohérences avant l'envoi cloud.
-                        </p>
-                      </div>
-                    )}
 
                     <div>
                       <button
                         onClick={handleAuditDates}
-                        disabled={isAuditing || loading}
+                        disabled={isAuditing || loading || isClearingCloud}
                         className="btn"
                         title="Vérifie toutes les dates de naissance du stock et isole les dates invalides"
                         style={{
@@ -1159,8 +1133,8 @@ export function SiteAdminView({
                           backgroundColor: 'rgba(234, 179, 8, 0.1)',
                           color: '#eab308',
                           border: '1px solid rgba(234, 179, 8, 0.25)',
-                          cursor: (isAuditing || loading) ? 'not-allowed' : 'pointer',
-                          opacity: (isAuditing || loading) ? 0.5 : 1,
+                          cursor: (isAuditing || loading || isClearingCloud) ? 'not-allowed' : 'pointer',
+                          opacity: (isAuditing || loading || isClearingCloud) ? 0.5 : 1,
                           display: 'flex',
                           alignItems: 'center',
                           gap: '8px',
@@ -1198,14 +1172,14 @@ export function SiteAdminView({
                           )}
                           {syncAlert.status === 'BLOCKED_INVALID' && (
                             <>
-                              <strong>⚠️ Dates Non Conformes détectées :</strong> {syncAlert.count} cartes possèdent des dates de naissance invalides. Vous devez obligatoirement corriger ces erreurs de saisie avant de pouvoir les envoyer sur le cloud.
+                              <strong>⚠️ Dates Invalides détectées :</strong> {syncAlert.count} cartes possèdent des dates de naissance invalides. Vous devez obligatoirement corriger ces erreurs de saisie avant de pouvoir les envoyer sur le cloud.
                             </>
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: 12 }}>
                           {syncAlert.status === 'BLOCKED_STRICT' && (
-                            <button 
-                              onClick={() => navigate('/qualite')} 
+                            <button
+                              onClick={() => navigate('/agent-qualite/doublons')}
                               className="btn-danger"
                               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: 'none', background: '#ef4444', color: 'white' }}
                             >
@@ -1231,8 +1205,8 @@ export function SiteAdminView({
                             </button>
                           )}
                           {syncAlert.status === 'BLOCKED_INVALID' && (
-                            <button 
-                              onClick={() => navigate('/qualite')} 
+                            <button
+                              onClick={() => navigate('/agent-qualite/invalides')}
                               className="btn-danger"
                               style={{ padding: '8px 16px', borderRadius: 8, fontSize: 12, fontWeight: 700, cursor: 'pointer', border: 'none', background: '#ef4444', color: 'white' }}
                             >
@@ -1304,12 +1278,19 @@ export function SiteAdminView({
                           textAlign: 'center'
                         }}
                       >
-                        <Globe size={18} style={{ flexShrink: 0, animation: isSyncingAgents ? 'spin 1.5s linear infinite' : 'none' }} />
-                        {isSyncingAgents ? 'SYNCHRONISATION EN COURS...' : `SYNCHRONISER LES COMPTES AGENTS${dirtyUsersCount > 0 ? ` (${dirtyUsersCount} agent(s))` : ''}`}
+                        {isSyncingAgents ? <Loader size={18} className="animate-spin" /> : <Globe size={18} style={{ flexShrink: 0 }} />}
+                        {isSyncingAgents ? 'SYNCHRONISATION EN COURS...' : (dirtyUsersCount > 0 ? `SYNCHRONISER LES COMPTES AGENTS (${dirtyUsersCount})` : '✅ COMPTES À JOUR')}
                       </button>
-                      <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                        Met à jour et envoie sur le serveur en ligne la liste des comptes utilisateurs, agents de saisie et distributeurs de ce site.
-                      </p>
+                      
+                      {dirtyUsersCount === 0 && !isSyncingAgents ? (
+                        <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--accent-green)', fontWeight: 600, lineHeight: 1.5 }}>
+                          ✅ Comptes à jour
+                        </p>
+                      ) : (
+                        <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                          Met à jour et envoie sur le serveur en ligne la liste des comptes utilisateurs, agents de saisie et distributeurs de ce site.
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -1339,10 +1320,15 @@ export function SiteAdminView({
                   <p style={{ fontSize: 14, color: 'var(--text-primary)', lineHeight: 1.5, margin: 0 }}>
                     La réinitialisation supprimera <strong>définitivement</strong> toutes les cartes liées à ce site. Les centres et les agents seront conservés.
                   </p>
-                  <button 
-                    onClick={handleClearDatabase} 
-                    className="btn-danger" 
-                    style={{ padding: '12px 24px', alignSelf: 'flex-start', borderRadius: 12, fontWeight: 700, boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)', cursor: 'pointer' }}
+                  <button
+                    onClick={handleClearDatabase}
+                    disabled={loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading}
+                    className="btn-danger"
+                    style={{
+                      padding: '12px 24px', alignSelf: 'flex-start', borderRadius: 12, fontWeight: 700, boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)',
+                      cursor: (loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 'not-allowed' : 'pointer',
+                      opacity: (loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 0.5 : 1
+                    }}
                   >
                     <Trash2 size={18} /> PURGER LES CARTES DU SITE
                   </button>
@@ -1361,18 +1347,18 @@ export function SiteAdminView({
                   <p style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.5, margin: 0 }}>
                     Cette opération supprimera <strong>définitivement</strong> toutes les cartes associées à ce site sur le serveur Supabase Cloud. L'action est irréversible et n'affectera pas vos données locales.
                   </p>
-                  <button 
-                    onClick={handleClearCloudDatabaseClick} 
-                    disabled={isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
-                    className="btn-danger" 
-                    style={{ 
-                      padding: '12px 24px', 
-                      alignSelf: 'flex-start', 
-                      borderRadius: 12, 
-                      fontWeight: 700, 
-                      boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)', 
-                      cursor: (isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
-                      opacity: (isClearingCloud || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
+                  <button
+                    onClick={handleClearCloudDatabaseClick}
+                    disabled={isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
+                    className="btn-danger"
+                    style={{
+                      padding: '12px 24px',
+                      alignSelf: 'flex-start',
+                      borderRadius: 12,
+                      fontWeight: 700,
+                      boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)',
+                      cursor: (isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
+                      opacity: (isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
                     }}
                   >
                     <Trash2 size={18} /> 
@@ -1388,7 +1374,7 @@ export function SiteAdminView({
         </>
       )}
       {/* Bouclier global anti-clics et curseur de chargement — seulement si PAS en arrière-plan */}
-      {(isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading || loading || isClearingCloud) && (
+      {(isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading || loading || isClearingCloud || isAuditing) && (
         <div style={{
           position: 'fixed',
           top: 0,
@@ -1641,11 +1627,13 @@ export function SiteAdminView({
             <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
               <button
                 disabled={
-                  confirmModal.requireInput 
-                    ? confirmInputVal !== confirmModal.requireInput 
-                    : (confirmModal.isPassword ? confirmInputVal.trim() === '' : false)
+                  loading ||
+                  (confirmModal.requireInput
+                    ? confirmInputVal !== confirmModal.requireInput
+                    : (confirmModal.isPassword ? confirmInputVal.trim() === '' : false))
                 }
                 onClick={() => {
+                  if (loading) return;
                   confirmModal.onConfirm(confirmInputVal);
                   if (!confirmModal.isPassword) {
                     setConfirmModal(null);
@@ -1658,14 +1646,15 @@ export function SiteAdminView({
                   borderRadius: 10,
                   fontWeight: 700,
                   border: 'none',
-                  opacity: (confirmModal.requireInput && confirmInputVal !== confirmModal.requireInput) ? 0.5 : 1,
-                  cursor: (confirmModal.requireInput && confirmInputVal !== confirmModal.requireInput) ? 'not-allowed' : 'pointer'
+                  opacity: (loading || (confirmModal.requireInput && confirmInputVal !== confirmModal.requireInput)) ? 0.5 : 1,
+                  cursor: (loading || (confirmModal.requireInput && confirmInputVal !== confirmModal.requireInput)) ? 'not-allowed' : 'pointer'
                 }}
               >
-                {confirmModal.confirmText || 'Confirmer'}
+                {loading ? 'Traitement en cours...' : (confirmModal.confirmText || 'Confirmer')}
               </button>
               <button
-                onClick={() => setConfirmModal(null)}
+                onClick={() => { if (!loading) setConfirmModal(null); }}
+                disabled={loading}
                 className="btn-outline"
                 style={{
                   flex: 1,
@@ -1675,7 +1664,8 @@ export function SiteAdminView({
                   border: '1px solid rgba(255, 255, 255, 0.1)',
                   background: 'transparent',
                   color: 'white',
-                  cursor: 'pointer'
+                  cursor: loading ? 'not-allowed' : 'pointer',
+                  opacity: loading ? 0.5 : 1
                 }}
               >
                 Annuler

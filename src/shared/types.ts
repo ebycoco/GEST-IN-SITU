@@ -108,6 +108,9 @@ export interface StatsKpi {
   sans_nom: number;
   sans_prenom: number;
   dates_invalides: number;
+  autres_anomalies?: number;
+  dates_naissance_vide?: number;
+  cartes_fantomes?: number;
   [key: string]: any; // Pour les autres champs de graphes et stats
 }
 
@@ -129,4 +132,5 @@ export interface DetailedSyncStats {
   strictCount: number;
   invalidCount: number;
   modifiedCount: number;
+  ghostCount: number;
 }

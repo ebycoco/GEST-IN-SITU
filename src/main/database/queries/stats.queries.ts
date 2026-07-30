@@ -197,9 +197,50 @@ export function getUnsyncedCardsCount(siteId: number): number {
   return row?.count || 0;
 }
 
+// Miroir exact des critères de conformité appliqués par défaut par le bouton "Envoyer les
+// corrections" du Portail Qualité (allowProbable=false, allowInvalid=false,
+// allowMissing=true dans upload-worker.js) : une donnée manquante (rangement, nom,
+// prénom, contact...) ne bloque plus l'envoi — seuls une date invalide ou un doublon
+// restent des blocages durs. Sert uniquement à afficher le nombre réel de cartes
+// envoyables, pour éviter l'incohérence avec le compteur brut getUnsyncedCardsCount
+// (utilisé ailleurs dans l'app, volontairement laissé inchangé).
+export function getUnsyncedConformeCardsCount(siteId: number): number {
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes
+    WHERE site_id = ?
+      AND is_dirty = 1
+      AND statut != 'BROUILLON'
+      AND NOT (
+        (noms IS NULL OR noms = '') AND
+        (prenoms IS NULL OR prenoms = '') AND
+        (num_secu IS NULL OR num_secu = '') AND
+        (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+      )
+      AND (date_de_naissance IS NULL OR date_de_naissance = '' OR date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$')
+      AND (cle_doublon IS NULL OR cle_doublon = '' OR cle_doublon = '||||' OR cle_doublon NOT IN (
+        SELECT cle_doublon FROM t_cartes
+        WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
+        GROUP BY cle_doublon HAVING COUNT(*) > 1
+      ))
+      AND (noms || '||' || prenoms || '||' || date_de_naissance) NOT IN (
+        SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes
+        WHERE site_id = ?
+        GROUP BY noms, prenoms, date_de_naissance HAVING COUNT(DISTINCT cle_doublon) > 1
+      )
+  `).get(siteId, siteId, siteId) as { count: number };
+  return row?.count || 0;
+}
+
 export function getUnsyncedUsersCount(siteId: number): number {
   const db = getDatabase()!;
   const row = db.prepare('SELECT COUNT(*) as count FROM t_users WHERE site_id = ? AND is_dirty = 1').get(siteId) as { count: number };
+  return row?.count || 0;
+}
+
+export function getUnsyncedCentresCount(siteId: number): number {
+  const db = getDatabase()!;
+  const row = db.prepare('SELECT COUNT(*) as count FROM t_centres WHERE site_id = ? AND is_dirty = 1').get(siteId) as { count: number };
   return row?.count || 0;
 }
 

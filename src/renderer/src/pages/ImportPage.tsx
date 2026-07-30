@@ -169,6 +169,7 @@ export default function ImportPage() {
       setResult(res);
       toast.success(`Migration terminée !`);
       await fetchCardCount();
+      useCacheStore.getState().invalidateDashboardCache();
     } catch (e) {
       toast.error(`Échec de l'importation`);
       console.error(e);
@@ -221,6 +222,7 @@ export default function ImportPage() {
       if (res.success) {
         toast.success("Base de données locale purgée avec succès !");
         setCardCount(0);
+        useCacheStore.getState().invalidateDashboardCache();
       }
     } catch (e) {
       toast.error('Échec de la purge');
@@ -665,7 +667,7 @@ export default function ImportPage() {
                 </div>
                 <div>
                   <h4 style={{ fontSize: 18, fontWeight: 900, color: 'white', marginBottom: 4, margin: 0 }}>Maintenance des Cartes Locales</h4>
-                  <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 14, fontWeight: 500, margin: 0 }}>Supprime temporairement les cartes de ce site stockées sur cet ordinateur. Utile pour libérer de l'espace ou forcer un ré-import complet.</p>
+                  <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 14, fontWeight: 500, margin: 0 }}>Cette action supprimera toutes les cartes locales ET toutes les anomalies d'importation enregistrées sur ce poste pour ce site.</p>
                 </div>
               </div>
               <button 

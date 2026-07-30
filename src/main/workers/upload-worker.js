@@ -4,6 +4,7 @@ const { parentPort, workerData } = require('worker_threads');
 const Database = require(workerData.sqlitePath);
 const { createClient } = require('@supabase/supabase-js');
 
+
 async function run() {
   const { siteId, centreId, dbPath, supabaseUrl, supabaseAnonKey, allowProbable, allowInvalid, allowMissing, onlyModified } = workerData;
 
@@ -26,7 +27,8 @@ async function run() {
     return re.test(text) ? 1 : 0;
   });
 
-  function isValidDate(dateStr) {
+
+  function isValidDateStrict(dateStr) {
     if (!dateStr) return false;
     const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (!match) return false;
@@ -89,7 +91,11 @@ async function run() {
     filterClause += `
       AND (noms IS NOT NULL AND noms != '')
       AND (prenoms IS NOT NULL AND prenoms != '')
-      AND (date_de_naissance IS NOT NULL AND date_de_naissance != '')
+      AND NOT (
+        (noms IS NULL OR noms = '')
+        AND (prenoms IS NULL OR prenoms = '')
+        AND (date_de_naissance IS NULL OR date_de_naissance = '')
+      )
       AND (rangement IS NOT NULL AND rangement != '' AND rangement != 'NON CLASSE')
     `;
   }
@@ -124,6 +130,7 @@ async function run() {
   let blockIndex = 0;
   let lastProgressSentAt = 0;
   const PROGRESS_THROTTLE_MS = 500;
+  const failedSyncIds = new Map();
 
   while (i < totalToUpload) {
     blockIndex++;
@@ -141,9 +148,12 @@ async function run() {
     const validCards = [];
     const deleteCards = [];
     for (const c of cards) {
+      if ((failedSyncIds.get(c.sync_id) || 0) > 3) {
+        continue; // skipped due to quarantine
+      }
       if (c.is_dirty === -1) {
         deleteCards.push(c);
-      } else if (!allowInvalid && !isValidDate(c.date_de_naissance)) {
+      } else if (!allowInvalid && !isValidDateStrict(c.date_de_naissance)) {
         // skipped
       } else {
         validCards.push(c);
@@ -181,6 +191,14 @@ async function run() {
     }
 
     if (validCards.length > 0) {
+      // Horodatage unique de ce lot, pris au moment RÉEL de l'envoi vers le cloud —
+      // et non la date de dernière édition locale de la carte (c.updated_at). Le tirage
+      // descendant (downstream) sur les autres postes se base sur updated_at pour savoir
+      // ce qu'il reste à récupérer ; une carte "propre" corrigée puis classée il y a
+      // plusieurs jours mais envoyée seulement maintenant doit porter un updated_at
+      // d'AUJOURD'HUI pour être garantie détectable par tout autre poste, même si son
+      // propre repère de tirage a déjà avancé au-delà de la date d'édition d'origine.
+      const pushedAt = new Date().toISOString();
       const mappedCards = validCards.map(c => ({
         sync_id: c.sync_id,
         noms: c.noms,
@@ -204,7 +222,7 @@ async function run() {
         id_centre: c.centre_id || null,
         id_poste: c.poste_id || null,
         qr_code_data: c.qr_code_data || null,
-        updated_at: c.updated_at || new Date().toISOString()
+        updated_at: pushedAt
       }));
 
       try {
@@ -216,15 +234,21 @@ async function run() {
 
         if (error) {
           parentPort.postMessage({ type: 'log', level: 'error', message: `ÉCHEC bloc ${blockIndex} en ${chunkDuration}ms : ${error.message}` });
+          validCards.forEach(c => {
+            failedSyncIds.set(c.sync_id, (failedSyncIds.get(c.sync_id) || 0) + 1);
+          });
         } else {
           parentPort.postMessage({ type: 'log', level: 'info', message: `Bloc ${blockIndex} OK — ${chunkDuration}ms — chunkSize=${chunkSize}` });
 
           try {
+            // updated_at local aligné sur pushedAt : évite un écart local/cloud qui
+            // provoquerait une fusion inutile (mais inoffensive) lors d'un futur tirage
+            // de cette même carte par ce poste ou un autre.
             const syncIds = validCards.map(c => c.sync_id);
             const placeholders = syncIds.map(() => '?').join(',');
-            const updateStmt = db.prepare(`UPDATE t_cartes SET is_dirty = 0, synced_at = datetime('now') WHERE sync_id IN (${placeholders})`);
+            const updateStmt = db.prepare(`UPDATE t_cartes SET is_dirty = 0, synced_at = datetime('now'), updated_at = ? WHERE sync_id IN (${placeholders})`);
             db.transaction(() => {
-              updateStmt.run(...syncIds);
+              updateStmt.run(pushedAt, ...syncIds);
             })();
           } catch (txErr) {
             parentPort.postMessage({ type: 'log', level: 'error', message: `Erreur SQLite locale bloc ${blockIndex} : ${txErr.message}` });

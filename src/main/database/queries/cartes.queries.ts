@@ -2,9 +2,48 @@ import { getDatabase } from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { networkMonitor } from '../../sync/network-monitor';
+import { mapCardPayload } from '../../sync/payload-mapper';
 import { insertAuditLog } from './audit.queries';
 import { QualityFilters } from '../../../shared/types/quality.types';
 import log from 'electron-log';
+import { isValidDateStrict } from '../../../shared/utils/validators';
+
+/**
+ * Enfile automatiquement une carte tout juste corrigée (Qualité) vers t_outbox pour une
+ * synchronisation cloud immédiate, à condition qu'elle n'ait plus de doublon (strict ou
+ * probable) non résolu. Les données manquantes ne bloquent PAS l'enfilage (règle métier
+ * déjà validée pour le bouton "Envoyer les corrections") ; une date encore invalide ou une
+ * identité totalement vide fait échouer mapCardPayload, ce qui est volontaire : la carte
+ * reste is_dirty=1 et sera reprise plus tard par l'envoi manuel groupé.
+ */
+function autoEnqueueCorrection(id_carte: number): void {
+  try {
+    const db = getDatabase()!;
+    const card = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id_carte) as any;
+    if (!card || !card.sync_id || !card.site_id) return;
+
+    if (card.cle_doublon && card.cle_doublon !== '' && card.cle_doublon !== '||||') {
+      const strictDup = db.prepare(`
+        SELECT COUNT(*) as c FROM t_cartes WHERE site_id = ? AND cle_doublon = ?
+      `).get(card.site_id, card.cle_doublon) as { c: number };
+      if (strictDup.c > 1) return;
+    }
+
+    const probableDup = db.prepare(`
+      SELECT COUNT(DISTINCT cle_doublon) as c FROM t_cartes
+      WHERE site_id = ? AND noms = ? AND prenoms = ? AND date_de_naissance = ?
+    `).get(card.site_id, card.noms, card.prenoms, card.date_de_naissance) as { c: number };
+    if (probableDup.c > 1) return;
+
+    const payload = mapCardPayload(card);
+    enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', payload);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  } catch (e: any) {
+    log.warn(`[AutoSync] Carte ${id_carte} non enfilée automatiquement après correction : ${e.message || e}`);
+  }
+}
 
 /** Reset nucléaire de l'index FTS5 : DROP + CREATE + REBUILD pour réparer une corruption profonde */
 function nuclearResetFts5(): void {
@@ -196,16 +235,7 @@ export function getCarteById(id: number, currentUser?: { role: string; site_id?:
   return db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND is_dirty != -1').get(id);
 }
 
-function isValidDate(dateStr: string | null | undefined): boolean {
-  if (!dateStr) return false;
-  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) return false;
-  const year = parseInt(match[1], 10);
-  const month = parseInt(match[2], 10);
-  const day = parseInt(match[3], 10);
-  const d = new Date(year, month - 1, day);
-  return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
-}
+
 
 export function createCarte(data: Record<string, unknown>, siteIdToUse: number) {
   const db = getDatabase()!;
@@ -218,12 +248,12 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
   const lieuN = removeAccents(data.lieu_de_naissance as string || '');
   const contact = normalizeContact(data.contact as string || '');
 
-  if (!isValidDate(ddn)) {
+  if (!isValidDateStrict(ddn)) {
     throw new Error("Date de naissance invalide. Format attendu : AAAA-MM-JJ (ex : 1990-12-31).");
   }
 
   const dateDelivrance = data.date_delivrance as string || '';
-  if (dateDelivrance && !isValidDate(dateDelivrance)) {
+  if (dateDelivrance && !isValidDateStrict(dateDelivrance)) {
     throw new Error("Date de délivrance invalide. Format attendu : AAAA-MM-JJ.");
   }
 
@@ -280,20 +310,20 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
   return { id: result.lastInsertRowid, sync_id: syncId };
 }
 
-export function updateCarte(id: number, data: Record<string, unknown>, currentUser?: { role: string; site_id?: number; login?: string }) {
+export function updateCarte(id: number, data: Record<string, unknown>, currentUser?: { role: string; site_id?: number; login?: string; id_user?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
 
   if ('date_de_naissance' in data) {
     const ddn = data.date_de_naissance as string;
-    if (ddn && !isValidDate(ddn)) {
+    if (ddn && !isValidDateStrict(ddn)) {
       throw new Error("Date de naissance invalide. Format attendu : AAAA-MM-JJ (ex : 1990-12-31).");
     }
   }
 
   if ('date_delivrance' in data) {
     const dateDelivrance = data.date_delivrance as string;
-    if (dateDelivrance && !isValidDate(dateDelivrance)) {
+    if (dateDelivrance && !isValidDateStrict(dateDelivrance)) {
       throw new Error("Date de délivrance invalide. Format attendu : AAAA-MM-JJ.");
     }
   }
@@ -355,6 +385,43 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
   }
 
   // Comportement standard pour t_cartes
+
+  // Recalcul de la clé anti-doublon si un champ d'identité est modifié (ex: correction
+  // d'un brouillon). Sans cela, cle_doublon reste figée sur les anciennes valeurs et le
+  // contrôle de doublon à la création (createCarte) devient inopérant pour cette fiche.
+  const identityFields = ['noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'contact'];
+  if (identityFields.some(f => f in data)) {
+    const current = db.prepare(
+      'SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, contact FROM t_cartes WHERE id_carte = ?'
+    ).get(id) as { noms: string; prenoms: string; date_de_naissance: string; lieu_de_naissance: string; contact: string } | undefined;
+
+    if (current) {
+      const noms = removeAccents((('noms' in data ? data.noms : current.noms) as string) || '');
+      const prenoms = removeAccents((('prenoms' in data ? data.prenoms : current.prenoms) as string) || '');
+      const ddn = (('date_de_naissance' in data ? data.date_de_naissance : current.date_de_naissance) as string) || '';
+      const lieuN = removeAccents((('lieu_de_naissance' in data ? data.lieu_de_naissance : current.lieu_de_naissance) as string) || '');
+      const contact = normalizeContact((('contact' in data ? data.contact : current.contact) as string) || '');
+
+      const cleDbl = `${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`;
+      const cleFlex = `${noms}|${prenoms}|${ddn}|${contact}`;
+
+      const existingStrict = db.prepare(`
+        SELECT id_carte, noms, prenoms FROM t_cartes
+        WHERE cle_doublon = ? AND is_dirty != -1 AND id_carte != ?
+      `).get(cleDbl, id) as { id_carte: number; noms: string; prenoms: string } | undefined;
+
+      if (existingStrict) {
+        throw new Error(
+          `DOUBLON_STRICT: La carte de ${existingStrict.noms} ${existingStrict.prenoms} ` +
+          `(ID: ${existingStrict.id_carte}) existe déjà dans la base locale.`
+        );
+      }
+
+      data.cle_doublon = cleDbl;
+      data.cle_doublon_flex = cleFlex;
+    }
+  }
+
   const allowedColumns = [
     'noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'num_secu',
     'lieu_enrolement', 'contact', 'rangement', 'statut', 'date_delivrance',
@@ -385,7 +452,14 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
     query += ' AND site_id = @site_id';
     params.site_id = currentUser.site_id;
   }
-  
+
+  // Verrou serveur pour l'opérateur de saisie : ne peut modifier que ses propres
+  // fiches encore non synchronisées (is_dirty = 1), même si l'appel IPC est forgé.
+  if (currentUser && currentUser.role === 'OPERATEUR_SAISIE') {
+    query += ' AND is_dirty = 1 AND created_by = @created_by_check';
+    params.created_by_check = currentUser.id_user ?? null;
+  }
+
   let result: any;
   try {
     result = db.prepare(query).run(params);
@@ -658,20 +732,107 @@ export function exportCartes(ids: number[]) {
 }
 
 
-export function getInvalidDateRecords(siteId?: number, offset = 0, limit = 50) {
+export function getInvalidDateRecords(siteId?: number, offset = 0, limit = 50, query?: string) {
   const db = getDatabase()!;
-  // ✔️ Utilise l'index (site_id, has_invalid_date) — O(log n) au lieu de REGEXP FULL SCAN
   const params: any[] = [];
-  let where = 'WHERE has_invalid_date = 1';
+  
+  let baseWhere = "";
   if (siteId) {
-    where = 'WHERE site_id = ? AND has_invalid_date = 1';
+    baseWhere = "AND site_id = ?";
     params.push(siteId);
+    params.push(siteId); // For the second part of UNION
+  }
+  
+  let searchWhere = "";
+  if (query && query.trim()) {
+    const tokens = query.trim().split(/\s+/);
+    tokens.forEach(t => {
+      searchWhere += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR COALESCE(contact, '') LIKE ? OR COALESCE(num_secu, '') LIKE ? OR CAST(id_carte AS TEXT) LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q, q);
+    });
   }
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM t_cartes ${where}`).get(...params) as { count: number };
+  // Common CTE to unify both tables
+  const sql = `
+    WITH UnifiedInvalidDates AS (
+      SELECT
+        id_carte,
+        noms,
+        prenoms,
+        date_de_naissance,
+        num_secu,
+        contact,
+        site_id,
+        rangement,
+        lieu_de_naissance,
+        lieu_enrolement,
+        statut,
+        't_cartes' AS source
+      FROM t_cartes
+      WHERE (date_de_naissance IS NULL OR TRIM(date_de_naissance) = '' OR LENGTH(TRIM(date_de_naissance)) < 10 OR date_de_naissance NOT LIKE '%-%-%')
+        ${baseWhere}
+        
+      UNION ALL
+      
+      SELECT
+        id AS id_carte,
+        noms,
+        prenoms,
+        date_de_naissance,
+        num_secu,
+        contact,
+        site_id,
+        rangement,
+        lieu_de_naissance,
+        NULL AS lieu_enrolement,
+        NULL AS statut,
+        't_import_anomalies' AS source
+      FROM t_import_anomalies
+      WHERE type_anomalie = 'DATE_INVALIDE'
+        ${baseWhere}
+    )
+  `;
+
+  const totalRow = db.prepare(`${sql} SELECT COUNT(*) as count FROM UnifiedInvalidDates WHERE 1=1 ${searchWhere}`).get(...params) as { count: number };
   const total = totalRow?.count || 0;
 
-  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+  const rows = db.prepare(`${sql} SELECT * FROM UnifiedInvalidDates WHERE 1=1 ${searchWhere} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+  return { rows, total };
+}
+
+export function getDatesVidesPage(siteId?: number, offset = 0, limit = 50, query?: string) {
+  const db = getDatabase()!;
+  const params: any[] = [];
+  
+  let baseWhere = "";
+  if (siteId) {
+    baseWhere = "AND site_id = ?";
+    params.push(siteId);
+  }
+  
+  let searchWhere = "";
+  if (query && query.trim()) {
+    const tokens = query.trim().split(/\s+/);
+    tokens.forEach(t => {
+      searchWhere += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR COALESCE(contact, '') LIKE ? OR COALESCE(num_secu, '') LIKE ? OR CAST(id_carte AS TEXT) LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q, q);
+    });
+  }
+
+  const sql = `
+    SELECT
+      id_carte, noms, prenoms, date_de_naissance, num_secu, contact, site_id, rangement, lieu_de_naissance, lieu_enrolement, statut, 't_cartes' AS source
+    FROM t_cartes
+    WHERE (date_de_naissance IS NULL OR TRIM(date_de_naissance) = '')
+      ${baseWhere}
+  `;
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as count FROM (${sql}) WHERE 1=1 ${searchWhere}`).get(...params) as { count: number };
+  const total = totalRow?.count || 0;
+
+  const rows = db.prepare(`SELECT * FROM (${sql}) WHERE 1=1 ${searchWhere} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
   return { rows, total };
 }
 
@@ -694,7 +855,7 @@ export function updateDateDeNaissance(id: number, newDate: string) {
       const cleFlex = `${noms}|${prenoms}|${ddn}|${contact}`;
       const syncId = uuidv4();
 
-      db.prepare(`
+      const insertRes = db.prepare(`
         INSERT INTO t_cartes (
           noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
           lieu_enrolement, contact, rangement, statut, agent_saisie,
@@ -721,18 +882,22 @@ export function updateDateDeNaissance(id: number, newDate: string) {
       );
 
       db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
+      return insertRes;
     });
 
     const res = runTx();
     console.log(`[CORRECTION DIAGNOSTIC] ✨ Anomalie ID ${id} corrigée. Carte transférée avec succès vers t_cartes et purgée de la DLQ.`);
+    autoEnqueueCorrection(Number(res.lastInsertRowid));
     return res;
   }
 
-  return db.prepare(`
-    UPDATE t_cartes 
-    SET date_de_naissance = ?, updated_at = ?, is_dirty = 1 
+  const res = db.prepare(`
+    UPDATE t_cartes
+    SET date_de_naissance = ?, updated_at = ?, is_dirty = 1
     WHERE id_carte = ?
   `).run(newDate, now, id);
+  autoEnqueueCorrection(id);
+  return res;
 }
 
 export function getDoublonsStrictsPage(siteId: number, offset: number, limit: number, query?: string, filters?: QualityFilters) {
@@ -742,8 +907,12 @@ export function getDoublonsStrictsPage(siteId: number, offset: number, limit: nu
 
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    where += " AND (noms LIKE ? OR prenoms LIKE ? OR contact LIKE ?)";
-    params.push(`%${effectiveNom}%`, `%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
@@ -785,8 +954,12 @@ export function getDoublonsProbablesPage(siteId: number, offset: number, limit: 
   
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    filterClause += " AND (noms LIKE ? OR prenoms LIKE ? OR contact LIKE ?)";
-    filterParams.push(`%${effectiveNom}%`, `%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      filterClause += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      filterParams.push(q, q, q);
+    });
   }
   if (filters?.contact?.trim()) { filterClause += " AND contact LIKE ?"; filterParams.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { filterClause += " AND date_de_naissance = ?"; filterParams.push(filters.ddn.trim()); }
@@ -849,8 +1022,12 @@ export function getSansNumSecuPage(siteId: number, offset: number, limit: number
 
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    where += " AND (noms LIKE ? OR prenoms LIKE ? OR contact LIKE ?)";
-    params.push(`%${effectiveNom}%`, `%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
@@ -871,8 +1048,12 @@ export function getSansRangementPage(siteId: number, offset: number, limit: numb
 
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    where += " AND (noms LIKE ? OR prenoms LIKE ? OR contact LIKE ?)";
-    params.push(`%${effectiveNom}%`, `%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
@@ -893,8 +1074,12 @@ export function getSansNomPage(siteId: number, offset: number, limit: number, qu
 
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    where += " AND (prenoms LIKE ? OR contact LIKE ?)"; // noms is absent by definition
-    params.push(`%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND (prenoms LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q);
+    });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
@@ -915,8 +1100,12 @@ export function getSansPrenomPage(siteId: number, offset: number, limit: number,
 
   const effectiveNom = filters?.nom || query || '';
   if (effectiveNom.trim()) {
-    where += " AND (noms LIKE ? OR contact LIKE ?)"; // prenoms is absent by definition
-    params.push(`%${effectiveNom}%`, `%${effectiveNom}%`);
+    const tokens = effectiveNom.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND (noms LIKE ? OR contact LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q);
+    });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
   if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
@@ -980,7 +1169,9 @@ export function updateQuickFields(id: number, fields: {
   }
 
   params.push(id);
-  return db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+  const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+  autoEnqueueCorrection(id);
+  return res;
 }
 
 export function getSansContactPage(siteId: number, offset: number, limit: number, query?: string) {
@@ -990,8 +1181,12 @@ export function getSansContactPage(siteId: number, offset: number, limit: number
   const params: any[] = [siteId];
 
   if (query && query.trim()) {
-    where += " AND (noms LIKE ? OR prenoms LIKE ? OR num_secu LIKE ?)";
-    params.push(`%${query}%`, `%${query}%`, `%${query}%`);
+    const tokens = query.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR num_secu LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
   }
 
   const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
@@ -1008,8 +1203,12 @@ export function getSansLieuNaissancePage(siteId: number, offset: number, limit: 
   const params: any[] = [siteId];
 
   if (query && query.trim()) {
-    where += " AND (noms LIKE ? OR prenoms LIKE ? OR num_secu LIKE ?)";
-    params.push(`%${query}%`, `%${query}%`, `%${query}%`);
+    const tokens = query.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR num_secu LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
   }
 
   const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
@@ -1056,7 +1255,9 @@ export function updateRangementEtFiche(id: number, fields: { rangement: string, 
   }
 
   params.push(id);
-  return db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+  const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+  autoEnqueueCorrection(id);
+  return res;
 }
 
 export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) {
@@ -1149,23 +1350,32 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
 export function searchAllRecords(siteId: number, filters: QualityFilters, limit: number = 50) {
   const db = getDatabase()!;
   
-  let conditions = '';
-  const params: any = {};
+  let conditionsCartes = 'site_id = @siteId';
+  let conditionsAnomalies = 'site_id = @siteId';
+  const params: any = { siteId, limit };
   
   if (filters?.nom) {
-    conditions += ` AND (noms LIKE @nom OR prenoms LIKE @nom OR (noms || ' ' || prenoms) LIKE @nom)`;
-    params.nom = `%${filters.nom}%`;
+    const tokens = filters.nom.trim().split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length > 0) {
+      const ftsString = tokens.map(t => `"${t.replace(/"/g, '')}"*`).join(' AND ');
+      conditionsCartes += ` AND id_carte IN (SELECT rowid FROM t_cartes_fts WHERE t_cartes_fts MATCH @ftsQuery)`;
+      conditionsAnomalies += ` AND id IN (SELECT rowid FROM t_anomalies_fts WHERE t_anomalies_fts MATCH @ftsQuery)`;
+      params.ftsQuery = ftsString;
+    }
   }
   if (filters?.contact) {
-    conditions += ` AND contact LIKE @contact`;
+    conditionsCartes += ` AND contact LIKE @contact`;
+    conditionsAnomalies += ` AND contact LIKE @contact`;
     params.contact = `%${filters.contact}%`;
   }
   if (filters?.ddn) {
-    conditions += ` AND date_de_naissance = @ddn`;
+    conditionsCartes += ` AND date_de_naissance = @ddn`;
+    conditionsAnomalies += ` AND date_de_naissance = @ddn`;
     params.ddn = filters.ddn;
   }
   if (filters?.lieu) {
-    conditions += ` AND lieu_de_naissance LIKE @lieu`;
+    conditionsCartes += ` AND lieu_de_naissance LIKE @lieu`;
+    conditionsAnomalies += ` AND lieu_de_naissance LIKE @lieu`;
     params.lieu = `%${filters.lieu}%`;
   }
 
@@ -1181,7 +1391,7 @@ export function searchAllRecords(siteId: number, filters: QualityFilters, limit:
       'Valide' AS record_type,
       statut AS status_or_anomaly
     FROM t_cartes
-    WHERE site_id = @siteId ${conditions}
+    WHERE ${conditionsCartes}
     
     UNION ALL
     
@@ -1196,23 +1406,26 @@ export function searchAllRecords(siteId: number, filters: QualityFilters, limit:
       'En Anomalie' AS record_type,
       type_anomalie AS status_or_anomaly
     FROM t_import_anomalies
-    WHERE site_id = @siteId ${conditions}
+    WHERE ${conditionsAnomalies}
     
     ORDER BY noms, prenoms
     LIMIT @limit
   `;
-  
-  params.siteId = siteId;
-  params.limit = limit;
 
   return db.prepare(query).all(params);
 }
 
-export function getRecordForCorrection(originalId: number | string, recordType: string) {
+export function getRecordForCorrection(originalId: number | string, recordType: string, siteId?: number) {
   const db = getDatabase()!;
   if (recordType === 'Valide') {
+    if (siteId !== undefined && siteId !== null) {
+      return db.prepare(`SELECT * FROM t_cartes WHERE id_carte = ? AND site_id = ?`).get(originalId, siteId);
+    }
     return db.prepare(`SELECT * FROM t_cartes WHERE id_carte = ?`).get(originalId);
   } else if (recordType === 'En Anomalie') {
+    if (siteId !== undefined && siteId !== null) {
+      return db.prepare(`SELECT * FROM t_import_anomalies WHERE id = ? AND site_id = ?`).get(originalId, siteId);
+    }
     return db.prepare(`SELECT * FROM t_import_anomalies WHERE id = ?`).get(originalId);
   }
   return null;
@@ -1238,11 +1451,11 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
   const db = getDatabase()!;
   const now = new Date().toISOString();
   
-  // Scanner toutes les cartes modifiées (brouillons ou corrections)
+  // Scanner uniquement les cartes modifiées appartenant à cet agent (brouillons ou corrections)
   const modifiedCartes = db.prepare(`
-    SELECT * FROM t_cartes 
-    WHERE site_id = ? AND is_dirty = 1
-  `).all(siteId) as any[];
+    SELECT * FROM t_cartes
+    WHERE site_id = ? AND is_dirty = 1 AND created_by = ?
+  `).all(siteId, userId) as any[];
 
   if (modifiedCartes.length === 0) {
     return { publishedCount: 0 };

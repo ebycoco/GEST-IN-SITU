@@ -24,7 +24,7 @@ export default function AgentSaisieLayout() {
     }
   }, [activeSiteId, user]);
 
-  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const { cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -62,7 +62,11 @@ export default function AgentSaisieLayout() {
 
 
   const pullDisabled = isPullingCards || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
+  // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
+  // donnée manquante) — distinct de dirtyCartesCount (brut) pour ne pas activer le bouton
+  // sur des cartes que l'envoi rejettera silencieusement.
+  const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
+  const pushDisabled = isBulkUploading || conformeCount === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -113,7 +117,7 @@ export default function AgentSaisieLayout() {
             </button>
 
             <button
-              onClick={() => handleStartBulkUpload(false, false, false, (detailedSyncStats?.modifiedCount || 0) > 0)}
+              onClick={() => handleStartBulkUpload(false, false, false)}
               disabled={pushDisabled}
               className="btn-plein-soleil"
               style={{
@@ -134,7 +138,7 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : 'Synchroniser vers le Cloud'}
+              {isBulkUploading ? 'ENVOI...' : `Synchroniser vers le Cloud${conformeCount > 0 ? ` (${conformeCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}

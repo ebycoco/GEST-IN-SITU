@@ -29,14 +29,18 @@ declare global {
         getRetraits: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<{ rows: any[]; totaux: any }>;
         getRetraitsTrend: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<Array<{ label: string; total: number }>>;
         getUnsyncedCardsCount: (siteId: number) => Promise<number>;
+        getUnsyncedConformeCardsCount: (siteId: number) => Promise<number>;
         getUnsyncedUsersCount: (siteId: number) => Promise<number>;
-        getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number }>;
+        getUnsyncedCentresCount: (siteId: number) => Promise<number>;
+        getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number }>;
       };
       cartes: {
         searchAllRecords: (siteId: number, filters: any, limit: number) => Promise<any[]>;
-        getRecordForCorrection: (originalId: number | string, recordType: string) => Promise<any>;
+        getRecordForCorrection: (originalId: number | string, recordType: string, siteId?: number) => Promise<any>;
         getPage: (offset: number, limit: number, filters: any) => Promise<{rows: any[], total: number}>;
         search: (query: string, limit?: number, filters?: any) => Promise<any[]>;
+        searchCloudEmergency: (query: string, filters: any) => Promise<any[]>;
+        pullSingleCard: (cardData: any) => Promise<any>;
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
         countDrafts: (siteId: number, currentUser?: any) => Promise<number>;
@@ -59,7 +63,8 @@ declare global {
         declarerPerdue: (id: number) => Promise<boolean>;
         getHistoriquePertes: (siteId?: number) => Promise<any[]>;
         reactiverCarte: (id: number, nouveauRangement: string, currentUser?: any) => Promise<any>;
-        getInvalidDates: (siteId?: number) => Promise<any[]>;
+        getInvalidDates: (siteId?: number, offset?: number, limit?: number, query?: string) => Promise<{ rows: any[], total: number }>;
+        getDatesVidesPage: (siteId?: number, offset?: number, limit?: number, query?: string) => Promise<{ rows: any[], total: number }>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;
         getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
         getDoublonsProbablesPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
@@ -89,7 +94,7 @@ declare global {
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
         hardDelete: (id: number) => Promise<boolean>;
-        resetAgentPassword: (targetUserId: number, callerUserId: number) => Promise<{ success: boolean }>;
+        resetAgentPassword: (targetUserId: number) => Promise<{ success: boolean }>;
       };
       logs: {
         get: (offset?: number, limit?: number, filters?: any) => Promise<{rows: any[], total: number}>;
@@ -127,6 +132,7 @@ declare global {
         getAnomalies: (siteId: number, offset?: number, limit?: number, query?: string) => Promise<{rows: any[], total: number}>;
         clearAnomalies: (siteId: number) => Promise<void>;
         deleteAnomaly: (id: number) => Promise<void>;
+        updateAnomalyField: (id: number, field: string, value: string) => Promise<void>;
         countEmptyAnomalies: (siteId: number) => Promise<number>;
         deleteEmptyAnomalies: (siteId: number) => Promise<void>;
         onProgress: (callback: (p: number) => void) => () => void;

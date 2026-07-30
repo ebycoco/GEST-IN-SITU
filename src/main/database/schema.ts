@@ -1,8 +1,9 @@
-﻿import Database from 'better-sqlite3';
+import Database from 'better-sqlite3';
 import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
+import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 49;
+export const SCHEMA_VERSION = 59;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -175,6 +176,11 @@ export function runMigrations(db: Database.Database): void {
       migrateV32(db);
     }
 
+    if (currentVersion < 33) {
+      log.info('Running migration v33: Enriching t_import_anomalies with identity columns (noms, prenoms, ddn, num_secu, contact, site_id, erreur_message, lieu_de_naissance, rangement)');
+      migrateV33(db);
+    }
+
     if (currentVersion < 34) {
       log.info('Running migration v34: Creating indexes for stats:get performance optimization');
       migrateV34(db);
@@ -253,6 +259,56 @@ export function runMigrations(db: Database.Database): void {
     if (currentVersion < 49) {
       log.info('Running migration v49: Create t_agent_archives table');
       migrateV49(db);
+    }
+    
+    if (currentVersion < 50) {
+      log.info('Running migration v50: Add centre_id to t_import_anomalies');
+      migrateV50(db);
+    }
+
+    if (currentVersion < 51) {
+      log.info('Running migration v51: Create t_anomalies_fts');
+      migrateV51(db);
+    }
+
+    if (currentVersion < 52) {
+      log.info('Running migration v52: Add lieu_enrolement to t_import_anomalies');
+      migrateV52(db);
+    }
+
+    if (currentVersion < 53) {
+      log.info('Running migration v53: Full alignment of t_import_anomalies with t_cartes');
+      migrateV53(db);
+    }
+
+    if (currentVersion < 54) {
+      log.info('Running migration v54: Rebuilding t_cartes for missing columns and integrity checks');
+      migrateV54(db);
+    }
+
+    if (currentVersion < 55) {
+      log.info('Running migration v55: Adding depends_on to t_outbox and migrating is_dirty cards');
+      migrateV55(db);
+    }
+
+    if (currentVersion < 56) {
+      log.info('Running migration v56: Normalizing cle_doublon back to the canonical 5-segment format');
+      migrateV56(db);
+    }
+
+    if (currentVersion < 57) {
+      log.info('Running migration v57: Normalizing contact (and dependent cle_doublon) back to the canonical digits-only format');
+      migrateV57(db);
+    }
+
+    if (currentVersion < 58) {
+      log.info('Running migration v58: Removing redundant recursive FTS resync on t_cartes trigger');
+      migrateV58(db);
+    }
+
+    if (currentVersion < 59) {
+      log.info('Running migration v59: Update t_cartes CHECK constraint to allow DOUBLON');
+      migrateV59(db);
     }
 
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -523,9 +579,12 @@ function migrateV1(db: Database.Database): void {
       is_active INTEGER DEFAULT 1,
       max_centres INTEGER DEFAULT 4,
       created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       sync_id TEXT,
       expiry_date TEXT,
-      is_permanent INTEGER DEFAULT 0
+      is_permanent INTEGER DEFAULT 0,
+      prefixe_rangement TEXT,
+      is_dirty INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS t_centres (
@@ -534,10 +593,12 @@ function migrateV1(db: Database.Database): void {
       nom TEXT NOT NULL,
       numero INTEGER DEFAULT 1 CHECK(numero BETWEEN 1 AND 4),
       created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now')),
       sync_id TEXT,
       code TEXT,
       prefixe_rangement TEXT,
       lieu TEXT,
+      is_dirty INTEGER DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES t_sites(id)
     );
 
@@ -602,7 +663,7 @@ function migrateV1(db: Database.Database): void {
       lieu_enrolement TEXT,
       contact TEXT,
       rangement TEXT,
-      statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON')),
+      statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON','DOUBLON')),
       date_delivrance TEXT,
       agent_saisie TEXT,
       -- DÃ©livrance
@@ -614,7 +675,7 @@ function migrateV1(db: Database.Database): void {
       cle_doublon TEXT,
       cle_doublon_flex TEXT,
       -- Absence physique
-      statut_physique TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE')),
+      statut_physique TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE','PERDUE','ABIMEE')),
       agent_signalement_absence TEXT,
       date_signalement_absence TEXT,
       note_signalement_absence TEXT,
@@ -630,13 +691,16 @@ function migrateV1(db: Database.Database): void {
       -- QR Code
       qr_code_data TEXT,
       -- Sync
-      sync_id TEXT,
+      sync_id TEXT UNIQUE,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now')),
       synced_at TEXT,
       is_dirty INTEGER DEFAULT 0,
+      is_exported INTEGER DEFAULT 0,
       created_by INTEGER DEFAULT NULL,
       updated_by INTEGER DEFAULT NULL,
+      contact_retirant TEXT,
+      has_invalid_date INTEGER DEFAULT 0,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
@@ -664,29 +728,7 @@ function migrateV1(db: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);
 
-    -- =====================================================
-    -- FTS5 : Recherche instantanÃ©e full-text
-    -- =====================================================
-    CREATE VIRTUAL TABLE IF NOT EXISTS t_cartes_fts USING fts5(
-      noms, prenoms, num_secu, contact, lieu_de_naissance, rangement,
-      content='t_cartes', content_rowid='id_carte'
-    );
 
-    -- Triggers pour garder FTS synchronisÃ©
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
 
     -- =====================================================
     -- LOGS D'AUDIT
@@ -769,7 +811,8 @@ function migrateV1(db: Database.Database): void {
       status      TEXT    NOT NULL DEFAULT 'PENDING'
                           CHECK(status IN ('PENDING','SYNCED','ERROR')),
       error_msg   TEXT,
-      attempts    INTEGER DEFAULT 0
+      attempts    INTEGER DEFAULT 0,
+      depends_on  TEXT    NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_outbox_status ON t_outbox(status, created_at);
@@ -782,14 +825,57 @@ function migrateV1(db: Database.Database): void {
       carte_id        TEXT,
       type_anomalie   TEXT,
       description     TEXT,
+      erreur_message  TEXT,
       noms            TEXT,
       prenoms         TEXT,
       date_de_naissance TEXT,
+      lieu_de_naissance TEXT,
       num_secu        TEXT,
+      lieu_enrolement TEXT,
       contact         TEXT,
+      rangement       TEXT,
+      statut          TEXT,
+      date_delivrance TEXT,
+      agent_saisie    TEXT,
+      nom_retirant    TEXT,
+      num_retirant    TEXT,
+      agent_distributeur TEXT,
+      centre_retrait  TEXT,
+      cle_doublon     TEXT,
+      cle_doublon_flex TEXT,
+      statut_physique TEXT,
+      agent_signalement_absence TEXT,
+      date_signalement_absence TEXT,
+      note_signalement_absence TEXT,
+      escalade_niveau TEXT,
+      date_resolution_absence TEXT,
+      agent_resolution_absence TEXT,
+      note_resolution TEXT,
+      notif_lue       INTEGER,
       site_id         INTEGER,
-      erreur_message  TEXT,
-      created_at      TEXT DEFAULT (datetime('now'))
+      centre_id       INTEGER,
+      poste_id        INTEGER,
+      qr_code_data    TEXT,
+      sync_id         TEXT,
+      created_at      TEXT DEFAULT (datetime('now')),
+      updated_at      TEXT DEFAULT (datetime('now')),
+      synced_at       TEXT,
+      is_dirty        INTEGER DEFAULT 0,
+      created_by      INTEGER DEFAULT NULL,
+      updated_by      INTEGER DEFAULT NULL,
+      has_invalid_date INTEGER DEFAULT 0,
+      is_exported     INTEGER DEFAULT 0,
+      contact_retirant TEXT
+    );
+
+    -- =====================================================
+    -- ARCHIVES DES AGENTS
+    -- =====================================================
+    CREATE TABLE IF NOT EXISTS t_agent_archives (
+      id_carte INTEGER NOT NULL,
+      login_user TEXT NOT NULL,
+      archived_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id_carte, login_user)
     );
 
     -- =====================================================
@@ -800,6 +886,79 @@ function migrateV1(db: Database.Database): void {
       value TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- =====================================================
+    -- FTS5 : Recherche instantanÃ©e full-text
+    -- =====================================================
+    CREATE VIRTUAL TABLE IF NOT EXISTS t_cartes_fts USING fts5(
+      noms, prenoms, num_secu, contact, lieu_de_naissance, rangement,
+      content='t_cartes', content_rowid='id_carte'
+    );
+
+    -- Triggers pour garder FTS synchronisÃ©
+    CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
+      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
+      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+    END;
+
+    -- Restreint aux colonnes réellement indexées par la FTS : sans ce filtre, le trigger se
+    -- redéclenche récursivement pour CHAQUE ligne insérée via trg_cartes_invalid_date_ai/au
+    -- (qui font un UPDATE ... SET has_invalid_date, non couvert par la FTS), triplant les
+    -- écritures FTS par ligne lors des imports massifs sans aucun bénéfice fonctionnel.
+    CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE OF noms, prenoms, num_secu, contact, lieu_de_naissance, rangement ON t_cartes BEGIN
+      DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_ai
+    AFTER INSERT ON t_cartes
+    BEGIN
+      UPDATE t_cartes SET has_invalid_date = CASE
+        WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+             OR length(NEW.date_de_naissance) != 10
+             OR substr(NEW.date_de_naissance, 5, 1) != '-'
+             OR substr(NEW.date_de_naissance, 8, 1) != '-'
+        THEN 1 ELSE 0 END
+      WHERE id_carte = NEW.id_carte;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_au
+    AFTER UPDATE OF date_de_naissance ON t_cartes
+    BEGIN
+      UPDATE t_cartes SET has_invalid_date = CASE
+        WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+             OR length(NEW.date_de_naissance) != 10
+             OR substr(NEW.date_de_naissance, 5, 1) != '-'
+             OR substr(NEW.date_de_naissance, 8, 1) != '-'
+        THEN 1 ELSE 0 END
+      WHERE id_carte = NEW.id_carte;
+    END;
+
+    -- FTS5 pour t_import_anomalies
+    CREATE VIRTUAL TABLE IF NOT EXISTS t_anomalies_fts USING fts5(
+      noms, prenoms, num_secu, contact, lieu_de_naissance, rangement,
+      content='t_import_anomalies', content_rowid='id'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS trg_anomalies_ai AFTER INSERT ON t_import_anomalies BEGIN
+      INSERT INTO t_anomalies_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_anomalies_ad AFTER DELETE ON t_import_anomalies BEGIN
+      DELETE FROM t_anomalies_fts WHERE rowid = old.id;
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS trg_anomalies_au AFTER UPDATE ON t_import_anomalies BEGIN
+      DELETE FROM t_anomalies_fts WHERE rowid = old.id;
+      INSERT INTO t_anomalies_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
 
     -- =====================================================
     -- SEED DATA : Site + Centres + Postes par dÃ©faut
@@ -969,7 +1128,7 @@ function migrateV10(db: Database.Database): void {
     `);
 
     db.exec(`
-      CREATE TRIGGER trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
+      CREATE TRIGGER trg_cartes_au AFTER UPDATE OF noms, prenoms, num_secu, contact, lieu_de_naissance, rangement ON t_cartes BEGIN
         DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
         INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
         VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
@@ -1719,7 +1878,7 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_cartes', 'is_dirty', 'INTEGER DEFAULT 0');
   safeAlter('t_cartes', 'updated_at', 'TEXT');
   safeAlter('t_cartes', 'updated_by', 'INTEGER DEFAULT NULL');
-  // Colonnes de dÃ©livrance (V39) â€” garanties mÃªme si la DB a Ã©tÃ© crÃ©Ã©e directement Ã  une version > 39
+  // Colonnes de délivrance (V39) — garanties même si la DB a été créée directement à une version > 39
   safeAlter('t_cartes', 'contact_retirant', 'TEXT');
   safeAlter('t_cartes', 'nom_retirant', 'TEXT');
   safeAlter('t_cartes', 'num_retirant', 'TEXT');
@@ -1729,7 +1888,7 @@ function migrateV27_safetyNet(db: Database.Database): void {
   try {
     db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
   } catch (indexErr: any) {
-    log.warn("[SAFETY NET] Impossible de crÃ©er l'index idx_cartes_created_by :", indexErr.message);
+    log.warn("[SAFETY NET] Impossible de créer l'index idx_cartes_created_by :", indexErr.message);
   }
 
   try {
@@ -1747,7 +1906,7 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_sites', 'is_dirty', 'INTEGER DEFAULT 0');
   safeAlter('t_sites', 'updated_at', 'TEXT');
 
-  // t_import_anomalies : colonnes d'identitÃ© (V33)
+  // t_import_anomalies : colonnes d'identite et de structure
   safeAlter('t_import_anomalies', 'noms', 'TEXT');
   safeAlter('t_import_anomalies', 'prenoms', 'TEXT');
   safeAlter('t_import_anomalies', 'date_de_naissance', 'TEXT');
@@ -1757,6 +1916,39 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_import_anomalies', 'erreur_message', 'TEXT');
   safeAlter('t_import_anomalies', 'lieu_de_naissance', 'TEXT');
   safeAlter('t_import_anomalies', 'rangement', 'TEXT');
+  safeAlter('t_import_anomalies', 'statut', 'TEXT');
+  safeAlter('t_import_anomalies', 'date_delivrance', 'TEXT');
+  safeAlter('t_import_anomalies', 'lieu_enrolement', 'TEXT');
+  safeAlter('t_import_anomalies', 'centre_id', 'INTEGER');
+
+  // Alignement integral t_cartes -> t_import_anomalies (V53)
+  safeAlter('t_import_anomalies', 'agent_saisie', 'TEXT');
+  safeAlter('t_import_anomalies', 'nom_retirant', 'TEXT');
+  safeAlter('t_import_anomalies', 'num_retirant', 'TEXT');
+  safeAlter('t_import_anomalies', 'agent_distributeur', 'TEXT');
+  safeAlter('t_import_anomalies', 'centre_retrait', 'TEXT');
+  safeAlter('t_import_anomalies', 'cle_doublon', 'TEXT');
+  safeAlter('t_import_anomalies', 'cle_doublon_flex', 'TEXT');
+  safeAlter('t_import_anomalies', 'statut_physique', 'TEXT');
+  safeAlter('t_import_anomalies', 'agent_signalement_absence', 'TEXT');
+  safeAlter('t_import_anomalies', 'date_signalement_absence', 'TEXT');
+  safeAlter('t_import_anomalies', 'note_signalement_absence', 'TEXT');
+  safeAlter('t_import_anomalies', 'escalade_niveau', 'TEXT');
+  safeAlter('t_import_anomalies', 'date_resolution_absence', 'TEXT');
+  safeAlter('t_import_anomalies', 'agent_resolution_absence', 'TEXT');
+  safeAlter('t_import_anomalies', 'note_resolution', 'TEXT');
+  safeAlter('t_import_anomalies', 'notif_lue', 'INTEGER');
+  safeAlter('t_import_anomalies', 'poste_id', 'INTEGER');
+  safeAlter('t_import_anomalies', 'qr_code_data', 'TEXT');
+  safeAlter('t_import_anomalies', 'sync_id', 'TEXT');
+  safeAlter('t_import_anomalies', 'updated_at', "TEXT DEFAULT (datetime('now'))");
+  safeAlter('t_import_anomalies', 'synced_at', 'TEXT');
+  safeAlter('t_import_anomalies', 'is_dirty', 'INTEGER DEFAULT 0');
+  safeAlter('t_import_anomalies', 'created_by', 'INTEGER DEFAULT NULL');
+  safeAlter('t_import_anomalies', 'updated_by', 'INTEGER DEFAULT NULL');
+  safeAlter('t_import_anomalies', 'has_invalid_date', 'INTEGER DEFAULT 0');
+  safeAlter('t_import_anomalies', 'is_exported', 'INTEGER DEFAULT 0');
+  safeAlter('t_import_anomalies', 'contact_retirant', 'TEXT');
 
   // â”€â”€ audit_logs : table de logs d'audit (V21) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Garantie universelle : crÃ©e la table si elle n'existe pas (bases prÃ©-V21
@@ -2071,7 +2263,7 @@ function migrateV43(db: Database.Database): void {
       FROM t_cartes_v42_backup;
     `);
 
-    // Ã‰tape 4 : RecrÃ©er les indexes
+    // Étape 4 : Recréer les indexes
     db.exec(`
       CREATE INDEX IF NOT EXISTS idx_cartes_site_statut ON t_cartes(site_id, statut);
       CREATE INDEX IF NOT EXISTS idx_cartes_sync_id ON t_cartes(sync_id);
@@ -2085,7 +2277,7 @@ function migrateV43(db: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_cartes_has_invalid_date ON t_cartes(has_invalid_date) WHERE has_invalid_date = 1;
     `);
 
-    // Ã‰tape 5 : Supprimer la table de sauvegarde
+    // Étape 5 : Supprimer la table de sauvegarde
     db.exec('DROP TABLE t_cartes_v42_backup;');
 
     log.info('[MIGRATION V43] Contrainte statut Ã©tendue avec BROUILLON avec succÃ¨s.');
@@ -2250,5 +2442,495 @@ function migrateV49(db: Database.Database): void {
     log.info('Migration V49: Created t_agent_archives table');
   } catch (e) {
     log.error('Migration V49 Error:', e);
+  }
+}
+
+// =====================================================
+// MIGRATION V50 : Ajout de centre_id sur t_import_anomalies + Backfill des données existantes
+// =====================================================
+function migrateV50(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V50] Ajout de centre_id sur t_import_anomalies...');
+    const tableInfoAnomaly = db.prepare("PRAGMA table_info(t_import_anomalies)").all() as { name: string }[];
+    const hasAnomalyCol = (colName: string) => tableInfoAnomaly.some(col => col.name === colName);
+
+    if (!hasAnomalyCol('centre_id')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN centre_id INTEGER;");
+      log.info("[MIGRATION V50] Column 'centre_id' added to t_import_anomalies.");
+    }
+
+    log.info('[MIGRATION V50] Backfill centre_id et lieu_enrolement (t_cartes & t_import_anomalies)...');
+    const sites = db.prepare('SELECT id FROM t_sites').all() as { id: number }[];
+
+    const updateCarte = db.prepare('UPDATE t_cartes SET centre_id = ?, lieu_enrolement = ? WHERE id = ?');
+    const updateAnomalie = db.prepare('UPDATE t_import_anomalies SET centre_id = ?, lieu_enrolement = ? WHERE id = ?');
+
+    for (const s of sites) {
+      const siteId = s.id;
+      const centres = db.prepare('SELECT id, nom, prefixe_rangement FROM t_centres WHERE site_id = ? ORDER BY numero ASC, id ASC').all(siteId) as any[];
+      if (centres.length === 0) continue;
+
+      const mainCentre = centres[0];
+
+      const routingIndex: { centre_id: number; nom_centre: string; prefix: string }[] = [];
+      centres.forEach((c: any) => {
+        if (c.prefixe_rangement && c.prefixe_rangement.trim()) {
+          c.prefixe_rangement.split(',').forEach((p: string) => {
+            const cleanP = p.toUpperCase().trim();
+            if (cleanP) routingIndex.push({ centre_id: c.id, nom_centre: c.nom, prefix: cleanP });
+          });
+        }
+      });
+      routingIndex.sort((a, b) => b.prefix.length - a.prefix.length);
+
+      const resolveRouting = (rawRangement: string): { centre_id: number; nom_centre: string } => {
+        if (!rawRangement) return { centre_id: mainCentre.id, nom_centre: mainCentre.nom };
+        const upper = rawRangement.toUpperCase().trim();
+        for (const r of routingIndex) {
+          if (upper.startsWith(r.prefix)) return { centre_id: r.centre_id, nom_centre: r.nom_centre };
+        }
+        return { centre_id: mainCentre.id, nom_centre: mainCentre.nom };
+      };
+
+      const cartes = db.prepare('SELECT id, rangement, lieu_enrolement FROM t_cartes WHERE site_id = ? AND centre_id IS NULL').all(siteId) as any[];
+      if (cartes.length > 0) {
+        db.transaction(() => {
+          for (const c of cartes) {
+            const res = resolveRouting(c.rangement);
+            const lieuE = (c.lieu_enrolement && c.lieu_enrolement.trim()) ? c.lieu_enrolement : res.nom_centre;
+            updateCarte.run(res.centre_id, lieuE, c.id);
+          }
+        })();
+        log.info(`[MIGRATION V50] Site ${siteId} : ${cartes.length} cartes mises à jour.`);
+      }
+
+      const anomalies = db.prepare('SELECT id, rangement, lieu_enrolement FROM t_import_anomalies WHERE site_id = ? AND (centre_id IS NULL OR centre_id = 0)').all(siteId) as any[];
+      if (anomalies.length > 0) {
+        db.transaction(() => {
+          for (const a of anomalies) {
+            const res = resolveRouting(a.rangement);
+            const lieuE = (a.lieu_enrolement && a.lieu_enrolement.trim()) ? a.lieu_enrolement : res.nom_centre;
+            updateAnomalie.run(res.centre_id, lieuE, a.id);
+          }
+        })();
+        log.info(`[MIGRATION V50] Site ${siteId} : ${anomalies.length} anomalies mises à jour.`);
+      }
+    }
+    log.info('[MIGRATION V50] Backfill terminé avec succès.');
+  } catch (e: any) {
+    log.error('Migration V50 Error:', e);
+  }
+}
+
+// =====================================================
+// MIGRATION V51 : Ajout de la table virtuelle FTS5 pour t_import_anomalies
+// =====================================================
+function migrateV51(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V51] Création de t_anomalies_fts et des triggers associés...');
+    
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS t_anomalies_fts USING fts5(
+        noms, prenoms, num_secu, contact, lieu_de_naissance, rangement,
+        content='t_import_anomalies', content_rowid='id'
+      );
+    `);
+
+    // Repeupler la table FTS
+    db.exec(`INSERT INTO t_anomalies_fts(t_anomalies_fts) VALUES('rebuild');`);
+
+    // Créer les triggers
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_anomalies_ai AFTER INSERT ON t_import_anomalies BEGIN
+        INSERT INTO t_anomalies_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_anomalies_ad AFTER DELETE ON t_import_anomalies BEGIN
+        DELETE FROM t_anomalies_fts WHERE rowid = old.id;
+      END;
+    `);
+
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_anomalies_au AFTER UPDATE ON t_import_anomalies BEGIN
+        DELETE FROM t_anomalies_fts WHERE rowid = old.id;
+        INSERT INTO t_anomalies_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+
+    log.info('[MIGRATION V51] Migration V51 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V51] Erreur :', e);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V52 : Ajout de lieu_enrolement à t_import_anomalies
+// =====================================================
+function migrateV52(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V52] Ajout de lieu_enrolement à t_import_anomalies...');
+    
+    const tableInfoAnomaly = db.prepare("PRAGMA table_info(t_import_anomalies)").all() as { name: string }[];
+    const hasAnomalyCol = (colName: string) => tableInfoAnomaly.some(col => col.name === colName);
+
+    if (!hasAnomalyCol('lieu_enrolement')) {
+      db.exec("ALTER TABLE t_import_anomalies ADD COLUMN lieu_enrolement TEXT;");
+      log.info("[MIGRATION V52] Column 'lieu_enrolement' added to t_import_anomalies.");
+    }
+    
+    log.info('[MIGRATION V52] Migration V52 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V52] Erreur :', e);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V53 : Alignement intégral de t_import_anomalies sur t_cartes
+// =====================================================
+function migrateV53(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V53] Alignement structurel de t_import_anomalies...');
+    const tableInfo = db.prepare("PRAGMA table_info(t_import_anomalies)").all() as { name: string }[];
+    const existingCols = new Set(tableInfo.map(c => c.name));
+
+    const columnsToAdd = [
+      { name: 'agent_saisie', type: 'TEXT' },
+      { name: 'nom_retirant', type: 'TEXT' },
+      { name: 'num_retirant', type: 'TEXT' },
+      { name: 'agent_distributeur', type: 'TEXT' },
+      { name: 'centre_retrait', type: 'TEXT' },
+      { name: 'cle_doublon', type: 'TEXT' },
+      { name: 'cle_doublon_flex', type: 'TEXT' },
+      { name: 'statut_physique', type: 'TEXT' },
+      { name: 'agent_signalement_absence', type: 'TEXT' },
+      { name: 'date_signalement_absence', type: 'TEXT' },
+      { name: 'note_signalement_absence', type: 'TEXT' },
+      { name: 'escalade_niveau', type: 'TEXT' },
+      { name: 'date_resolution_absence', type: 'TEXT' },
+      { name: 'agent_resolution_absence', type: 'TEXT' },
+      { name: 'note_resolution', type: 'TEXT' },
+      { name: 'notif_lue', type: 'INTEGER' },
+      { name: 'poste_id', type: 'INTEGER' },
+      { name: 'qr_code_data', type: 'TEXT' },
+      { name: 'sync_id', type: 'TEXT' },
+      { name: 'updated_at', type: "TEXT DEFAULT (datetime('now'))" },
+      { name: 'synced_at', type: 'TEXT' },
+      { name: 'is_dirty', type: 'INTEGER DEFAULT 0' },
+      { name: 'created_by', type: 'INTEGER DEFAULT NULL' },
+      { name: 'updated_by', type: 'INTEGER DEFAULT NULL' },
+      { name: 'has_invalid_date', type: 'INTEGER DEFAULT 0' },
+      { name: 'is_exported', type: 'INTEGER DEFAULT 0' },
+      { name: 'contact_retirant', type: 'TEXT' }
+    ];
+
+    for (const col of columnsToAdd) {
+      if (!existingCols.has(col.name)) {
+        db.exec(`ALTER TABLE t_import_anomalies ADD COLUMN ${col.name} ${col.type};`);
+        log.info(`[MIGRATION V53] Column '${col.name}' added to t_import_anomalies.`);
+      }
+    }
+    
+    log.info('[MIGRATION V53] Migration V53 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V53] Erreur :', e);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V54 : Reconstruction t_cartes pour securite et optimisation
+// =====================================================
+function migrateV54(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V54] Demarrage V54 - Reconstruction securisee de t_cartes...');
+
+    // ETAPE 1 : BACKUP
+    const { join, dirname } = require('path');
+    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const dbPath = (db as any).name as string;
+    
+    if (dbPath !== ':memory:') {
+      const backupDir = join(dirname(dbPath), 'backups_migrations');
+      try {
+        mkdirSync(backupDir, { recursive: true });
+      } catch(e) {}
+      const timestamp = new Date().getTime();
+      const backupPath = join(backupDir, `backup_pre_v54_${timestamp}.sqlite`);
+      copyFileSync(dbPath, backupPath);
+      const backupSize = statSync(backupPath).size;
+      log.info(`[MIGRATION V54] Backup physique pre-reconstruction cree avec succes : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
+    }
+
+    const countBefore = db.prepare('SELECT COUNT(*) FROM t_cartes').get() as any;
+    log.info(`[MIGRATION V54] t_cartes contient ${countBefore['COUNT(*)']} lignes.`);
+
+    const currentColumnsRaw = db.pragma('table_info(t_cartes)') as { name: string }[];
+    const currentColumnNames = currentColumnsRaw.map(c => c.name);
+
+    // Desactiver FK pour la reconstruction
+    const fkState = db.pragma('foreign_keys', { simple: true });
+    log.info(`[MIGRATION V54] Initial PRAGMA foreign_keys: ${fkState}`);
+    db.pragma('foreign_keys = OFF');
+
+    db.exec('BEGIN EXCLUSIVE TRANSACTION');
+    try {
+      const oldIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='t_cartes' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+      const oldTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='t_cartes' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+      
+      db.exec('ALTER TABLE t_cartes RENAME TO t_cartes_backup_v53');
+      
+      const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='t_cartes_backup_v53'").get() as { sql: string };
+      if (!row || !row.sql) {
+        throw new Error("Impossible de lire la definition de t_cartes_backup_v53");
+      }
+      
+      let newCreateSql = row.sql.replace(/\"?t_cartes_backup_v53\"?/g, 't_cartes');
+      // Unifier la contrainte CHECK (on remplace toutes les variantes existantes)
+      newCreateSql = newCreateSql.replace(/CHECK\s*\(\s*statut_physique\s+IN\s*\([^)]+\)\s*\)/gi, "CHECK(statut_physique IN ('OK','ABSENT','RETROUVE','PERDUE','ABIMEE'))");
+      
+      db.exec(newCreateSql);
+      
+      const missingColumns = [
+        { name: 'has_invalid_date', def: 'INTEGER DEFAULT 0' },
+        { name: 'agent_signalement_absence', def: 'TEXT' },
+        { name: 'date_signalement_absence', def: 'TEXT' },
+        { name: 'date_resolution_absence', def: 'TEXT' },
+        { name: 'agent_resolution_absence', def: 'TEXT' },
+        { name: 'note_resolution', def: 'TEXT' },
+        { name: 'notif_lue', def: 'INTEGER DEFAULT 1' },
+        { name: 'updated_by', def: 'INTEGER DEFAULT NULL' }
+      ];
+      
+      for (const col of missingColumns) {
+        if (!currentColumnNames.includes(col.name)) {
+          db.exec(`ALTER TABLE t_cartes ADD COLUMN ${col.name} ${col.def}`);
+          currentColumnNames.push(col.name);
+        }
+      }
+      
+      const colsToCopy = currentColumnsRaw.map(c => c.name).join(', ');
+      db.exec(`INSERT INTO t_cartes (${colsToCopy}) SELECT ${colsToCopy} FROM t_cartes_backup_v53`);
+      
+      const countAfter = db.prepare('SELECT COUNT(*) FROM t_cartes').get() as any;
+      if (countBefore['COUNT(*)'] !== countAfter['COUNT(*)']) {
+        throw new Error(`Perte de donnees detectee ! Avant=${countBefore['COUNT(*)']}, Apres=${countAfter['COUNT(*)']}`);
+      }
+      log.info(`[MIGRATION V54] Copie verifiee. ${countAfter['COUNT(*)']} lignes.`);
+      
+      // DROP ancienne table POUR LIBERER LES NOMS d'INDEX et TRIGGERS !
+      db.exec('DROP TABLE t_cartes_backup_v53');
+      
+      // Restauration dynamique des INDEXES
+      const indexesToDrop = ['idx_cartes_identite_civile', 'idx_cartes_site_identite', 'idx_cartes_dp_identite', 'idx_cartes_noms_prenoms_ddn'];
+      for (const idx of oldIndexes) {
+        if (!indexesToDrop.includes(idx.name)) {
+          db.exec(idx.sql);
+        }
+      }
+      
+      // Restauration dynamique des TRIGGERS
+      for (const trg of oldTriggers) {
+        db.exec(trg.sql);
+      }
+      
+      const integrity = db.pragma('integrity_check', { simple: true });
+      if (typeof integrity === 'string' && integrity.toLowerCase() !== 'ok') {
+        throw new Error(`Integrity check failed: ${integrity}`);
+      }
+      log.info('[MIGRATION V54] PRAGMA integrity_check (avant commit) = ok');
+      
+      const fkErrors = db.pragma('foreign_key_check(t_cartes)') as any[];
+      if (fkErrors.length > 0) {
+        throw new Error(`Foreign key check failed: ${JSON.stringify(fkErrors)}`);
+      }
+      log.info('[MIGRATION V54] PRAGMA foreign_key_check(t_cartes) = pass');
+      
+      db.exec('COMMIT');
+      log.info('[MIGRATION V54] Transaction COMMIT successfully.');
+    } catch (e: any) {
+      db.exec('ROLLBACK');
+      log.error(`[MIGRATION V54] ROLLBACK declenche suite a erreur : ${e.message}`);
+      throw e;
+    }
+
+    if (fkState) {
+      db.pragma('foreign_keys = ON');
+    }
+      
+    try {
+      db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild')");
+      log.info('[MIGRATION V54] FTS rebuild triggered.');
+    } catch (e: any) {
+      log.warn(`[MIGRATION V54] FTS rebuild skipped or failed: ${e.message}`);
+    }
+
+    // SUITE DE MIGRATE V54
+    // Ajout triggers has_invalid_date
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_ai
+      AFTER INSERT ON t_cartes
+      BEGIN
+        UPDATE t_cartes SET has_invalid_date = CASE
+          WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+               OR length(NEW.date_de_naissance) != 10
+               OR substr(NEW.date_de_naissance, 5, 1) != '-'
+               OR substr(NEW.date_de_naissance, 8, 1) != '-'
+          THEN 1 ELSE 0 END
+        WHERE id_carte = NEW.id_carte;
+      END;
+    `);
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_invalid_date_au
+      AFTER UPDATE OF date_de_naissance ON t_cartes
+      BEGIN
+        UPDATE t_cartes SET has_invalid_date = CASE
+          WHEN NEW.date_de_naissance IS NULL OR NEW.date_de_naissance = ''
+               OR length(NEW.date_de_naissance) != 10
+               OR substr(NEW.date_de_naissance, 5, 1) != '-'
+               OR substr(NEW.date_de_naissance, 8, 1) != '-'
+          THEN 1 ELSE 0 END
+        WHERE id_carte = NEW.id_carte;
+      END;
+    `);
+    log.info('[MIGRATION V54] Triggers trg_cartes_invalid_date_ai/au crees/verifies avec succes.');
+
+    // Ajout prefixe_rangement t_sites
+    try {
+      db.exec("ALTER TABLE t_sites ADD COLUMN prefixe_rangement TEXT;");
+      log.info("[MIGRATION V54] Colonne prefixe_rangement ajoutee a t_sites.");
+    } catch (e: any) {
+      if (e.message.includes("duplicate column name")) {
+        log.info("[MIGRATION V54] Colonne prefixe_rangement existe deja sur t_sites.");
+      }
+    }
+
+    // GLOBAL INTEGRITY CHECK
+    const globalIntegrity = db.pragma('integrity_check', { simple: true });
+    log.info(`[MIGRATION V54] GLOBAL PRAGMA integrity_check de fin = ${globalIntegrity}`);
+
+  } catch (e: any) {
+    log.error('[MIGRATION V54] Echec:', e.message);
+    throw e;
+  }
+}
+
+export function migrateV55(db: Database.Database): void {
+  try {
+    const tableInfo = db.pragma('table_info(t_outbox)') as { name: string }[];
+    if (!tableInfo.some(c => c.name === 'depends_on')) {
+      db.exec("ALTER TABLE t_outbox ADD COLUMN depends_on TEXT NULL;");
+      log.info("[MIGRATION V55] Colonne depends_on ajoutée a t_outbox.");
+    }
+
+    // Rattrapage exclusif (cartes orphelines hors outbox)
+    const dirtyCards = db.prepare("SELECT * FROM t_cartes WHERE is_dirty = 1 AND sync_id NOT IN (SELECT id FROM t_outbox)").all() as any[];
+    if (dirtyCards.length > 0) {
+      log.info(`[MIGRATION V55] Rattrapage : ${dirtyCards.length} cartes is_dirty=1 orphelines trouvées.`);
+      const enqueue = db.prepare(`
+        INSERT INTO t_outbox (id, table_name, operation, payload, status, attempts, created_at, error_msg, depends_on)
+        VALUES (?, 't_cartes', 'UPDATE', ?, 'PENDING', 0, datetime('now'), NULL, NULL)
+      `);
+      db.transaction(() => {
+        for (const c of dirtyCards) {
+          if (!c.sync_id) continue;
+          try {
+            const payload = JSON.stringify(mapCardPayload(c));
+            enqueue.run(c.sync_id, payload);
+          } catch (err) {
+            log.error(`[MIGRATION V55] Carte ${c.sync_id} ignorée pour payload invalide :`, err);
+          }
+        }
+      })();
+    }
+  } catch (e: any) {
+    throw e;
+  }
+}
+
+export function migrateV56(db: Database.Database): void {
+  try {
+    // Réaligne cle_doublon sur le format canonique à 5 segments
+    // (noms|prenoms|date_de_naissance|lieu_de_naissance|contact), utilisé par la saisie manuelle
+    // (createCarte/updateCarte), le dashboard qualité (stats-worker.js, sentinelle '||||') et le
+    // moteur de sync (downstream.ts). Répare les cartes déviées par une ancienne version de
+    // import-worker.js qui embarquait num_secu+statut dans la clé (7 segments), invisibles à ces
+    // modules. Ciblé sur les seules clés à réparer (>=6 '|') pour rester rapide sur les gros sites.
+    const result = db.prepare(`
+      UPDATE t_cartes
+      SET cle_doublon = COALESCE(noms, '') || '|' || COALESCE(prenoms, '') || '|' || COALESCE(date_de_naissance, '') || '|' || COALESCE(lieu_de_naissance, '') || '|' || COALESCE(contact, '')
+      WHERE cle_doublon LIKE '%|%|%|%|%|%'
+    `).run();
+    log.info(`[MIGRATION V56] cle_doublon normalisée (5 segments) sur ${result.changes} carte(s) déviées par l'ancien format d'import.`);
+  } catch (e: any) {
+    log.error('[MIGRATION V56] Échec de la normalisation de cle_doublon :', e);
+    throw e;
+  }
+}
+
+export function migrateV57(db: Database.Database): void {
+  try {
+    // Réaligne `contact` sur le format canonique (chiffres bruts, sans indicatif) — celui
+    // utilisé par la saisie manuelle (createCarte/updateCarte) et le pull Cloud
+    // (download-worker.js). Répare les cartes stockées par une ancienne version de
+    // import-worker.js au format "+225 XX XX XX XX XX", et recalcule dans la foulée
+    // cle_doublon (qui inclut contact) pour ces mêmes lignes. `contact` fait référence à
+    // la valeur AVANT mise à jour dans les deux expressions du SET ci-dessous.
+    const result = db.prepare(`
+      UPDATE t_cartes
+      SET contact = SUBSTR(REPLACE(REPLACE(contact, ' ', ''), '+', ''), -10),
+          cle_doublon = COALESCE(noms, '') || '|' || COALESCE(prenoms, '') || '|' || COALESCE(date_de_naissance, '') || '|' || COALESCE(lieu_de_naissance, '') || '|' || SUBSTR(REPLACE(REPLACE(contact, ' ', ''), '+', ''), -10)
+      WHERE contact LIKE '+225%'
+    `).run();
+    log.info(`[MIGRATION V57] contact normalisé (format canonique) sur ${result.changes} carte(s) déviées par l'ancien format d'import.`);
+  } catch (e: any) {
+    log.error('[MIGRATION V57] Échec de la normalisation de contact :', e);
+    throw e;
+  }
+}
+
+export function migrateV58(db: Database.Database): void {
+  try {
+    // trg_cartes_au se déclenchait sur TOUT UPDATE de t_cartes, y compris l'auto-update
+    // has_invalid_date effectué par trg_cartes_invalid_date_ai/au. Résultat : chaque ligne
+    // insérée déclenchait un cycle DELETE+INSERT FTS redondant en plus de celui déjà fait par
+    // trg_cartes_ai, triplant les écritures FTS par ligne lors des imports massifs. Le
+    // filtre "OF <colonnes FTS>" ne change aucun résultat fonctionnel (le contenu FTS reste
+    // synchronisé dans tous les cas), il supprime uniquement la récursion inutile.
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+    db.exec(`
+      CREATE TRIGGER trg_cartes_au AFTER UPDATE OF noms, prenoms, num_secu, contact, lieu_de_naissance, rangement ON t_cartes BEGIN
+        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+    log.info('[MIGRATION V58] trg_cartes_au recréé avec filtre de colonnes (suppression de la récursion FTS redondante).');
+  } catch (e: any) {
+    log.error('[MIGRATION V58] Échec de la recréation de trg_cartes_au :', e);
+    throw e;
+  }
+}
+
+export function migrateV59(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V59] Updating CHECK constraint for t_cartes to allow DOUBLON...');
+    // Modification directe du sqlite_schema (PRAGMA writable_schema) pour mettre à jour la contrainte CHECK sans DROP
+    db.pragma('writable_schema = ON');
+    db.exec(`
+      UPDATE sqlite_schema 
+      SET sql = replace(sql, 'CHECK(statut IN (''EN STOCK'',''DELIVRE'',''DISTRIBUEE'',''RETIRE'',''ANNULE'',''BROUILLON''))', 'CHECK(statut IN (''EN STOCK'',''DELIVRE'',''DISTRIBUEE'',''RETIRE'',''ANNULE'',''BROUILLON'',''DOUBLON''))') 
+      WHERE name = 't_cartes' AND type = 'table';
+    `);
+    db.pragma('writable_schema = OFF');
+    log.info('[MIGRATION V59] CHECK constraint updated successfully.');
+  } catch (e: any) {
+    log.error('[MIGRATION V59] Failed to update CHECK constraint:', e);
+    // On ignore l'erreur si sqlite_schema n'est pas modifiable, car safety net ne check pas ca
   }
 }

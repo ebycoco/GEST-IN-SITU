@@ -15,7 +15,6 @@ export default function AdminCentreLayout() {
   const [isPullingCards, setIsPullingCards] = useState<boolean>(false);
   const [isSyncingUsers, setIsSyncingUsers] = useState<boolean>(false);
   const [isBulkUploading, setIsBulkUploading] = useState<boolean>(false);
-  const [dirtyCartesCount, setDirtyCartesCount] = useState<number>(0);
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
   const [detailedSyncStats, setDetailedSyncStats] = useState<any>(null);
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -45,9 +44,6 @@ export default function AdminCentreLayout() {
             if (currentCentre) setCentreName(currentCentre.nom);
           }
 
-          const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(user.site_id);
-          if (typeof unsyncedRes === 'number') setDirtyCartesCount(unsyncedRes);
-          
           window.api.sync.getCloudCartesCount(user.site_id).then(count => {
             setCloudCartesCount(count);
           }).catch(console.error);
@@ -74,9 +70,7 @@ export default function AdminCentreLayout() {
       const res = await window.api.sync.pullSiteCards(Number(user.site_id), user);
       if (res.success) {
         toast.success(res.count > 0 ? `✅ Récupération réussie ! ${res.count} carte(s) modifiée(s).` : "✅ Vos données locales sont déjà à jour.", { id: toastId, duration: 4000 });
-        // Force refresh dirty count
-        const unsyncedRes = await window.api.stats.getUnsyncedCardsCount(user.site_id);
-        if (typeof unsyncedRes === 'number') setDirtyCartesCount(unsyncedRes);
+        // Force refresh des compteurs de conformité
         const detailedSyncStats = await window.api.stats.getDetailedSyncStats(user.site_id);
         if (detailedSyncStats) setDetailedSyncStats(detailedSyncStats);
       } else {
@@ -112,14 +106,13 @@ export default function AdminCentreLayout() {
     setIsBulkUploading(true);
     const toastId = toast.loading("Envoi des données vers le cloud...");
     try {
-      const isDelta = (detailedSyncStats?.modifiedCount || 0) > 0;
-      const res = await window.api.sync.startBulk(Number(user.site_id), false, false, false, isDelta);
+      const res = await window.api.sync.startBulk(Number(user.site_id), false, false, false);
       if (res.success) {
         toast.success(res.message, { id: toastId });
         if ((res.strictCount || 0) > 0 || (res.probableCount || 0) > 0 || (res.invalidCount || 0) > 0) {
            toast.error(`Des anomalies ont bloqué l'envoi de certaines cartes. Veuillez les corriger dans l'onglet Cartes.`, { duration: 6000 });
         }
-        setDirtyCartesCount(0); // Update optimiste ou on attend le prochain tick
+        setDetailedSyncStats((prev: any) => prev ? { ...prev, cleanCount: 0, modifiedCount: 0 } : prev); // Update optimiste, en attendant le prochain tick
       } else {
         toast.error(res.message || "Erreur de synchronisation", { id: toastId });
       }
@@ -131,7 +124,11 @@ export default function AdminCentreLayout() {
   };
 
   const pullDisabled = isPullingCards || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
+  // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
+  // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
+  // des cartes que l'envoi rejettera silencieusement.
+  const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
+  const pushDisabled = isBulkUploading || conformeCount === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -198,7 +195,7 @@ export default function AdminCentreLayout() {
                 }}
               >
                 <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                {isBulkUploading ? 'ENVOI...' : ((detailedSyncStats?.modifiedCount || 0) > 0 ? 'Synchroniser [Delta]' : 'Synchroniser mes saisies')}
+                {isBulkUploading ? 'ENVOI...' : `Synchroniser mes saisies${conformeCount > 0 ? ` (${conformeCount.toLocaleString('fr')})` : ''}`}
               </button>
           </div>
         </div>

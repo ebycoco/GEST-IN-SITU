@@ -1,103 +1,11 @@
 import log from 'electron-log';
 import { getSupabaseClient } from './supabase-client';
 import { getDatabase, getDbPath } from '../database/connection';
-import { logAction } from '../database/queries';
 import { logAudit } from '../utils/audit';
 import { BrowserWindow, app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
-
-function cleanBirthDate(dateStr: string | null | undefined): string | null {
-  if (!dateStr) return null;
-  const cleanStr = dateStr.trim().toLowerCase();
-
-  // 1. Si c'est déjà au format ISO parfait (YYYY-MM-DD), on le retourne directement
-  if (/^\d{4}-\d{2}-\d{2}$/.test(cleanStr)) return cleanStr;
-
-  // 2. CAS DU FORMAT STANDARD : JJ/MM/AAAA ou JJ-MM-AAAA purement numérique
-  if (/^\d{1,2}[\/\s-]\d{1,2}[\/\s-]\d{4}$/.test(cleanStr)) {
-    const parts = cleanStr.split(/[\/\s-]+/);
-    const day = parts[0].padStart(2, '0');
-    const month = parts[1].padStart(2, '0');
-    const year = parts[2];
-    return `${year}-${month}-${day}`;
-  }
-
-  // 3. CAS DU FORMAT LITTÉRAL ABRÉGÉ : ex "1-févr.-1997", "27-dc.-1997", "25-sept.-1998"
-  // Nettoyage des points (ex: sept. -> sept) et découpage par les tirets/espaces
-  const normalizedLiteral = cleanStr.replace(/\./g, '');
-  const partsLiteral = normalizedLiteral.split(/[- ]+/);
-
-  if (partsLiteral.length === 3) {
-    const day = partsLiteral[0].padStart(2, '0');
-    let monthToken = partsLiteral[1].toLowerCase();
-    let year = partsLiteral[2];
-
-    // TECHNIQUE DE SÉCURITÉ : On nettoie les caractères corrompus d'encodage
-    if (monthToken.includes('jan')) monthToken = 'janv';
-    else if (monthToken.startsWith('f')) monthToken = 'fevr'; // Février est le SEUL mois qui commence par 'f'
-    else if (monthToken.includes('mar')) monthToken = 'mars';
-    else if (monthToken.startsWith('av')) monthToken = 'avr'; // Avril commence par 'av'
-    else if (monthToken.includes('mai')) monthToken = 'mai';
-    else if (monthToken.includes('jui') && monthToken.includes('n')) monthToken = 'juin';
-    else if (monthToken.includes('jui')) monthToken = 'juil';
-    else if (monthToken.startsWith('a')) monthToken = 'aout'; // Août commence par 'a' (et se distingue d'avril)
-    else if (monthToken.includes('sep')) monthToken = 'sept';
-    else if (monthToken.includes('oct')) monthToken = 'oct';
-    else if (monthToken.startsWith('n')) monthToken = 'nov';  // Novembre est le SEUL mois qui commence par 'n'
-    else if (monthToken.includes('d') || monthToken.includes('c')) monthToken = 'dec'; // Décembre (déc, dc, etc.)
-
-    const frenchMonths: { [key: string]: string } = {
-      'janv': '01', 'fevr': '02', 'mars': '03', 'avr': '04', 'mai': '05', 'juin': '06',
-      'juil': '07', 'aout': '08', 'sept': '09', 'oct': '10', 'nov': '11', 'dec': '12'
-    };
-
-    if (frenchMonths[monthToken]) {
-      const month = frenchMonths[monthToken];
-      if (year.length === 2) {
-        year = parseInt(year) > 30 ? `19${year}` : `20${year}`;
-      }
-      return `${year}-${month}-${day}`;
-    }
-  }
-
-  // Si aucun pattern ne matche, on renvoie la chaîne brute pour éviter de perdre la donnée
-  return dateStr;
-}
-
-function normalizeContact(contactStr: string | null | undefined): string {
-  if (!contactStr) return '+225 00 00 00 00 00';
-  
-  // 1. Extraire uniquement les caractères numériques
-  let digits = contactStr.toString().replace(/\D/g, '');
-
-  // 2. Isoler le numéro local ivoirien à 10 chiffres
-  let localNumber = '';
-
-  if (digits.startsWith('225')) {
-    // Si ça commence par 225, le numéro local est ce qui suit
-    localNumber = digits.slice(3);
-  } else {
-    // Sinon, on considère que toute la chaîne est le numéro local
-    localNumber = digits;
-  }
-
-  // 3. Sécurité : Si le numéro local ne fait pas exactement 10 chiffres, on renvoie le format vide de sécurité
-  if (localNumber.length !== 10) {
-    return '+225 00 00 00 00 00';
-  }
-
-  // 4. Découper le numéro local à 10 chiffres en blocs de 2 (XX XX XX XX XX)
-  const part1 = localNumber.slice(0, 2);
-  const part2 = localNumber.slice(2, 4);
-  const part3 = localNumber.slice(4, 6);
-  const part4 = localNumber.slice(6, 8);
-  const part5 = localNumber.slice(8, 10);
-
-  // 5. Retourner le format international standardisé propre
-  return `+225 ${part1} ${part2} ${part3} ${part4} ${part5}`;
-}
 
 /**
  * Récupère les données depuis Supabase modifiées après le watermark et les intègre localement.
@@ -239,11 +147,14 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     emitProgress(0, 0, totalToPull);
   }
 
-  while (hasMore) {
-    const chunkProcessed = await runDownstreamChunk(siteId);
-    totalMerged += chunkProcessed;
+  let totalFetched = 0;
 
-    if (chunkProcessed < 500) {
+  while (hasMore) {
+    const { fetched, processed } = await runDownstreamChunk(siteId);
+    totalFetched += fetched;
+    totalMerged += processed;
+
+    if (fetched < 500) {
       hasMore = false;
     } else {
       log.info(`Downstream: Chunk of 500 processed. Yielding CPU & RAM...`);
@@ -252,23 +163,51 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     }
 
     if (totalToPull > 0) {
-      let progress = Math.round((totalMerged / totalToPull) * 100);
+      let progress = Math.round((totalFetched / totalToPull) * 100);
       if (progress >= 100 && hasMore) {
         progress = 99; // Ne jamais afficher 100% tant que c'est pas vraiment fini
       } else if (progress > 100) {
         progress = 100;
       }
       currentProgress = progress;
-      emitProgress(currentProgress, totalMerged, totalToPull);
+      emitProgress(currentProgress, totalFetched, totalToPull);
     } else if (hasMore) {
       // Si on n'a pas de totalToPull, on simule une progression qui bloque à 99%
       currentProgress = 99;
-      emitProgress(99, totalMerged, 0);
+      emitProgress(99, totalFetched, 0);
+    }
+  }
+
+  // ── Marge de sécurité sur le watermark persisté (protection anti-décalage d'horloge) ──
+  // Le watermark a déjà été avancé précisément, chunk par chunk, jusqu'au updated_at exact
+  // de la dernière carte reçue (download-worker.js). On le recule ici d'un petit tampon
+  // avant de conclure ce cycle : si le poste qui a ENVOYÉ une carte a une horloge légèrement
+  // en retard, son updated_at de poussée peut être antérieur à ce que d'autres postes ont
+  // déjà vu. Ce tampon garantit qu'un prochain tirage réexamine cette fenêtre récente — au
+  // prix d'un nombre borné de cartes déjà à jour re-fetchées inutilement (sans risque,
+  // l'upsert/merge est idempotent).
+  // N'agit QUE si ce cycle a réellement avancé le watermark (totalFetched > 0) : sinon,
+  // la valeur déjà persistée est déjà un ancien recul appliqué, et reculer à nouveau à
+  // chaque cycle sans nouvelles données ferait dériver le watermark indéfiniment vers
+  // le passé (fenêtre de re-fetch grandissant sans borne à chaque cycle inactif).
+  if (totalFetched > 0) {
+    const WATERMARK_SAFETY_BUFFER_MS = 2 * 60 * 1000;
+    try {
+      const finalWatermarkRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+      if (finalWatermarkRow?.value) {
+        const rewound = new Date(new Date(finalWatermarkRow.value).getTime() - WATERMARK_SAFETY_BUFFER_MS).toISOString();
+        db.transaction(() => {
+          db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync', ?)`).run(rewound);
+          db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_id', '00000000-0000-0000-0000-000000000000')`).run();
+        })();
+      }
+    } catch (err) {
+      log.warn('[SYNC] Impossible d\'appliquer la marge de sécurité sur le watermark :', err);
     }
   }
 
   // Émission finale : 100% réel
-  emitProgress(100, totalMerged, totalToPull > 0 ? totalToPull : totalMerged);
+  emitProgress(100, totalFetched, totalToPull > 0 ? totalToPull : totalFetched);
 
   log.info(`Downstream: Sync completed. Total merged: ${totalMerged} records.`);
 
@@ -294,7 +233,7 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
 /**
  * Traite un unique lot (chunk) de 500 cartes maximum de Supabase via Worker.
  */
-async function runDownstreamChunk(siteId: number): Promise<number> {
+async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; processed: number }> {
   const db = getDatabase()!;
   
   // 1. Récupération du watermark local dans t_config
@@ -314,7 +253,7 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
   const supabase = getSupabaseClient();
   if (!supabase) {
     log.warn('[runDownstreamChunk] Client Supabase non disponible — chunk ignoré.');
-    return 0;
+    return { fetched: 0, processed: 0 };
   }
 
   // 2. Requête Supabase avec AbortController
@@ -344,13 +283,13 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
       log.warn("⚠️ [SUPABASE] Requête downstream interrompue : Timeout. Passage en mode dégradé.");
-      return 0; 
+      return { fetched: 0, processed: 0 };
     }
     throw err;
   }
 
   if (!cloudCards || cloudCards.length === 0) {
-    return 0;
+    return { fetched: 0, processed: 0 };
   }
 
   log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud. Sending to Worker...`);
@@ -369,7 +308,7 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
       workerData: { dbPath: getDbPath(), sqlitePath }
     });
 
-    let chunkSuccessCount: number | null = null;
+    let chunkResult: { fetched: number; processed: number } | null = null;
     let chunkError: Error | null = null;
 
     worker.on('message', (msg) => {
@@ -377,8 +316,11 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
         if (msg.level === 'error') log.error(msg.message);
         else log.info(msg.message);
       } else if (msg.type === 'chunk-done') {
-        log.info(`✅ [SYNC SUCCESS] ${cloudCards!.length} cartes traitées (fusionnées: ${msg.processed}) par le worker.`);
-        chunkSuccessCount = cloudCards!.length;
+        log.info(`✅ [SYNC SUCCESS] ${cloudCards!.length} cartes reçues (fusionnées: ${msg.processed}) par le worker.`);
+        // fetched = pagination réelle (pour savoir s'il reste des pages sur Supabase) ;
+        // processed = nombre de cartes réellement insérées/mises à jour localement
+        // (certaines cartes reçues peuvent être déjà à jour et donc ignorées par le worker).
+        chunkResult = { fetched: cloudCards!.length, processed: msg.processed || 0 };
         worker.postMessage({ type: 'close' });
       } else if (msg.type === 'error') {
         log.error(`[DownloadWorker] Erreur: ${msg.message}`);
@@ -395,7 +337,7 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
     worker.on('exit', (code) => {
       if (code !== 0) log.warn(`[DownloadWorker] Exited with code ${code}`);
       if (chunkError) reject(chunkError);
-      else resolve(chunkSuccessCount || 0);
+      else resolve(chunkResult || { fetched: 0, processed: 0 });
     });
 
     worker.postMessage({
@@ -406,175 +348,6 @@ async function runDownstreamChunk(siteId: number): Promise<number> {
       siteId
     });
   });
-}
-
-/**
- * Insertion brute en base de données locale (provenance Cloud).
- * Met is_dirty à 0 pour éviter de ré-expédier la ligne à l'upstream.
- */
-function insertLocalCard(insertStmt: any, card: any): void {
-  insertStmt.run({
-    noms: card.noms,
-    prenoms: card.prenoms || '',
-    date_de_naissance: cleanBirthDate(card.date_naissance || card.date_de_naissance), // Supabase utilise date_naissance ou date_de_naissance
-    lieu_de_naissance: card.lieu_naissance || card.lieu_de_naissance || null,
-    num_secu: card.num_secu || null,
-    lieu_enrolement: card.lieu_enrolement || null,
-    contact: normalizeContact(card.contact),
-    rangement: card.rangement || null,
-    statut: card.statut || 'EN STOCK',
-    date_delivrance: card.date_delivrance || null,
-    agent_saisie: card.agent_saisie || null,
-    nom_retirant: card.nom_retirant || null,
-    num_retirant: card.num_retirant || null,
-    agent_distributeur: card.agent_distributeur || null,
-    centre_retrait: card.centre_retrait || null,
-    cle_doublon: card.cle_doublon || null,
-    cle_doublon_flex: card.cle_doublon_flex || null,
-    statut_physique: card.statut_physique || 'OK',
-    site_id: card.id_site || card.site_id || card.siteId ? Number(card.id_site || card.site_id || card.siteId) : null,
-    centre_id: card.id_centre || card.centre_id || null,
-    poste_id: card.id_poste || card.poste_id || null,
-    qr_code_data: card.qr_code_data || null,
-    sync_id: card.sync_id,
-    created_at: card.created_at || new Date().toISOString(),
-    updated_at: card.updated_at || new Date().toISOString()
-  });
-}
-
-/**
- * Mise à jour locale (provenance Cloud).
- * Met is_dirty à 0 pour éviter de ré-expédier la ligne à l'upstream.
- */
-function updateLocalCard(updateStmt: any, idCarte: number, card: any): void {
-  updateStmt.run({
-    idCarte,
-    noms: card.noms,
-    prenoms: card.prenoms || '',
-    date_de_naissance: cleanBirthDate(card.date_naissance || card.date_de_naissance),
-    lieu_de_naissance: card.lieu_naissance || card.lieu_de_naissance || null,
-    num_secu: card.num_secu || null,
-    lieu_enrolement: card.lieu_enrolement || null,
-    contact: normalizeContact(card.contact),
-    rangement: card.rangement || null,
-    statut: card.statut || 'EN STOCK',
-    date_delivrance: card.date_delivrance || null,
-    agent_saisie: card.agent_saisie || null,
-    nom_retirant: card.nom_retirant || null,
-    num_retirant: card.num_retirant || null,
-    agent_distributeur: card.agent_distributeur || null,
-    centre_retrait: card.centre_retrait || null,
-    cle_doublon: card.cle_doublon || null,
-    cle_doublon_flex: card.cle_doublon_flex || null,
-    statut_physique: card.statut_physique || 'OK',
-    centre_id: card.id_centre || card.centre_id || null,
-    poste_id: card.id_poste || card.poste_id || null,
-    qr_code_data: card.qr_code_data || null,
-    updated_at: card.updated_at || new Date().toISOString()
-  });
-}
-
-/**
- * Pilier 4 : Résolution de conflit et application
- */
-function resolveAndApplyConflict(db: any, local: any, cloud: any): void {
-  const statutScores: Record<string, number> = { 'EN STOCK': 1, 'DELIVRE': 2, 'ANNULE': 3 };
-  
-  const localStatutScore = statutScores[local.statut] || 1;
-  const cloudStatutScore = statutScores[cloud.statut] || 1;
-
-  let resolvedCard = { ...local };
-  let resolvedBy = '';
-
-  // Règle 1 : Règle métier sur le statut le plus avancé
-  if (cloudStatutScore > localStatutScore) {
-    resolvedCard.statut = cloud.statut;
-    resolvedCard.date_delivrance = cloud.date_delivrance;
-    resolvedCard.nom_retirant = cloud.nom_retirant;
-    resolvedCard.num_retirant = cloud.num_retirant;
-    resolvedCard.agent_distributeur = cloud.agent_distributeur;
-    resolvedCard.centre_retrait = cloud.centre_retrait;
-    resolvedBy = 'Règle métier (Statut Cloud plus avancé)';
-  } else if (localStatutScore > cloudStatutScore) {
-    // Le statut local gagne, on garde nos infos de livraison
-    resolvedBy = 'Règle métier (Statut Local plus avancé)';
-  } else {
-    // Règle 2 : Last-Write-Wins sur updated_at local vs cloud
-    const localTime = new Date(local.updated_at || 0).getTime();
-    const cloudTime = new Date(cloud.updated_at || 0).getTime();
-
-    if (cloudTime > localTime) {
-      // Le cloud est plus récent, on fusionne les champs
-      resolvedCard = {
-        ...local,
-        noms: cloud.noms,
-        prenoms: cloud.prenoms || '',
-        date_de_naissance: cloud.date_naissance || null,
-        lieu_de_naissance: cloud.lieu_naissance || null,
-        num_secu: cloud.num_secu || null,
-        lieu_enrolement: cloud.lieu_enrolement || null,
-        contact: cloud.contact || null,
-        rangement: cloud.rangement || null,
-        statut_physique: cloud.statut_physique || 'OK',
-        centre_id: cloud.id_centre || cloud.centre_id || null,
-        poste_id: cloud.id_poste || cloud.poste_id || null,
-        qr_code_data: cloud.qr_code_data || null,
-        updated_at: cloud.updated_at
-      };
-      resolvedBy = 'LWW (Cloud plus récent)';
-    } else {
-      resolvedBy = 'LWW (Local plus récent)';
-    }
-  }
-
-  // Appliquer le résultat de la résolution en base locale avec is_dirty = 0 (guard anti-boucle)
-  const updateStmt = db.prepare(`
-    UPDATE t_cartes
-    SET noms = :noms, prenoms = :prenoms, date_de_naissance = :date_de_naissance,
-        lieu_de_naissance = :lieu_de_naissance, num_secu = :num_secu,
-        lieu_enrolement = :lieu_enrolement, contact = :contact, rangement = :rangement,
-        statut = :statut, date_delivrance = :date_delivrance, agent_saisie = :agent_saisie,
-        nom_retirant = :nom_retirant, num_retirant = :num_retirant,
-        agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
-        cle_doublon = :cle_doublon, cle_doublon_flex = :cle_doublon_flex,
-        statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
-        qr_code_data = :qr_code_data, updated_at = :updated_at, synced_at = :updated_at,
-        is_dirty = 0
-    WHERE id_carte = :idCarte
-  `);
-
-  updateLocalCard(updateStmt, local.id_carte, {
-    noms: resolvedCard.noms,
-    prenoms: resolvedCard.prenoms,
-    date_naissance: resolvedCard.date_de_naissance,
-    lieu_naissance: resolvedCard.lieu_de_naissance,
-    num_secu: resolvedCard.num_secu,
-    lieu_enrolement: resolvedCard.lieu_enrolement,
-    contact: resolvedCard.contact,
-    rangement: resolvedCard.rangement,
-    statut: resolvedCard.statut,
-    date_delivrance: resolvedCard.date_delivrance,
-    agent_saisie: resolvedCard.agent_saisie,
-    nom_retirant: resolvedCard.nom_retirant,
-    num_retirant: resolvedCard.num_retirant,
-    agent_distributeur: resolvedCard.agent_distributeur,
-    centre_retrait: resolvedCard.centre_retrait,
-    cle_doublon: resolvedCard.cle_doublon,
-    cle_doublon_flex: resolvedCard.cle_doublon_flex,
-    statut_physique: resolvedCard.statut_physique,
-    centre_id: resolvedCard.centre_id,
-    poste_id: resolvedCard.poste_id,
-    qr_code_data: resolvedCard.qr_code_data,
-    updated_at: resolvedCard.updated_at || new Date().toISOString()
-  });
-
-  // Enregistrer le conflit résolu dans l'historique de logs
-  logAction(
-    0, 
-    'SYSTEM', 
-    'SYNC_CONFLIT', 
-    `Conflit résolu sur carte sync_id ${local.sync_id}. Méthode : ${resolvedBy}. Avant : ${JSON.stringify({statut: local.statut, rangement: local.rangement})}, Après : ${JSON.stringify({statut: resolvedCard.statut, rangement: resolvedCard.rangement})}`
-  );
 }
 
 /**

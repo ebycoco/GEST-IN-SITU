@@ -16,17 +16,21 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const [dirtyUsersCount, setDirtyUsersCount] = useState<number>(0);
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
   const [totalCloudCartesCount, setTotalCloudCartesCount] = useState<number>(0);
-  const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number } | null>(null);
+  const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number } | null>(null);
 
   const loadGlobalData = async (silent = false) => {
     try {
-      if (!silent) setLoading(true);
+      if (!silent) {
+        setLoading(true);
+        useAuthStore.getState().setInitialDataProgress(20, 'Connexion BDD & Initialisation...');
+      }
       const [gStats, sList] = await Promise.all([
         window.api.stats.getGlobal(),
         window.api.hierarchy.getSitesSummary()
       ]);
       setGlobalStats(gStats);
       setSites(sList);
+      if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache des données...');
       useCacheStore.getState().setDashboardCache({
         globalStats: gStats,
         sites: sList
@@ -35,13 +39,17 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       console.error(e);
     } finally {
       if (!silent) setLoading(false);
-      useAuthStore.getState().setInitialDataLoading(false);
+      useAuthStore.getState().setInitialDataProgress(100, 'Interface prête');
+      setTimeout(() => useAuthStore.getState().setInitialDataLoading(false), 300);
     }
   };
 
   const loadStats = useCallback(async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => {
     try {
-      if (!silent) setLoading(true);
+      if (!silent) {
+        setLoading(true);
+        useAuthStore.getState().setInitialDataProgress(20, 'Vérification des droits d\'accès...');
+      }
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
       const centreIdToUse = user?.role === 'ADMIN_CENTRE' 
         ? user?.centre_id 
@@ -51,6 +59,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       const targetDateStr = supervisionFilters?.dateStr;
 
       if (user?.role === 'OPERATEUR_SAISIE') {
+        if (!silent) useAuthStore.getState().setInitialDataProgress(40, 'Extraction des saisies récentes...');
         const [todayCount, recentsRes, cartesCount, syncStats] = await Promise.all([
           window.api.stats.getAgentToday(user.id_user),
           window.api.stats.getAgentRecentSaisies(user.id_user, 15),
@@ -58,6 +67,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           window.api.stats.getDetailedSyncStats(siteIdToUse!)
         ]);
         const recents = (recentsRes as any).rows || [];
+        if (!silent) useAuthStore.getState().setInitialDataProgress(70, 'Calcul des statistiques de synchronisation...');
         setOperatorTodayCount(todayCount);
         setOperatorRecentSaisies(recents);
         setDirtyCartesCount(cartesCount);
@@ -74,6 +84,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           setCloudCartesCount(-1);
         });
 
+        if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache et rendu final...');
         useCacheStore.getState().setDashboardCache({
           operatorTodayCount: todayCount,
           operatorRecentSaisies: recents,
@@ -81,6 +92,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         });
       } else {
         // Chargement des stats KPI avec bridage centre si ADMIN_CENTRE
+        if (!silent) useAuthStore.getState().setInitialDataProgress(40, 'Extraction des KPI globaux...');
         const data = await window.api.stats.get(siteIdToUse || undefined, centreIdToUse);
         setStats(data);
         
@@ -93,6 +105,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         let syncStats: any = null;
  
         if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE' || user?.role === 'OPERATEUR_VERIFICATION')) {
+          if (!silent) useAuthStore.getState().setInitialDataProgress(50, 'Analyse des données du site...');
           [saisiesToday, cartesCount, usersCount, syncStats] = await Promise.all([
             window.api.stats.getSiteSaisieToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
             window.api.stats.getUnsyncedCardsCount(siteIdToUse),
@@ -119,6 +132,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
             setTotalCloudCartesCount(-1);
           });
 
+          if (!silent) useAuthStore.getState().setInitialDataProgress(70, 'Extraction des indicateurs Qualité & Logistique...');
           qualiteToday = await window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
           logistiqueToday = await window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
           setSiteSaisiesStats(saisiesToday);
@@ -129,6 +143,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           setDetailedSyncStats(syncStats);
         }
  
+        if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache et préparation du rendu...');
         useCacheStore.getState().setDashboardCache({
           stats: data,
           siteSaisiesStats: saisiesToday,
@@ -144,7 +159,8 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       console.error(e); 
     } finally { 
       if (!silent) setLoading(false); 
-      useAuthStore.getState().setInitialDataLoading(false);
+      useAuthStore.getState().setInitialDataProgress(100, 'Déverrouillage...');
+      setTimeout(() => useAuthStore.getState().setInitialDataLoading(false), 300);
     }
   }, [user?.role, user?.site_id, user?.centre_id, user?.id_user, activeSiteId]);
 
@@ -193,6 +209,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     siteLogistiqueStats,
     dirtyCartesCount,
     dirtyUsersCount,
+    setDirtyUsersCount,
     cloudCartesCount,
     totalCloudCartesCount,
     detailedSyncStats,

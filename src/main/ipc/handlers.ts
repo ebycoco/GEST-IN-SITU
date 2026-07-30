@@ -10,7 +10,7 @@ import * as readline from 'readline';
 import { Worker } from 'worker_threads';
 import { networkMonitor } from '../sync/network-monitor';
 import { syncEngine } from '../sync/sync-engine';
-import { runBulkUpload } from '../sync/bulk-uploader';
+import { runBulkUpload, cancelBulkUpload } from '../sync/bulk-uploader';
 import { runDownstream } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
 import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser } from '../auth/session-heartbeat';
@@ -18,7 +18,9 @@ import { logAudit } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
+import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
 import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing } from '../sync/outbox.service';
+import { mapCardPayload } from '../sync/payload-mapper';
 
 const FAILSAFE_ROOT_ID = 999999;
 let activeImportsCount = 0;
@@ -54,6 +56,38 @@ function verifyUserRole(userId: number | null | undefined, allowedRoles: string[
   } catch (err) {
     log.error(`[verifyUserRole] Ã‰chec de la validation de rÃ´le pour l'utilisateur ID ${userId} :`, err);
     return false;
+  }
+}
+
+// Anti-bruteforce pour hierarchy:verifyPassword : verrouille une identité après un nombre
+// d'échecs successifs, sur une fenêtre glissante (protection locale, en mémoire du process).
+const VERIFY_PASSWORD_MAX_ATTEMPTS = 5;
+const VERIFY_PASSWORD_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const VERIFY_PASSWORD_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
+const verifyPasswordAttempts: Map<string, { count: number; firstAttempt: number; lockedUntil?: number }> = new Map();
+
+function isVerifyPasswordLocked(key: string): number {
+  const entry = verifyPasswordAttempts.get(key);
+  if (!entry || !entry.lockedUntil) return 0;
+  const remaining = entry.lockedUntil - Date.now();
+  return remaining > 0 ? remaining : 0;
+}
+
+function registerVerifyPasswordAttempt(key: string, success: boolean): void {
+  if (success) {
+    verifyPasswordAttempts.delete(key);
+    return;
+  }
+  const now = Date.now();
+  const entry = verifyPasswordAttempts.get(key);
+  if (!entry || now - entry.firstAttempt > VERIFY_PASSWORD_WINDOW_MS) {
+    verifyPasswordAttempts.set(key, { count: 1, firstAttempt: now });
+    return;
+  }
+  entry.count += 1;
+  if (entry.count >= VERIFY_PASSWORD_MAX_ATTEMPTS) {
+    entry.lockedUntil = now + VERIFY_PASSWORD_LOCKOUT_MS;
+    log.warn(`[SECURITY] Verrouillage anti-bruteforce déclenché pour '${key}' après ${entry.count} échecs de vérification de mot de passe.`);
   }
 }
 
@@ -365,11 +399,142 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('cartes:getRecordForCorrection', async (_, originalId, recordType) => {
+  ipcMain.handle('cartes:searchCloudEmergency', async (_, query: string, filters: any = {}) => {
+    try {
+      const supabase = getSupabaseClient();
+      if (!supabase) throw new Error("Supabase non configuré.");
+      
+      const userLogin = getCurrentUserLogin() || 'SYSTEM';
+      const db = getDatabase();
+      let targetSiteId = filters.site_id;
+
+      if (db) {
+        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as any;
+        if (user && user.role !== 'SUPER ADMIN') {
+          targetSiteId = user.site_id; 
+        }
+      }
+      
+      if (!targetSiteId) {
+        log.warn(`[SECURITY] Tentative de recherche cloud sans site_id par ${userLogin}`);
+        throw new Error("REJETÉ : site_id obligatoire pour la recherche cloud.");
+      }
+
+      const queryTokens = query.trim().split(/\s+/).filter(Boolean);
+      const nomToken = queryTokens[0] || '';
+      const prenomToken = queryTokens.slice(1).join(' ') || '';
+      
+      let req = supabase.from('t_cartes').select('*');
+      
+      if (nomToken) req = req.ilike('noms', nomToken);
+      if (prenomToken) req = req.ilike('prenoms', `%${prenomToken}%`);
+      if (filters.date_de_naissance) req = req.eq('date_naissance', filters.date_de_naissance);
+      
+      if (filters.contact) {
+        const cleanContact = filters.contact.replace(/%/g, '');
+        if (cleanContact) req = req.ilike('contact', `%${cleanContact}%`);
+      }
+
+      req = req.eq('id_site', Number(targetSiteId));
+      
+      const { data, error } = await req.limit(5); 
+      if (error) {
+        log.error('Supabase error in searchCloudEmergency:', error);
+        return [];
+      }
+      return data || [];
+    } catch (e) {
+      log.error('IPC Error: cartes:searchCloudEmergency', e);
+      return [];
+    }
+  });
+
+  ipcMain.handle('cartes:pullSingleCard', async (_, cardData: any) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+        log.warn(`[SECURITY] Tentative de pullSingleCard refusée pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+        throw new Error("Accès refusé pour cette opération.");
+      }
+
+      const resolvedSiteId = secureUser.role === 'SUPER ADMIN'
+        ? (cardData.id_site || cardData.site_id || null)
+        : secureUser.site_id;
+
+      if (!resolvedSiteId) {
+        throw new Error("REJETÉ : site_id introuvable pour cette opération.");
+      }
+
+      const db = getDatabase();
+      if (!db) throw new Error("Database non connectée");
+
+      const existingById = db.prepare('SELECT * FROM t_cartes WHERE sync_id = ?').get(cardData.sync_id) as any;
+      if (existingById) return { success: true, carte: existingById };
+
+      const cleDbl = cardData.cle_doublon;
+      if (cleDbl) {
+        const existingByCle = db.prepare('SELECT * FROM t_cartes WHERE cle_doublon = ? AND is_dirty != -1').get(cleDbl) as any;
+        if (existingByCle) return { success: true, carte: existingByCle };
+      }
+
+      const stmt = db.prepare(`
+        INSERT INTO t_cartes (
+          sync_id, noms, prenoms, date_de_naissance, lieu_de_naissance, contact,
+          num_secu, lieu_enrolement, rangement, statut, date_delivrance, agent_saisie,
+          statut_physique, site_id, centre_id, poste_id, cle_doublon, cle_doublon_flex,
+          created_at, updated_at, is_dirty
+        ) VALUES (
+          @sync_id, @noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @contact,
+          @num_secu, @lieu_enrolement, @rangement, @statut, @date_delivrance, @agent_saisie,
+          @statut_physique, @site_id, @centre_id, @poste_id, @cle_doublon, @cle_doublon_flex,
+          @created_at, @updated_at, 0
+        )
+      `);
+      
+      stmt.run({
+        sync_id: cardData.sync_id,
+        noms: cardData.noms || '',
+        prenoms: cardData.prenoms || '',
+        date_de_naissance: cardData.date_naissance || cardData.date_de_naissance || null,
+        lieu_de_naissance: cardData.lieu_naissance || cardData.lieu_de_naissance || null,
+        contact: cardData.contact || null,
+        num_secu: cardData.num_secu || null,
+        lieu_enrolement: cardData.lieu_enrolement || null,
+        rangement: cardData.rangement || null,
+        statut: cardData.statut || 'EN STOCK',
+        date_delivrance: cardData.date_delivrance || null,
+        agent_saisie: cardData.agent_saisie || null,
+        statut_physique: cardData.statut_physique || 'OK',
+        site_id: resolvedSiteId,
+        centre_id: cardData.id_centre || cardData.centre_id || null,
+        poste_id: cardData.id_poste || cardData.poste_id || null,
+        cle_doublon: cardData.cle_doublon || null,
+        cle_doublon_flex: cardData.cle_doublon_flex || null,
+        created_at: cardData.created_at || new Date().toISOString(),
+        updated_at: cardData.updated_at || new Date().toISOString()
+      });
+
+      const newCard = db.prepare('SELECT * FROM t_cartes WHERE sync_id = ?').get(cardData.sync_id);
+      return { success: true, carte: newCard };
+    } catch (e) {
+      log.error('IPC Error: cartes:pullSingleCard', e);
+      throw e;
+    }
+  });
+
+  ipcMain.handle('cartes:getRecordForCorrection', async (_, originalId, recordType, siteId?: number) => {
     try {
       const userLogin = getCurrentUserLogin() || 'SYSTEM';
-      const result = await queries.getRecordForCorrection(originalId, recordType);
-      
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+        log.warn(`[SECURITY] Tentative de getRecordForCorrection refusée pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+        throw new Error("Accès refusé pour cette opération.");
+      }
+      const effectiveSiteId = secureUser.role === 'SUPER ADMIN' ? siteId : secureUser.site_id;
+      const result = await queries.getRecordForCorrection(originalId, recordType, effectiveSiteId);
+
       setImmediate(() => {
         if (result) {
           logAudit(userLogin, 'CONSULTATION_CORRECTION', {
@@ -440,10 +605,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const db = getDatabase();
       if (userLogin && db) {
         const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        if (user && user.role === 'ADMINISTRATEUR_SITE') {
-          // Sécurité anti-contournement : forcer le site_id de l'admin
+        if (user && user.role !== 'SUPER ADMIN') {
+          // Sécurité anti-contournement : forcer le site_id de l'utilisateur connecté,
+          // quel que soit son rôle (pas uniquement ADMINISTRATEUR_SITE), pour empêcher
+          // tout appel IPC forgé d'écrire une carte dans un site étranger.
           data.site_id = user.site_id;
-          
+
           if (data.centre_id) {
             const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(data.centre_id)) as { site_id: number } | undefined;
             if (!centre || centre.site_id !== user.site_id) {
@@ -482,10 +649,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:create', e); throw e; }
   });
-  ipcMain.handle('cartes:update', async (_, id, data, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
-    try { 
-      const res = await queries.updateCarte(id, data, currentUser);
+  ipcMain.handle('cartes:update', async (_, id, data) => {
+    // Securite : identite et perimetre derives exclusivement de la session serveur (non
+    // falsifiable via IPC) - currentUser (renderer) n'est plus utilise, ni pour le controle
+    // de role ni pour le scoping site/centre applique par queries.updateCarte.
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    const userId = secureUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE'])) {
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette carte.");
+    }
+    try {
+      const res = await queries.updateCarte(id, data, secureUser);
       logAudit(
         userLogin,
         'CARTE_MODIFICATION',
@@ -499,14 +674,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:update', e); throw e; }
   });
-  ipcMain.handle('cartes:delete', async (_, id, currentUser) => {
-    const userId = currentUser?.id_user;
-    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'])) {
+  ipcMain.handle('cartes:delete', async (_, id) => {
+    // Securite : identite derivee exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userId = secureUser?.id_user;
+    // Note : OPERATEUR_SAISIE est autorisé ici au niveau du rôle ; la restriction fine
+    // (suppression limitée à ses propres brouillons BROUILLON) est appliquée par queries.deleteCarte.
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE'])) {
       throw new Error("Accès refusé. Privilèges insuffisants pour supprimer une carte.");
     }
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try { 
-      const res = await queries.deleteCarte(id, currentUser);
+      const res = await queries.deleteCarte(id, secureUser);
       logAudit(
         userLogin,
         'CARTE_SUPPRESSION',
@@ -752,10 +931,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return { success: true };
   });
 
-  ipcMain.handle('cmu:updateCarte', async (_, id, data, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+  ipcMain.handle('cmu:updateCarte', async (_, id, data) => {
+    // Securite : identite et perimetre derives exclusivement de la session serveur (non
+    // falsifiable via IPC) - currentUser (renderer) n'est plus utilise, ni pour le controle
+    // de role ni pour le scoping site/centre applique par queries.updateCarte.
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    const userId = secureUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE'])) {
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette carte.");
+    }
     try {
-      const res = await queries.updateCarte(id, data, currentUser);
+      const res = await queries.updateCarte(id, data, secureUser);
       logAudit(
         userLogin,
         'CMU_MODIFICATION',
@@ -827,12 +1014,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('cmu:deleteCarte', async (_, id, reason, currentUser) => {
-    const userId = currentUser?.id_user;
-    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'])) {
+  ipcMain.handle('cmu:deleteCarte', async (_, id, reason) => {
+    // Securite : identite derivee exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userId = secureUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE'])) {
       throw new Error("Accès refusé. Privilèges insuffisants pour supprimer une carte.");
     }
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try {
       const db = getDatabase();
       let numeroCmu = 'N/A';
@@ -841,7 +1030,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         if (row && row.num_secu) numeroCmu = row.num_secu;
       }
 
-      const res = await queries.deleteCarte(id, currentUser);
+      const res = await queries.deleteCarte(id, secureUser);
       logAudit(
         userLogin,
         'CMU_SUPPRESSION',
@@ -858,18 +1047,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('cartes:delivrer', async (_, id, data, currentUser) => {
+  ipcMain.handle('cartes:delivrer', async (_, id, data) => {
+    // Securite : identite et perimetre derives exclusivement de la session serveur (non
+    // falsifiable via IPC) - currentUser (renderer) n'est plus utilise du tout.
     const secureSession = getSecureCurrentUser();
-    const resolvedUser = currentUser?.id_user ? currentUser : (secureSession ? {
-      id_user: secureSession.id_user || secureSession.id,
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
       login: secureSession.login,
       role: secureSession.role,
-      site_id: secureSession.site_id || secureSession.siteId,
-      centre_id: secureSession.centre_id || secureSession.centreId
-    } : null);
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
 
     const userId = resolvedUser?.id_user;
-    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_RECHERCHE'])) {
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_RECHERCHE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:delivrer : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour délivrer une carte.");
     }
     try {
@@ -897,9 +1089,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   ipcMain.handle('cartes:signalerAbsence', async (_, id, agentLogin, agentInfo, commentaire = '', currentUser?: any) => {
     try {
-      const res = await queries.signalerAbsence(id, agentLogin, agentInfo, commentaire, currentUser);
+      const res: any = await queries.signalerAbsence(id, agentLogin, agentInfo, commentaire, currentUser);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_SIGNALEE' });
+        mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_SIGNALEE', centre_id: res?.centre_id ?? null });
       }
       return res;
     }
@@ -993,6 +1185,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getInvalidDateRecords(siteId, offset, limit); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
   });
+  ipcMain.handle('cartes:getDatesVidesPage', async (_, siteId?: number, offset = 0, limit = 50, query?: string) => {
+    try { return queries.getDatesVidesPage(siteId, offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getDatesVidesPage', e); throw e; }
+  });
   ipcMain.handle('cartes:updateDate', async (_, id, newDate) => {
     try { return queries.updateDateDeNaissance(id, newDate); }
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
@@ -1062,6 +1258,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('stats:get', async (_, siteId, centreId?: number) => {
     try {
+      // Sécurité : le périmètre site/centre est imposé par la session serveur pour tout rôle
+      // non-SUPER ADMIN (défense en profondeur, non falsifiable via IPC).
+      const secureUser = getSecureCurrentUser();
+      if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+        siteId = secureUser.site_id ?? siteId;
+        if (secureUser.role === 'ADMIN_CENTRE') {
+          centreId = secureUser.centre_id ?? centreId;
+        }
+      }
       const cacheKey = `${siteId}_${centreId || 'all'}`;
       const now = Date.now();
 
@@ -1136,6 +1341,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('stats:getUnsyncedCardsCount', async (_, siteId: number) => {
     try { return queries.getUnsyncedCardsCount(siteId); }
     catch (e) { log.error('IPC Error: stats:getUnsyncedCardsCount', e); throw e; }
+  });
+
+  ipcMain.handle('stats:getUnsyncedConformeCardsCount', async (_, siteId: number) => {
+    try { return queries.getUnsyncedConformeCardsCount(siteId); }
+    catch (e) { log.error('IPC Error: stats:getUnsyncedConformeCardsCount', e); throw e; }
   });
 
   ipcMain.handle('stats:getDetailedSyncStats', async (_, siteId: number) => {
@@ -1228,51 +1438,89 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     return queries.clearImportTemp(Number(siteId));
   });
-  // @deprecated AUD-001 — Pipeline B (mode batch manuel) remplacé par le Worker Thread (import:processFile).
-  // Ces handlers sont conservés pour rétro-compatibilité uniquement. Ne plus appeler depuis le Renderer.
-  ipcMain.handle('import:executeBatch', async (_, rows, agent, siteId) => {
-    log.warn('[DEPRECATED] import:executeBatch appelé — Pipeline B déprécié. Utiliser import:processFile (Worker Thread).');
-    try { return queries.importBatch(rows, agent, siteId); }
-    catch (e) { log.error('IPC Error: import:executeBatch', e); throw e; }
-  });
-  ipcMain.handle('import:fusionner', async (_, agent, siteId) => {
-    log.warn('[DEPRECATED] import:fusionner appelé — Pipeline B déprécié. La fusion est intégrée dans import:processFile (Worker Thread).');
-    try { return queries.fusionnerImport(siteId); }
-    catch (e) { log.error('IPC Error: import:fusionner', e); throw e; }
-  });
+
+  // Rôles autorisés à consulter/modifier les anomalies d'import (module Qualité + Admin)
+  const QUALITE_ROLES = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'];
+
+  function assertQualiteAccessOnSite(siteId: number | undefined | null) {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) throw new Error("Session invalide.");
+    if (!verifyUserRole(secureUser.id_user, QUALITE_ROLES)) {
+      log.warn(`[SECURITY] Accès qualité refusé pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+      throw new Error("Accès refusé pour cette opération.");
+    }
+    if (secureUser.role !== 'SUPER ADMIN' && siteId !== undefined && siteId !== null && Number(siteId) !== secureUser.site_id) {
+      log.warn(`[SECURITY] Accès qualité hors-site refusé pour l'utilisateur ID ${secureUser.id_user}`);
+      throw new Error("Accès refusé : ce site n'est pas le vôtre.");
+    }
+    return secureUser;
+  }
+
   ipcMain.handle('import:getAnomalies', (_, siteId, offset = 0, limit = 50, query?: string) => {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis.');
     }
+    assertQualiteAccessOnSite(siteId);
     return queries.getImportAnomalies(Number(siteId), offset, limit, query);
   });
   ipcMain.handle('import:clearAnomalies', (_, siteId) => {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis.');
     }
+    assertQualiteAccessOnSite(siteId);
     return queries.clearImportAnomalies(Number(siteId));
   });
 
   ipcMain.handle('import:countEmptyAnomalies', (_, siteId) => {
+    assertQualiteAccessOnSite(siteId);
     return queries.countEmptyAnomalies(Number(siteId));
   });
 
   ipcMain.handle('import:deleteEmptyAnomalies', (_, siteId) => {
+    assertQualiteAccessOnSite(siteId);
     return queries.deleteEmptyAnomalies(Number(siteId));
   });
-  
+
   ipcMain.handle('import:deleteAnomaly', (_, id) => {
     if (id === undefined || id === null) {
       throw new Error('id requis.');
     }
+    const db = getDatabase()!;
+    const anomaly = db.prepare('SELECT site_id FROM t_import_anomalies WHERE id = ?').get(Number(id)) as { site_id?: number } | undefined;
+    assertQualiteAccessOnSite(anomaly?.site_id);
     return queries.deleteImportAnomaly(Number(id));
+  });
+
+  ipcMain.handle('import:updateAnomalyField', (_, id: number, field: string, value: string) => {
+    try {
+      const db = getDatabase()!;
+      const allowedFields = ['noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'contact', 'num_secu'];
+      if (!allowedFields.includes(field)) {
+        throw new Error(`Champ non autorisé: ${field}`);
+      }
+      const anomaly = db.prepare('SELECT site_id FROM t_import_anomalies WHERE id = ?').get(Number(id)) as { site_id?: number } | undefined;
+      assertQualiteAccessOnSite(anomaly?.site_id);
+      const stmt = db.prepare(`UPDATE t_import_anomalies SET ${field} = ? WHERE id = ?`);
+      stmt.run(value, id);
+      return { success: true };
+    } catch (e) {
+      log.error('IPC Error: import:updateAnomalyField', e);
+      throw e;
+    }
   });
 
   // QUALITE & ASSAINISSEMENT HANDLERS
   ipcMain.handle('qualite:fusionnerDoublons', async (event, payload: { id_carte_source: number; id_carte_cible: number; champs_fusionnes: string[] }) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    const { id_carte_source, id_carte_cible, champs_fusionnes } = payload;
+    const { id_carte_source, id_carte_cible } = payload;
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+        log.warn(`[SECURITY] Tentative de fusionnerDoublons refusée pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+        throw new Error("Accès refusé pour cette opération.");
+      }
+
       const db = getDatabase();
       if (!db) throw new Error('Base de données indisponible');
 
@@ -1282,6 +1530,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // Idempotence : si la source n'existe plus, l'opération a déjà été exécutée
       if (!sourceCard) {
         return { success: true, changes: 0 };
+      }
+
+      if (!targetCard) {
+        throw new Error("Carte cible introuvable.");
+      }
+
+      if (sourceCard.site_id !== targetCard.site_id) {
+        throw new Error("Fusion refusée : la carte source et la carte cible n'appartiennent pas au même site.");
+      }
+
+      if (secureUser.role !== 'SUPER ADMIN' && sourceCard.site_id !== secureUser.site_id) {
+        log.warn(`[SECURITY] Tentative de fusion hors-site refusée pour l'utilisateur ID ${secureUser.id_user}`);
+        throw new Error("Accès refusé : ces cartes n'appartiennent pas à votre site.");
       }
 
       const mergedFields: string[] = [];
@@ -1300,17 +1561,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       db.transaction(() => {
+        let targetUpdatePending = false;
         if (updates.length > 0) {
           params.push(id_carte_cible);
           db.prepare(`UPDATE t_cartes SET ${updates.join(', ')}, updated_at = datetime('now'), is_dirty = 1 WHERE id_carte = ?`).run(...params);
+          const updatedTarget = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id_carte_cible) as any;
+          if (updatedTarget && updatedTarget.sync_id) {
+             // Volontairement pas de try/catch ici : si l'enfilage échoue (payload invalide),
+             // toute la transaction (y compris la suppression de la source) doit être annulée
+             // pour éviter de perdre les champs fusionnés côté Supabase.
+             enqueueOutbox(updatedTarget.sync_id, 't_cartes', 'UPDATE', mapCardPayload(updatedTarget));
+             targetUpdatePending = true;
+          }
         }
-        
+
         // Soft delete de la carte source + propagation Supabase
         db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id_carte_source);
         if (sourceCard.sync_id) {
           const wasLocalOnly = cancelPendingInsert(sourceCard.sync_id, 't_cartes');
           if (!wasLocalOnly) {
-            enqueueOutbox(sourceCard.sync_id, 't_cartes', 'DELETE', { sync_id: sourceCard.sync_id });
+            // Le "depends_on" n'a de sens que s'il existe réellement une mise à jour cible en attente ;
+            // sinon on pointerait vers un id d'outbox inexistant, ce qui neutralise la garde anti-race.
+            enqueueOutbox(sourceCard.sync_id, 't_cartes', 'DELETE', { sync_id: sourceCard.sync_id }, targetUpdatePending ? targetCard.sync_id : null);
             if (networkMonitor.getState() === 'ONLINE') scheduleOutboxProcessing();
           } else {
             // S'il n'avait jamais été synchronisé (INSERT annulé), on peut le supprimer physiquement pour libérer l'espace
@@ -1348,7 +1620,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw new Error(`Champ non autorisé : ${champ_corrige}`);
     }
 
+    // Revalidation serveur des formats (ne pas se reposer uniquement sur la validation du formulaire client)
+    if (champ_corrige === 'num_secu' && valeur_apres && !/^\d{13}$/.test(valeur_apres)) {
+      throw new Error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.');
+    }
+    if (champ_corrige === 'contact' && valeur_apres && !/^\d{10}$/.test(valeur_apres)) {
+      throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
+    }
+    if (champ_corrige === 'date_de_naissance' && valeur_apres && !isValidCalendarDateFlexible(valeur_apres)) {
+      throw new Error('Date de naissance invalide ou inexistante dans le calendrier.');
+    }
+
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+        log.warn(`[SECURITY] Tentative de corrigerFormat refusée pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+        throw new Error("Accès refusé pour cette opération.");
+      }
+
       const db = getDatabase();
       if (!db) throw new Error('Base de données indisponible');
 
@@ -1357,6 +1647,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       if (!card && !anomaly) {
         return { success: true, changes: 0 };
+      }
+
+      const recordSiteId = card?.site_id ?? anomaly?.site_id;
+      if (secureUser.role !== 'SUPER ADMIN' && recordSiteId !== undefined && recordSiteId !== null && recordSiteId !== secureUser.site_id) {
+        log.warn(`[SECURITY] Tentative de correction hors-site refusée pour l'utilisateur ID ${secureUser.id_user}`);
+        throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
       }
 
       // Idempotence : si la valeur est déjà identique, on ne réécrit pas
@@ -1376,7 +1672,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
                // Si le champ n'était pas la date, on doit quand même mettre à jour le champ après coup,
                // sauf si ça a été mis à jour par le premier appel.
                // Mais l'anomalie ayant été purgée, on met à jour la nouvelle carte
-               const newCard = db.prepare('SELECT id_carte FROM t_cartes WHERE nums_secu = ? AND noms = ? AND prenoms = ? ORDER BY id_carte DESC LIMIT 1').get(anomaly.num_secu, anomaly.noms, anomaly.prenoms) as any;
+               const newCard = db.prepare('SELECT id_carte FROM t_cartes WHERE num_secu = ? AND noms = ? AND prenoms = ? ORDER BY id_carte DESC LIMIT 1').get(anomaly.num_secu, anomaly.noms, anomaly.prenoms) as any;
                if (newCard) {
                  queries.updateQuickFields(newCard.id_carte, { [champ_corrige]: valeur_apres });
                }
@@ -1512,7 +1808,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('qualite:auditDates', async (event) => {
-    const userLogin = getCurrentUserLogin() || 'SYSTEM';
+    // Sécurité : identité et périmètre dérivés exclusivement de la session serveur (non falsifiable
+    // depuis le renderer). Un ADMINISTRATEUR_SITE ne doit jamais pouvoir purger/déplacer des cartes
+    // d'un autre site ; seul un SUPER ADMIN (site_id de session = null) opère sur l'ensemble des sites.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      log.warn('[SECURITY] Accès refusé à qualite:auditDates : session invalide ou rôle non autorisé.');
+      throw new Error("Accès refusé. Privilèges administrateur requis pour l'audit des dates.");
+    }
+    const scopeSiteId: number | undefined = secureUser.role !== 'SUPER ADMIN' ? secureUser.site_id : undefined;
+    const userLogin = secureUser.login || getCurrentUserLogin() || 'SYSTEM';
     try {
       const db = getDatabase();
       if (!db) throw new Error('Base de données indisponible');
@@ -1529,18 +1834,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
       };
 
-      // 1. Récupérer le nombre total de cartes
-      const totalCountRes = db.prepare('SELECT COUNT(*) as count FROM t_cartes').get() as { count: number };
+      // 1. Récupérer le nombre total de cartes (scopé au site de l'administrateur, sauf SUPER ADMIN)
+      const totalCountRes = scopeSiteId
+        ? db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?').get(scopeSiteId) as { count: number }
+        : db.prepare('SELECT COUNT(*) as count FROM t_cartes').get() as { count: number };
       const total = totalCountRes.count;
-      
+
       let processed = 0;
       let movedCount = 0;
       const chunkSize = 250;
       let lastId = 0;
-      
+
       // On boucle par lots de 250
       while (processed < total) {
-        const cards = db.prepare('SELECT * FROM t_cartes WHERE id_carte > ? ORDER BY id_carte ASC LIMIT ?').all(lastId, chunkSize) as any[];
+        const cards = (scopeSiteId
+          ? db.prepare('SELECT * FROM t_cartes WHERE site_id = ? AND id_carte > ? ORDER BY id_carte ASC LIMIT ?').all(scopeSiteId, lastId, chunkSize)
+          : db.prepare('SELECT * FROM t_cartes WHERE id_carte > ? ORDER BY id_carte ASC LIMIT ?').all(lastId, chunkSize)) as any[];
         if (cards.length === 0) break;
         
         lastId = cards[cards.length - 1].id_carte;
@@ -2099,30 +2408,48 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // USERS
-  ipcMain.handle('users:getAll', (_, siteId?: number, centreId?: number) => queries.getUsers(siteId, centreId));
+  ipcMain.handle('users:getAll', (_, siteId?: number, centreId?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Accès refusé à users:getAll : session invalide ou rôle non autorisé.');
+      throw new Error("Accès refusé. Privilèges administrateur requis pour consulter les utilisateurs.");
+    }
+    // Le périmètre site/centre est imposé par la session sécurisée : un ADMINISTRATEUR_SITE ou
+    // ADMIN_CENTRE ne peut jamais voir les agents d'un autre site/centre, quels que soient les
+    // paramètres envoyés par le renderer.
+    const scopedSiteId = secureUser.role !== 'SUPER ADMIN' ? secureUser.site_id : siteId;
+    const scopedCentreId = secureUser.role === 'ADMIN_CENTRE' ? secureUser.centre_id : centreId;
+    return queries.getUsers(scopedSiteId, scopedCentreId);
+  });
   ipcMain.handle('users:getProfile', async (_, login: string) => {
     const db = getDatabase();
     if (!db) return null;
     return db.prepare('SELECT id_user, login, role, nom_user, prenom_user, site_id, centre_id, sync_id FROM t_users WHERE login = ?').get(login);
   });
-  ipcMain.handle('users:create', async (_, data, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin();
-    let callerUserId = currentUser?.id_user || 0;
-    if (!callerUserId && userLogin) {
-      const db = getDatabase();
-      if (db) {
-        const u = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(userLogin) as { id_user: number } | undefined;
-        if (u) callerUserId = u.id_user;
-      }
+  ipcMain.handle('users:create', async (_, data) => {
+    // SECURITY fix : l'identité de l'appelant doit venir de la session sécurisée
+    // (Main Process), jamais d'un paramètre transmis par le Renderer.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Accès refusé à users:create : session invalide ou rôle non autorisé.');
+      throw new Error("Accès refusé. Privilèges administrateur requis pour créer un agent.");
     }
     // createUser appelle déjà insertAuditLog en interne — pas de doublon ici (C-3 fix)
-    const res = await queries.createUser(data, callerUserId, userLogin || undefined);
+    const res = await queries.createUser(data, secureUser.id_user, secureUser.login);
     return res;
   });
-  ipcMain.handle('users:update', async (_, id, data, currentUser) => {
-    // C-1 fix : passer currentUser pour que updateUser valide le périmètre de site
-    const res = await queries.updateUser(id, data, currentUser);
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+  ipcMain.handle('users:update', async (_, id, data) => {
+    // SECURITY fix : l'identité/le rôle de l'appelant (et donc le périmètre site/centre
+    // vérifié dans updateUser) doivent provenir de la session sécurisée, pas d'un objet
+    // "currentUser" fourni par le Renderer (falsifiable, et de toute façon jamais transmis
+    // par le pont preload — la vérification C-1 précédente était donc toujours contournée).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Accès refusé à users:update : session invalide ou rôle non autorisé.');
+      throw new Error("Accès refusé. Privilèges administrateur requis pour modifier un agent.");
+    }
+    const res = await queries.updateUser(id, data, secureUser);
+    const userLogin = secureUser.login || 'SYSTEM';
 
     setImmediate(() => {
       // Déterminer s'il y a eu un changement de rôle ou attribution de droits
@@ -2145,38 +2472,53 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     });
 
     queries.insertAuditLog(
-      currentUser?.login || 'ADMIN',
+      userLogin,
       'VALIDATION',
       `Modification du compte utilisateur ID ${id} (${data.login ? 'login : ' + data.login : 'champs mis Ã  jour'}).`
     );
     return res;
   });
-  ipcMain.handle('users:delete', async (_, id, currentUser) => {
-    // C-2 fix : passer currentUser pour que deleteUser valide le périmètre de site
-    const res = await queries.deleteUser(id, currentUser);
+  ipcMain.handle('users:delete', async (_, id) => {
+    // SECURITY fix : idem users:update — l'appelant vient de la session sécurisée.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      log.warn('[SECURITY] Accès refusé à users:delete : session invalide ou rôle non autorisé.');
+      throw new Error("Accès refusé. Privilèges administrateur requis pour désactiver un agent.");
+    }
+    const res = await queries.deleteUser(id, secureUser);
     queries.insertAuditLog(
-      currentUser?.login || 'ADMIN',
+      secureUser.login || 'ADMIN',
       'VALIDATION',
       `Désactivation du compte utilisateur ID ${id}.`
     );
     return res;
   });
-  ipcMain.handle('users:hardDelete', async (_, id, currentUser) => {
-    // C-2 fix : vérification de rôle explicite + transmission du currentUser
-    if (!verifyUserRole(currentUser?.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+  ipcMain.handle('users:hardDelete', async (_, id) => {
+    // SECURITY fix : vérifier le rôle de l'appelant via la session sécurisée. L'ancienne
+    // implémentation lisait currentUser?.id_user, un paramètre jamais transmis par le
+    // pont preload : verifyUserRole recevait donc toujours `undefined` et refusait
+    // systématiquement l'action, y compris pour un SUPER ADMIN légitime.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
       throw new Error("Accès non autorisé : rôle insuffisant pour supprimer définitivement un agent.");
     }
-    const res = await queries.hardDeleteUser(id, currentUser);
+    const res = await queries.hardDeleteUser(id, secureUser);
     queries.insertAuditLog(
-      currentUser?.login || 'ADMIN',
+      secureUser.login || 'ADMIN',
       'VALIDATION',
       `Suppression physique définitive de l'utilisateur ID ${id}.`
     );
     return res;
   });
-  ipcMain.handle('auth:resetAgentPassword', (_, targetUserId: number, callerUserId: number) => 
-    queries.resetAgentPassword(targetUserId, callerUserId)
-  );
+  ipcMain.handle('auth:resetAgentPassword', (_, targetUserId: number) => {
+    // SECURITY fix : callerUserId ne doit jamais venir du Renderer (authStore falsifiable) —
+    // seule la session sécurisée fait foi pour identifier qui déclenche la réinitialisation.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès non autorisé : rôle insuffisant pour réinitialiser un mot de passe.");
+    }
+    return queries.resetAgentPassword(targetUserId, secureUser.id_user);
+  });
 
   // LOGS
   ipcMain.handle('logs:get', (_, offset, limit, filters) => queries.getLogs(offset, limit, filters));
@@ -2344,15 +2686,29 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.resetSiteAdminPassword(siteId, pass); }
     catch (e) { log.error('IPC Error: hierarchy:resetAdminPassword', e); throw e; }
   });
-  ipcMain.handle('hierarchy:verifyPassword', async (_, password, loginOverride?: string) => {
+  ipcMain.handle('hierarchy:verifyPassword', async (_, password, loginOverride?: string, actionName?: string) => {
     try {
       const login = loginOverride || getCurrentUserLogin();
-      if (login) {
-        log.info(`[hierarchy:verifyPassword] Vérification du mot de passe pour l'utilisateur '${login}'.`);
-        return queries.verifyUserPassword(login, password);
+      const attemptKey = login || 'SUPERADMIN_FALLBACK';
+      const actionLabel = actionName ? ` (action : '${actionName}')` : '';
+
+      const lockRemainingMs = isVerifyPasswordLocked(attemptKey);
+      if (lockRemainingMs > 0) {
+        log.warn(`[SECURITY] Tentative de vérification de mot de passe bloquée pour '${attemptKey}'${actionLabel} (verrouillage anti-bruteforce actif, ${Math.ceil(lockRemainingMs / 1000)}s restantes).`);
+        return false;
       }
-      log.warn('[hierarchy:verifyPassword] Aucun login fourni, fallback sur verifySuperAdminPassword.');
-      return queries.verifySuperAdminPassword(password);
+
+      let isValid: boolean;
+      if (login) {
+        log.info(`[hierarchy:verifyPassword] Vérification du mot de passe pour l'utilisateur '${login}'${actionLabel}.`);
+        isValid = await queries.verifyUserPassword(login, password);
+      } else {
+        log.warn(`[hierarchy:verifyPassword] Aucun login fourni${actionLabel}, fallback sur verifySuperAdminPassword.`);
+        isValid = await queries.verifySuperAdminPassword(password);
+      }
+
+      registerVerifyPasswordAttempt(attemptKey, isValid);
+      return isValid;
     }
     catch (e) { log.error('IPC Error: hierarchy:verifyPassword', e); throw e; }
   });
@@ -2363,8 +2719,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userLogin = getCurrentUserLogin();
       if (userLogin && db) {
         const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        if (user && user.role === 'ADMINISTRATEUR_SITE') {
-          // Forcer le filtrage sur le site_id de l'administrateur de site
+        // Sécurité : tout rôle non-SUPER ADMIN est cantonné à son propre site, quel que soit
+        // le siteId envoyé par le renderer (pas uniquement ADMINISTRATEUR_SITE).
+        if (user && user.role !== 'SUPER ADMIN') {
           finalSiteId = user.site_id ?? undefined;
         }
       }
@@ -2809,19 +3166,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // MAINTENANCE
-  ipcMain.handle('maintenance:clearAll', async (event, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
+  ipcMain.handle('maintenance:clearAll', async (event) => {
+    // Sécurité : identité dérivée exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
     try {
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
+        log.warn('[SECURITY] Accès refusé à maintenance:clearAll : session invalide ou rôle non autorisé.');
         throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis pour effacer toutes les donnÃ©es.");
       }
-      
+
       const db = getDatabase()!;
       const totalCountRow = db.prepare("SELECT COUNT(*) as count FROM t_cartes").get() as { count: number } | undefined;
       const totalCount = totalCountRow ? totalCountRow.count : 0;
 
-      log.info(`[MAINTENANCE] Initialisation de maintenance:clearAll (effacement total de toutes les cartes) par l'utilisateur '${currentUser?.login}'.`);
+      log.info(`[MAINTENANCE] Initialisation de maintenance:clearAll (effacement total de toutes les cartes) par l'utilisateur '${userLogin}'.`);
       const clearAllStart = performance.now();
       queries.clearDatabaseCartes(undefined);
       event.sender.send('maintenance-progress', 100);
@@ -2846,19 +3206,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw e;
     }
   });
-  ipcMain.handle('maintenance:clearDatabaseCartes', async (event, siteId, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
+  ipcMain.handle('maintenance:clearDatabaseCartes', async (event, siteId) => {
+    // Sécurité : identité dérivée exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
     try {
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
+        log.warn('[SECURITY] Accès refusé à maintenance:clearDatabaseCartes : session invalide ou rôle non autorisé.');
         throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis.");
       }
-      
+
       const db = getDatabase()!;
       const siteCountRow = db.prepare("SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?").get(siteId) as { count: number } | undefined;
       const siteCount = siteCountRow ? siteCountRow.count : 0;
 
-      log.info(`[MAINTENANCE] Initialisation de maintenance:clearDatabaseCartes pour le site ID ${siteId} par l'utilisateur '${currentUser?.login}'.`);
+      log.info(`[MAINTENANCE] Initialisation de maintenance:clearDatabaseCartes pour le site ID ${siteId} par l'utilisateur '${userLogin}'.`);
       const clearSiteStart = performance.now();
       queries.clearDatabaseCartes(siteId);
       event.sender.send('maintenance-progress', 100);
@@ -2883,19 +3246,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw e;
     }
   });
-  ipcMain.handle('maintenance:clearCloudCartes', async (event, siteId: number, confirmed: boolean, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
+  ipcMain.handle('maintenance:clearCloudCartes', async (event, siteId: number, confirmed: boolean) => {
+    // Sécurité : identité dérivée exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'ADMIN';
     try {
       if (confirmed !== true) {
         throw new Error("Confirmation explicite requise pour purger les cartes sur le Cloud.");
       }
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        log.warn('[SECURITY] Accès refusé à maintenance:clearCloudCartes : session invalide ou rôle non autorisé.');
         throw new Error("AccÃ¨s refusÃ©. PrivilÃ¨ges administrateur requis pour la purge Cloud.");
       }
-      
+
       const db = getDatabase()!;
-      if (userId !== 999999) {
+      if (userId !== FAILSAFE_ROOT_ID) {
         const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
         if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
@@ -2958,13 +3324,31 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       let totalDeleted = 0;
       let keepDeleting = true;
 
+      // Reprise automatique sur incident réseau transitoire (timeout, DNS, etc.) : une purge
+      // de gros site représente des centaines d'appels réseau séquentiels sur plusieurs
+      // minutes, et un seul incident ponctuel ne doit pas faire échouer toute l'opération
+      // (l'admin devrait alors recliquer "purger" manuellement autant de fois que nécessaire).
+      const PURGE_MAX_RETRIES = 3;
+      const PURGE_RETRY_DELAY_MS = 1500;
+      async function withNetworkRetry<T extends { error: any }>(op: () => PromiseLike<T>, label: string): Promise<T> {
+        let lastResult: T;
+        for (let attempt = 1; attempt <= PURGE_MAX_RETRIES; attempt++) {
+          lastResult = await op();
+          if (!lastResult.error) return lastResult;
+          log.warn(`[PURGE CLOUD] ${label} — tentative ${attempt}/${PURGE_MAX_RETRIES} échouée : ${lastResult.error.message || lastResult.error}`);
+          if (attempt < PURGE_MAX_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, PURGE_RETRY_DELAY_MS));
+          }
+        }
+        return lastResult!;
+      }
+
       while (keepDeleting) {
         // RÃ©cupÃ©ration par lots de 2000
-        const { data, error: fetchError } = await supabase
-          .from('t_cartes')
-          .select('sync_id')
-          .eq('id_site', siteId)
-          .limit(2000);
+        const { data, error: fetchError } = await withNetworkRetry(
+          () => supabase.from('t_cartes').select('sync_id').eq('id_site', siteId).limit(2000),
+          'FETCH des IDs'
+        );
 
         if (fetchError) {
           log.error(`[PURGE CLOUD] Ã‰CHEC FETCH de la purge Supabase pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(fetchError, null, 2));
@@ -2980,7 +3364,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
 
         const ids = data.map(d => d.sync_id);
-        
+
         // PostgREST limite la taille des URLs (~8KB). 2000 UUIDs = 74KB = Bad Request.
         // On dÃ©coupe donc en sous-lots de 100 (3.7KB max) et on les lance en parallÃ¨le.
         const chunkSize = 100;
@@ -2991,12 +3375,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
         // ExÃ©cution sÃ©quentielle des 20 requÃªtes de 100 pour ne pas saturer le thread principal et le rÃ©seau
         for (const chunk of chunks) {
-          const { error: deleteError } = await supabase.from('t_cartes').delete().in('sync_id', chunk);
+          const { error: deleteError } = await withNetworkRetry(
+            () => supabase.from('t_cartes').delete().in('sync_id', chunk),
+            `DELETE lot de ${chunk.length}`
+          );
           if (deleteError) {
             log.error(`[PURGE CLOUD] Ã‰CHEC DELETE par lot pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(deleteError, null, 2));
             throw new Error(`Erreur lors de la suppression par lot sur Supabase : [${deleteError.code || 'NO_CODE'}] ${deleteError.message}`);
           }
-          
+
           totalDeleted += chunk.length;
           const percent = cloudTotal > 0 ? Math.min(99, Math.round((totalDeleted / cloudTotal) * 100)) : 99;
           if (!event.sender.isDestroyed()) {
@@ -3077,6 +3464,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('sync:getCloudCartesCount', async (_, siteId: number) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return -1;
+      siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+      if (!siteId || isNaN(Number(siteId))) return -1;
+
       const db = getDatabase();
       let watermark = '1970-01-01T00:00:00Z';
       let lastSyncId = '00000000-0000-0000-0000-000000000000';
@@ -3093,7 +3485,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const { count, error } = await supabase
         .from('t_cartes')
         .select('*', { count: 'exact', head: true })
-        .or(`updated_at.gt."${watermark}",and(updated_at.eq."${watermark}",sync_id.gt."${lastSyncId}")`)
+        .or(`updated_at.gt.${watermark},and(updated_at.eq.${watermark},sync_id.gt.${lastSyncId})`)
         .eq('id_site', siteId);
 
       if (error) {
@@ -3126,19 +3518,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return -1;
     }
   });
-  ipcMain.handle('maintenance:fullReset', async (event, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
+  ipcMain.handle('maintenance:fullReset', async (event) => {
+    // Sécurité : identité dérivée exclusivement de la session serveur (non falsifiable via IPC).
+    const secureUser = getSecureCurrentUser();
+    const userLogin = secureUser?.login || getCurrentUserLogin() || 'SYSTEM_SUPERADMIN';
     try {
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
+        log.warn('[SECURITY] Accès refusé à maintenance:fullReset : session invalide ou rôle non autorisé.');
         throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis pour la rÃ©initialisation totale.");
       }
-      
+
       const db = getDatabase()!;
       const sqliteVersionRow = db.prepare("select sqlite_version() as version").get() as { version: string } | undefined;
       const sqliteVersion = sqliteVersionRow ? sqliteVersionRow.version : '3.x';
 
-      log.info(`[MAINTENANCE] Initialisation de maintenance:fullReset (rÃ©initialisation systÃ¨me totale) par l'utilisateur '${currentUser?.login}'.`);
+      log.info(`[MAINTENANCE] Initialisation de maintenance:fullReset (rÃ©initialisation systÃ¨me totale) par l'utilisateur '${userLogin}'.`);
       const fullResetStart = performance.now();
       const res = queries.fullSystemReset();
       event.sender.send('maintenance-progress', 100);
@@ -3364,6 +3759,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('sync:startBulk', async (_, siteId: number, allowProbable: boolean = false, allowInvalid: boolean = false, allowMissing: boolean = false, onlyModified: boolean = false, currentUser?: any) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
+
+    // ── Verrou anti-concurrence ──────────────────────────────────────────────
+    // Symétrique à sync:pullSiteCards : runBulkUpload ouvre lui aussi un Worker Thread
+    // avec sa propre connexion SQLite indépendante (upload-worker.js). Si le SyncEngine
+    // a déjà un cycle en cours (upstream 30s ou downstream automatique 2h), on refuse
+    // l'envoi manuel pour éviter deux workers concurrents sur le même fichier → database is locked.
+    if (syncEngine.isCurrentlySyncing()) {
+      log.warn(`[sync:startBulk] Refusé : une synchronisation est déjà en cours pour le site ${siteId}.`);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: 'Une synchronisation est déjà en cours. Veuillez patienter.',
+        strictCount: 0,
+        probableCount: 0,
+        invalidCount: 0
+      };
+    }
+
     try {
       const secureUser = getSecureCurrentUser();
       if (!secureUser) throw new Error("Session invalide.");
@@ -3436,6 +3849,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  ipcMain.handle('sync:cancelBulk', async (_, currentUser?: any) => {
+    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    try {
+      log.info(`[BulkUpload] Annulation demandée par ${userLogin}.`);
+      cancelBulkUpload();
+      return { success: true, message: 'Signal d\'annulation envoyé.' };
+    } catch (e: any) {
+      log.error('IPC Error: sync:cancelBulk', e);
+      return { success: false, message: e.message || String(e) };
+    }
+  });
+
   ipcMain.handle('sync:getUnreadCount', (_, siteId?: number) => {
     try {
       return queries.getUnreadSyncNotifications(siteId);
@@ -3475,9 +3900,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // OPERATEUR STATS HANDLERS
   ipcMain.handle('stats:getAgentToday', (_, userId: number) => queries.getAgentStatsToday(userId));
   ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number, offset?: number) => queries.getAgentRecentSaisies(userId, limit, offset));
-  ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number, centreId?: number) => queries.getSiteSaisieStatsToday(siteId, centreId));
-  ipcMain.handle('stats:getSiteQualiteToday', (_, siteId: number, centreId?: number) => queries.getSiteQualiteStatsToday(siteId, centreId));
-  ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number) => queries.getSiteLogistiqueStatsToday(siteId, centreId));
+  // Sécurité : le périmètre site/centre de ces 3 handlers est imposé par la session serveur
+  // pour tout rôle non-SUPER ADMIN, quels que soient les paramètres envoyés par le renderer.
+  function scopeSiteCentreToSession(siteId: number, centreId?: number): { siteId: number; centreId?: number } {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || secureUser.role === 'SUPER ADMIN') return { siteId, centreId };
+    return {
+      siteId: secureUser.site_id ?? siteId,
+      centreId: secureUser.role === 'ADMIN_CENTRE' ? (secureUser.centre_id ?? centreId) : centreId
+    };
+  }
+  ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number, centreId?: number) => {
+    const scoped = scopeSiteCentreToSession(siteId, centreId);
+    return queries.getSiteSaisieStatsToday(scoped.siteId, scoped.centreId);
+  });
+  ipcMain.handle('stats:getSiteQualiteToday', (_, siteId: number, centreId?: number) => {
+    const scoped = scopeSiteCentreToSession(siteId, centreId);
+    return queries.getSiteQualiteStatsToday(scoped.siteId, scoped.centreId);
+  });
+  ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number) => {
+    const scoped = scopeSiteCentreToSession(siteId, centreId);
+    return queries.getSiteLogistiqueStatsToday(scoped.siteId, scoped.centreId);
+  });
 
   // RETRAITS ANALYTICS HANDLERS
   ipcMain.handle('stats:getRetraits', (_, siteId: number, centreId: number | null, period: string, customDate?: string | null) => {
@@ -3674,40 +4118,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: false, message: error.message || String(error) };
     }
   });
-  // DB MAINTENANCE - Purge locale des cartes
-  ipcMain.handle('database:purgeLocalCards', async (_, currentUser) => {
-    try {
-      const db = getDatabase();
-      if (!db) {
-        throw new Error("Base de données indisponible pour la purge.");
-      }
-
-      const backupDir = getBackupDir();
-      const backupPath = join(backupDir, `backup_purge_${Date.now()}.db`);
-      log.info(`[MAINTENANCE] Lancement de la sauvegarde de sécurité vers ${backupPath} avant purge...`);
-      await db.backup(backupPath);
-      log.info(`[MAINTENANCE] Sauvegarde réussie.`);
-
-      let deletedCount = 0;
-      db.transaction(() => {
-        const row = db.prepare("SELECT COUNT(*) as count FROM t_cartes").get() as { count: number } | undefined;
-        deletedCount = row ? row.count : 0;
-        db.prepare("DELETE FROM t_cartes").run();
-      })();
-
-      logAudit(
-        currentUser?.login || 'ADMIN',
-        'PURGE',
-        `Purge locale des cartes effectuée avec succès. ${deletedCount} cartes supprimées. Sauvegarde : ${backupPath}`
-      );
-
-      return { success: true, count: deletedCount, backupPath };
-    } catch (error: any) {
-      log.error(`[MAINTENANCE] Erreur lors de la purge des cartes :`, error);
-      return { success: false, message: error.message || String(error) };
-    }
-  });
-
   // DB MAINTENANCE - Synchronisation forcée (Full Downstream Pull)
   ipcMain.handle('sync:forceFullPull', async (_, siteId: number, currentUser) => {
     try {
@@ -3942,15 +4352,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('audit:delete', async (_, id: number, currentUser) => {
+  ipcMain.handle('audit:delete', async (_, id: number) => {
     try {
-      const userId = currentUser?.id_user;
+      // Securite : identite derivee exclusivement de la session serveur (non falsifiable via IPC).
+      const secureUser = getSecureCurrentUser();
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+        log.warn('[SECURITY] Acces refuse a audit:delete : session invalide ou role non autorise.');
         throw new Error("AccÃ¨s refusÃ©. Session ou rÃ´le non autorisÃ© Ã  supprimer les audits.");
       }
       queries.deleteAuditLog(id);
       queries.insertAuditLog(
-        currentUser?.login || 'ADMIN',
+        secureUser?.login || 'ADMIN',
         'VALIDATION',
         `Suppression de l'entrÃ©e d'audit ID ${id} par l'administrateur.`
       );

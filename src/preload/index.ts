@@ -49,8 +49,8 @@ const api = {
       ipcRenderer.invoke('cartes:publishDrafts', siteId, currentUser),
     searchAllRecords: (siteId: number, filters: any, limit: number): Promise<any[]> => 
       ipcRenderer.invoke('cartes:searchAllRecords', siteId, filters, limit),
-    getRecordForCorrection: (originalId: number | string, recordType: string): Promise<any> => 
-      ipcRenderer.invoke('cartes:getRecordForCorrection', originalId, recordType),
+    getRecordForCorrection: (originalId: number | string, recordType: string, siteId?: number): Promise<any> =>
+      ipcRenderer.invoke('cartes:getRecordForCorrection', originalId, recordType, siteId),
     getPage: (
       offset: number, 
       limit: number, 
@@ -63,6 +63,10 @@ const api = {
       filters?: { date_de_naissance?: string; lieu_de_naissance?: string; contact?: string; site_id?: string; exclude_delivered?: string }
     ): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:search', query, limit, filters),
+    searchCloudEmergency: (query: string, filters: any): Promise<any[]> => 
+      ipcRenderer.invoke('cartes:searchCloudEmergency', query, filters),
+    pullSingleCard: (cardData: any): Promise<any> => 
+      ipcRenderer.invoke('cartes:pullSingleCard', cardData),
     getById: (id: number): Promise<ICarte> => 
       ipcRenderer.invoke('cartes:getById', id),
     create: (data: Partial<ICarte>): Promise<{ id: number; sync_id: string }> => 
@@ -106,8 +110,10 @@ const api = {
       ipcRenderer.invoke('cartes:getHistoriquePertes', siteId),
     reactiverCarte: (id: number, nouveauRangement: string, currentUser?: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('cartes:reactiverCarte', id, nouveauRangement, currentUser),
-    getInvalidDates: (siteId?: number): Promise<ICarte[]> => 
-      ipcRenderer.invoke('cartes:getInvalidDates', siteId),
+    getInvalidDates: (siteId?: number, offset?: number, limit?: number, query?: string): Promise<{ rows: any[], total: number }> => 
+      ipcRenderer.invoke('cartes:getInvalidDates', siteId, offset, limit, query),
+    getDatesVidesPage: (siteId?: number, offset?: number, limit?: number, query?: string): Promise<{ rows: any[], total: number }> => 
+      ipcRenderer.invoke('cartes:getDatesVidesPage', siteId, offset, limit, query),
     updateDate: (id: number, newDate: string): Promise<any> => 
       ipcRenderer.invoke('cartes:updateDate', id, newDate),
     getDoublonsPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
@@ -189,12 +195,17 @@ const api = {
       ipcRenderer.invoke('stats:getRetraits', siteId, centreId, period, customDate ?? null),
     getRetraitsTrend: (siteId: number, centreId: number | null, period: 'jour' | 'semaine' | 'mois' | 'annee', customDate?: string | null): Promise<Array<{ label: string; total: number }>> => 
       ipcRenderer.invoke('stats:getRetraitsTrend', siteId, centreId, period, customDate ?? null),
-    getUnsyncedCardsCount: (siteId: number): Promise<number> => 
+    getUnsyncedCardsCount: (siteId: number): Promise<number> =>
       ipcRenderer.invoke('stats:getUnsyncedCardsCount', siteId),
-    getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number }> => 
+    getUnsyncedConformeCardsCount: (siteId: number): Promise<number> =>
+      ipcRenderer.invoke('stats:getUnsyncedConformeCardsCount', siteId),
+    getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number }> =>
       ipcRenderer.invoke('stats:getDetailedSyncStats', siteId),
     getUnsyncedUsersCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedUsersCount', siteId),
+    
+    getUnsyncedCentresCount: (siteId: number): Promise<number> => 
+      ipcRenderer.invoke('stats:getUnsyncedCentresCount', siteId),
   },
   // Import
   import: {
@@ -216,6 +227,8 @@ const api = {
       ipcRenderer.invoke('import:clearAnomalies', siteId),
     deleteAnomaly: (id: number): Promise<void> =>
       ipcRenderer.invoke('import:deleteAnomaly', id),
+    updateAnomalyField: (id: number, field: string, value: string): Promise<any> =>
+      ipcRenderer.invoke('import:updateAnomalyField', id, field, value),
     countEmptyAnomalies: (siteId: number): Promise<number> =>
       ipcRenderer.invoke('import:countEmptyAnomalies', siteId),
     deleteEmptyAnomalies: (siteId: number): Promise<void> =>
@@ -262,8 +275,8 @@ const api = {
       ipcRenderer.invoke('users:delete', id),
     hardDelete: (id: number): Promise<any> => 
       ipcRenderer.invoke('users:hardDelete', id),
-    resetAgentPassword: (targetUserId: number, callerUserId: number): Promise<{ success: boolean }> => 
-      ipcRenderer.invoke('auth:resetAgentPassword', targetUserId, callerUserId),
+    resetAgentPassword: (targetUserId: number): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('auth:resetAgentPassword', targetUserId),
   },
   // Logs
   logs: {
@@ -318,8 +331,8 @@ const api = {
       ipcRenderer.invoke('hierarchy:deleteSite', id),
     resetAdminPassword: (siteId: number, pass: string): Promise<any> => 
       ipcRenderer.invoke('hierarchy:resetAdminPassword', siteId, pass),
-    verifyPassword: (password: string, actionName?: string, login?: string): Promise<boolean> => 
-      ipcRenderer.invoke('hierarchy:verifyPassword', password, login),
+    verifyPassword: (password: string, actionName?: string, login?: string): Promise<boolean> =>
+      ipcRenderer.invoke('hierarchy:verifyPassword', password, login, actionName),
     getCentres: (siteId?: number): Promise<any[]> => 
       ipcRenderer.invoke('hierarchy:getCentres', siteId),
     getCentreById: (id: number): Promise<any> => 
@@ -565,7 +578,7 @@ const api = {
   },
   // Debug
   debug: {
-    getAllAnomalies: (): Promise<any[]> => ipcRenderer.invoke('debug:getAllAnomalies')
+    getAllAnomalies: (filterType?: string): Promise<any[]> => ipcRenderer.invoke('debug:getAllAnomalies', filterType)
   }
 };
 

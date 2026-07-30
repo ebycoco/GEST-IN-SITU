@@ -5,6 +5,12 @@ const Database = require(workerData.sqlitePath);
 const { createReadStream, openSync, readSync, closeSync } = require('fs');
 const readline = require('readline');
 
+// Référence module-scope vers la connexion active, uniquement pour permettre au handler
+// run().catch() ci-dessous de fermer proprement le WAL en cas d'exception non prévue
+// (ex: erreur SQLite mi-écriture). Sans cela, une exception laisse la connexion ouverte
+// jusqu'à la destruction du thread, ce qui peut laisser le WAL dans un état non checkpointé.
+let workerDb = null;
+
 async function run() {
   const startTime = Date.now();
   var totalRejected = 0;
@@ -78,10 +84,13 @@ async function run() {
   });
   routingIndex.sort((a, b) => b.prefix.length - a.prefix.length);
 
+  // Le premier centre de la routingTable est toujours le centre principal (trié par numéro ASC en base)
+  const defaultCentreId = (routingTable && routingTable.length > 0) ? routingTable[0].id : null;
+
   function resolveRouting(rawRangement) {
     const cleanRangement = removeAccents(rawRangement || '');
     if (!cleanRangement) {
-      return { site_id: siteId, centre_id: null, rangement: 'NON CLASSE' };
+      return { site_id: siteId, centre_id: defaultCentreId, rangement: 'NON CLASSE' };
     }
     const upper = cleanRangement.toUpperCase().trim();
     for (var i = 0; i < routingIndex.length; i++) {
@@ -93,10 +102,11 @@ async function run() {
         };
       }
     }
-    return { site_id: siteId, centre_id: null, rangement: upper };
+    return { site_id: siteId, centre_id: defaultCentreId, rangement: upper };
   }
 
   const db = new Database(dbPath, { timeout: 60000 });
+  workerDb = db;
   db.pragma('busy_timeout = 60000');
   db.pragma('journal_mode = WAL');
   db.pragma('synchronous = NORMAL');
@@ -104,15 +114,50 @@ async function run() {
   db.pragma('temp_store = MEMORY');
   db.pragma('foreign_keys = OFF');
 
-  // Mise à jour de la cle_doublon de t_cartes pour inclure num_secu et statut (copie conforme absolue 100%)
+  // Ré-alignement défensif de `contact` sur le format canonique (chiffres bruts, sans
+  // indicatif) — celui utilisé par la saisie manuelle et le pull Cloud. Répare les cartes
+  // du site qu'une ancienne version de ce worker aurait stockées au format "+225 XX XX XX XX XX".
+  // Doit s'exécuter AVANT le ré-alignement de cle_doublon ci-dessous, qui se base sur cette colonne.
   try {
-    db.prepare(`
-      UPDATE t_cartes 
-      SET cle_doublon = noms || '|' || prenoms || '|' || date_de_naissance || '|' || COALESCE(lieu_de_naissance, '') || '|' || COALESCE(contact, '') || '|' || COALESCE(num_secu, '') || '|' || statut 
-      WHERE site_id = ?
-    `).run(siteId);
+    const badContacts = db.prepare(`
+      SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, contact
+      FROM t_cartes
+      WHERE site_id = ? AND contact LIKE '+225%'
+    `).all(siteId);
+
+    if (badContacts.length > 0) {
+      const fixContactStmt = db.prepare(`UPDATE t_cartes SET contact = ?, cle_doublon = ? WHERE id_carte = ?`);
+      const fixTx = db.transaction((rows) => {
+        for (const row of rows) {
+          const digits = normalizeContact(row.contact);
+          const cleDbl = (row.noms || '') + '|' + (row.prenoms || '') + '|' + (row.date_de_naissance || '') + '|' + (row.lieu_de_naissance || '') + '|' + digits;
+          fixContactStmt.run(digits, cleDbl, row.id_carte);
+        }
+      });
+      fixTx(badContacts);
+      console.log(`[CSV WORKER] contact ré-aligné (format canonique) sur ${badContacts.length} carte(s) du site ${siteId}.`);
+    }
   } catch (err) {
-    console.error('[CSV WORKER] Failed to upgrade t_cartes cle_doublon:', err);
+    console.error('[CSV WORKER] Failed to normalize t_cartes contact:', err);
+  }
+
+  // Ré-alignement défensif de cle_doublon sur le format canonique à 5 segments
+  // (noms|prenoms|date_de_naissance|lieu_de_naissance|contact), celui utilisé par la saisie
+  // manuelle (createCarte/updateCarte), le dashboard qualité (stats-worker.js, sentinelle '||||')
+  // et le moteur de sync (downstream.ts). Répare aussi les cartes du site qu'une ancienne version
+  // de ce worker aurait déviées vers un format à 7 segments (+num_secu+statut), invisible à ces
+  // modules. Ciblé sur les seules clés à réparer (>=6 '|') pour rester rapide sur les gros sites.
+  try {
+    const realign = db.prepare(`
+      UPDATE t_cartes
+      SET cle_doublon = COALESCE(noms, '') || '|' || COALESCE(prenoms, '') || '|' || COALESCE(date_de_naissance, '') || '|' || COALESCE(lieu_de_naissance, '') || '|' || COALESCE(contact, '')
+      WHERE site_id = ? AND cle_doublon LIKE '%|%|%|%|%|%'
+    `).run(siteId);
+    if (realign.changes > 0) {
+      console.log(`[CSV WORKER] cle_doublon ré-alignée (format canonique) sur ${realign.changes} carte(s) du site ${siteId}.`);
+    }
+  } catch (err) {
+    console.error('[CSV WORKER] Failed to normalize t_cartes cle_doublon:', err);
   }
 
   // Drop and recreate temp table to guarantee a clean and up-to-date schema
@@ -156,7 +201,8 @@ async function run() {
     VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message, @lieu_de_naissance, @rangement, @lieu_enrolement, @statut, @date_delivrance)
   `);
 
-  const BATCH_SIZE = 1000;
+  const BATCH_SIZE = 10000;
+  let totalTransactions = 0;
   const insertManyTx = db.transaction(function(items, anomalies) {
     for (var i = 0; i < items.length; i++) {
       insertStmt.run(items[i]);
@@ -181,28 +227,19 @@ async function run() {
       .trim();
   }
 
+  // Format canonique (chiffres bruts, sans indicatif) — identique à cartes.queries.ts
+  // (saisie manuelle) et download-worker.js (pull Cloud), pour que la colonne `contact`
+  // et donc `cle_doublon` restent comparables quelle que soit l'origine de la carte.
   function normalizeContact(contactStr) {
-    if (!contactStr) return '+225 00 00 00 00 00';
-    let digits = contactStr.toString().replace(/\D/g, '');
-    let localNumber = '';
-
-    if (digits.startsWith('225')) {
-      localNumber = digits.slice(3);
-    } else {
-      localNumber = digits;
+    if (!contactStr) return '';
+    let cleaned = contactStr.toString().replace(/\D/g, '');
+    if (cleaned.startsWith('225') && cleaned.length > 10) {
+      cleaned = cleaned.substring(3);
     }
-
-    if (localNumber.length !== 10) {
-      return '+225 00 00 00 00 00';
+    if (cleaned.length > 10) {
+      cleaned = cleaned.substring(cleaned.length - 10);
     }
-
-    const part1 = localNumber.slice(0, 2);
-    const part2 = localNumber.slice(2, 4);
-    const part3 = localNumber.slice(4, 6);
-    const part4 = localNumber.slice(6, 8);
-    const part5 = localNumber.slice(8, 10);
-
-    return `+225 ${part1} ${part2} ${part3} ${part4} ${part5}`;
+    return cleaned;
   }
 
   function cleanBirthDate(dateStr) {
@@ -412,8 +449,8 @@ async function run() {
   // Liste exhaustive des statuts reconnus par le pipeline (Chemins A, B, C)
   // Tout rawStatut non vide et absent de cette liste sera tracé comme STATUT_INCONNU.
   var STATUS_CONNUS = [
-    // Chemin ANNULE
-    'ANNULE',
+    // Chemin ANNULE & DOUBLON
+    'ANNULE', 'DOUBLON',
     // Chemin B — valeurs exactes
     'OK', 'RECU', 'OUI', 'LIVRE', 'RETIRE',
     // Chemin B — préfixes (on inclut les valeurs de base que les préfixes couvrent)
@@ -438,6 +475,7 @@ async function run() {
     if (!raw || raw === '-' || raw === '--' || raw === 'N/A' || raw === 'NA') return 'EN STOCK';
     var VALEURS_STOCK = ['EN STOCK', 'STOCK', 'NON DISTRIBUE', 'NON DELIVRE', 'DISPONIBLE', 'EN ATTENTE RETRAIT'];
     if (VALEURS_STOCK.indexOf(raw) !== -1) return 'EN STOCK';
+    if (raw === 'DOUBLON') return 'DOUBLON';
     // Valeur inconnue : on la logue pour traçabilité, mais on force 'EN STOCK'
     // pour respecter la contrainte CHECK de t_cartes
     console.warn('[CSV WORKER] Statut inconnu normalisé en EN STOCK:', raw);
@@ -455,7 +493,7 @@ async function run() {
     if (!match) return null;
     var digits = match[0].replace(/\D/g, '');
     if (digits.length < 8) return null;
-    return normalizeContact(digits); // → format +225 XX XX XX XX XX
+    return normalizeContact(digits); // → chiffres bruts (format canonique)
   }
 
   /**
@@ -541,7 +579,11 @@ async function run() {
   // Réutilisée comme fallback absolu dans les Chemins A et B.
   var TODAY_ISO = new Date().toISOString().split('T')[0]; // ex: '2026-07-02'
 
-  for await (const line of rl) {
+  const iterator = rl[Symbol.asyncIterator]();
+  while (true) {
+    const { value: line, done } = await iterator.next();
+    if (done) break;
+
     if (!line.trim()) continue;
     if (lineCount === 0) {
       // Détection du séparateur
@@ -700,7 +742,7 @@ async function run() {
             agent_distributeur: agentDistributeur,
             site_id: resolved.site_id,
             centre_id: resolved.centre_id,
-            cle_doublon: noms + '|' + prenoms + '|' + ddn + '|' + lieuN + '|' + contact + '|' + (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() + '|' + finalStatut,
+            cle_doublon: noms + '|' + prenoms + '|' + ddn + '|' + lieuN + '|' + contact,
             cle_doublon_flex: noms + '|' + prenoms + '|' + ddn + '|' + contact,
             nom_retirant: nomRetirant,
             num_retirant: numRetirant
@@ -716,6 +758,7 @@ async function run() {
       // Flush du batch EN DEHORS du try-catch per-ligne
       if (batch.length + anomaliesBatch.length >= BATCH_SIZE) {
         insertManyTx(batch, anomaliesBatch);
+        totalTransactions++;
         batch = [];
         anomaliesBatch = [];
 
@@ -742,6 +785,7 @@ async function run() {
 
   if (batch.length > 0 || anomaliesBatch.length > 0) {
     insertManyTx(batch, anomaliesBatch);
+    totalTransactions++;
     batch = [];
     anomaliesBatch = [];
   }
@@ -752,6 +796,23 @@ async function run() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_cle_site ON t_cartes(cle_doublon, site_id);');
   // Index sur la table temporaire
   db.exec("CREATE INDEX IF NOT EXISTS idx_import_temp_cle_flex ON t_import_temp(cle_doublon_flex);");
+
+  // Garde anti-doublon intra-fichier : si le CSV contient plusieurs lignes strictement
+  // identiques (même cle_doublon+site_id), un simple NOT EXISTS contre t_cartes ne les
+  // détecte pas entre elles (aucune n'existe encore dans t_cartes au moment de l'INSERT),
+  // donc chacune serait insérée comme fiche distincte. Correction en une passe globale
+  // (GROUP BY, un seul index scan) plutôt qu'une sous-requête corrélée par ligne dans la
+  // boucle de fusion — moins coûteux et ne laisse en base qu'une seule ligne (la première,
+  // MIN id_tmp) par groupe de doublons avant que la fusion par chunks ne démarre.
+  const dedupResult = db.prepare(`
+    DELETE FROM t_import_temp
+    WHERE id_tmp NOT IN (
+      SELECT MIN(id_tmp) FROM t_import_temp GROUP BY cle_doublon, site_id
+    )
+  `).run();
+  if (dedupResult.changes > 0) {
+    console.log(`[CSV WORKER] ${dedupResult.changes} doublon(s) strict(s) retiré(s) de t_import_temp avant fusion.`);
+  }
 
   // Fusion phase - transactions courtes par chunk pour éviter la saturation du WAL
   var now = new Date().toISOString();
@@ -809,38 +870,113 @@ async function run() {
     '@now, @now, 1 ' +
     'FROM t_import_temp ' +
     'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
-    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id) ' +
-    // Garde anti-doublon intra-chunk : si plusieurs lignes du CSV partagent la même
-    // cle_doublon dans CE chunk, seule la première (MIN id_tmp) est retenue. Sans ce filtre,
-    // NOT EXISTS ci-dessus ne voit pas les lignes du même INSERT...SELECT en cours d'exécution
-    // et laisserait passer chaque doublon comme une fiche distincte dans t_cartes.
-    'AND t_import_temp.id_tmp = (' +
-    '  SELECT MIN(t2.id_tmp) FROM t_import_temp t2 ' +
-    '  WHERE t2.cle_doublon = t_import_temp.cle_doublon AND t2.site_id = t_import_temp.site_id ' +
-    '  AND t2.id_tmp BETWEEN @startId AND @endId' +
-    ')'
+    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id)'
   );
 
   if (maxId >= minId && minId > 0) {
     const totalChunks = Math.ceil((maxId - minId + 1) / CHUNK_SIZE);
     let chunkIndex = 0;
 
+    // --- INSTRUMENTATION AVANCÉE (Phase 3) ---
+    const { performance } = require('perf_hooks');
+    const fs = require('fs');
+    const walPath = workerData.sqlitePath + '-wal';
+    
+    let fusionStartTime = performance.now();
+    let totalUpdateMs = 0;
+    let totalInsertMs = 0;
+    let totalCommitMs = 0;
+    let totalBetweenMs = 0;
+    let lastChunkEndTime = fusionStartTime;
+    
+    const getWalSize = () => {
+      try { return fs.statSync(walPath).size; } catch(e) { return 0; }
+    };
+
+    // 10. Mesure des PRAGMAs liés à l'environnement d'exécution
+    let pragmaStart = performance.now();
+    const walAutoCheckpoint = db.pragma('wal_autocheckpoint', { simple: true });
+    let pragmaAutoMs = performance.now() - pragmaStart;
+    
+    pragmaStart = performance.now();
+    const journalMode = db.pragma('journal_mode', { simple: true });
+    let pragmaJMs = performance.now() - pragmaStart;
+
+    pragmaStart = performance.now();
+    const syncMode = db.pragma('synchronous', { simple: true });
+    let pragmaSMs = performance.now() - pragmaStart;
+
+    console.log(`\\n[FUSION DIAGNOSTIC] PRAGMA vérifiés: journal_mode=${journalMode} (${pragmaJMs.toFixed(3)}ms), synchronous=${syncMode} (${pragmaSMs.toFixed(3)}ms), wal_autocheckpoint=${walAutoCheckpoint} (${pragmaAutoMs.toFixed(3)}ms)`);
+
     for (let startId = minId; startId <= maxId; startId += CHUNK_SIZE) {
       const endId = Math.min(maxId, startId + CHUNK_SIZE - 1);
 
-      // Transaction courte par chunk : commit fréquent = WAL ne sature jamais
-      const chunkTx = db.transaction(() => {
-        const uRes = updateChunkStmt.run({ now: now, startId: startId, endId: endId });
-        const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
-        totalUpdated += uRes.changes;
-        totalInserted += iRes.changes;
-      });
-      chunkTx();
+      // 1. Début de la transaction & 4. Temps entre deux
+      let chunkStart = performance.now();
+      let betweenTxMs = chunkStart - lastChunkEndTime;
+      totalBetweenMs += betweenTxMs;
 
+      let chunkUpdateMs = 0;
+      let chunkInsertMs = 0;
+      let chunkUChanges = 0;
+      let chunkIChanges = 0;
+
+      // 8. Taille du fichier .wal avant le COMMIT
+      let walSizeBefore = getWalSize();
+
+      // Transaction courte par chunk
+      const chunkTx = db.transaction(() => {
+        // 2. Temps du UPDATE & 3. Nombre réel
+        let uStart = performance.now();
+        const uRes = updateChunkStmt.run({ now: now, startId: startId, endId: endId });
+        chunkUpdateMs = performance.now() - uStart;
+        chunkUChanges = uRes.changes;
+
+        // 4. Temps du INSERT & 5. Nombre réel
+        let iStart = performance.now();
+        const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
+        chunkInsertMs = performance.now() - iStart;
+        chunkIChanges = iRes.changes;
+      });
+      
+      // 6. Temps exact du COMMIT + 7. Temps du checkpoint WAL (inclus dans le commit SQLite)
+      let txWrapperStart = performance.now();
+      chunkTx();
+      let txWrapperMs = performance.now() - txWrapperStart;
+      let commitAndCheckpointMs = Math.max(0, txWrapperMs - chunkUpdateMs - chunkInsertMs);
+      
+      // 9. Taille du fichier .wal après le COMMIT
+      let walSizeAfter = getWalSize();
+
+      // 11. Temps total de chaque transaction
+      let chunkTotalMs = performance.now() - chunkStart;
+
+      totalUpdated += chunkUChanges;
+      totalInserted += chunkIChanges;
+      totalUpdateMs += chunkUpdateMs;
+      totalInsertMs += chunkInsertMs;
+      totalCommitMs += commitAndCheckpointMs;
+
+      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
+
+      totalTransactions++;
       chunkIndex++;
+
+      lastChunkEndTime = performance.now();
       const chunkProgress = 82 + Math.round((chunkIndex / totalChunks) * 16);
       parentPort.postMessage({ type: 'progress', value: chunkProgress });
     }
+
+    // 12. Temps cumulé des transactions
+    let fusionTotalMs = performance.now() - fusionStartTime;
+    console.log(`[FUSION DIAGNOSTIC] === BILAN DE LA FUSION ===
+Temps Total (49+ transactions) : ${fusionTotalMs.toFixed(2)}ms
+Total UPDATE : ${totalUpdateMs.toFixed(2)}ms (${totalUpdated} lignes)
+Total INSERT : ${totalInsertMs.toFixed(2)}ms (${totalInserted} lignes)
+Total COMMIT & Auto-Checkpoint WAL : ${totalCommitMs.toFixed(2)}ms
+Total Attente Entre Chunks : ${totalBetweenMs.toFixed(2)}ms
+Seuil Auto-Checkpoint : ${walAutoCheckpoint} pages (~${(walAutoCheckpoint * 4096 / 1024 / 1024).toFixed(2)} MB)
+`);
   }
 
   // MISSION 4 — DétecterDoublonsProbables : la table temp est encore présente à ce stade
@@ -891,6 +1027,11 @@ async function run() {
 
   const durationSeconds = Math.max(1, Math.round((Date.now() - startTime) / 1000));
 
+  console.log(`[IMPORT DIAGNOSTIC] Après import :
+Temps total : ${durationSeconds} s
+Nombre transactions : ${totalTransactions}
+Lignes traitées : ${processedRows}`);
+
   parentPort.postMessage({ type: 'progress', value: 100 });
   parentPort.postMessage({
     type: 'done',
@@ -911,6 +1052,16 @@ async function run() {
 }
 
 run().catch(function(e) {
+  // Fermeture défensive du WAL : sans ça, une exception survenue en cours de traitement
+  // (ex: SqliteError) laisse la connexion ouverte jusqu'à la destruction du thread, ce qui
+  // peut laisser le fichier -wal dans un état non checkpointé pour la prochaine ouverture.
+  if (workerDb) {
+    try {
+      workerDb.close();
+    } catch (closeErr) {
+      console.error('[CSV WORKER] Erreur lors de la fermeture de la base après échec:', closeErr);
+    }
+  }
   parentPort.postMessage({ type: 'error', error: String(e) });
 });
 

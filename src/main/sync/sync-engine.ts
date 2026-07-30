@@ -542,8 +542,12 @@ class SyncEngine extends EventEmitter {
         durationMs
       } as AutoDownstreamEvent);
 
-      // Mettre à jour le timestamp de dernière synchronisation en base
-      this.updateLastDownstreamSync();
+      // Le watermark ('last_downstream_sync'/'_id') est déjà avancé de façon précise et
+      // transactionnelle par download-worker.js à partir du updated_at/sync_id réel de la
+      // dernière carte traitée — ne PAS l'écraser ici avec l'heure locale de la machine :
+      // un écart d'horloge (poste non synchronisé NTP) ou une carte écrite sur le cloud
+      // pendant ce court instant se retrouverait avec un updated_at antérieur au nouveau
+      // watermark et ne serait plus jamais retirée par aucun futur downstream.
 
       // Notifier le renderer de la mise à jour des données
       this.notifyRenderer('sync:updated-data', { source: 'auto-downstream', siteId, count: pulledCount });
@@ -663,26 +667,6 @@ class SyncEngine extends EventEmitter {
   }
 
   // ── Utilitaires privés ────────────────────────────────────────────────────
-
-  /**
-   * Met à jour la clé 'last_downstream_sync' dans t_config.
-   * Utilise un INSERT OR REPLACE pour garantir l'idempotence.
-   */
-  private updateLastDownstreamSync(): void {
-    try {
-      const db = getDatabase();
-      if (!db) return;
-      const now = new Date().toISOString();
-      const emptyUuid = '00000000-0000-0000-0000-000000000000';
-      db.transaction(() => {
-        const stmt = db.prepare('INSERT OR REPLACE INTO t_config (key, value) VALUES (?, ?)');
-        stmt.run('last_downstream_sync', now);
-        stmt.run('last_downstream_sync_id', emptyUuid);
-      })();
-    } catch (err) {
-      log.warn('[SyncEngine] Impossible de mettre à jour last_downstream_sync :', err);
-    }
-  }
 
   /**
    * Envoie un événement IPC vers le Renderer principal de façon sécurisée.

@@ -15,7 +15,7 @@ export default function AgentQualiteLayout() {
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const location = useLocation();
   const isOverview = location.pathname === '/agent-qualite' || location.pathname === '/agent-qualite/';
-  const { activeCard, correctionType, closeCorrection, isGuideOpen, closeGuide, guideInitialName, triggerRefresh, openCorrection } = useQualityUIStore();
+  const { activeCard, correctionType, closeCorrection, isGuideOpen, closeGuide, guideInitialName, triggerRefresh, openCorrection, isFetchingQuery } = useQualityUIStore();
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -37,8 +37,26 @@ export default function AgentQualiteLayout() {
     handleStartBulkUpload
   } = useForceSyncActions(user, activeSiteId, loadStats);
 
+  // Nombre de cartes réellement envoyables par le bouton "Envoyer les corrections" tel
+  // qu'utilisé ci-dessous (allowProbable/allowInvalid/allowMissing tous à false). Distinct de
+  // dirtyCartesCount (compteur brut is_dirty=1, partagé par plusieurs autres pages) pour ne
+  // pas afficher "en attente" des cartes que le bouton ne pourra pas envoyer sans forçage
+  // (classement 'NON CLASSE', date invalide, doublon) — évite le message trompeur "Aucune
+  // donnée locale conforme" alors que le badge annonçait des corrections en attente.
+  const [conformeCartesCount, setConformeCartesCount] = useState<number>(0);
+  useEffect(() => {
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) { setConformeCartesCount(0); return; }
+    let cancelled = false;
+    window.api.stats.getUnsyncedConformeCardsCount(Number(siteIdToUse))
+      .then(count => { if (!cancelled) setConformeCartesCount(count); })
+      .catch(err => console.error('Failed to fetch conforme cartes count:', err));
+    return () => { cancelled = true; };
+  }, [user, activeSiteId, dirtyCartesCount]);
+
   const pullDisabled = isPullingCards || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
+  const pushDisabled = isBulkUploading || conformeCartesCount === 0;
+  const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -87,7 +105,10 @@ export default function AgentQualiteLayout() {
             </button>
 
             <button
-              onClick={() => handleStartBulkUpload(false, false, false, (detailedSyncStats?.modifiedCount || 0) > 0)}
+              // forceMissing=true : une donnée manquante (rangement, nom, prénom, contact...) ne
+              // doit plus bloquer l'envoi cloud une fois la date corrigée. Seuls les doublons
+              // (forceProbable) et les dates invalides (forceInvalid) restent des blocages durs.
+              onClick={() => handleStartBulkUpload(false, false, true, (detailedSyncStats?.modifiedCount || 0) > 0)}
               disabled={pushDisabled}
               className="btn-plein-soleil"
               style={{
@@ -106,13 +127,49 @@ export default function AgentQualiteLayout() {
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : 'Synchroniser mes corrections'}
+              {isBulkUploading ? 'ENVOI...' : 'Envoyer les corrections'}
             </button>
           </div>
         </div>
 
+        {/* Rappel visuel : corrections locales pas encore envoyées vers le cloud.
+            Les fusions/corrections qualité restent 100% locales tant que ce bouton
+            n'a pas été cliqué — ce bandeau évite l'oubli. */}
+        {dirtyCartesCount > 0 && !isBulkUploading && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '10px 16px',
+            borderRadius: 10,
+            background: 'rgba(255, 230, 0, 0.08)',
+            border: '1px solid rgba(255, 230, 0, 0.25)',
+            color: '#FFE600',
+            fontSize: 13,
+            fontWeight: 600
+          }}>
+            <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+            {conformeCartesCount > 0 ? (
+              <>
+                {conformeCartesCount.toLocaleString('fr')} correction{conformeCartesCount > 1 ? 's' : ''} prête{conformeCartesCount > 1 ? 's' : ''} à l'envoi — restera{conformeCartesCount > 1 ? 'nt' : ''} uniquement sur ce poste tant que vous n'aurez pas cliqué sur « Envoyer les corrections ».
+                {nonConformeCount > 0 && ` (${nonConformeCount.toLocaleString('fr')} autre${nonConformeCount > 1 ? 's' : ''} non conforme${nonConformeCount > 1 ? 's' : ''} — date invalide ou doublon à corriger avant envoi.)`}
+              </>
+            ) : (
+              `${dirtyCartesCount.toLocaleString('fr')} correction${dirtyCartesCount > 1 ? 's' : ''} en attente mais non conforme${dirtyCartesCount > 1 ? 's' : ''} (date invalide ou doublon) — corrigez ces fiches avant de pouvoir les envoyer.`
+            )}
+          </div>
+        )}
+
         {/* Sous-navigation Modulaire */}
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+        <div style={{ 
+          display: 'flex', 
+          gap: 8, 
+          overflowX: 'auto', 
+          paddingBottom: 4,
+          pointerEvents: isFetchingQuery ? 'none' : 'auto',
+          opacity: isFetchingQuery ? 0.6 : 1,
+          transition: 'opacity 0.2s ease-in-out'
+        }}>
           <NavLink to="/agent-qualite" end className="tab-link" style={() => getNavLinkStyle({ isActive: isOverview })}>
             <LayoutDashboard size={16} /> Vue d'ensemble
           </NavLink>
@@ -123,10 +180,10 @@ export default function AgentQualiteLayout() {
             <Fingerprint size={16} /> Données Manquantes
           </NavLink>
           <NavLink to="/agent-qualite/invalides" className="tab-link" style={getNavLinkStyle}>
-            <Calendar size={16} /> Formats Invalides
+            <Calendar size={16} /> Dates Invalides ou Absentes
           </NavLink>
           <NavLink to="/agent-qualite/anomalies-brutes" className="tab-link" style={getNavLinkStyle}>
-            <AlertTriangle size={16} /> Anomalies Brutes
+            <AlertTriangle size={16} /> Autres Anomalies
           </NavLink>
           <NavLink to="/agent-qualite/recherche-universelle" className="tab-link" style={getNavLinkStyle}>
             <Search size={16} /> Recherche Universelle

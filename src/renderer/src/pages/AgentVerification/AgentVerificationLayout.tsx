@@ -22,7 +22,7 @@ export default function AgentVerificationLayout() {
     };
   }, []);
 
-  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const { stats, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -32,7 +32,11 @@ export default function AgentVerificationLayout() {
   } = useForceSyncActions(user, activeSiteId, loadStats);
 
   const pullDisabled = isPullingCards || cloudCartesCount === 0;
-  const pushDisabled = isBulkUploading || dirtyCartesCount === 0;
+  // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
+  // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
+  // des cartes que l'envoi rejettera silencieusement.
+  const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
+  const pushDisabled = isBulkUploading || conformeCount === 0;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -56,7 +60,24 @@ export default function AgentVerificationLayout() {
             </p>
           </div>
 
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+            {stats?.total !== undefined && (
+              <div style={{ 
+                display: 'flex', alignItems: 'center', gap: 8, 
+                padding: '10px 16px', 
+                background: 'rgba(74, 222, 128, 0.05)', 
+                borderRadius: 12, 
+                border: '1px solid rgba(74, 222, 128, 0.2)',
+                color: 'var(--text-secondary)'
+              }}>
+                <Database size={16} color="#4ade80" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Cartes disponibles en local :</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'white' }}>
+                  {stats.total.toLocaleString('fr-FR')}
+                </span>
+              </div>
+            )}
+            
             <button
               onClick={() => handlePullSiteCards(false)}
               disabled={pullDisabled}
@@ -83,7 +104,7 @@ export default function AgentVerificationLayout() {
             </button>
 
             <button
-              onClick={() => handleStartBulkUpload(false, false, false, (detailedSyncStats?.modifiedCount || 0) > 0)}
+              onClick={() => handleStartBulkUpload(false, false, false)}
               disabled={pushDisabled}
               className="btn-plein-soleil"
               style={{
@@ -104,7 +125,7 @@ export default function AgentVerificationLayout() {
               }}
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : 'Synchroniser mes saisies'}
+              {isBulkUploading ? 'ACTUALISATION...' : `Synchroniser mes actions${conformeCount > 0 ? ` (${conformeCount.toLocaleString('fr')})` : ''}`}
             </button>
           </div>
         </div>

@@ -13,7 +13,7 @@ interface CacheState {
     dirtyCartesCount: number;
     dirtyUsersCount: number;
     cloudCartesCount: number;
-    detailedSyncStats?: { cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number } | null;
+    detailedSyncStats?: { cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number } | null;
     cachedAt: number | null;
   };
   importCache: {
@@ -54,6 +54,7 @@ interface CacheState {
   setSitesCache: (list: any[]) => void;
   setCentresCache: (list: any[]) => void;
   setRetraitsCache: (data: any, trend: any[]) => void;
+  invalidateDashboardCache: () => void;
   clearCache: () => void;
 }
 
@@ -126,6 +127,9 @@ export const useCacheStore = create<CacheState>((set) => ({
   setRetraitsCache: (data, trend) => set({
     retraitsCache: { data, trend, cachedAt: Date.now() }
   }),
+  invalidateDashboardCache: () => set((state) => ({
+    dashboardCache: { ...state.dashboardCache, cachedAt: null }
+  })),
   clearCache: () => set({
     dashboardCache: { stats: null, globalStats: null, sites: [], siteSaisiesStats: [], siteQualiteStats: [], siteLogistiqueStats: [], operatorTodayCount: 0, operatorRecentSaisies: [], dirtyCartesCount: 0, dirtyUsersCount: 0, cloudCartesCount: 0, cachedAt: null },
     importCache: { cardCount: null, cachedAt: null },
