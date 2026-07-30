@@ -16,10 +16,8 @@ import ExportPage from './pages/ExportPage';
 import RoleRedirect from './components/RoleRedirect';
 import VerificationSearchPage from './pages/VerificationSearchPage';
 import SaisiePage from './pages/SaisiePage';
-import QualiteAssainissementPage from './pages/QualiteAssainissementPage';
 import AdminQueuePage from './pages/AdminQueuePage';
 import InventaireLayout from './pages/inventaire/InventaireLayout';
-import AdminCentreDashboardPage from './pages/AdminCentreDashboardPage';
 import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect, useState } from 'react';
@@ -27,7 +25,6 @@ import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
 import RoleSelectorPage from './pages/RoleSelectorPage';
-import AnomaliesView from './pages/AnomaliesView';
 
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
@@ -112,8 +109,7 @@ export default function App() {
             {/* Redirection dynamique par défaut */}
             <Route index element={<RoleRedirect />} />
             <Route path="dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><DashboardPage /></ProtectedRoute>} />
-            <Route path="centre/dashboard" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AdminCentreDashboardPage /></ProtectedRoute>} />
-            
+
             {/* Portail Admin Centre */}
             <Route path="admin-centre" element={<ProtectedRoute requiredRoles={['ADMIN_CENTRE']}><AdminCentreLayout /></ProtectedRoute>}>
               <Route index element={<DashboardView />} />
@@ -148,7 +144,7 @@ export default function App() {
               <Route path="doublons" element={<DoublonsView />} />
               <Route path="manquants" element={<MissingDataView />} />
               <Route path="invalides" element={<InvalidFormatView />} />
-              <Route path="anomalies" element={<AnomaliesView />} />
+              <Route path="anomalies-brutes" element={<AnomaliesBrutesView />} />
               <Route path="recherche-universelle" element={<GlobalSearchView />} />
             </Route>
 
@@ -168,7 +164,6 @@ export default function App() {
             <Route path="maintenance" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><MaintenancePage /></ProtectedRoute>} />
             <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><LogsPage /></ProtectedRoute>} />
             <Route path="retraits" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><RetraitsPage /></ProtectedRoute>} />
-            <Route path="anomalies" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AnomaliesView /></ProtectedRoute>} />
           </Route>
         </Routes>
       </HashRouter>

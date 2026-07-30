@@ -1,5 +1,24 @@
 %APPDATA%
 
+[SKILL.md](file;file:///d%3A/Espace%20travail/GEST_IN-SITU_CARTE_ABOBO_V2/.agents/skills/agent_0_orchestrator_master/SKILL.md) 
+*********************************************************************************************
+
+3. **Validation Statique, Confinement & Documentation (Gouvernance TITAN) :**
+### 🛡️ Directives de Confinement & Sécurité (Mode Production)
+- **Principe STOP & WARN :** Si la correction nécessite de modifier un composant global de navigation, préviens-moi avant d'appliquer le changement.
+   - **Confinement :** Inspection en lecture seule.
+   - **Validation Statique :** Exécuter `npx tsc --noEmit` (0 erreur).
+   - **Mise à jour de la Mémoire & Documentation :** 
+     - Consigner les conclusions de l'audit de volume dans `.agents/storage/factory_memory.md`.
+     - **Mettre OBLIGATOIREMENT à jour le fichier `.agents/storage/GEMINI.md`** pour documenter le comportement du pré-scan CSV par rapport aux insertions réelles.
+
+   - Aucun `npm run build` ne doit être exécuté.
+
+---
+
+### 📢 Restitution
+Présente le compte-rendu final selon la Norme des 13 Agents TITAN.
+***********************************************************************************************************
 Agent, je lance une mission d'audit technique complet du module [INSÉRER LE NOM DE LA PAGE ICI, ex: Administrateur du Site]. Je veux que tu appliques une rigueur totale sur cette partie du projet.
 
 1. Scan Exhaustif :

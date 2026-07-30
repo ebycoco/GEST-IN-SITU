@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Trash2, AlertCircle, RefreshCw, Filter } from 'lucide-react';
+import { Trash2, AlertCircle, RefreshCw, Filter, ChevronDown, ChevronUp, Info, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../../stores/authStore';
+import { useQualityUIStore } from '../../../stores/qualityUIStore';
 import { confirmService } from '../../../components/confirmService';
 import { PaginationInput } from '../../../components/PaginationInput';
+import { ExpandedAnomalyDetails } from '../../../components/Quality/ExpandedAnomalyDetails';
 
 export default function AnomaliesBrutesView() {
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
+  const { isFetchingQuery, setIsFetchingQuery } = useQualityUIStore();
 
   const [records, setRecords] = useState<any[]>([]);
   const [totalItems, setTotalItems] = useState(0);
@@ -16,11 +19,14 @@ export default function AnomaliesBrutesView() {
   const [showOnlyEmpty, setShowOnlyEmpty] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [isDeletingRow, setIsDeletingRow] = useState<Record<number, boolean>>({});
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const itemsPerPage = 50;
 
   const loadAnomalies = useCallback(async () => {
+    if (isLoading) return;
     setIsLoading(true);
+    setIsFetchingQuery(true);
     try {
       const offset = (currentPage - 1) * itemsPerPage;
       // Pour l'instant on récupère tout et on filtre en local ou on affiche tout.
@@ -34,21 +40,24 @@ export default function AnomaliesBrutesView() {
       toast.error('Erreur lors du chargement des anomalies.');
     } finally {
       setIsLoading(false);
+      setIsFetchingQuery(false);
     }
-  }, [siteIdToUse, currentPage]);
+  }, [siteIdToUse, currentPage, setIsFetchingQuery]);
 
   useEffect(() => {
     loadAnomalies();
+    setExpandedId(null);
   }, [loadAnomalies]);
 
   const isEmptyRow = (row: any) => {
-    const noms = row.noms?.trim() || '';
-    const prenoms = row.prenoms?.trim() || '';
-    const ddn = row.date_de_naissance?.trim() || '';
+    if (!row) return true;
+    const noms = String(row?.noms || '').trim();
+    const prenoms = String(row?.prenoms || '').trim();
+    const ddn = String(row?.date_de_naissance || '').trim();
     return !noms && !prenoms && !ddn;
   };
 
-  const displayedRecords = showOnlyEmpty ? records.filter(isEmptyRow) : records;
+  const displayedRecords = showOnlyEmpty ? (records || []).filter(isEmptyRow) : (records || []);
   const totalPages = Math.ceil(totalItems / itemsPerPage);
 
   const handleDeleteRow = async (id: number) => {
@@ -102,9 +111,9 @@ export default function AnomaliesBrutesView() {
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white', margin: 0 }}>Gestion des anomalies brutes</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white', margin: 0 }}>Autres anomalies</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 4 }}>
-            Nettoyez les rejets d'importation, notamment les lignes fantômes.
+            Nettoyez les rejets d'importation, notamment les lignes fantômes et les autres erreurs.
           </p>
         </div>
 
@@ -158,28 +167,34 @@ export default function AnomaliesBrutesView() {
                   </td>
                 </tr>
               ) : (
-                displayedRecords.map(row => {
+                (displayedRecords || []).map((row, index) => {
+                  if (!row) return null;
                   const empty = isEmptyRow(row);
                   return (
-                    <tr key={row.id}>
+                  <React.Fragment key={row?.id || index}>
+                    <tr
+                      style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', background: expandedId === row?.id ? 'rgba(255,255,255,0.02)' : 'transparent', transition: 'background 0.2s' }}
+                      onClick={() => row?.id && setExpandedId(expandedId === row.id ? null : row.id)}
+                    >
                       <td style={{ paddingLeft: 20 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {row?.id && (expandedId === row.id ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />)}
                           <div>
-                            <div style={{ fontWeight: 600, color: 'white' }}>{row.noms || '-'} {row.prenoms || '-'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Num Sécu: {row.num_secu || '-'}</div>
+                            <div style={{ fontWeight: 600, color: 'white' }}>{row?.noms || '-'} {row?.prenoms || '-'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Num Sécu: {row?.num_secu || '-'}</div>
                           </div>
                         </div>
                       </td>
                       <td>
-                        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{row.date_de_naissance || '-'}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{row?.date_de_naissance || '-'}</span>
                       </td>
                       <td>
-                        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{row.contact || '-'}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{row?.contact || '-'}</span>
                       </td>
                       <td>
                         <span style={{ color: '#ff7675', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                           <AlertCircle size={14} />
-                          {row.erreur_message || row.type_anomalie || 'Erreur'}
+                          {row?.erreur_message || row?.type_anomalie || 'Erreur'}
                         </span>
                       </td>
                       <td>
@@ -208,28 +223,52 @@ export default function AnomaliesBrutesView() {
                         )}
                       </td>
                       <td style={{ textAlign: 'right', paddingRight: 20 }}>
-                        <button
-                          onClick={() => handleDeleteRow(row.id)}
-                          disabled={isDeletingRow[row.id]}
-                          style={{
-                            background: 'rgba(255,118,117,0.1)',
-                            border: 'none',
-                            color: '#ff7675',
-                            padding: '6px 12px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
-                            fontSize: 12,
-                            fontWeight: 600,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6
-                          }}
-                        >
-                          {isDeletingRow[row.id] ? <RefreshCw size={14} className="spin" /> : <Trash2 size={14} />}
-                          Supprimer
-                        </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleDeleteRow(row?.id); }}
+                            disabled={row?.id ? isDeletingRow[row.id] : false}
+                            style={{
+                              background: 'rgba(255,118,117,0.1)',
+                              border: 'none',
+                              color: '#ff7675',
+                              padding: '6px 12px',
+                              borderRadius: 6,
+                              cursor: 'pointer',
+                              fontSize: 12,
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6
+                            }}
+                          >
+                            {(row?.id && isDeletingRow[row.id]) ? <RefreshCw size={14} className="spin" /> : <Trash2 size={14} />}
+                            Supprimer
+                          </button>
                       </td>
                     </tr>
+                    {expandedId === row?.id && row?.id && !empty && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                          <ExpandedAnomalyDetails
+                            record={row}
+                            isResolving={false}
+                            onSaveField={async (field, value) => {
+                              try {
+                                await window.api.import.updateAnomalyField(row.id, field, value);
+                                toast.success('Champ modifié avec succès.');
+                                loadAnomalies();
+                              } catch (err) {
+                                console.error(err);
+                                toast.error('Erreur lors de la modification.');
+                              }
+                            }}
+                            colorTheme={row?.type_anomalie === 'STATUT_INCONNU' ? "#f59e0b" : "#ff6348"}
+                            onForceStock={row?.type_anomalie === 'STATUT_INCONNU' ? () => handleDeleteRow(row?.id) : undefined}
+                            isDeleting={row?.id ? isDeletingRow[row.id] : false}
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                   );
                 })
               )}
@@ -237,33 +276,20 @@ export default function AnomaliesBrutesView() {
           </table>
         </div>
 
-        {!showOnlyEmpty && totalPages > 1 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+        {totalPages > 1 && (
+          <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-              Total : <strong style={{ color: 'white' }}>{totalItems}</strong>
+              Affichage {((currentPage - 1) * itemsPerPage) + 1} à {Math.min(currentPage * itemsPerPage, totalItems)} sur {totalItems}
             </span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button 
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="btn btn-secondary"
-                style={{ padding: '6px 12px', fontSize: 13 }}
-              >
-                Précédent
-              </button>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button className="btn btn-secondary" disabled={currentPage === 1 || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
               <PaginationInput 
                 currentPage={currentPage} 
                 totalPages={totalPages} 
                 onPageChange={setCurrentPage} 
+                disabled={isLoading || isFetchingQuery}
               />
-              <button 
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="btn btn-secondary"
-                style={{ padding: '6px 12px', fontSize: 13 }}
-              >
-                Suivant
-              </button>
+              <button className="btn btn-secondary" disabled={currentPage === totalPages || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
             </div>
           </div>
         )}

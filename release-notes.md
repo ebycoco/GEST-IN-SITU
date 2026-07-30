@@ -1,29 +1,59 @@
-# GEST-IN-SITU v2.8.0 — Notes de Release
+# GEST-IN-SITU — Release v2.9.0
 
-**Date de publication :** 30 juillet 2026
-**Validée par :** Agent 12 (Deploy Validator) ✅
-**Documentée par :** Agent 11 (Release Manager) ✅
+> **Date de publication :** 30 juillet 2026  
+> **Statut :** Production — Postes opérationnels en Côte d'Ivoire  
+> **SCHEMA_VERSION :** 59 (inchangé — aucune migration BDD requise)
 
 ---
 
-## 🚀 Nouvelles Fonctionnalités
+## 🚀 Nouveautés & Ergonomie
 
-- **Détection des Cartes Fantômes :** Nouveau compteur et nouvelle étape dédiée (Étape 3, avant le blocage des dates invalides) pour les cartes locales dont l'identité est totalement vide (nom, prénom, numéro de sécu et rangement tous absents) — jusqu'ici invisibles de tous les indicateurs et jamais synchronisables. Un clic renvoie directement vers la page Qualité pour correction.
-- **Enfilage Automatique des Corrections Qualité :** Les corrections individuelles (date de naissance, champs rapides, rangement) sont désormais poussées vers le Cloud quasi instantanément si une connexion est disponible, avec garde de conformité (aucun envoi automatique si la carte a encore un doublon ou une date invalide non résolue).
+### Module Qualité — Onglet "Autres Anomalies"
+Nouvel onglet dédié sur la page Qualité permettant de consulter, filtrer et corriger les cartes dont le statut est inconnu (ex : `ERREUR`, `NUMERO INCORRECT`, `INJOIGNABLE`). L'agent peut désormais :
+- Visualiser toutes les cartes à statut non reconnu en un seul endroit
+- Ouvrir le panneau de correction rapide (`CorrectionSidePanel`)
+- Voir le détail expandable de chaque carte (`ExpandedAnomalyDetails`)
+
+### Module Qualité — Données Manquantes Expandable
+Intégration du composant `ExpandedManquantDetails` sur l'onglet "Données Manquantes" pour un affichage carte par carte des champs absents, avec action de correction directe depuis la liste.
+
+### Nouvelles Métriques KPI — Tableau de Bord Admin
+Deux nouveaux indicateurs sont affichés dans le tableau de bord :
+- **Autres Anomalies** : nombre de cartes à statut inconnu
+- **Dates Vides** : nombre de cartes sans date de naissance
+
+Chaque KPI est cliquable et redirige directement vers l'onglet de correction correspondant.
+
+### Import Sécurisé — Validation des Statuts
+Lors de l'import CSV/Excel, seul `DOUBLON` est accepté comme statut alternatif à `DELIVRE` ou `EN STOCK`. Les statuts terrain non standard (`NUMERO INCORRECT`, `INJOIGNABLE`, `ERREUR`) sont désormais :
+- Rejetés silencieusement
+- Tracés comme `STATUT_INCONNU`
+- La carte est sauvegardée en stock avec un message d'avertissement précisant le statut exact en **gras**
+
+### Bouton "Forcer en Stock" repositionné
+Le bouton est désormais intégré à l'intérieur du panneau de détail de la carte, conformément à l'ergonomie terrain attendue.
+
+---
 
 ## 🛠️ Corrections & Sécurité
 
-- **Tirage Descendant (Anti-Perte de Données) :** Le repère de synchronisation (watermark) n'est plus écrasé par l'heure locale du poste après le cycle automatique de 2h ; une marge de sécurité absorbe désormais un décalage d'horloge résiduel côté poste expéditeur, éliminant un risque de carte jamais détectée par les autres postes.
-- **Sécurité IPC :** Le endpoint `sync:getCloudCartesCount` applique maintenant le même contrôle d'accès site/rôle que les autres endpoints de synchronisation.
-- **Horodatage à l'Envoi :** Les cartes envoyées en masse portent désormais l'heure réelle d'envoi, garantissant leur détection par les autres postes lors d'un tirage ultérieur.
-- **Purge Cloud Résiliente :** Ajout d'une reprise automatique (retry) sur incident réseau transitoire lors de la purge Cloud.
-- **Cohérence Badge/Envoi (Saisie, Vérification, Admin Centre) :** Le bouton d'envoi n'active plus sur des cartes que le filtre de conformité rejetterait silencieusement au moment de l'envoi réel.
-- **Total Cartes :** Le KPI reflète désormais le nombre réel de cartes locales, sans y ajouter les anomalies encore en attente de correction.
-
-## 🧹 Nettoyage
-
-- Suppression de boutons non fonctionnels (gestionnaire IPC manquant) et du code mort lié à l'ancien mécanisme de synchronisation par file d'attente (`t_sync_queue`).
+- **Outbox Upstream :** Robustesse accrue pour les opérations en attente lors d'interruptions réseau
+- **Download Worker :** Meilleure gestion des conflits de fusion lors du tirage descendant
+- **Heartbeat de Session :** Prévention des déconnexions intempestives
+- **Requêtes Hiérarchie & Import :** Fiabilisation du pipeline d'import multi-formats
 
 ---
 
-*GEST-IN-SITU — Application desktop offline-first de gestion des cartes CMU — Centre Abobo*
+## ⚡ Optimisations
+
+- Suppression de 3 pages obsolètes (`AdminCentreDashboardPage`, `AnomaliesView`, `QualiteAssainissementPage`)
+- Nouveau hook `useDebounce` limitant les appels IPC dans les barres de recherche
+- Refactorisation du store Zustand `qualityUIStore`
+
+---
+
+## ℹ️ Mise à jour automatique
+
+Cette release est distribuée via le système d'auto-update Electron.  
+Les postes connectés recevront la notification de mise à jour automatiquement.  
+**Aucune action manuelle n'est requise sur les centres en production.**

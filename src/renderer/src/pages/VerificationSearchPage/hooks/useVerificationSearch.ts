@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import toast from 'react-hot-toast';
 
 const convertToISODate = (dateStr: string): string => {
@@ -31,6 +31,12 @@ export function useVerificationSearch(
   const [isSearching, setIsSearching] = useState(false);
   const [searchMode, setSearchMode] = useState<'name' | 'contact'>('name');
   const [searchContactQuery, setSearchContactQuery] = useState('+225 ');
+
+  // Cloud Fallback Search states
+  const [cloudResults, setCloudResults] = useState<any[]>([]);
+  const [isCloudSearching, setIsCloudSearching] = useState(false);
+  const [cloudSearchDone, setCloudSearchDone] = useState(false);
+  const cloudSearchRequestRef = useRef<number>(0);
 
   // Modal inversion states
   const [showInversionModal, setShowInversionModal] = useState(false);
@@ -120,7 +126,7 @@ export function useVerificationSearch(
       if (directMatches.length > 0) {
         setResults(directMatches);
         setHasSearched(true);
-        if (directMatches.length === 1 && directMatches[0].statut_physique !== 'ABSENT') {
+        if (directMatches.length === 1 && directMatches[0].statut_physique !== 'ABSENT' && directMatches[0].statut_physique !== 'PERDUE') {
           setSelectedCarte(directMatches[0]);
           if (directMatches[0].statut === 'DELIVRE') {
             setShowProofModal(true);
@@ -151,6 +157,39 @@ export function useVerificationSearch(
         setResults(searchResults);
         setHasSearched(true);
         setSelectedCarte(null);
+        
+        if (searchResults.length === 0) {
+          if (navigator.onLine) {
+            setIsCloudSearching(true);
+            setCloudSearchDone(false);
+            
+            const currentRequestId = ++cloudSearchRequestRef.current;
+            const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 6000));
+            const fetchPromise = window.api.cartes.searchCloudEmergency(query, filters);
+            
+            Promise.race([fetchPromise, timeoutPromise])
+              .then((cloudRes: any) => {
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setCloudResults(cloudRes || []);
+                }
+              })
+              .catch((e) => {
+                console.error("Cloud search failed", e);
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setCloudResults([]);
+                }
+              })
+              .finally(() => {
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setIsCloudSearching(false);
+                  setCloudSearchDone(true);
+                }
+              });
+          } else {
+            setCloudResults([]);
+            setCloudSearchDone(true);
+          }
+        }
       }
     } catch (err) {
       console.error(err);
@@ -165,7 +204,7 @@ export function useVerificationSearch(
     const carte = carteTrouveeParInversion!;
     setResults([carte]);
     setHasSearched(true);
-    if (carte.statut_physique !== 'ABSENT') {
+    if (carte.statut_physique !== 'ABSENT' && carte.statut_physique !== 'PERDUE') {
       setSelectedCarte(carte);
       if (carte.statut === 'DELIVRE') {
         setShowProofModal(true);
@@ -239,7 +278,7 @@ export function useVerificationSearch(
       setResults(searchResults);
       setHasSearched(true);
       
-      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT') {
+      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT' && searchResults[0].statut_physique !== 'PERDUE') {
         setSelectedCarte(searchResults[0]);
         if (searchResults[0].statut === 'DELIVRE') {
           setShowProofModal(true);
@@ -249,6 +288,39 @@ export function useVerificationSearch(
         }
       } else {
         setSelectedCarte(null);
+        
+        if (searchResults.length === 0) {
+          if (navigator.onLine) {
+            setIsCloudSearching(true);
+            setCloudSearchDone(false);
+            
+            const currentRequestId = ++cloudSearchRequestRef.current;
+            const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve([]), 6000));
+            const fetchPromise = window.api.cartes.searchCloudEmergency(searchContactQuery, filters);
+            
+            Promise.race([fetchPromise, timeoutPromise])
+              .then((cloudRes: any) => {
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setCloudResults(cloudRes || []);
+                }
+              })
+              .catch((e) => {
+                console.error("Cloud search failed", e);
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setCloudResults([]);
+                }
+              })
+              .finally(() => {
+                if (currentRequestId === cloudSearchRequestRef.current) {
+                  setIsCloudSearching(false);
+                  setCloudSearchDone(true);
+                }
+              });
+          } else {
+            setCloudResults([]);
+            setCloudSearchDone(true);
+          }
+        }
       }
     } catch (e) {
       console.error(e);
@@ -297,6 +369,9 @@ export function useVerificationSearch(
     setHasSearched(false);
     setLieuNaissance('');
     setContact('');
+    setIsCloudSearching(false);
+    setCloudSearchDone(false);
+    setCloudResults([]);
   };
 
   return {
@@ -313,6 +388,10 @@ export function useVerificationSearch(
     hasSearched,
     setHasSearched,
     isSearching,
+    cloudResults,
+    setCloudResults,
+    isCloudSearching,
+    cloudSearchDone,
     searchMode,
     setSearchMode,
     searchContactQuery,

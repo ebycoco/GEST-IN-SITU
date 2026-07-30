@@ -783,6 +783,16 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
             flexWrap: 'wrap',
             paddingTop: 8,
             borderTop: '1px solid rgba(255,255,255,0.05)',
+            // En mode édition (modale), la barre d'actions reste visible sans avoir à
+            // dérouler tout le formulaire — important sur les petits écrans terrain (1366x768).
+            ...(mode === 'edit' ? {
+              position: 'sticky' as const,
+              bottom: 0,
+              zIndex: 5,
+              background: 'rgba(15, 23, 42, 0.97)',
+              backdropFilter: 'blur(6px)',
+              paddingBottom: 16,
+            } : {}),
           }}
         >
           <button

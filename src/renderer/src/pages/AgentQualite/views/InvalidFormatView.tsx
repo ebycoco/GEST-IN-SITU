@@ -9,12 +9,15 @@ import { confirmService } from '../../../components/confirmService';
 import { useQualityUIStore } from '../../../stores/qualityUIStore';
 import { AdvancedSearchBar } from '../../../components/Quality/AdvancedSearchBar';
 import { QualityFilters } from '../../../../../shared/types/quality.types';
+import { ExpandedAnomalyDetails } from '../../../components/Quality/ExpandedAnomalyDetails';
+import { useDebounce } from '../../../hooks/useDebounce';
 
 export default function InvalidFormatView() {
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
 
   const [filters, setFilters] = useState<QualityFilters>({});
+  const debouncedFilters = useDebounce(filters, 500);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -26,24 +29,19 @@ export default function InvalidFormatView() {
   const [editValue, setEditValue] = useState('');
   const [isResolving, setIsResolving] = useState<Record<number, boolean>>({});
 
-  // Édition en ligne — Contact
-  const [editingContact, setEditingContact] = useState<number | null>(null);
-  const [editContactValue, setEditContactValue] = useState('');
-
-  const [editingLieu, setEditingLieu] = useState<number | null>(null);
-  const [editLieuValue, setEditLieuValue] = useState('');
-
-  const { refreshTrigger, openCorrection } = useQualityUIStore();
+  const { refreshTrigger, openCorrection, isFetchingQuery, setIsFetchingQuery } = useQualityUIStore();
 
   const itemsPerPage = 10;
 
   const loadTabData = useCallback(async () => {
+    if (isLoading) return;
     setIsLoading(true);
+    setIsFetchingQuery(true);
     try {
       const offset = (currentPage - 1) * itemsPerPage;
-      const query = filters.nom || '';
-      // ✔️ Pagination côté serveur via table t_import_anomalies
-      const res = await (window.api.import as any).getAnomalies(siteIdToUse, offset, itemsPerPage, query);
+      const query = debouncedFilters.nom || '';
+      // ✔️ Pagination côté serveur via table unifiée
+      const res = await window.api.cartes.getInvalidDates(siteIdToUse, offset, itemsPerPage, query);
       const allRows: any[] = res?.rows || [];
 
       setRecords(allRows);
@@ -53,8 +51,9 @@ export default function InvalidFormatView() {
       toast.error('Erreur lors du chargement des données.');
     } finally {
       setIsLoading(false);
+      setIsFetchingQuery(false);
     }
-  }, [currentPage, filters.nom, siteIdToUse, refreshTrigger]);
+  }, [currentPage, debouncedFilters.nom, siteIdToUse, refreshTrigger, setIsFetchingQuery]);
 
   useEffect(() => {
     loadTabData();
@@ -64,10 +63,8 @@ export default function InvalidFormatView() {
   useEffect(() => {
     setCurrentPage(1);
     setEditingId(null);
-    setEditingContact(null);
-    setEditingLieu(null);
     setExpandedId(null);
-  }, [filters]);
+  }, [debouncedFilters]);
 
   const handleSaveDate = async (card: any) => {
     if (editValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
@@ -98,12 +95,19 @@ export default function InvalidFormatView() {
     }
   };
 
-  const handleSaveContactLieu = async (card: any, champ: 'contact' | 'lieu_de_naissance', valeur: string) => {
+  const handleSaveContactLieu = async (card: any, champ: string, valeur: string) => {
     if (!valeur.trim()) { toast.error('La valeur ne peut pas être vide.'); return; }
     if (champ === 'contact') {
       const digits = valeur.replace(/\D/g, '');
       if (digits.length !== 10) {
         toast.error('Le contact doit faire exactement 10 chiffres locaux (ex: 0708090010).');
+        return;
+      }
+    }
+    if (champ === 'date_de_naissance') {
+      if (valeur.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
+      if (!isValidCalendarDate(valeur)) {
+        toast.error('Date physiquement impossible dans le calendrier (ex: 30/02 ou 31/04). Veuillez saisir une date correcte.');
         return;
       }
     }
@@ -114,12 +118,20 @@ export default function InvalidFormatView() {
         id_carte: card.id_carte,
         champ_corrige: champ,
         valeur_avant: card[champ] || '(Vide)',
-        valeur_apres: champ === 'contact' ? valeur.replace(/\D/g, '') : valeur.trim().toUpperCase()
+        valeur_apres: champ === 'contact' ? valeur.replace(/\D/g, '') : champ === 'date_de_naissance' ? valeur : valeur.trim().toUpperCase()
       });
       window.api.log.info(`[QUALITÉ] Succès correction '${champ}' pour ID=${card.id_carte}`);
-      toast.success(`${champ === 'contact' ? 'Contact' : 'Lieu de naissance'} corrigé avec succès !`);
-      if (champ === 'contact') setEditingContact(null);
-      else setEditingLieu(null);
+      
+      let label = champ;
+      if (champ === 'contact') label = 'Contact';
+      else if (champ === 'lieu_de_naissance') label = 'Lieu de naissance';
+      else if (champ === 'num_secu') label = 'Numéro de Sécurité Sociale';
+      else if (champ === 'date_de_naissance') label = 'Date de naissance';
+      else if (champ === 'noms') label = 'Noms';
+      else if (champ === 'prenoms') label = 'Prénoms';
+      
+      toast.success(`${label} corrigé avec succès !`);
+      
       loadTabData();
     } catch (err: any) {
       window.api.log.error(`[QUALITÉ] ERREUR correction '${champ}' pour ID=${card.id_carte} : ${err}`);
@@ -160,11 +172,15 @@ export default function InvalidFormatView() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           <Calendar color="#ff6348" /> 
-          Correction des Dates Invalides
+          Correction des Dates Invalides ou Absentes
         </h2>
       </div>
 
-      <AdvancedSearchBar filters={filters} setFilters={setFilters} />
+      <AdvancedSearchBar 
+        filters={filters} 
+        setFilters={setFilters} 
+        disabled={isLoading || isFetchingQuery}
+      />
 
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         <div className="table-responsive">
@@ -246,99 +262,15 @@ export default function InvalidFormatView() {
                     {expandedId === r.id_carte && (
                       <tr>
                         <td colSpan={4} style={{ padding: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                          <div className="animate-fade-in" style={{ padding: '20px 20px 20px 50px', background: 'rgba(0,0,0,0.15)', overflow: 'hidden', borderLeft: '3px solid #ff6348' }}>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 20 }}>
-                              <div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Noms et Prénoms</div>
-                                <div style={{ fontWeight: 600, fontSize: 14 }}>
-                                  {r.noms || r.prenoms ? `${r.noms || ''} ${r.prenoms || ''}` : <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}
-                                </div>
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Date de naissance</div>
-                                <div style={{ fontWeight: 600, fontSize: 14 }}>
-                                  {r.date_de_naissance ? r.date_de_naissance : <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}
-                                </div>
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                  <Phone size={11} /> Contact
-                                </div>
-                                {editingContact === r.id_carte ? (
-                                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                    <input
-                                      type="text"
-                                      className="form-input"
-                                      placeholder="Ex: 0708090010"
-                                      maxLength={10}
-                                      inputMode="numeric"
-                                      style={{ width: 140, height: 32, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', fontSize: 13 }}
-                                      value={editContactValue}
-                                      onChange={(e) => setEditContactValue(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                                      autoFocus
-                                    />
-                                    <button className="btn btn-primary" style={{ padding: '4px 10px' }} onClick={() => handleSaveContactLieu(r, 'contact', editContactValue)} disabled={isResolving[r.id_carte]}>
-                                      {isResolving[r.id_carte] ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-                                    </button>
-                                    <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setEditingContact(null)}>✕</button>
-                                  </div>
-                                ) : (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-                                    <span>{r.contact || <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}</span>
-                                    <button
-                                      className="btn btn-secondary"
-                                      style={{ padding: '2px 8px', fontSize: 11, border: '1px solid rgba(245,158,11,0.4)', color: '#f59e0b', background: 'rgba(245,158,11,0.08)' }}
-                                      onClick={(e) => { e.stopPropagation(); setEditingContact(r.id_carte); setEditContactValue(r.contact?.replace(/\D/g, '') || ''); }}
-                                    >
-                                      <Edit3 size={10} style={{ marginRight: 3 }} />Modifier
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                  <MapPin size={11} /> Lieu de naissance
-                                </div>
-                                {editingLieu === r.id_carte ? (
-                                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                    <input
-                                      type="text"
-                                      className="form-input"
-                                      placeholder="Ex: ABIDJAN"
-                                      maxLength={100}
-                                      style={{ width: 160, height: 32, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', fontSize: 13, textTransform: 'uppercase' }}
-                                      value={editLieuValue}
-                                      onChange={(e) => setEditLieuValue(e.target.value.toUpperCase())}
-                                      autoFocus
-                                    />
-                                    <button className="btn btn-primary" style={{ padding: '4px 10px' }} onClick={() => handleSaveContactLieu(r, 'lieu_de_naissance', editLieuValue)} disabled={isResolving[r.id_carte]}>
-                                      {isResolving[r.id_carte] ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
-                                    </button>
-                                    <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setEditingLieu(null)}>✕</button>
-                                  </div>
-                                ) : (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-                                    <span>{r.lieu_de_naissance || <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}</span>
-                                    <button
-                                      className="btn btn-secondary"
-                                      style={{ padding: '2px 8px', fontSize: 11, border: '1px solid rgba(167,139,250,0.4)', color: '#a78bfa', background: 'rgba(167,139,250,0.08)' }}
-                                      onClick={(e) => { e.stopPropagation(); setEditingLieu(r.id_carte); setEditLieuValue(r.lieu_de_naissance || ''); }}
-                                    >
-                                      <Edit3 size={10} style={{ marginRight: 3 }} />Modifier
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4 }}>Numéro de Sécurité Sociale</div>
-                                <div style={{ fontWeight: 600, fontSize: 14 }}>
-                                  {r.num_secu ? r.num_secu : <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}
-                                </div>
-                              </div>
-                            </div>
-                            
-                            {r.erreur_message && (
-                              <div style={{ marginTop: 20, padding: '10px 14px', background: 'rgba(255, 118, 117, 0.08)', borderRadius: 8, border: '1px solid rgba(255, 118, 117, 0.3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <ExpandedAnomalyDetails
+                            record={r}
+                            isResolving={isResolving[r.id_carte] || false}
+                            onSaveField={(field, value) => handleSaveContactLieu(r, field, value)}
+                            colorTheme="#ff6348"
+                          />
+                          {r.erreur_message && (
+                            <div style={{ padding: '0 20px 20px 50px', background: 'rgba(0,0,0,0.15)', borderLeft: '3px solid #ff6348' }}>
+                              <div style={{ padding: '10px 14px', background: 'rgba(255, 118, 117, 0.08)', borderRadius: 8, border: '1px solid rgba(255, 118, 117, 0.3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div>
                                   <strong style={{ color: '#ff7675', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
                                     ⚠️ Raison du blocage
@@ -356,8 +288,8 @@ export default function InvalidFormatView() {
                                   Supprimer
                                 </button>
                               </div>
-                            )}
-                          </div>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     )}
@@ -375,13 +307,14 @@ export default function InvalidFormatView() {
               Affichage {((currentPage - 1) * itemsPerPage) + 1} à {Math.min(currentPage * itemsPerPage, totalItems)} sur {totalItems}
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn btn-secondary" disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
+              <button className="btn btn-secondary" disabled={currentPage === 1 || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
               <PaginationInput 
                 currentPage={currentPage} 
                 totalPages={totalPages} 
                 onPageChange={setCurrentPage} 
+                disabled={isLoading || isFetchingQuery}
               />
-              <button className="btn btn-secondary" disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
+              <button className="btn btn-secondary" disabled={currentPage === totalPages || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
             </div>
           </div>
         )}

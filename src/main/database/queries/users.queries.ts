@@ -8,6 +8,35 @@ import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { insertAuditLog } from './audit.queries';
 
+// Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
+// Reflète côté serveur la restriction déjà appliquée côté UI (AgentsPage.visibleRoles) :
+// un ADMIN_CENTRE ne doit jamais pouvoir créer/promouvoir un ADMIN_CENTRE, un
+// ADMINISTRATEUR_SITE ou un SUPER ADMIN. Sans cette vérification serveur, un appel
+// direct à l'IPC (hors UI) pouvait contourner la restriction visuelle.
+const ASSIGNABLE_ROLES_BY_CREATOR: Record<string, string[]> = {
+  'SUPER ADMIN': [
+    'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
+    'OPERATEUR_VERIFICATION', 'OPERATEUR_SAISIE', 'OPERATEUR_LOGISTIQUE',
+    'OPERATEUR_QUALITE', 'OPERATEUR_INVENTAIRE'
+  ],
+  'ADMINISTRATEUR_SITE': [
+    'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_SAISIE',
+    'OPERATEUR_LOGISTIQUE', 'OPERATEUR_QUALITE', 'OPERATEUR_INVENTAIRE'
+  ],
+  'ADMIN_CENTRE': [
+    'OPERATEUR_VERIFICATION', 'OPERATEUR_SAISIE',
+    'OPERATEUR_LOGISTIQUE', 'OPERATEUR_QUALITE', 'OPERATEUR_INVENTAIRE'
+  ],
+};
+
+function assertRolesAssignable(creatorRole: string, roles: string[]): void {
+  const allowed = ASSIGNABLE_ROLES_BY_CREATOR[creatorRole] || [];
+  const forbidden = roles.filter(r => !allowed.includes(r));
+  if (forbidden.length > 0) {
+    throw new Error(`Accès non autorisé : le rôle "${creatorRole}" ne peut pas attribuer le(s) rôle(s) suivant(s) : ${forbidden.join(', ')}.`);
+  }
+}
+
 export function seedUserFromCloud(userData: {
   login: string;
   password_hash: string;
@@ -81,6 +110,19 @@ export async function authenticateUser(login: string, password: string): Promise
     roles = [user.role];
   }
 
+  if (user.role === 'ADMINISTRATEUR_SITE' && !user.centre_id && user.site_id) {
+    const mainCentre = db.prepare(`
+      SELECT id FROM t_centres
+      WHERE site_id = ?
+      ORDER BY numero ASC, id ASC
+      LIMIT 1
+    `).get(user.site_id) as { id: number } | undefined;
+    
+    if (mainCentre) {
+      user.centre_id = mainCentre.id;
+    }
+  }
+
   const token = uuidv4();
   db.prepare("UPDATE t_users SET last_login = datetime('now') WHERE id_user = ?").run(user.id_user);
 
@@ -141,6 +183,7 @@ export function getUsers(siteId?: number, centreId?: number) {
       user.roles = [user.role];
     }
     delete user.roles_concat;
+    delete user.password_hash;
   }
   return users;
 }
@@ -168,6 +211,8 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
   const syncId = uuidv4();
   const inputRoles = (data.roles as string[]) || (data.role ? [data.role as string] : ['OPERATEUR_SAISIE']);
   const primaryRole = (data.role as string) || inputRoles[0];
+
+  assertRolesAssignable(creator.role, inputRoles);
 
   const transaction = db.transaction(() => {
     const existing = db.prepare('SELECT id_user, sync_id FROM t_users WHERE login = ?').get(data.login) as { id_user: number; sync_id: string } | undefined;
@@ -321,6 +366,9 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
 
   const inputRoles = data.roles as string[] | undefined;
   if (inputRoles && inputRoles.length > 0) {
+    if (creator) {
+      assertRolesAssignable(creator.role, inputRoles);
+    }
     data.role = inputRoles[0];
   }
   delete data.roles;

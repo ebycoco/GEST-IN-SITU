@@ -229,6 +229,7 @@ export default function VerificationSearchPage() {
     contact, setContact, results, hasSearched, isSearching, searchMode, setSearchMode,
     searchContactQuery, setSearchContactQuery, showInversionModal, handleConfirmInversion,
     handleRejectInversion, nomSaisiInfo, prenomSaisiInfo, handleClear, handleSearch,
+    cloudResults, setCloudResults, isCloudSearching, cloudSearchDone,
     handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString
   } = useVerificationSearch(
     user, activeSiteId, isAdmin, adminSiteFilter, setAdminSiteFilter,
@@ -495,6 +496,11 @@ export default function VerificationSearchPage() {
             setModalStep={setModalStep}
             setShowProofModal={setShowProofModal}
             isAgentAuthorisedForCard={isAgentAuthorisedForCard}
+            cloudResults={cloudResults}
+            isCloudSearching={isCloudSearching}
+            cloudSearchDone={cloudSearchDone}
+            setCloudResults={setCloudResults}
+            onCloseNotFound={resetSearchFields}
           />
         </>
       )}

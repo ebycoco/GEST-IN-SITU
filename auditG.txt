@@ -1,0 +1,346 @@
+# Étude d'Architecture — Cohérence des "Dates Invalides"
+## GEST-IN-SITU · Rapport Officiel · Juillet 2026
+
+---
+
+> [!IMPORTANT]
+> Ce document est une étude d'architecture en lecture seule. **Aucune modification du code ni de la base de données n'a été réalisée.** Ce rapport constitue la base d'une décision d'implémentation ultérieure.
+
+---
+
+## 1. Analyse de l'Architecture Actuelle
+
+### 1.1 Cartographie des acteurs en jeu
+
+| Composant | Fichier | Rôle dans le circuit des dates invalides |
+|---|---|---|
+| **Worker d'Import** | `src/main/workers/import-worker.js` | Rejette les lignes invalides → `t_import_anomalies` |
+| **Worker de Stats** | `src/main/workers/stats-worker.js` | Calcule les compteurs via `UNION ALL` des deux tables |
+| **Queries Cartes** | `src/main/database/queries/cartes.queries.ts` | CTE `UnifiedInvalidDates` (UNION ALL pour affichage Portail) |
+| **Queries Import** | `src/main/database/queries/import.queries.ts` | CRUD sur `t_import_anomalies` + Pipeline B déprécié |
+| **Handler IPC** | `src/main/ipc/handlers.ts` | **Audit Rétroactif** : déplace des cartes de `t_cartes` vers `t_import_anomalies` |
+| **SQLite Schema** | `src/main/database/schema.ts` | Définit les deux tables + triggers FTS5 |
+
+### 1.2 Points forts
+
+- ✅ Le Worker d'import est le seul point d'entrée des données nouvelles — il est strict et fiable.
+- ✅ La table `t_import_anomalies` dispose d'un index FTS5 (`t_anomalies_fts`) pour la recherche plein texte — rapide pour le Portail Qualité.
+- ✅ Le bloqueur de synchronisation (`getDetailedSyncStats`) utilise `GLOB` au lieu de JS pour des contrôles ultra-performants.
+- ✅ La fonction `updateDateDeNaissance` dans `cartes.queries.ts` gère correctement la migration d'une anomalie corrigée vers `t_cartes` — le cycle de correction existe.
+- ✅ Le Pipeline B (`import.queries.ts`) est déprécié et marqué `@deprecated AUD-001` — conscience de la dette technique.
+
+### 1.3 Faiblesses identifiées
+
+> [!WARNING]
+> **Faiblesse 1 — Double Source de Vérité active**
+> Les dates invalides vivent simultanément dans `t_import_anomalies` (rejets du Worker) ET dans `t_cartes` (cartes historiques ou reçues de Supabase). Les statistiques doivent faire un `UNION ALL` permanent pour les agréger, créant de la complexité dans chaque composant qui y accède.
+
+> [!WARNING]
+> **Faiblesse 2 — Accumulation sans contrainte UNIQUE**
+> `t_import_anomalies` n'a aucune contrainte `UNIQUE` sur les champs d'identité (`cle_doublon + type_anomalie + site_id`). Si l'opérateur importe le même fichier 3 fois, la même anomalie est stockée 3 fois, gonflant artificiellement tous les compteurs.
+
+> [!WARNING]
+> **Faiblesse 3 — Fragmentation des règles de validation**
+> La règle "date invalide" est définie à 4 endroits différents avec des syntaxes différentes :
+> - `isValidDate()` dans `import-worker.js` (Regex + `new Date()`) — le plus strict
+> - `LENGTH(TRIM(...)) < 10` dans `stats-worker.js` (heuristique de longueur)
+> - `NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'` dans `stats-worker.js` (format pattern)
+> - `NOT REGEXP '^\\d{4}-\\d{2}-\\d{2}$'` dans `stats-worker.js` (regex via extension custom)
+>
+> Ces quatre règles ne produisent pas exactement les mêmes résultats. Une date "1990-02-31" passerait le GLOB mais serait rejetée par `isValidDate()` via JavaScript.
+
+> [!WARNING]
+> **Faiblesse 4 — Audit Rétroactif crée un déplacement irréversible**
+> Le handler IPC `handlers.ts:1564-1593` balaie toute la table `t_cartes`, détecte les dates invalides, les déplace vers `t_import_anomalies` et les supprime de `t_cartes`. Ce processus est destructif et non idempotent : exécuté deux fois, il peut créer des doublons dans `t_import_anomalies` (pas de vérification `NOT EXISTS` avant l'insertion).
+
+> [!WARNING]
+> **Faiblesse 5 — Pipeline B partiellement actif malgré sa dépréciation**
+> `import.queries.ts` contient `importBatch()` et `fusionnerImport()` qui ignorent complètement la validation de date. Si ce code est appelé depuis un chemin non-standard, des cartes avec dates invalides peuvent atteindre `t_cartes` sans passer par le Worker strict.
+
+### 1.4 Tableau des risques
+
+| Risque | Probabilité | Impact | Score |
+|---|---|---|---|
+| Compteurs divergents entre Dashboard et Sync | Élevée | Élevé | 🔴 Critique |
+| Duplication dans `t_import_anomalies` | Élevée | Moyen | 🔴 Critique |
+| Règle de validation incohérente | Élevée | Élevé | 🔴 Critique |
+| Audit rétroactif non idempotent | Moyenne | Élevé | 🟠 Majeur |
+| Pipeline B réactivé par erreur | Faible | Élevé | 🟠 Majeur |
+| Données orphelines post-correction | Faible | Moyen | 🟡 Modéré |
+
+---
+
+## 2. Comparatif des Architectures
+
+### Architecture A — `t_cartes` comme unique source de vérité
+
+**Principe** : Les anomalies d'import ne sont plus rejetées. Toute ligne CSV, même avec une date invalide, est insérée dans `t_cartes` avec un champ `is_valid INTEGER DEFAULT 1`. `t_import_anomalies` devient un simple journal d'événements.
+
+| Critère | Évaluation |
+|---|---|
+| **Avantages** | Source unique, requêtes simples, pas de `UNION ALL`, correction directe dans `t_cartes` |
+| **Inconvénients** | `t_cartes` reçoit des données médicalement corrompues, viole la contrainte métier de la table principale, risque de pollution de Supabase, la contrainte CHECK de `statut` peut générer des conflits |
+| **Performances** | Meilleures pour la lecture (pas de jointure), pires pour la sécurité (plus de filtre en amont) |
+| **Maintenance** | Plus simple à court terme, très risquée à long terme (données corrompues en production) |
+| **Synchronisation Supabase** | ⛔ Dangereux : Supabase a un champ `DATE` strict. Une date "31/15/1990" ferait crasher la transaction d'upload |
+| **Portail Qualité** | Simple : `WHERE is_valid = 0` sur `t_cartes` |
+| **Verdict** | ❌ **Rejetée** — Trop risquée pour l'intégrité de la production Supabase |
+
+---
+
+### Architecture B — `t_import_anomalies` comme source officielle avec UPSERT
+
+**Principe** : `t_import_anomalies` reste la seule destination des rejets, mais on lui ajoute une contrainte `UNIQUE` sur `(cle_doublon, type_anomalie, site_id)` et on remplace les `INSERT` par des `INSERT OR REPLACE`. Les cartes historiques invalides dans `t_cartes` sont migrées vers `t_import_anomalies` via l'audit rétroactif une seule fois.
+
+| Critère | Évaluation |
+|---|---|
+| **Avantages** | Source unique pour les anomalies, fin des doublons, compteurs cohérents, règle respectée |
+| **Inconvénients** | Nécessite une migration (ALTER TABLE pour ajouter la contrainte UNIQUE), l'audit rétroactif reste destructif |
+| **Performances** | Très bonnes — `UPSERT` sur index UNIQUE est une opération O(log n) native SQLite |
+| **Maintenance** | Bonne — un seul endroit à maintenir pour les anomalies |
+| **Synchronisation Supabase** | ✅ Aucun risque — `t_import_anomalies` n'est pas synchronisée avec Supabase |
+| **Portail Qualité** | Simple : requête directe sur `t_import_anomalies` sans CTE ou UNION |
+| **Verdict** | ✅ **Recommandée avec améliorations** (voir Architecture B+ ci-après) |
+
+---
+
+### Architecture C — Nouvelle table `t_anomalies_unifiées`
+
+**Principe** : Création d'une table tierce qui consolide les anomalies de toutes origines (import, saisie manuelle, synchro descendante). `t_cartes` et `t_import_anomalies` restent intacts mais sont désormais sources secondaires.
+
+| Critère | Évaluation |
+|---|---|
+| **Avantages** | Architecture la plus propre théoriquement, compatible avec tout type d'anomalie futur |
+| **Inconvénients** | Breaking change massif — toutes les requêtes des 5 workers doivent être refactorisées, risque de régression élevé, 3 tables impliquées au lieu de 2, délai d'implémentation de 2-4 semaines |
+| **Performances** | Plus complexes (requêtes sur 3 tables), mais compensées par un meilleur indexage |
+| **Maintenance** | Longue migration, mais architecture la plus robuste à 3-5 ans |
+| **Synchronisation Supabase** | Neutre — nécessiterait aussi une migration Supabase si synchronisée |
+| **Portail Qualité** | Requêtes plus propres à terme, mais refactorisation lourde en phase de transition |
+| **Verdict** | 🟡 **Valide à long terme, mais trop risquée à court terme** pour l'état de production actuel |
+
+---
+
+## 3. Recommandation Officielle : Architecture B+
+
+### Principe de l'Architecture B+
+
+> **`t_import_anomalies` est la source officielle et unique des dates invalides.**  
+> Elle est renforcée par une contrainte UNIQUE, un UPSERT idempotent, et un module de validation centralisé partagé.
+
+L'Architecture B+ est une évolution **conservative** de l'existant : elle corrige les problèmes sans casser les fonctionnalités existantes. Elle repose sur 4 piliers :
+
+1. **Unicité garantie** : Contrainte `UNIQUE(cle_doublon, type_anomalie, site_id)` sur `t_import_anomalies`
+2. **Idempotence** : `INSERT OR REPLACE` (UPSERT) à chaque rejet, qu'il vienne du Worker ou de l'Audit Rétroactif
+3. **Centralisation** : Un module unique `validation.js` exporté et partagé entre tous les Workers et Handlers
+4. **Nettoyage** : L'Audit Rétroactif devient non-destructif — il déplace sans vérifier ce qui existe déjà, car l'UPSERT l'absorbera
+
+---
+
+## 4. Cycle de vie idéal d'une anomalie (Architecture B+)
+
+```mermaid
+graph TD
+    A[Fichier CSV chargé] --> B[Worker détecte date invalide]
+    B --> C{Anomalie existe déjà?\ncle_doublon + type + site}
+    C -- OUI --> D[INSERT OR REPLACE : MAJ de updated_at]
+    C -- NON --> E[INSERT : Nouvelle anomalie]
+    D --> F[t_import_anomalies comme SOURCE UNIQUE]
+    E --> F
+
+    F --> G[Opérateur consulte le Portail Qualité]
+    G --> H{Correction effectuée?}
+    H -- NON --> G
+    H -- OUI --> I[updateDateDeNaissance : INSERT INTO t_cartes + DELETE FROM t_import_anomalies]
+    I --> J[Carte propre dans t_cartes]
+    J --> K[Moteur Sync : détecte is_dirty = 1]
+    K --> L{Validation finale?}
+    L -- DATE VALIDE → --> M[Upload vers Supabase]
+    L -- DATE INVALIDE → --> N[Blocage local, log d'erreur]
+    M --> O[Anomalie disparue définitivement]
+
+    P[Audit Rétroactif planifié] --> Q[Scan t_cartes, cherche dates invalides]
+    Q --> R[INSERT OR REPLACE INTO t_import_anomalies]
+    R --> F
+```
+
+---
+
+## 5. Centralisation des Règles Métier
+
+### Constat actuel
+La règle "date invalide" existe en 4 variantes incompatibles réparties dans le code :
+
+| Variante | Fichier | Technique | Cas potentiellement manqués |
+|---|---|---|---|
+| `isValidDate()` | `import-worker.js` | Regex + `new Date()` | Aucun — le plus strict |
+| `LENGTH(TRIM(...)) < 10` | `stats-worker.js` | Heuristique | "1990-02-" (9 chars) passerait |
+| `NOT GLOB '...'` | `stats-worker.js` | Pattern SQLite | "1990-02-31" (format OK, date impossible) passerait |
+| `NOT REGEXP '...'` | `stats-worker.js` | Regex SQLite custom | Même faiblesse que le GLOB |
+
+### Solution recommandée : Validation en deux niveaux
+
+**Niveau 1 — Format (SQLite natif, ultra-rapide)** :
+```sql
+-- Utilisé pour les indexes, les bloqueurs de sync, et les compteurs rapides
+date_de_naissance GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+```
+
+**Niveau 2 — Cohérence calendaire (JavaScript, appliqué en amont)** :
+```javascript
+// Ce module unique est la référence absolue
+// Exporté depuis validation.js et importé par TOUS les workers
+function isValidDate(dateStr) {
+  if (!dateStr) return false;
+  const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const y = parseInt(match[1]), m = parseInt(match[2]), d = parseInt(match[3]);
+  const dt = new Date(y, m - 1, d);
+  return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
+}
+```
+
+La règle de division du travail est simple : le **GLOB** protège la base SQLite en temps réel (requêtes de comptage), la **fonction JS** protège la donnée en amont (importation, correction manuelle, audit).
+
+---
+
+## 6. Stratégie Anti-Doublons
+
+### Comparatif des solutions
+
+| Solution | Avantages | Inconvénients | Compatibilité |
+|---|---|---|---|
+| **Contrainte UNIQUE** | Native, garantie DB, zéro code | ALTER TABLE, `cle_doublon` peut être NULL | ✅ SQLite, doit gérer les NULL |
+| **UPSERT (`INSERT OR REPLACE`)** | Idempotent, simple, rapide | Perd l'`id` auto-incrémenté (triggers FTS à vérifier) | ✅ SQLite natif |
+| **Hash du contenu** | Très robuste, détecte les quasi-doublons | Calcul supplémentaire, champ à ajouter | ✅ Compatible |
+| **Identifiant technique** | Stable, non lisible | Dépend de la source, peut dériver | 🟡 Complexité accrue |
+| **`INSERT OR IGNORE` + vérification avant** | Simple | Deux opérations SQL, risque de race condition | ✅ Compatible |
+
+### Recommandation : Combo UNIQUE + INSERT OR REPLACE
+
+```sql
+-- Étape 1 : Ajouter la contrainte sur t_import_anomalies
+CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_uniq 
+ON t_import_anomalies(cle_doublon, type_anomalie, site_id)
+WHERE cle_doublon IS NOT NULL AND cle_doublon != '';
+
+-- Étape 2 : Remplacer les INSERT par INSERT OR REPLACE dans le Worker
+-- L'upsert met à jour `updated_at` et preserve `created_at` (important pour le journal d'audit)
+INSERT OR REPLACE INTO t_import_anomalies (
+  cle_doublon, type_anomalie, site_id, noms, prenoms, date_de_naissance, 
+  erreur_message, created_at, updated_at
+) VALUES (
+  ..., datetime('now'), datetime('now')
+);
+```
+
+**Pourquoi pas un hash ?** Le hash est redondant ici : la `cle_doublon` contient déjà `noms|prenoms|ddn|lieu|contact|num_secu|statut`, ce qui est fonctionnellement équivalent à un hash sémantique. Ajouter un hash SHA-256 apporterait de la complexité sans bénéfice supplémentaire dans ce contexte.
+
+---
+
+## 7. Plan de Migration Progressive
+
+> [!IMPORTANT]
+> Le plan est conçu pour être **exécuté en 5 étapes séquentielles**, chacune étant réversible. Aucune fonctionnalité existante n'est cassée entre les étapes.
+
+### Étape 1 — Centralisation du module de validation (Durée : 1-2h)
+- Créer `src/main/utils/validation.js` avec les fonctions `isValidDate()`, `cleanBirthDate()`, `isValidDateFormat()` (GLOB-compatible).
+- Mettre à jour `import-worker.js` pour importer depuis ce module.
+- **Impact** : Zéro changement de comportement. Simple refactorisation.
+
+### Étape 2 — Mise à jour du stats-worker pour utiliser la règle centralisée (Durée : 2-3h)
+- Remplacer les 3 variantes de validation par des appels cohérents (GLOB pour les requêtes SQL, `isValidDate` en JS).
+- **Impact** : Les compteurs des statistiques seront recalculés avec la règle stricte. Attendu : légère augmentation du compteur de dates invalides (quelques dates "1990-02-31" précédemment non détectées).
+- **Vérification** : Comparer les chiffres avant/après sur un jeu de données de test.
+
+### Étape 3 — Ajout de la contrainte UNIQUE + migration UPSERT (Durée : 3-4h)
+- Nettoyer d'abord les doublons existants via une requête de déduplication `DELETE WHERE id NOT IN (SELECT MIN(id) ...)`.
+- Ajouter l'index UNIQUE partiel (via migration numérotée dans `schema.ts`).
+- Modifier les `INSERT` du Worker et de l'Audit Rétroactif en `INSERT OR REPLACE`.
+- **Impact** : Élimination définitive des doublons d'anomalies. Le compteur de `t_import_anomalies` se stabilise.
+
+### Étape 4 — Nettoyage de l'historique de `t_cartes` (Durée : 4-8h, à planifier hors heures de pointe)
+- Exécuter l'Audit Rétroactif une dernière fois après la correction de l'Étape 3 (maintenant idempotent grâce à l'UPSERT).
+- Les cartes historiques invalides sont migrées vers `t_import_anomalies`.
+- **Impact** : Après cette étape, `t_cartes` ne contient plus aucune date invalide. Le `UNION ALL` dans les statistiques peut être simplifié.
+- **Point de vérification obligatoire** : Compter `SELECT COUNT(*) FROM t_cartes WHERE date_de_naissance NOT GLOB '...'` avant et après.
+
+### Étape 5 — Simplification des requêtes statistiques (Durée : 2-4h)
+- Remplacer le `UNION ALL` dans `stats-worker.js` par une requête directe sur `t_import_anomalies` uniquement.
+- Supprimer la CTE `UnifiedInvalidDates` dans `cartes.queries.ts` au profit d'une requête simple.
+- Retirer le code mort du Pipeline B déprécié.
+- **Impact** : Réduction de la complexité SQL. Amélioration des performances mesurable.
+
+---
+
+## 8. Compatibilité de l'Architecture B+
+
+| Composant | Impact | Action requise |
+|---|---|---|
+| **SQLite** | ✅ Compatible natif | Ajout d'un index UNIQUE (migration numérotée) |
+| **Electron / Worker Threads** | ✅ Compatible | Import du module `validation.js` centralisé |
+| **React (Renderer)** | ✅ Aucun impact | Les IPC handlers ne changent pas de signature |
+| **Synchronisation Supabase** | ✅ Amélioré | Le bloqueur est renforcé, les données envoyées sont plus propres |
+| **Dashboards** | ✅ Amélioré | Compteurs unifiés, plus simples et plus fiables |
+| **Portail Qualité** | ✅ Amélioré | Requêtes simplifiées, pas de CTE complexe |
+| **Import CSV** | ✅ Compatible | Le Worker adopte le module centralisé |
+| **FTS5 (`t_anomalies_fts`)** | ⚠️ À vérifier | Le `INSERT OR REPLACE` recrée les entrées FTS. Les triggers `trg_anomalies_au` doivent gérer correctement les REPLACE (équivalent à DELETE+INSERT) |
+
+---
+
+## 9. Impact sur les Performances
+
+| Métrique | Architecture Actuelle | Architecture B+ |
+|---|---|---|
+| **Complexité SQL (stats)** | `UNION ALL` sur 2 tables à chaque calcul | Requête simple sur 1 table |
+| **Requête compteur dates invalides** | 2 sous-requêtes + UNION | 1 COUNT direct |
+| **Import CSV (rejet)** | `INSERT` simple (rapide, mais doublon possible) | `INSERT OR REPLACE` sur index UNIQUE (marginalement plus lent ~5%, mais fiable) |
+| **Portail Qualité** | CTE + UNION + multi-paramètres | Simple SELECT + pagination |
+| **Mémoire Worker Stats** | Charge 2 jeux de données | Charge 1 seul jeu de données |
+| **Maintenance future** | Modifier 4 endroits lors d'une évolution de règle | Modifier 1 seul fichier (`validation.js`) |
+| **Coût de migration** | N/A | ~1h de downtime pour l'Audit Rétroactif (Étape 4) |
+
+---
+
+## 10. Recommandation Finale — Avis de l'Architecte Principal
+
+> **L'Architecture B+ est la seule recommandée pour GEST-IN-SITU en l'état de production actuel.**
+
+### Justification
+
+L'application est en production active sur des volumes de données réels (200k+ cartes). Dans ce contexte, **toute architecture impliquant une table tierce ou une restructuration radicale (Architecture C) présente un risque inacceptable de régression** pour l'opérateur terrain qui doit continuer à travailler pendant la migration.
+
+L'Architecture A est exclue pour une raison fondamentale et non-négociable : **Supabase PostgreSQL a un typage strict sur les colonnes `DATE`**. Envoyer "31/15/1990" provoquerait une erreur au niveau de la transaction de synchronisation, ce qui bloquerait potentiellement des dizaines de milliers de cartes valides en attente de synchronisation.
+
+L'Architecture B+ est la seule qui respecte les 5 contraintes suivantes simultanément :
+
+1. **Non-régression** — Aucune fonctionnalité existante n'est cassée pendant la migration
+2. **Source unique de vérité** — `t_import_anomalies` est **THE** registre officiel des anomalies
+3. **Idempotence** — L'import répété du même fichier produit toujours le même état final
+4. **Cohérence des compteurs** — Tous les modules (Dashboard, Sync, Portail) lisent la même source avec la même règle
+5. **Evolutivité** — Le module `validation.js` centralisé permettra d'ajouter de nouvelles règles de validation sans toucher aux Workers
+
+### Diagramme cible (Architecture B+)
+
+```mermaid
+graph LR
+    A[CSV Import Worker] -- INSERT OR REPLACE --> B[(t_import_anomalies\nSOURCE UNIQUE)]
+    C[Audit Rétroactif\nHandler IPC] -- INSERT OR REPLACE --> B
+    D[validation.js\nModule Centralisé] -- isValidDate --> A
+    D -- isValidDate --> C
+    B -- SELECT COUNT --> E[Dashboard Stats]
+    B -- SELECT --> F[Portail Qualité]
+    B -- COUNT distinct --> G[Bloqueur Sync]
+    F -- Correction --> H[(t_cartes)]
+    H -- is_dirty=1 --> I[Supabase Upload]
+```
+
+### Résumé exécutif
+
+| Question | Réponse Architecture B+ |
+|---|---|
+| Où sont stockées les dates invalides ? | **Uniquement dans `t_import_anomalies`** |
+| Plusieurs sources de vérité ? | **Non. Source unique garantie.** |
+| Duplication possible ? | **Non. Contrainte UNIQUE + UPSERT.** |
+| Compteurs cohérents entre modules ? | **Oui. Un seul `COUNT` sur `t_import_anomalies`.** |
+| Risque d'incohérence futur ? | **Faible. Module de validation centralisé.** |
+| Durée de migration estimée | **2 à 3 sprints techniques de 2-4h chacun** |

@@ -27,3 +27,13 @@ Ce document rassemble les verrous de sécurité fondamentaux à appliquer de fa�
 > Les données et notifications d'anomalies doivent être strictement isolées par identifiant de site (`site_id`/`id_site`).
 > - Un consultant connecté sur un site donné ne doit recevoir aucune alerte ni notification concernant les anomalies d'un autre site.
 > - La base de données et les requêtes doivent assurer ce cloisonnement pour respecter la sécurité territoriale (Mairie d'Abobo, etc.).
+
+---
+
+## 4. Section Sécurité (Directives TITAN)
+> [!WARNING]
+> **Directives Permanentes et Obligatoires**
+> - **Principe STOP & WARN :** Si une modification touche un composant partagé, un canal IPC réutilisé, ou une table SQLite globale (`t_user_roles`, `audit_logs`), STOP et demande validation à l'utilisateur.
+> - **Confinement Stricte :** Seuls les fichiers du ticket doivent être édités.
+> - **Validation Statique Obligatoire :** Exécuter `npx tsc --noEmit` après chaque modif. La tâche est valide uniquement à 0 erreur.
+> - **Règle Anti-Build :** Interdiction de lancer `npm run build` automatiquement.

@@ -38,6 +38,10 @@ function normalizeContact(contact) {
   return digits.length > 0 ? digits : null;
 }
 
+// Priorité métier des statuts : un statut plus avancé ne doit jamais régresser
+// (ex: une carte DELIVRE ne doit jamais redevenir EN STOCK suite à un pull).
+const STATUT_PRIORITY = { 'EN STOCK': 1, 'DELIVRE': 2, 'ANNULE': 3 };
+
 function getOrOpenDb() {
   if (!db) {
     db = new Database(workerData.dbPath, { timeout: 60000 });
@@ -56,7 +60,7 @@ function getOrOpenDb() {
 function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
   const database = getOrOpenDb();
 
-  const selectStmt = database.prepare('SELECT id_carte, updated_at, is_dirty FROM t_cartes WHERE sync_id = ?');
+  const selectStmt = database.prepare('SELECT id_carte, updated_at, is_dirty, statut FROM t_cartes WHERE sync_id = ?');
   const insertStmt = database.prepare(`
     INSERT INTO t_cartes (
       noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
@@ -86,6 +90,17 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
         qr_code_data = :qr_code_data, updated_at = :updated_at, synced_at = :updated_at,
         is_dirty = 0
+    WHERE id_carte = :idCarte
+  `);
+  // Fusion partielle appliquée à une carte localement dirty : n'adopte QUE le statut
+  // (et les champs de délivrance associés) du cloud quand il est plus avancé, sans
+  // toucher aux autres champs en cours de correction locale ni à is_dirty (la fiche
+  // reste marquée à renvoyer pour ses propres modifications).
+  const statusMergeStmt = database.prepare(`
+    UPDATE t_cartes
+    SET statut = :statut, date_delivrance = :date_delivrance,
+        agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
+        nom_retirant = :nom_retirant, num_retirant = :num_retirant
     WHERE id_carte = :idCarte
   `);
   const updateWatermarkStmt = database.prepare(`
@@ -145,7 +160,24 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
           });
           processedCount++;
         } else if (localCard.is_dirty === 1) {
-          // SKIP — carte modifiée localement, on protège le travail local
+          // Carte modifiée localement (non encore renvoyée) : on protège les champs
+          // en cours de correction, MAIS on adopte quand même un statut cloud plus
+          // avancé pour éviter qu'un envoi ultérieur de cette fiche ne renvoie un
+          // statut périmé et n'écrase une délivrance déjà enregistrée ailleurs.
+          const localScore = STATUT_PRIORITY[localCard.statut] || 1;
+          const cloudScore = STATUT_PRIORITY[card.statut] || 1;
+          if (cloudScore > localScore) {
+            statusMergeStmt.run({
+              idCarte: localCard.id_carte,
+              statut: card.statut,
+              date_delivrance: card.date_delivrance || null,
+              agent_distributeur: card.agent_distributeur || null,
+              centre_retrait: card.centre_retrait || null,
+              nom_retirant: card.nom_retirant || null,
+              num_retirant: card.num_retirant || null
+            });
+            processedCount++;
+          }
         } else {
           // UPDATE si la version Cloud est plus récente
           const localTime = new Date(localCard.updated_at || 0).getTime();

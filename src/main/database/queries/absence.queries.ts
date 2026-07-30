@@ -31,22 +31,26 @@ export function signalerAbsence(id: number, agentLogin: string, agentInfo: strin
       throw new Error("Accès non autorisé aux données de ce site");
     }
 
-    const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    const card = db.prepare('SELECT site_id, centre_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
     if (card) {
       const siteId = card.site_id;
+      const centreId = card.centre_id;
       const message = `🚨 [SIGNALEMENT - ABSENCE] La carte de ${card.noms} ${card.prenoms} est signalée absente par ${agentInfo}. ${commentaire ? 'Note: ' + commentaire : ''}`;
       const userId = currentUser?.id_user || null;
       const userLogin = agentLogin;
-      const logPayload = JSON.stringify({ read: false, id_carte: id });
+      // centre_id inclus dans le payload : seul l'ADMIN_CENTRE de ce centre doit être notifié en temps réel
+      const logPayload = JSON.stringify({ read: false, id_carte: id, centre_id: centreId });
 
       try {
         db.prepare(`
-          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-          VALUES (?, ?, 'CARTE_ABSENTE_SIGNALEE', ?, ?, ?, 1, ?)
-        `).run(userId, userLogin, message, logPayload, uuidv4(), siteId);
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CARTE_ABSENTE_SIGNALEE', ?, ?, ?, 1, ?, ?)
+        `).run(userId, userLogin, message, logPayload, uuidv4(), siteId, centreId ?? null);
       } catch (err) {
         log.error('Failed to log CARTE_ABSENTE_SIGNALEE:', err);
       }
+
+      return { ...result, centre_id: centreId ?? null };
     }
 
     return result;

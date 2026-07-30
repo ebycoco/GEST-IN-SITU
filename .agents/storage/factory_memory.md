@@ -316,3 +316,64 @@ Format d'inscription : `Date | Problème | Solution exacte validée`.
 
 ### Coupe-Circuit
 `incident_count = 3` → `arbitration_required = true` → gel des opérations → prompt d'arbitrage Option A / Option B soumis à l'Humain (Précieux).
+
+---
+
+### 2026-07-28 — Chantier "Fusion de Doublons & Sync Outbox" (V55)
+
+**Problématique :**
+Le processus de fusion de doublons en mode déconnecté générait deux opérations (UPDATE de la carte cible, DELETE de la carte source). Sans lien de dépendance, le moteur de synchronisation asynchrone (Outbox) pouvait synchroniser la suppression (DELETE) avant ou sans la mise à jour (UPDATE), entraînant une perte de données (carte source supprimée, mais fusion cible rejetée ou retardée).
+
+**Architecture Implémentée (V55) :**
+1. **Colonne `depends_on`** : Ajout d'une colonne `depends_on TEXT NULL` à `t_outbox`.
+2. **Liage au niveau du handler** : Le handler `qualite:fusionnerDoublons` attache l'`id` de l'entrée `UPDATE` à l'entrée `DELETE` correspondante via `depends_on`.
+3. **Moteur `processOutboxPending` (outbox.service.ts)** : Si une entrée a un `depends_on`, elle n'est traitée QUE si l'entrée parente a le statut `SYNCED`. Si la parente passe en `ERROR`, l'enfant passe également en `ERROR` (cascading failure localisé), évitant le blocage de l'ensemble de la file.
+4. **Validation Unifiée (payload-mapper.ts)** : Centralisation de la logique de validation (`mapCardPayload`) pour l'Outbox, incluant la vérification de la présence d'au moins un champ d'identité (`noms`, `prenoms` ou `date_de_naissance`) pour empêcher la propagation de cartes fantômes, et la validation par RegEx stricte `/^\d{4}-\d{2}-\d{2}$/` pour les dates.
+
+**Tests de Déploiement :**
+Le mécanisme complet a été validé sur une copie de production de 225 131 cartes.
+- **Le script de rattrapage V55** a correctement filtré les données orphelines et mis à jour le schéma.
+- **La simulation de fusion réelle** a confirmé qu'un échec de l'UPDATE bloque bien le DELETE en ERROR, et qu'un succès libère et synchronise l'enfant au cycle suivant.
+
+---
+
+### 2026-07-28 — Audit Complet du Cycle de Vie (Synchronisation & Conflits)
+
+**Problématique :**
+Vérification des comportements de la synchronisation Supabase face à des scénarios limites (Suppression vs Modification, modifications concurrentes).
+
+**Découverte Architecturale (🔴 CRITIQUE) :**
+L'audit du code (en lecture seule) a mis en évidence deux failles structurelles profondes :
+1. **Absence de Tombstone (Cartes Zombies)** : La suppression d'une carte s'opère par un `.delete()` physique sur Supabase. Par conséquent, les autres postes (via le `downstream`) ne sont jamais notifiés de cette suppression. Les cartes restent en local (zombies) et peuvent être recréées involontairement.
+2. **Écrasement Silencieux (Last-Write-Wins non maîtrisé)** : L'upload (`upstream`) utilise un `.upsert()` brut qui écrase purement et simplement les données de Supabase sans vérifier les dates de modification (`updated_at`). En outre, le rapatriement local refuse les mises à jour cloud si la carte locale a `is_dirty = 1`, forçant ainsi l'écrasement des données distantes par les données locales lors du prochain envoi.
+
+**Décision :**
+Ces failles sont inscrites dans `GEMINI.md` (§13.8) comme un risque architectural majeur. Le chantier (qui nécessite l'introduction d'un Soft-Delete / Tombstone et d'un RPC de résolution de conflits par versionnement sur Supabase) fera l'objet d'une session future dédiée. Aucun code n'est modifié lors de cette session d'audit.
+
+---
+
+### 2026-07-29 — Audit de Sécurité Cloud (Recherche Secours)
+
+**Problématique :**
+Lors de la conception du Niveau 2 pour la recherche des cartes introuvables localement (recherche cloud de secours), il a été nécessaire de vérifier la sécurité RLS sur Supabase pour garantir qu'un agent ne puisse pas lire les données d'un autre site en modifiant le paramètre `site_id` du client.
+
+**Découverte Architecturale (🔴 CRITIQUE) :**
+L'audit de `supabase_schema.sql` a révélé que **le RLS est explicitement DÉSACTIVÉ** sur toutes les tables majeures (`t_cartes`, `t_users`, `t_sites`, `t_centres`, `t_postes`, `t_logs`) via `DISABLE ROW LEVEL SECURITY` combiné à `GRANT ALL TO anon, authenticated, service_role`.
+La confidentialité inter-sites actuelle repose uniquement sur les filtres appliqués dans le code des requêtes ou les handlers IPC (`handlers.ts`). Une omission ou une injection de requête pourrait exposer la base de données entière.
+
+**Décision :**
+- Le risque a été formellement documenté dans `GEMINI.md` (§13.9).
+- Pour l'implémentation immédiate de la recherche cloud, le paramètre `site_id` a été rendu obligatoire et imposé depuis l'identité de l'agent authentifié dans `handlers.ts` pour créer une couche de sécurité palliative.
+- La réactivation et configuration correcte du RLS côté Supabase feront l'objet d'un chantier prioritaire dédié dans une session ultérieure.
+
+---
+
+### 2026-07-29 — Contextualisation UI des boutons de Synchronisation (Dette Mineure)
+
+**Problématique :**
+Le bouton "Synchroniser mes saisies" était dupliqué en dur sur 8 interfaces distinctes. Ce libellé n'était pas pertinent pour des rôles comme l'Agent de Vérification (qui consulte/signale) ou le Responsable Qualité (qui corrige).
+
+**Décision & Implémentation :**
+- **Action stricte en lecture/écriture** : Modification ciblée des libellés (texte et animation de chargement) dans `AgentVerificationLayout.tsx` ("Synchroniser mes actions" / "ACTUALISATION...") et `AgentQualiteLayout.tsx` ("Envoyer les corrections" / "ENVOI...").
+- **Découverte post-analyse** : Les interfaces `SiteAdminView.tsx` et `GovernanceView.tsx` (tableaux de bord Administrateur) ne contenaient finalement pas de libellé statique mais des états fortement dynamiques et liés au processus (`ENVOYER LES MODIFICATIONS (X cartes)`, `ENVOYER LES ANOMALIES`, etc.). Ces boutons n'ont donc **délibérément pas été altérés** pour préserver la précision de l'UX d'administration.
+- **Dette technique consignée** : L'absence de composant partagé (`<SyncButton />`) a été documentée dans `GEMINI.md` (§13.10) en vue d'un refactoring ultérieur. Aucun changement de logique ou de structure n'a été appliqué.

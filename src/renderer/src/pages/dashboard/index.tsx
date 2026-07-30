@@ -34,6 +34,7 @@ export default function DashboardPage() {
     siteLogistiqueStats,
     dirtyCartesCount,
     dirtyUsersCount,
+    setDirtyUsersCount,
     cloudCartesCount,
     totalCloudCartesCount,
     detailedSyncStats,
@@ -60,7 +61,7 @@ export default function DashboardPage() {
     handlePullSiteCards,
     handleStartBulkUpload,
     handleClearCloudDatabase
-  } = useForceSyncActions(user, activeSiteId, loadStats);
+  } = useForceSyncActions(user, activeSiteId, loadStats, setDirtyUsersCount);
 
 
   // ⚠️ Le pull automatique au montage a été supprimé.

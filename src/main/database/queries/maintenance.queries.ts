@@ -6,15 +6,15 @@ export function clearDatabaseCartes(siteId?: number): void {
   db.pragma('foreign_keys = OFF');
   try {
     db.transaction(() => {
+      // Securite : t_logs (historique operationnel) n'est volontairement PAS purge ici - une
+      // purge de cartes ne doit pas effacer la tracabilite des actions anterieures du site.
       if (siteId !== undefined) {
         db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(siteId);
-        // t_sync_queue n'a PAS de colonne site_id — purge des entr\u00e9es orphelines apr\u00e8s suppression des cartes
+        // t_sync_queue n'a PAS de colonne site_id - purge des entrees orphelines apres suppression des cartes
         db.prepare("DELETE FROM t_sync_queue WHERE table_name = 't_cartes' AND record_id NOT IN (SELECT id_carte FROM t_cartes)").run();
-        db.prepare('DELETE FROM t_logs WHERE site_id = ?').run(siteId);
       } else {
         db.prepare('DELETE FROM t_cartes').run();
         db.prepare('DELETE FROM t_sync_queue').run();
-        db.prepare('DELETE FROM t_logs').run();
       }
     })();
   } finally {
@@ -26,40 +26,31 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
   const db = getDatabase()!;
   db.pragma('foreign_keys = OFF');
   try {
-    let deleted = 0;
+    let deletedCartes = 0;
     
-    const countRow = db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?').get(siteId) as { count: number } | undefined;
-    const totalToPurge = countRow ? countRow.count : 0;
+    // Début à 10%
+    if (progressCallback) progressCallback(10);
     
-    if (totalToPurge > 0) {
-      const batchSize = 1000;
-      let hasMore = true;
-      while (hasMore) {
-        const idsRow = db.prepare('SELECT id_carte FROM t_cartes WHERE site_id = ? LIMIT ?').all(siteId, batchSize) as { id_carte: number }[];
-        if (idsRow.length === 0) {
-          hasMore = false;
-          break;
-        }
-        
-        const ids = idsRow.map(r => r.id_carte);
-        const placeholders = ids.map(() => '?').join(',');
-        
-        db.transaction(() => {
-          db.prepare(`DELETE FROM t_cartes WHERE id_carte IN (${placeholders})`).run(...ids);
-          db.prepare(`DELETE FROM t_sync_queue WHERE table_name = 't_cartes' AND record_id IN (${placeholders})`).run(...ids);
-        })();
-        
-        deleted += ids.length;
-        if (progressCallback) {
-          const percent = Math.min(Math.round((deleted / totalToPurge) * 100), 100);
-          progressCallback(percent);
-        }
-        // Yield Event Loop
-        await new Promise((resolve) => setImmediate(resolve));
-      }
-    } else {
-      if (progressCallback) progressCallback(100);
-    }
+    db.transaction(() => {
+      // 1. Purge des anomalies pour ce site
+      db.prepare(`DELETE FROM t_import_anomalies WHERE site_id = ?`).run(siteId);
+      
+      // 2. Compter le nombre de cartes à purger pour le log
+      const countRow = db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?').get(siteId) as { count: number } | undefined;
+      deletedCartes = countRow ? countRow.count : 0;
+      
+      // 3. Purger la file de synchronisation (pour ce site)
+      db.prepare(`
+        DELETE FROM t_sync_queue 
+        WHERE table_name = 't_cartes' 
+        AND record_id IN (SELECT id_carte FROM t_cartes WHERE site_id = ?)
+      `).run(siteId);
+
+      // 4. Purger la table principale t_cartes
+      db.prepare(`DELETE FROM t_cartes WHERE site_id = ?`).run(siteId);
+    })();
+
+    if (progressCallback) progressCallback(100);
     
     db.pragma('foreign_keys = ON');
 
@@ -73,7 +64,7 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
       }
     }, 500);
 
-    return { success: true, count: deleted };
+    return { success: true, count: deletedCartes };
   } catch (error) {
     db.pragma('foreign_keys = ON');
     throw error;
@@ -108,9 +99,10 @@ export async function emergencyPurge(
   if (progressCallback) progressCallback(15);
   await new Promise(resolve => setImmediate(resolve));
 
-  // Étape 2 : Purge de t_cartes (40%)
+  // Étape 2 : Purge de t_cartes et anomalies (40%)
   db.transaction(() => {
     db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(siteId);
+    db.prepare('DELETE FROM t_import_anomalies WHERE site_id = ?').run(siteId);
   })();
   if (progressCallback) progressCallback(40);
   await new Promise(resolve => setImmediate(resolve));

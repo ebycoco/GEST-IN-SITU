@@ -7,7 +7,7 @@ import {
   UserCheck, UserX, ShieldCheck, RefreshCw,
   MapPin, Mail, Phone, Calendar, Clock,
   User as UserIcon, Lock, Building, Type, Key, Eye, EyeOff,
-  CloudDownload, CloudUpload
+  CloudDownload, CloudUpload, Loader
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
@@ -69,7 +69,7 @@ export default function AgentsPage() {
     if (!isConfirmed) return;
 
     try {
-      await window.api.users.resetAgentPassword(user.id_user, userContext.id_user);
+      await window.api.users.resetAgentPassword(user.id_user);
       
       toast.success(
         (t) => (
@@ -151,6 +151,11 @@ export default function AgentsPage() {
       console.log(`[AgentsPage] Loaded ${fetchedUsers.length} users for site_id=${siteIdToUse}, centre_id=${centreIdToUse}`);
       setUsers(fetchedUsers);
       useCacheStore.getState().setAgentsCache(fetchedUsers);
+
+      if (siteIdToUse) {
+        const unsyncedCount = await window.api.stats.getUnsyncedUsersCount(siteIdToUse);
+        setPendingPushUsersCount(unsyncedCount);
+      }
     }
     catch (e) { 
       console.error('[AgentsPage] loadData error:', e);
@@ -186,6 +191,8 @@ export default function AgentsPage() {
 
   const [isPullingAgents, setIsPullingAgents] = useState(false);
   const [isPushingAgents, setIsPushingAgents] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingPushUsersCount, setPendingPushUsersCount] = useState<number>(0);
 
   const handlePullAgents = async () => {
     if (!navigator.onLine) {
@@ -200,6 +207,7 @@ export default function AgentsPage() {
     }
 
     setIsPullingAgents(true);
+    setIsSyncing(true);
     const toastId = toast.loading("☁️ Récupération des comptes agents depuis le cloud...");
 
     try {
@@ -214,6 +222,7 @@ export default function AgentsPage() {
       toast.error(`Erreur de connexion cloud : ${err.message || err}`, { id: toastId });
     } finally {
       setIsPullingAgents(false);
+      setIsSyncing(false);
     }
   };
 
@@ -230,12 +239,14 @@ export default function AgentsPage() {
     }
 
     setIsPushingAgents(true);
+    setIsSyncing(true);
     const toastId = toast.loading("☁️ Envoi des comptes agents vers le cloud...");
 
     try {
       const res = await window.api.sync.forceAgents(Number(siteIdToUse));
       if (res && res.success) {
         toast.success(`✅ Envoi réussi : ${res.count} profil(s) d'agent(s) envoyé(s) ou mis à jour sur le cloud.`, { id: toastId, duration: 5000 });
+        await loadData();
       } else {
         toast.error(`Échec de l'envoi : ${res?.message || 'Erreur inconnue'}`, { id: toastId });
       }
@@ -243,6 +254,7 @@ export default function AgentsPage() {
       toast.error(`Erreur de connexion cloud : ${err.message || err}`, { id: toastId });
     } finally {
       setIsPushingAgents(false);
+      setIsSyncing(false);
     }
   };
 
@@ -431,27 +443,46 @@ export default function AgentsPage() {
           <button className="btn btn-primary" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, flex: '1 1 auto', minWidth: 'max-content' }} onClick={() => { closeModal(); setShowModal(true); }}>
             <Plus size={18} /> Nouvel Agent
           </button>
-          <button 
-            className="btn btn-outline" 
-            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content' }} 
-            onClick={handlePullAgents}
-            disabled={isPullingAgents || loading}
-            title="Télécharger les agents créés sur le Cloud vers cet ordinateur"
-          >
-            <CloudDownload size={18} className={isPullingAgents ? 'animate-bounce' : ''} />
-            Télécharger les agents
-          </button>
-          
-          <button 
-            className="btn btn-primary" 
-            style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content' }} 
-            onClick={handlePushAgents}
-            disabled={isPushingAgents || loading}
-            title="Envoyer les agents créés localement vers le Cloud"
-          >
-            <CloudUpload size={18} className={isPushingAgents ? 'animate-bounce' : ''} />
-            Envoyer vers le Cloud
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button 
+                className="btn btn-outline" 
+                style={{ 
+                  borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, 
+                  display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content',
+                  opacity: (isSyncing || loading) ? 0.5 : 1,
+                  cursor: (isSyncing || loading) ? 'not-allowed' : 'pointer'
+                }} 
+                onClick={handlePullAgents}
+                disabled={isSyncing || loading}
+                title="Télécharger les agents créés sur le Cloud vers cet ordinateur"
+              >
+                {isPullingAgents ? <Loader size={18} className="animate-spin" /> : <CloudDownload size={18} />}
+                {isPullingAgents ? "Synchronisation en cours..." : "Télécharger les agents"}
+              </button>
+              
+              <button 
+                className="btn btn-primary" 
+                style={{ 
+                  borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, 
+                  display: 'flex', alignItems: 'center', gap: '8px', flex: '1 1 auto', minWidth: 'max-content',
+                  opacity: (isSyncing || loading || pendingPushUsersCount === 0) ? 0.5 : 1,
+                  cursor: (isSyncing || loading || pendingPushUsersCount === 0) ? 'not-allowed' : 'pointer'
+                }} 
+                onClick={handlePushAgents}
+                disabled={isSyncing || loading || pendingPushUsersCount === 0}
+                title="Envoyer les agents créés localement vers le Cloud"
+              >
+                {isPushingAgents ? <Loader size={18} className="animate-spin" /> : <CloudUpload size={18} />}
+                {isPushingAgents ? "Synchronisation en cours..." : (pendingPushUsersCount > 0 ? `Envoyer vers le Cloud (${pendingPushUsersCount})` : "Envoyer vers le Cloud")}
+              </button>
+            </div>
+            {pendingPushUsersCount === 0 && !isSyncing && (
+              <span style={{ fontSize: 11, color: 'var(--accent-green)', fontWeight: 600, textAlign: 'right', paddingRight: 4 }}>
+                ✅ À jour
+              </span>
+            )}
+          </div>
           {/* OPTIM-5 fix : désactiver pendant synchro cloud pour éviter rechargement concurrent */}
           <button 
             className="btn btn-outline" 

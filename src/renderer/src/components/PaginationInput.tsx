@@ -4,9 +4,10 @@ interface PaginationInputProps {
   currentPage: number;
   totalPages: number;
   onPageChange: (page: number) => void;
+  disabled?: boolean;
 }
 
-export function PaginationInput({ currentPage, totalPages, onPageChange }: PaginationInputProps) {
+export function PaginationInput({ currentPage, totalPages, onPageChange, disabled = false }: PaginationInputProps) {
   const [inputValue, setInputValue] = useState(currentPage.toString());
 
   useEffect(() => {
@@ -48,6 +49,7 @@ export function PaginationInput({ currentPage, totalPages, onPageChange }: Pagin
         onKeyDown={handleKeyDown}
         min={1}
         max={totalPages}
+        disabled={disabled}
         style={{
           width: '50px',
           background: 'transparent',

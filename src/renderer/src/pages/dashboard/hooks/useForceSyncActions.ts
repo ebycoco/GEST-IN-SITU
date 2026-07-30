@@ -4,7 +4,7 @@ import { useVisibilityBufferedCallback } from '../../../hooks/useVisibilityBuffe
 import { useSyncDownstreamStore } from '../../../stores/syncDownstreamStore';
 import { useCloudActionGuard } from '../../../hooks/useCloudActionGuard';
 
-export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: () => Promise<void>) {
+export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: () => Promise<void>, setDirtyUsersCount?: (count: number) => void) {
   const [isForceSyncing, setIsForceSyncing] = useState<boolean>(false);
   const [forceSyncResult, setForceSyncResult] = useState<any | null>(null);
   const [isSiteSyncing, setIsSiteSyncing] = useState<boolean>(false);
@@ -22,7 +22,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     clearDownstream,
   } = useSyncDownstreamStore();
   // Compat: isPullingCards = vrai seulement si pas encore en arrière-plan
-  const isPullingCards = isPullingCardsLocalState && !isBackgroundPulling;
+  const isPullingCards = isPullingCardsLocalState || isBackgroundPulling;
   const downstreamProgress = downstreamInfo?.progress ?? -1;
 
   const [allowProbable, setAllowProbable] = useState<boolean>(false);
@@ -188,6 +188,7 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
 
     try {
       await window.api.sync.forceAgents(Number(siteIdToUse));
+      if (setDirtyUsersCount) setDirtyUsersCount(0);
       await loadStats(); 
       toast.success(
         `✅ Synchronisation des agents réussie !`,

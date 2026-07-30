@@ -45,7 +45,7 @@ export default function HistoriqueView() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, color: 'white' }}>Historique de vos saisies</h2>
-          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Retrouvez vos 50 dernières saisies. Vous pouvez modifier celles qui ne sont pas encore envoyées au Cloud.</p>
+          <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Retrouvez l'ensemble de vos saisies, triées de la plus récente à la plus ancienne. Vous pouvez modifier celles qui ne sont pas encore envoyées au Cloud.</p>
         </div>
         
         <div style={{ position: 'relative', width: 300 }}>

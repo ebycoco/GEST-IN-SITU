@@ -49,7 +49,7 @@ export function getLogsCount(siteId?: number): number {
 
 export function getUnreadSyncNotifications(siteId?: number): number {
   const db = getDatabase()!;
-  let query = `SELECT COUNT(*) as count FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
+  let query = `SELECT COUNT(*) as count FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_ESCALADEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
   const params: any[] = [];
   if (siteId !== undefined && siteId !== null) {
     query += ' AND site_id = ?';
@@ -61,7 +61,7 @@ export function getUnreadSyncNotifications(siteId?: number): number {
 
 export function getUnreadNotificationsList(siteId?: number): any[] {
   const db = getDatabase()!;
-  let query = `SELECT * FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
+  let query = `SELECT * FROM t_logs WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_ESCALADEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
   const params: any[] = [];
   if (siteId !== undefined && siteId !== null) {
     query += ' AND site_id = ?';
@@ -73,7 +73,7 @@ export function getUnreadNotificationsList(siteId?: number): any[] {
 
 export function markUnreadSyncNotificationsAsRead(siteId?: number): boolean {
   const db = getDatabase()!;
-  let query = `UPDATE t_logs SET is_read = 1, is_dirty = 1 WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
+  let query = `UPDATE t_logs SET is_read = 1, is_dirty = 1 WHERE action IN ('SYNC_UPDATE', 'CARTE_ABSENTE_SIGNALEE', 'CARTE_ABSENTE_ESCALADEE', 'CARTE_ABSENTE_RETROUVEE', 'CARTE_PERDUE_CONFIRMEE', 'CARTE_PERDUE_RETROUVEE') AND is_read = 0`;
   const params: any[] = [];
   if (siteId !== undefined && siteId !== null) {
     query += ' AND site_id = ?';

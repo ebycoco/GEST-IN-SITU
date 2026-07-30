@@ -22,6 +22,8 @@ export default function CentreContextSwitcher() {
             setSelectedCentreId(data[0].id);
           }
         }
+      }).catch((err) => {
+        console.error('[CentreContextSwitcher] Échec du chargement des centres :', err);
       });
     } else {
       setCentres([]);

@@ -1,0 +1,86 @@
+=== PROFILING_REPORT_V2 (EXPERT) ===
+
+A) Répartition complète du temps
+Lecture disque : 0.00 % (0.00s)
+Parsing CSV : 0.00 % (0.00s)
+Nettoyage chaînes : 0.00 % (0.00s)
+Validation métier : 0.00 % (0.00s)
+SQLite : 99.33 % (329.45s)
+Garbage Collector : 0.52 % (1.73s)
+Logs : 0.05 % (0.17s)
+Autres : 0.09 % (0.31s)
+
+B) TOP 20 des fonctions les plus lentes
+- removeAccents | Total: 1.55s | Appels: 1431632 | Moy: 0.00ms | Max: 30.11ms | 0.47% CPU
+- isValidDate | Total: 1.50s | Appels: 241731 | Moy: 0.01ms | Max: 31.21ms | 0.45% CPU
+- cleanBirthDate | Total: 1.17s | Appels: 238553 | Moy: 0.00ms | Max: 30.47ms | 0.35% CPU
+- getCol | Total: 0.95s | Appels: 2395340 | Moy: 0.00ms | Max: 31.77ms | 0.29% CPU
+- normalizeContact | Total: 0.95s | Appels: 239678 | Moy: 0.00ms | Max: 249.81ms | 0.29% CPU
+- extractNomRetirant | Total: 0.76s | Appels: 2191 | Moy: 0.35ms | Max: 59.85ms | 0.23% CPU
+- resolveRouting | Total: 0.54s | Appels: 238553 | Moy: 0.00ms | Max: 30.12ms | 0.16% CPU
+- normaliserStatut | Total: 0.17s | Appels: 235367 | Moy: 0.00ms | Max: 20.56ms | 0.05% CPU
+- isRetraitIntelligent | Total: 0.12s | Appels: 238553 | Moy: 0.00ms | Max: 24.13ms | 0.04% CPU
+- isStatutDistribueSimple | Total: 0.09s | Appels: 236362 | Moy: 0.00ms | Max: 16.35ms | 0.03% CPU
+- detectEncoding | Total: 0.00s | Appels: 1 | Moy: 4.00ms | Max: 4.00ms | 0.00% CPU
+- buildColumnMap | Total: 0.00s | Appels: 1 | Moy: 2.39ms | Max: 2.39ms | 0.00% CPU
+
+C) TOP 20 des boucles les plus lentes
+- Nettoyage Entetes | Total: NaNs | Iters: 1 | Moy: NaNms | Max: 0.00ms
+- Boucle Fusion | Total: 278.47s | Iters: 12 | Moy: 23205.92ms | Max: 37933.73ms
+- Boucle Lignes CSV | Total: 14.00s | Iters: 238553 | Moy: 0.06ms | Max: 249.91ms
+
+D) TOP 10 des colonnes CSV les plus coûteuses
+- DDN | Total: 1.56s | Lignes: 238553 | Moy: 0.01ms | 0.47% CPU
+- CONTACT | Total: 1.26s | Lignes: 238553 | Moy: 0.01ms | 0.38% CPU
+- NOMS | Total: 1.04s | Lignes: 238553 | Moy: 0.00ms | 0.31% CPU
+- PRENOMS | Total: 0.71s | Lignes: 238553 | Moy: 0.00ms | 0.21% CPU
+- LIEUN | Total: 0.59s | Lignes: 238553 | Moy: 0.00ms | 0.18% CPU
+- RAWSTATUT | Total: 0.50s | Lignes: 238553 | Moy: 0.00ms | 0.15% CPU
+- LIEUE | Total: 0.41s | Lignes: 238553 | Moy: 0.00ms | 0.12% CPU
+
+E) TOP 10 des opérations SQLite
+- INSERT fusion | Total: 60.79s | Appels: 12 | Moy: 5065.97ms | Max: 9630.56ms
+- UPDATE fusion | Total: 12.02s | Appels: 12 | Moy: 1001.39ms | Max: 2066.01ms
+- insertManyTx | Total: 11.89s | Appels: 25 | Moy: 475.64ms | Max: 586.97ms
+- INSERT batch cartes | Total: 10.70s | Appels: 236896 | Moy: 0.05ms | Max: 34.38ms
+- CREATE INDEX idx_import_temp_cle | Total: 4.94s | Appels: 1 | Moy: 4944.58ms | Max: 4944.58ms
+- CREATE INDEX idx_import_temp_cle_flex | Total: 3.45s | Appels: 1 | Moy: 3453.82ms | Max: 3453.82ms
+- DELETE final | Total: 0.49s | Appels: 1 | Moy: 489.89ms | Max: 489.89ms
+- DELETE nettoyage | Total: 0.40s | Appels: 1 | Moy: 399.60ms | Max: 399.60ms
+- DROP TABLE | Total: 0.00s | Appels: 1 | Moy: 0.88ms | Max: 0.88ms
+- CREATE INDEX idx_cartes_cle_site | Total: 0.00s | Appels: 1 | Moy: 0.60ms | Max: 0.60ms
+
+F) Profil mémoire
+RSS Max : 275.72 MB
+Heap Used Max : 35.50 MB
+Heap Total Max : 41.14 MB
+External Max : 2.75 MB
+ArrayBuffers Max : 1.07 MB
+
+G) Activité du Garbage Collector (V8)
+Nombre de GC automatiques : 217
+Durée cumulée GC : 1.73 s
+Durée maximale GC : 249.79 ms
+
+H) Vérification des Hypothèses
+- removeAccents est-il le principal consommateur CPU ? OUI
+- cleanBirthDate est-elle coûteuse (>15%) ? NON
+- normalizeContact est-elle coûteuse (>15%) ? NON
+- extractNomRetirant est-elle coûteuse (>15%) ? NON
+- normaliserStatut est-elle coûteuse (>15%) ? NON
+- SQLite est-il un goulot ? OUI (99.33%)
+- Le GC ralentit-il l'import ? NON (1733.67ms)
+
+I) Flame Graph Textuel
+Import CSV (100%)
+├── Lecture & Parsing CSV (0.00%)
+│   ├── removeAccents (0.47%)
+│   ├── isValidDate (0.45%)
+│   ├── cleanBirthDate (0.35%)
+│   ├── getCol (0.29%)
+│   └── normalizeContact (0.29%)
+├── SQLite (99.33%)
+│   ├── INSERT fusion (18.33%)
+│   ├── UPDATE fusion (3.62%)
+│   └── insertManyTx (3.59%)
+├── Garbage Collector (0.00%)

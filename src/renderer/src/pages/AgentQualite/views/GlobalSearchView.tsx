@@ -15,7 +15,7 @@ export default function GlobalSearchView() {
   const [isLoading, setIsLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
-  const { refreshTrigger, openCorrection } = useQualityUIStore();
+  const { refreshTrigger, openCorrection, isFetchingQuery, setIsFetchingQuery } = useQualityUIStore();
 
   const handleSearch = useCallback(async () => {
     // Ne pas chercher si les filtres sont complètement vides pour éviter une requête lourde
@@ -26,6 +26,7 @@ export default function GlobalSearchView() {
     }
 
     setIsLoading(true);
+    setIsFetchingQuery(true);
     setHasSearched(true);
     try {
       // On passe les filtres à l'API. On limite arbitrairement à 50 résultats pour la performance.
@@ -36,14 +37,15 @@ export default function GlobalSearchView() {
       toast.error('Erreur lors de la recherche.');
     } finally {
       setIsLoading(false);
+      setIsFetchingQuery(false);
     }
-  }, [siteIdToUse, filters]);
+  }, [siteIdToUse, filters, setIsFetchingQuery]);
 
-  // Effectuer la recherche automatiquement quand les filtres changent
+  // Effectuer la recherche automatiquement quand les filtres changent avec un debounce (200ms)
   useEffect(() => {
     const delayDebounceFn = setTimeout(() => {
       handleSearch();
-    }, 500);
+    }, 200);
     return () => clearTimeout(delayDebounceFn);
   }, [filters, handleSearch]);
 
@@ -56,7 +58,7 @@ export default function GlobalSearchView() {
 
   const handleModifier = async (record: any) => {
     try {
-      const fullRecord = await window.api.cartes.getRecordForCorrection(record.original_id, record.record_type);
+      const fullRecord = await window.api.cartes.getRecordForCorrection(record.original_id, record.record_type, siteIdToUse);
       if (fullRecord) {
         // Ajouter la propriété _recordType pour aider le panneau de correction si besoin
         fullRecord._recordType = record.record_type;
@@ -113,9 +115,9 @@ export default function GlobalSearchView() {
                 <tr key={r.virtual_id || index} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                   <td style={{ paddingLeft: 20, paddingTop: 12, paddingBottom: 12 }}>
                     {r.record_type === 'Valide' ? (
-                      <span className="badge badge-success" style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '8px' }}>Valide</span>
+                      <span className="badge badge-success" style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '8px' }}>🟢 Carte en base</span>
                     ) : (
-                      <span className="badge badge-error" style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '8px', background: 'rgba(244, 67, 54, 0.15)', color: '#f44336' }}>Anomalie</span>
+                      <span className="badge badge-error" style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '8px', background: 'rgba(244, 67, 54, 0.15)', color: '#f44336' }}>🔴 Anomalie à corriger</span>
                     )}
                     <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                       {r.status_or_anomaly}

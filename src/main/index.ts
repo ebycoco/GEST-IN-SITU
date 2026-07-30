@@ -4,6 +4,19 @@
 const appStartTime = performance.now();
 // ────────────────────────────────────────────────────────────────────────────
 
+// ─── ENCODAGE UTF-8 (WINDOWS) ────────────────────────────────────────────────
+// Force l'encodage UTF-8 sur stdout/stderr pour corriger la corruption CP850
+// observée dans les terminaux Windows (code page 850 : "réussi" → "r├®ussi").
+// Doit être exécuté AVANT tout appel à electron-log ou console.log.
+if (process.platform === 'win32') {
+  try {
+    if (process.stdout.setEncoding) process.stdout.setEncoding('utf8');
+    if (process.stderr.setEncoding) process.stderr.setEncoding('utf8');
+  } catch (_) { /* non-fatal */ }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
+
 import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme, dialog } from 'electron';
 import { join } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
@@ -15,6 +28,7 @@ import { initBackupScheduler } from './backup';
 import log from 'electron-log';
 import { syncEngine } from './sync/sync-engine';
 import { preloadUsersFromCloud } from './sync/downstream';
+import { resetOutboxErrors } from './sync/outbox.service';
 
 import { stopSessionHeartbeat } from './auth/session-heartbeat';
 
@@ -243,6 +257,7 @@ app.whenReady().then(async () => {
   // Initialize database
   await initDatabase();
   log.info('Database initialized');
+  resetOutboxErrors();
 
   try {
     ensureSyncIds();

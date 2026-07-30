@@ -22,6 +22,7 @@ export default function SitesPage() {
   const [centres, setCentres] = useState<any[]>([]);
   const [sites, setSites] = useState<Site[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dirtyCentresCount, setDirtyCentresCount] = useState(0);
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -63,6 +64,15 @@ export default function SitesPage() {
       const c = await window.api.hierarchy.getCentres(userContext?.role === 'SUPER ADMIN' ? undefined : userContext?.site_id);
       setCentres(c);
       useCacheStore.getState().setCentresCache(c);
+      
+      if (userContext?.site_id) {
+        try {
+          const count = await window.api.stats.getUnsyncedCentresCount(userContext.site_id);
+          setDirtyCentresCount(count);
+        } catch (err) {
+          console.error("Failed to get unsynced centres count", err);
+        }
+      }
     } catch (e) { console.error(e); }
     finally { 
       if (!silent) setLoading(false);
@@ -307,6 +317,7 @@ export default function SitesPage() {
       const result = await window.api.hierarchy.forceCentres(userContext.site_id, userContext);
       if (result.success) {
         toast.success(result.message || `${result.count} centres envoyés au Cloud avec succès.`);
+        setDirtyCentresCount(0);
         await loadData();
       } else {
         toast.error(result.message || 'Erreur lors de l\'envoi des centres.');
@@ -380,13 +391,17 @@ export default function SitesPage() {
               
               <button 
                 className="btn btn-primary"
-                style={{ background: 'var(--accent-primary)' }}
+                style={{ 
+                  background: (isPushingCentres || dirtyCentresCount === 0) ? '#555555' : 'var(--accent-primary)',
+                  cursor: (isPushingCentres || dirtyCentresCount === 0) ? 'not-allowed' : 'pointer',
+                  opacity: (isPushingCentres || dirtyCentresCount === 0) ? 0.5 : 1
+                }}
                 onClick={handlePushCentres}
-                disabled={isPushingCentres || loading}
+                disabled={isPushingCentres || loading || dirtyCentresCount === 0}
                 title="Envoyer les centres vers le Cloud"
               >
                 <CloudUpload size={18} className={isPushingCentres ? 'animate-bounce' : ''} />
-                Envoyer les centres
+                {isPushingCentres ? 'Envoi en cours...' : (dirtyCentresCount > 0 ? `Envoyer les centres (${dirtyCentresCount})` : '✅ Centres à jour')}
               </button>
               <button className="btn btn-outline" style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} onClick={() => loadData()}>
                 <RefreshCw size={18} className={loading ? "animate-spin" : ""} />
@@ -528,7 +543,7 @@ export default function SitesPage() {
                     <tr key={c.sync_id || c.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', transition: 'background 0.2s ease' }}>
                       <td style={{ textAlign: 'center', padding: '16px' }}>
                         <span style={{ display: 'inline-block', padding: '5px 12px', borderRadius: 8, background: 'rgba(255, 255, 255, 0.06)', border: '1px solid rgba(255, 255, 255, 0.1)', fontFamily: 'monospace', fontWeight: 800, fontSize: 12, color: 'white', letterSpacing: '0.04em' }}>
-                          ID-{c.numero.toString().padStart(2, '0')}
+                          ID: #{c.id}
                         </span>
                       </td>
                       <td style={{ textAlign: 'left', padding: '16px' }}>

@@ -10,6 +10,8 @@ import { Globe } from 'lucide-react';
 export default function MainLayout() {
   const [appVersion, setAppVersion] = useState('');
   const initialDataLoading = useAuthStore((s) => s.initialDataLoading);
+  const loadingProgress = useAuthStore((s) => s.loadingProgress);
+  const loadingStepText = useAuthStore((s) => s.loadingStepText);
 
   useEffect(() => {
     if (window.api?.app?.getVersion) {
@@ -92,9 +94,44 @@ export default function MainLayout() {
                   <h3 style={{ fontSize: 19, fontWeight: 700, color: 'white', marginBottom: 8 }}>
                     Chargement sécurisé en cours...
                   </h3>
-                  <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, lineHeight: 1.6 }}>
+                  <p style={{ fontSize: 14, color: 'var(--text-muted)', maxWidth: 520, lineHeight: 1.6, marginBottom: 24 }}>
                     Veuillez patienter pendant l'initialisation de la page. Les actions sont temporairement verrouillées pour éviter toute erreur de concurrence.
                   </p>
+
+                  <div style={{
+                    background: 'rgba(10, 15, 28, 0.8)',
+                    borderRadius: 12,
+                    padding: '16px 20px',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    width: '100%',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>
+                        {loadingStepText || 'Initialisation...'}
+                      </span>
+                      <span style={{ fontSize: 14, color: '#818cf8', fontWeight: 700 }}>
+                        {loadingProgress}%
+                      </span>
+                    </div>
+                    
+                    <div style={{ 
+                      width: '100%', 
+                      height: 6, 
+                      background: 'rgba(255, 255, 255, 0.05)', 
+                      borderRadius: 4, 
+                      overflow: 'hidden' 
+                    }}>
+                      <div className="transition-all duration-300 ease-out" style={{
+                        width: `${loadingProgress}%`,
+                        height: '100%',
+                        background: 'linear-gradient(90deg, #8b5cf6, #6366f1)',
+                        borderRadius: 4
+                      }} />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

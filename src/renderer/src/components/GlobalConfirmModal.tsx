@@ -39,7 +39,7 @@ export const GlobalConfirmModal: React.FC = () => {
       }
       setLoading(true);
       try {
-        const isCorrect = await window.api.hierarchy.verifyPassword(password, user?.login);
+        const isCorrect = await window.api.hierarchy.verifyPassword(password, options.actionName, user?.login);
         if (!isCorrect) {
           toast.error("❌ Mot de passe administrateur incorrect.");
           setLoading(false);
@@ -93,7 +93,7 @@ export const GlobalConfirmModal: React.FC = () => {
         {options.requirePassword && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <label style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
-              Mot de passe Administrateur :
+              Confirmez votre mot de passe :
             </label>
             <input
               type="password"

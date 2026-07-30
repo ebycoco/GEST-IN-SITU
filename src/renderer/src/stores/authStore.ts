@@ -18,11 +18,14 @@ interface AuthState {
   activeSiteId: number | null; // Contexte de site pour le Super Admin
   isLoading: boolean;
   initialDataLoading: boolean;
+  loadingProgress: number;
+  loadingStepText: string;
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => void;
   setSelectedCentreId: (id: number | null) => void;
   setActiveSiteId: (id: number | null) => void;
   setInitialDataLoading: (loading: boolean) => void;
+  setInitialDataProgress: (progress: number, stepText?: string) => void;
   setActiveRole: (role: string) => void;
   checkAuth: () => Promise<void>;
 }
@@ -33,6 +36,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   activeSiteId: null,
   isLoading: false,
   initialDataLoading: false,
+  loadingProgress: 0,
+  loadingStepText: 'Initialisation...',
   login: async (username, password) => {
     set({ isLoading: true });
     try {
@@ -48,10 +53,12 @@ export const useAuthStore = create<AuthState>((set) => ({
           
         set({ 
           user, 
-          selectedCentreId: initialCentreId, 
+          selectedCentreId: initialCentreId,
           activeSiteId: initialSiteId,
           isLoading: false,
-          initialDataLoading: true
+          initialDataLoading: true,
+          loadingProgress: 10,
+          loadingStepText: 'Connexion BDD réussie...'
         });
         return true;
       }
@@ -88,7 +95,17 @@ export const useAuthStore = create<AuthState>((set) => ({
     set({ activeSiteId: id, selectedCentreId: null }); // Reset centre when site changes
   },
   setInitialDataLoading: (loading) => {
-    set({ initialDataLoading: loading });
+    if (loading) {
+      set({ initialDataLoading: loading, loadingProgress: 0, loadingStepText: 'Initialisation...' });
+    } else {
+      set({ initialDataLoading: loading });
+    }
+  },
+  setInitialDataProgress: (progress, stepText) => {
+    set((state) => ({
+      loadingProgress: progress,
+      loadingStepText: stepText || state.loadingStepText
+    }));
   },
   setActiveRole: (role) => {
     set((state) => {

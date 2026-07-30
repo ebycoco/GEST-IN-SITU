@@ -116,7 +116,7 @@ export default function Sidebar() {
         { label: 'Agents', icon: Users, path: '/agents' },
         { label: 'File d\'attente', icon: Clock, path: '/admin/queue' },
         { label: 'Importation', icon: Upload, path: '/import' },
-        { label: 'Audit Anomalies', icon: Database, path: '/anomalies' },
+        { label: 'Audit Anomalies', icon: Database, path: '/agent-qualite/anomalies-brutes' },
         { label: 'Exportation', icon: Download, path: '/export' },
         { label: 'Journaux', icon: FileText, path: '/logs' },
         ...(user.role === 'SUPER ADMIN' ? [{ label: 'Maintenance System', icon: Shield, path: '/maintenance' }] : []),
@@ -155,6 +155,7 @@ export default function Sidebar() {
     if (user.role === 'OPERATEUR_VERIFICATION') {
       return [
         { label: 'Portail Vérification', icon: Search, path: '/agent-verification' },
+        { label: 'Recherche Rapide', icon: FileText, path: '/search' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

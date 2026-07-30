@@ -7,6 +7,7 @@ import { useQualityUIStore } from '../../../stores/qualityUIStore';
 import { AdvancedSearchBar } from '../../../components/Quality/AdvancedSearchBar';
 import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { PaginationInput } from '../../../components/PaginationInput';
+import { useDebounce } from '../../../hooks/useDebounce';
 
 export default function DoublonsView() {
   const { user, activeSiteId } = useAuthStore();
@@ -14,11 +15,12 @@ export default function DoublonsView() {
 
   const [activeTab, setActiveTab] = useState<'DOUBLONS' | 'DOUBLONS_PROBABLES'>('DOUBLONS');
   const [filters, setFilters] = useState<QualityFilters>({});
+  const debouncedFilters = useDebounce(filters, 500);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const { openCorrection, refreshTrigger, openGuide } = useQualityUIStore();
+  const { openCorrection, refreshTrigger, openGuide, isFetchingQuery, setIsFetchingQuery } = useQualityUIStore();
 
   // Modales
   const [mergeModal, setMergeModal] = useState<{ isOpen: boolean; target: any; source: any } | null>(null);
@@ -29,14 +31,16 @@ export default function DoublonsView() {
   const itemsPerPage = 10;
 
   const loadTabData = useCallback(async () => {
+    if (isLoading) return;
     setIsLoading(true);
+    setIsFetchingQuery(true);
     try {
       const offset = (currentPage - 1) * itemsPerPage;
       let res;
       if (activeTab === 'DOUBLONS') {
-        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, filters.nom || '');
+        res = await window.api.cartes.getDoublonsPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       } else {
-        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, filters.nom || '');
+        res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       }
       
       const rawRows = res?.rows || [];
@@ -76,8 +80,9 @@ export default function DoublonsView() {
       toast.error('Erreur lors du chargement des données.');
     } finally {
       setIsLoading(false);
+      setIsFetchingQuery(false);
     }
-  }, [activeTab, currentPage, filters.nom, siteIdToUse, refreshTrigger]);
+  }, [activeTab, currentPage, debouncedFilters.nom, siteIdToUse, refreshTrigger, setIsFetchingQuery]);
 
   useEffect(() => {
     loadTabData();
@@ -86,7 +91,7 @@ export default function DoublonsView() {
   // Réinitialiser la page sur changement
   useEffect(() => {
     setCurrentPage(1);
-  }, [filters, activeTab]);
+  }, [debouncedFilters, activeTab]);
 
   const executeDelete = async () => {
     if (!deleteModal || isDeleting) return;
@@ -156,7 +161,11 @@ export default function DoublonsView() {
         </div>
       </div>
 
-      <AdvancedSearchBar filters={filters} setFilters={setFilters} />
+      <AdvancedSearchBar 
+        filters={filters} 
+        setFilters={setFilters} 
+        disabled={isLoading || isFetchingQuery}
+      />
 
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         <div className="table-responsive">
@@ -261,16 +270,20 @@ export default function DoublonsView() {
         {totalPages > 1 && (
           <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-              Affichage {((currentPage - 1) * itemsPerPage) + 1} à {Math.min(currentPage * itemsPerPage, totalItems)} sur {totalItems}
+              {/* La pagination porte sur des groupes de doublons (pas des paires individuelles) :
+                  un groupe de 3+ doublons peut produire plus de paires que d'éléments paginés,
+                  donc on affiche le compte réel de cette page plutôt qu'un intervalle calculé. */}
+              {records.length} paire(s) affichée(s) sur cette page — {totalItems} au total
             </span>
             <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn btn-secondary" disabled={currentPage === 1} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
+              <button className="btn btn-secondary" disabled={currentPage === 1 || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
               <PaginationInput 
                 currentPage={currentPage} 
                 totalPages={totalPages} 
-                onPageChange={setCurrentPage} 
+                onPageChange={setCurrentPage}
+                disabled={isLoading || isFetchingQuery}
               />
-              <button className="btn btn-secondary" disabled={currentPage === totalPages} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
+              <button className="btn btn-secondary" disabled={currentPage === totalPages || isLoading || isFetchingQuery} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
             </div>
           </div>
         )}

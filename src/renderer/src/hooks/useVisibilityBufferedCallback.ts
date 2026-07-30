@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
 /**
  * Hook React personnalisé qui enveloppe un callback de progression ou de mise à jour d'état.
@@ -32,12 +32,14 @@ export function useVisibilityBufferedCallback<T>(callback: (value: T) => void) {
     };
   }, []);
 
-  return (value: T) => {
+  // Mémoïsé : la référence retournée reste stable entre les rendus, évitant un
+  // désabonnement/réabonnement inutile des listeners IPC qui en dépendent.
+  return useCallback((value: T) => {
     if (document.visibilityState === 'hidden') {
       bufferRef.current = value;
       hasPendingUpdateRef.current = true;
     } else {
       callbackRef.current(value);
     }
-  };
+  }, []);
 }

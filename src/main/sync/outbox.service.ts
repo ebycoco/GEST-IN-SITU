@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../database/connection';
 import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
+import { mapCardPayload } from './payload-mapper';
 
 // ─── Constantes de configuration ────────────────────────────────────────────
 /** Nombre maximal de tentatives avant de basculer une entrée en ERROR. */
@@ -22,6 +23,7 @@ interface OutboxEntry {
   status: 'PENDING' | 'SYNCED' | 'ERROR';
   error_msg: string | null;
   attempts: number;
+  depends_on: string | null;
 }
 
 // ─── API publique ────────────────────────────────────────────────────────────
@@ -43,7 +45,8 @@ export function enqueueOutbox(
   id: string,
   tableName: string,
   operation: 'INSERT' | 'UPDATE' | 'DELETE',
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  dependsOnId: string | null = null
 ): void {
   try {
     const db = getDatabase();
@@ -54,20 +57,21 @@ export function enqueueOutbox(
 
     const payloadJson = JSON.stringify(payload);
 
-    log.info(`[OutboxService] Enfilage outbox tenté (id=${id}, table=${tableName}, op=${operation}, payload=${payloadJson})`);
+    log.info(`[OutboxService] Enfilage outbox tenté (id=${id}, table=${tableName}, op=${operation}, payload=${payloadJson}, dependsOn=${dependsOnId})`);
     
     // UPSERT : si l'UUID existe déjà, on met à jour le payload et on le repasse en PENDING.
     db.prepare(`
-      INSERT INTO t_outbox (id, table_name, operation, payload, status, attempts, created_at, error_msg)
-      VALUES (?, ?, ?, ?, 'PENDING', 0, datetime('now'), NULL)
+      INSERT INTO t_outbox (id, table_name, operation, payload, status, attempts, created_at, error_msg, depends_on)
+      VALUES (?, ?, ?, ?, 'PENDING', 0, datetime('now'), NULL, ?)
       ON CONFLICT(id) DO UPDATE SET 
         operation = excluded.operation,
         payload = excluded.payload,
         status = 'PENDING',
         attempts = 0,
         error_msg = NULL,
-        created_at = datetime('now')
-    `).run(id, tableName, operation, payloadJson);
+        created_at = datetime('now'),
+        depends_on = excluded.depends_on
+    `).run(id, tableName, operation, payloadJson, dependsOnId);
 
     log.info(`[OutboxService] Enfilé → ${tableName} [${operation}] (id=${id})`);
 
@@ -156,7 +160,7 @@ export async function processOutboxPending(): Promise<{ processed: number; error
 
     // Lire le prochain lot d'entrées PENDING
     const pendingEntries = db.prepare(`
-      SELECT id, table_name, operation, payload, status, error_msg, attempts
+      SELECT id, table_name, operation, payload, status, error_msg, attempts, depends_on
       FROM t_outbox
       WHERE status = 'PENDING'
       ORDER BY created_at ASC
@@ -176,6 +180,17 @@ export async function processOutboxPending(): Promise<{ processed: number; error
     }
 
     for (const entry of pendingEntries) {
+      if (entry.depends_on) {
+        const parent = db.prepare('SELECT status FROM t_outbox WHERE id = ?').get(entry.depends_on) as { status: string } | undefined;
+        if (parent && parent.status === 'ERROR') {
+          _markOutboxError(db, entry.id, entry.attempts + 1, "Action parente en échec définitif. Opération suspendue.");
+          errors++;
+          continue;
+        } else if (parent && parent.status === 'PENDING') {
+          continue; // Parent pas encore prêt, on reporte à plus tard sans erreur
+        }
+      }
+
       const newAttempts = entry.attempts + 1;
 
       // Vérification du seuil de tentatives avant tout appel réseau
@@ -256,30 +271,15 @@ export async function processOutboxPending(): Promise<{ processed: number; error
             }
           }
         } else {
-          // Fonction locale de mapping pour t_cartes (reprise de upstream.ts)
-          function mapCardPayload(c: any): any {
-            if (!c.site_id) throw new Error("Erreur de validation de la carte : site_id manquant.");
-            return {
-              sync_id: c.sync_id, noms: c.noms, prenoms: c.prenoms || '',
-              date_naissance: c.date_de_naissance || null, lieu_naissance: c.lieu_de_naissance || null,
-              num_secu: c.num_secu || null, lieu_enrolement: c.lieu_enrolement || null, contact: c.contact || null,
-              rangement: c.rangement || null, statut: c.statut || 'EN STOCK', statut_physique: c.statut_physique || 'OK',
-              date_delivrance: c.date_delivrance || null, agent_saisie: c.agent_saisie || null,
-              agent_distributeur: c.agent_distributeur || null, centre_retrait: c.centre_retrait || null,
-              nom_retirant: c.nom_retirant || null, num_retirant: c.num_retirant || null,
-              cle_doublon: c.cle_doublon || null, cle_doublon_flex: c.cle_doublon_flex || null,
-              agent_signalement_absence: c.agent_signalement_absence || null,
-              date_signalement_absence: c.date_signalement_absence || null,
-              date_resolution_absence: c.date_resolution_absence || null,
-              agent_resolution_absence: c.agent_resolution_absence || null,
-              note_resolution: c.note_resolution || null, notif_lue: c.notif_lue ?? 1,
-              id_site: c.site_id, id_centre: c.centre_id || null, id_poste: c.poste_id || null,
-              qr_code_data: c.qr_code_data || null, is_exported: c.is_exported || 0,
-              created_by: c.created_by || null, updated_at: c.updated_at || new Date().toISOString()
-            };
+          let finalPayload;
+          try {
+            finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
+          } catch (validationErr: any) {
+            _markOutboxError(db, entry.id, newAttempts, validationErr.message);
+            log.error(`[OutboxService] Rejet local (validation) pour ${entry.table_name} (id=${entry.id}) : ${validationErr.message}`);
+            errors++;
+            continue;
           }
-
-          const finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
 
           // INSERT ou UPDATE → upsert idempotent sur sync_id (ou user_sync_id,role pour t_user_roles)
           log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(finalPayload));
@@ -445,3 +445,20 @@ export { uuidv4 as generateOutboxId };
  * Utilisable par les appelants externes (queries) pour le typage strict.
  */
 export type OutboxOperation = 'INSERT' | 'UPDATE' | 'DELETE';
+
+/**
+ * Réinitialise les entrées en ERROR à PENDING au démarrage de l'application
+ * pour garantir que les erreurs persistantes ne soient pas oubliées.
+ */
+export function resetOutboxErrors(): void {
+  try {
+    const db = getDatabase();
+    if (!db) return;
+    const result = db.prepare("UPDATE t_outbox SET status = 'PENDING', attempts = 0 WHERE status = 'ERROR'").run();
+    if (result.changes > 0) {
+      log.info(`[OutboxService] ${result.changes} entrée(s) en ERROR réinitialisée(s) en PENDING.`);
+    }
+  } catch (err: any) {
+    log.error(`[OutboxService] Erreur lors de la réinitialisation des erreurs outbox :`, err.message || err);
+  }
+}

@@ -116,7 +116,19 @@ export default function TopBar() {
         const list = await window.api.sync.getUnreadList(user.site_id);
         const filteredList = (list || []).filter(n => {
           if (user.role === 'ADMINISTRATEUR_SITE' || user.role === 'SUPER ADMIN') {
-            return n.action !== 'CARTE_ABSENTE_RETROUVEE' && n.action !== 'CARTE_PERDUE_CONFIRMEE' && n.action !== 'CARTE_PERDUE_RETROUVEE';
+            // Le signalement initial ('CENTRE') ne concerne que l'ADMIN_CENTRE ; le site n'est notifié qu'en cas d'escalade.
+            return n.action !== 'CARTE_ABSENTE_RETROUVEE' && n.action !== 'CARTE_PERDUE_CONFIRMEE' && n.action !== 'CARTE_PERDUE_RETROUVEE' && n.action !== 'CARTE_ABSENTE_SIGNALEE';
+          }
+          if (user.role === 'ADMIN_CENTRE') {
+            if (n.action === 'CARTE_ABSENTE_SIGNALEE') {
+              let parsed = null;
+              try {
+                parsed = typeof n.valeur_apres === 'string' ? JSON.parse(n.valeur_apres) : n.valeur_apres;
+              } catch (e) {}
+              if (!parsed || parsed.centre_id === undefined || parsed.centre_id === null) return false;
+              return Number(parsed.centre_id) === Number(user.centre_id);
+            }
+            return true;
           }
           if (user.role === 'OPERATEUR_VERIFICATION') {
             if (n.site_id !== undefined && n.site_id !== null && n.site_id !== user.site_id) {
@@ -157,7 +169,7 @@ export default function TopBar() {
         fetchUnreadNotifications();
         
         if (data && data.type === 'ABSENCE_SIGNALEE') {
-          if (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN') {
+          if (user?.role === 'ADMIN_CENTRE' && data.centre_id !== undefined && data.centre_id !== null && Number(data.centre_id) === Number(user.centre_id)) {
             toast.error("⚠️ 1 carte signalée manquante dans les rangements !", {
               duration: 6000,
               style: {
@@ -176,6 +188,17 @@ export default function TopBar() {
               border: '1px solid #FFD700'
             }
           });
+        } else if (data && data.type === 'ABSENCE_ESCALADEE') {
+          if (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN') {
+            toast.error("⚠️ Un centre a escaladé une carte absente non résolue !", {
+              duration: 6000,
+              style: {
+                background: '#000',
+                color: '#FFD700',
+                border: '1px solid #FFD700'
+              }
+            });
+          }
         }
       });
       return () => {

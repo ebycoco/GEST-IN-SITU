@@ -4,6 +4,33 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-07-30
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Module Qualité — Onglet "Autres Anomalies" :** Nouvel onglet dédié sur la page Qualité permettant de consulter, filtrer et corriger les cartes dont le statut est inconnu (ex : `ERREUR`, `NUMERO INCORRECT`, `INJOIGNABLE`). Comprend un panneau de correction latéral complet (`CorrectionSidePanel`) et un détail expandable (`ExpandedAnomalyDetails`).
+- **Module Qualité — Détail "Données Manquantes" Expandable :** Intégration du composant `ExpandedManquantDetails` sur l'onglet "Données Manquantes" pour afficher les champs manquants carte par carte de façon claire et interactive.
+- **Statistiques Globales — "Autres Anomalies" & "Dates Vides" :** Les indicateurs KPI du tableau de bord Admin incluent désormais deux nouvelles métriques : le compte des cartes à statut inconnu (`autres_anomalies`) et celui des cartes avec date de naissance vide (`dates_naissance_vide`), avec liens directs vers les onglets de correction.
+- **Import sécurisé — Statuts valides :** Lors de l'import CSV/Excel, seul `DOUBLON` est désormais accepté comme statut alternatif légitime (au même titre que `DELIVRE` ou `EN STOCK`). Les statuts terrain non standard (`NUMERO INCORRECT`, `INJOIGNABLE`, `ERREUR`) sont rejetés et tracés comme `STATUT_INCONNU`, préservant l'intégrité des données.
+- **Message Statut Inconnu Enrichi :** Le message de confirmation affiché lors d'un import avec statut non reconnu précise désormais le statut exact en gras (ex : _"Cette carte a un statut inconnu **ERREUR** mais a été sauvegardée en stock."_).
+- **Bouton "Forcer en Stock" repositionné :** Le bouton d'action "Forcer en Stock" est désormais intégré à l'intérieur du panneau de détail de la carte pour une ergonomie terrain cohérente.
+- **Validateurs Partagés :** Nouveau module `src/shared/utils/validators.ts` centralisant les règles de validation des données (dates, contacts, numéros de sécu) utilisées transversalement dans l'application.
+
+### 🛠️ Corrections & Sécurité
+
+- **Moteur Upstream (Outbox) :** Robustesse accrue du service d'outbox pour les opérations en attente, prévenant des pertes de données lors d'interruptions réseau.
+- **Worker de Téléchargement :** Corrections de la logique du `download-worker.js` pour une meilleure gestion des conflits de fusion lors du tirage descendant.
+- **Requêtes Hiérarchie & Import :** Fiabilisation des requêtes d'accès aux sites/centres et du pipeline d'import multi-formats.
+- **Heartbeat de Session :** Amélioration du gestionnaire de battement de session (`session-heartbeat`) pour éviter les déconnexions intempestives.
+
+### ⚡ Performances & Optimisations
+
+- **Suppression de pages obsolètes :** Retrait de `AdminCentreDashboardPage`, `AnomaliesView` et `QualiteAssainissementPage`, nettoyant la base de code et réduisant le bundle final.
+- **Hook `useDebounce` :** Nouveau hook partagé pour limiter les appels IPC lors des saisies en temps réel dans les barres de recherche de la page Qualité.
+- **Store Qualité (`qualityUIStore`) :** Refactorisation du store Zustand dédié à l'état de l'interface Qualité pour une meilleure séparation des responsabilités.
+
+---
+
 ## [2.8.0] - 2026-07-30
 
 ### 🚀 Nouvelles Fonctionnalités

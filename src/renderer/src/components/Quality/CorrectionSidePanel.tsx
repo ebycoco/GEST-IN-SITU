@@ -113,7 +113,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
               <AlertTriangle size={18} color="#ef4444" style={{ flexShrink: 0, marginTop: 2 }} />
               <div>
                 <h4 style={{ margin: '0 0 4px 0', color: '#ef4444', fontSize: 14 }}>Modification sensible</h4>
-                <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>Vous allez devoir valider ce changement avec le mot de passe maître.</p>
+                <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>Vous allez devoir confirmer ce changement en ressaisissant votre mot de passe.</p>
               </div>
             </div>
           )}

@@ -7,6 +7,7 @@ interface QualityUIState {
   isGuideOpen: boolean;
   guideInitialName: string;
   refreshTrigger: number; // to notify views to refresh after a correction
+  isFetchingQuery: boolean;
   
   openCorrection: (card: ICarte | any, type: string) => void;
   closeCorrection: () => void;
@@ -15,6 +16,7 @@ interface QualityUIState {
   closeGuide: () => void;
   
   triggerRefresh: () => void;
+  setIsFetchingQuery: (isFetching: boolean) => void;
 }
 
 export const useQualityUIStore = create<QualityUIState>((set) => ({
@@ -23,6 +25,7 @@ export const useQualityUIStore = create<QualityUIState>((set) => ({
   isGuideOpen: false,
   guideInitialName: '',
   refreshTrigger: 0,
+  isFetchingQuery: false,
   
   openCorrection: (card, type) => set({ activeCard: card, correctionType: type }),
   closeCorrection: () => set({ activeCard: null, correctionType: '' }),
@@ -31,4 +34,5 @@ export const useQualityUIStore = create<QualityUIState>((set) => ({
   closeGuide: () => set({ isGuideOpen: false }),
   
   triggerRefresh: () => set((state) => ({ refreshTrigger: state.refreshTrigger + 1 })),
+  setIsFetchingQuery: (isFetching) => set({ isFetchingQuery: isFetching }),
 }));

@@ -77,7 +77,8 @@ export default function RechercheView() {
     contact, setContact, results, hasSearched, isSearching, searchMode, setSearchMode,
     searchContactQuery, setSearchContactQuery, showInversionModal, handleConfirmInversion,
     handleRejectInversion, nomSaisiInfo, prenomSaisiInfo, handleClear, handleSearch,
-    handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString
+    handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString,
+    cloudResults, setCloudResults, isCloudSearching, cloudSearchDone
   } = useVerificationSearch(
     user, activeSiteId, false, adminSiteFilter, setAdminSiteFilter,
     setSelectedCarte, setShowReportModal, setModalStep, setShowProofModal
@@ -151,6 +152,11 @@ export default function RechercheView() {
             setModalStep={setModalStep}
             setShowProofModal={setShowProofModal}
             isAgentAuthorisedForCard={isAgentAuthorisedForCard}
+            cloudResults={cloudResults}
+            isCloudSearching={isCloudSearching}
+            cloudSearchDone={cloudSearchDone}
+            setCloudResults={setCloudResults}
+            onCloseNotFound={resetSearchFields}
           />
         </>
       )}

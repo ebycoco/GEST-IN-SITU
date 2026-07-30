@@ -115,9 +115,10 @@ export function getCentres(siteId?: number) {
 export function getCentresWithPrefixes(siteId: number) {
   const db = getDatabase()!;
   return db.prepare(`
-    SELECT id, site_id, nom, prefixe_rangement 
+    SELECT id, site_id, nom, prefixe_rangement, numero 
     FROM t_centres 
-    WHERE site_id = ? AND prefixe_rangement IS NOT NULL AND prefixe_rangement != ''
+    WHERE site_id = ?
+    ORDER BY numero ASC, id ASC
   `).all(siteId) as any[];
 }
 
@@ -331,12 +332,16 @@ export function verifySuperAdminPassword(password: string): boolean {
   const db = getDatabase()!;
   const admin = db.prepare("SELECT password_hash FROM t_users WHERE role = 'SUPER ADMIN'").get() as any;
   if (!admin) return false;
-  
+
   const hash = admin.password_hash;
-  if (hash.startsWith('$2')) {
-    return verifyPassword(password, hash);
+  // Sécurité : seule une comparaison bcrypt est acceptée. Un hash legacy non-bcrypt (donnée mal
+  // migrée) est traité comme invalide plutôt que comparé en clair — le mot de passe doit être
+  // réinitialisé via le flux dédié.
+  if (!hash || !hash.startsWith('$2')) {
+    log.warn('[SECURITY] verifySuperAdminPassword : hash non-bcrypt détecté, vérification refusée.');
+    return false;
   }
-  return password === hash;
+  return verifyPassword(password, hash);
 }
 
 export function verifyUserPassword(login: string, password: string): boolean {
@@ -345,12 +350,14 @@ export function verifyUserPassword(login: string, password: string): boolean {
   if (!user) {
     return false;
   }
-  
+
   const hash = user.password_hash;
-  if (hash.startsWith('$2')) {
-    return verifyPassword(password, hash);
+  // Sécurité : idem, aucun fallback en clair.
+  if (!hash || !hash.startsWith('$2')) {
+    log.warn(`[SECURITY] verifyUserPassword : hash non-bcrypt détecté pour '${login}', vérification refusée.`);
+    return false;
   }
-  return password === hash;
+  return verifyPassword(password, hash);
 }
 
 export function getSitesSummary() {

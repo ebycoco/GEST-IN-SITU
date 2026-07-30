@@ -37,6 +37,7 @@ export async function initDatabase(): Promise<Database.Database> {
   db.pragma('temp_store = MEMORY');
   db.pragma('mmap_size = 268435456'); // 256MB mmap
   db.pragma('page_size = 4096');
+  db.pragma('wal_autocheckpoint = 100000'); // 400MB WAL avant autocheckpoint (empêche les freezes de l'UI pendant l'import massif)
 
   // Run schema migrations
   runMigrations(db);

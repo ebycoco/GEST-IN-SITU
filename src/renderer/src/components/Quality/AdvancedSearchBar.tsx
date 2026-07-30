@@ -7,9 +7,10 @@ interface AdvancedSearchBarProps {
   filters: QualityFilters;
   setFilters: React.Dispatch<React.SetStateAction<QualityFilters>>;
   onSearch?: () => void;
+  disabled?: boolean;
 }
 
-export function AdvancedSearchBar({ filters, setFilters }: AdvancedSearchBarProps) {
+export function AdvancedSearchBar({ filters, setFilters, disabled = false }: AdvancedSearchBarProps) {
   const [showExtendedFilters, setShowExtendedFilters] = useState(false);
   const openGuide = useQualityUIStore(s => s.openGuide);
 
@@ -24,17 +25,19 @@ export function AdvancedSearchBar({ filters, setFilters }: AdvancedSearchBarProp
           <Search size={18} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
           <input
             type="text"
-            placeholder="Nom ou prénom..."
+            placeholder="Nom et prénom..."
             value={filters.nom || ''}
             onChange={(e) => setFilters(prev => ({ ...prev, nom: e.target.value.toUpperCase() }))}
-            style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+            disabled={disabled}
+            style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, opacity: disabled ? 0.5 : 1 }}
           />
           <input
             type="text"
             placeholder="Contact..."
             value={filters.contact || ''}
             onChange={(e) => setFilters(prev => ({ ...prev, contact: e.target.value.replace(/\D/g, '') }))}
-            style={{ width: 140, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+            disabled={disabled}
+            style={{ width: 140, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, opacity: disabled ? 0.5 : 1 }}
           />
           <button onClick={() => setShowExtendedFilters(!showExtendedFilters)} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.1)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, padding: '8px 12px', borderRadius: 8 }}>
             {showExtendedFilters ? '▲ Moins de filtres' : '▼ Plus de filtres'}
@@ -47,18 +50,20 @@ export function AdvancedSearchBar({ filters, setFilters }: AdvancedSearchBarProp
               type="date"
               value={filters.ddn || ''}
               onChange={(e) => setFilters(prev => ({ ...prev, ddn: e.target.value }))}
-              style={{ width: 180, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+              disabled={disabled}
+              style={{ width: 180, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, opacity: disabled ? 0.5 : 1 }}
             />
             <input
               type="text"
               placeholder="Lieu de naissance..."
               value={filters.lieu || ''}
               onChange={(e) => setFilters(prev => ({ ...prev, lieu: e.target.value.toUpperCase() }))}
-              style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13 }}
+              disabled={disabled}
+              style={{ flex: 1, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', padding: '8px 12px', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, opacity: disabled ? 0.5 : 1 }}
             />
             {(filters.nom || filters.contact || filters.ddn || filters.lieu) && (
-              <button onClick={() => setFilters({ nom: '', contact: '', ddn: '', lieu: '' })} style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer', fontSize: 12, padding: '8px 12px' }}>
-                Effacer tous les filtres
+              <button disabled={disabled} onClick={() => setFilters({ nom: '', contact: '', ddn: '', lieu: '' })} style={{ background: 'none', border: 'none', color: '#f87171', cursor: disabled ? 'not-allowed' : 'pointer', fontSize: 12, padding: '8px 12px', opacity: disabled ? 0.5 : 1 }}>
+                Réinitialiser
               </button>
             )}
           </div>

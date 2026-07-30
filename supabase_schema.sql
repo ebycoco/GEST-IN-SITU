@@ -1,4 +1,4 @@
-﻿-- ============================================================
+-- ============================================================
 -- GEST-IN-SITU : SchÃ©ma Supabase/PostgreSQL officiel
 -- Version : alignÃ©e sur schema.ts v18 + mapping bulk-uploader.ts
 -- GÃ©nÃ©rÃ© le : 2026-07-03
@@ -114,7 +114,7 @@ CREATE TABLE public.t_cartes (
     lieu_enrolement             TEXT,
     contact                     TEXT,
     rangement                   TEXT,
-    statut                      TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE')),
+    statut                      TEXT DEFAULT 'EN STOCK' CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON','DOUBLON')),
     statut_physique             TEXT DEFAULT 'OK' CHECK(statut_physique IN ('OK','ABSENT','RETROUVE','PERDUE')),
     date_delivrance             TIMESTAMPTZ,
     agent_saisie                TEXT,

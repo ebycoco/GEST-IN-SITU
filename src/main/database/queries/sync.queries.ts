@@ -81,26 +81,17 @@ export function forceGlobalSuperAdminSync() {
 export async function forceSiteAdminSync(siteId: number) {
   const db = getDatabase()!;
   
-  // Mise à jour asynchrone par paquets de 1000 cartes pour éviter de bloquer la boucle d'événements
-  let updated = true;
-  while (updated) {
-    const result = db.prepare(`
-      UPDATE t_cartes 
-      SET is_dirty = 1 
-      WHERE id_carte IN (
-        SELECT id_carte FROM t_cartes 
-        WHERE id_site = ? AND is_dirty = 0 
-        LIMIT 1000
-      )
-    `).run(siteId);
+  db.transaction(() => {
+    // 1. Marquer toutes les cartes du site comme dirty
+    db.prepare(`UPDATE t_cartes SET is_dirty = 1 WHERE site_id = ?`).run(siteId);
 
-    if (result.changes === 0) {
-      updated = false;
-    } else {
-      // Pause de 10ms pour libérer périodiquement le Main Thread d'Electron
-      await new Promise((resolve) => setTimeout(resolve, 10));
+    // 2. Marquer toutes les anomalies du site comme dirty
+    try {
+      db.prepare(`UPDATE t_import_anomalies SET is_dirty = 1 WHERE site_id = ?`).run(siteId);
+    } catch (err: any) {
+      log.warn('[forceSiteAdminSync] Column is_dirty might not exist on t_import_anomalies yet:', err.message);
     }
-  }
+  })();
 }
 
 export async function forceAgentsSync(siteId: number): Promise<{ success: boolean; count: number; message?: string }> {
@@ -152,6 +143,16 @@ export async function forceAgentsSync(siteId: number): Promise<{ success: boolea
   // 3. Déclencher le traitement si en ligne
   if (networkMonitor.getState() === 'ONLINE') {
     scheduleOutboxProcessing();
+  }
+
+  // 4. Nettoyage : marquer les agents comme propres une fois l'enfilage réussi (comme demandé par la règle métier locale)
+  const userIds = dirtyUsers.map(u => u.id_user);
+  if (userIds.length > 0) {
+    db.prepare(`
+      UPDATE t_users 
+      SET is_dirty = 0 
+      WHERE id_user IN (${userIds.join(',')})
+    `).run();
   }
 
   log.info(`[forceAgentsSync] ${count} agents enfilés dans l'outbox pour synchronisation.`);
@@ -216,17 +217,10 @@ export async function pullCentresFromCloud(siteId: number): Promise<{ success: b
 export async function forceCentresSync(siteId: number): Promise<{ success: boolean; count: number; message?: string }> {
   const db = getDatabase()!;
   
-  // 1. Marquer les centres du site comme dirty (si is_dirty existe, sinon on prend tout)
-  try {
-    db.prepare('UPDATE t_centres SET is_dirty = 1 WHERE site_id = ?').run(siteId);
-  } catch (e) {
-    log.warn('[forceCentresSync] is_dirty missing in t_centres, proceeding with all centres');
-  }
-
   const dirtyCentres = db.prepare(`
     SELECT id, site_id, nom, code, lieu, prefixe_rangement, numero, created_at, sync_id
     FROM t_centres
-    WHERE site_id = ?
+    WHERE site_id = ? AND is_dirty = 1
   `).all(siteId) as any[];
 
   if (dirtyCentres.length === 0) {
@@ -259,7 +253,10 @@ export async function forceCentresSync(siteId: number): Promise<{ success: boole
   }
 
   try {
-    db.prepare('UPDATE t_centres SET is_dirty = 0 WHERE site_id = ?').run(siteId);
+    const centreIds = dirtyCentres.map(c => c.id);
+    if (centreIds.length > 0) {
+      db.prepare(`UPDATE t_centres SET is_dirty = 0 WHERE id IN (${centreIds.join(',')})`).run();
+    }
   } catch (e) {}
 
   log.info(`[forceCentresSync] ${dirtyCentres.length} centres synchronisés avec succès.`);
