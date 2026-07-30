@@ -1,6 +1,6 @@
 {
   "name": "gest-in-situ",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "Application desktop de gestion logistique ultra-performante pour le cycle de vie des cartes CMU",
   "main": "./dist/main/index.js",
   "author": "EBYCHOCO",
@@ -11,8 +11,8 @@
     "url": "https://github.com/ebycoco/GEST-IN-SITU.git"
   },
   "scripts": {
-    "clean:dev": "rd /s /q node_modules\\\\.vite 2>nul && npm run dev",
-    "dev": "electron-vite dev",
+    "clean:dev": "rd /s /q node_modules\\.vite 2>nul && npm run dev",
+    "dev": "chcp 65001 >nul 2>&1 & electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "build:win": "electron-vite build && electron-builder --win -c.extraMetadata.main=dist/main/index.js",
