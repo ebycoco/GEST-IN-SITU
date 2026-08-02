@@ -59,6 +59,42 @@ function verifyUserRole(userId: number | null | undefined, allowedRoles: string[
   }
 }
 
+/**
+ * Dérive le site_id RÉELLEMENT applicable à une lecture (listing/recherche paginée) à partir
+ * de la session serveur, jamais du siteId brut envoyé par le renderer — même pattern que
+ * `cartes:getRecordForCorrection` (seul SUPER ADMIN peut légitimement consulter un site
+ * différent du sien ; tout autre rôle est silencieusement recadré sur son propre site_id,
+ * transparent pour l'UI légitime qui n'envoie de toute façon jamais un autre site).
+ * Sécurité : sans cette substitution, un siteId forgé côté renderer (contournement UI) permet
+ * de lire noms/prénoms/date de naissance/num_secu/contact d'un autre site (cloisonnement §3).
+ */
+function resolveScopedSiteId(siteId: number | undefined | null): number {
+  const secureUser = getSecureCurrentUser();
+  if (!secureUser) throw new Error("Session invalide.");
+  if (secureUser.role === 'SUPER ADMIN') {
+    if (siteId === undefined || siteId === null) {
+      throw new Error("REJETÉ : site_id requis pour cette opération.");
+    }
+    return Number(siteId);
+  }
+  if (secureUser.site_id === undefined || secureUser.site_id === null) {
+    throw new Error("Session invalide : site_id introuvable pour cet utilisateur.");
+  }
+  return secureUser.site_id;
+}
+
+/**
+ * Masque les champs sensibles (num_secu, contact) avant écriture dans `t_audit_log` — même
+ * fonction que `qualite:corrigerFormat` appliquait localement (désormais partagée pour éviter
+ * toute divergence entre les points d'audit qui journalisent ces champs).
+ */
+function maskSensitiveField(champ: string, val: string | null | undefined): string {
+  if (!val) return 'Vide';
+  if (champ === 'num_secu') return val.length > 4 ? `*********${val.slice(-4)}` : '***';
+  if (champ === 'contact') return val.length > 4 ? `******${val.slice(-4)}` : '***';
+  return val;
+}
+
 // Anti-bruteforce pour hierarchy:verifyPassword : verrouille une identité après un nombre
 // d'échecs successifs, sur une fenêtre glissante (protection locale, en mémoire du process).
 const VERIFY_PASSWORD_MAX_ATTEMPTS = 5;
@@ -382,16 +418,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('cartes:searchAllRecords', async (_, siteId, filters, limit) => {
     try {
+      const effectiveSiteId = resolveScopedSiteId(siteId);
       const userLogin = getCurrentUserLogin() || 'SYSTEM';
-      const results = await queries.searchAllRecords(siteId, filters, limit);
-      
+      const results = await queries.searchAllRecords(effectiveSiteId, filters, limit);
+
       setImmediate(() => {
         logAudit(userLogin, 'RECHERCHE_UNIVERSELLE', {
-          site_id: siteId,
+          site_id: effectiveSiteId,
           critere_utilise: filters ? Object.keys(filters).join(', ') : 'none'
         });
       });
-      
+
       return results;
     } catch (e) {
       log.error('IPC Error: cartes:searchAllRecords', e);
@@ -661,13 +698,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     try {
       const res = await queries.updateCarte(id, data, secureUser);
+      // Sécurité : masquage des champs sensibles avant écriture dans t_audit_log — même
+      // fonction (`maskSensitiveField`) que celle appliquée par qualite:corrigerFormat, pour
+      // ne jamais journaliser num_secu/contact en clair.
+      const champsDataMasked: Record<string, unknown> = { ...data };
+      if ('num_secu' in champsDataMasked) {
+        champsDataMasked.num_secu = maskSensitiveField('num_secu', data.num_secu);
+      }
+      if ('contact' in champsDataMasked) {
+        champsDataMasked.contact = maskSensitiveField('contact', data.contact);
+      }
       logAudit(
         userLogin,
         'CARTE_MODIFICATION',
         JSON.stringify({
           id_carte: id,
           champs_modifies: Object.keys(data),
-          champs_data: data
+          champs_data: champsDataMasked
         })
       );
       return res;
@@ -943,12 +990,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     try {
       const res = await queries.updateCarte(id, data, secureUser);
+      // Sécurité : masquage des champs sensibles avant écriture dans t_audit_log — même
+      // fonction (`maskSensitiveField`) que celle appliquée par cartes:update, pour ne jamais
+      // journaliser num_secu en clair. Ce handler est le chemin RÉELLEMENT emprunté par
+      // CorrectionSidePanel.onSave (portail Qualité : Dates Invalides, Doublons Probables ->
+      // Identification, Recherche Universelle -> Modifier), voir preload/index.ts:74-75
+      // (`cartes.updateCarte` route vers le canal IPC `cmu:updateCarte`, pas `cartes:update`).
       logAudit(
         userLogin,
         'CMU_MODIFICATION',
         JSON.stringify({
           id_carte: id,
-          numero_cmu: data.num_secu || 'N/A',
+          numero_cmu: 'num_secu' in data ? maskSensitiveField('num_secu', data.num_secu) : 'N/A',
           champs_modifies: Object.keys(data)
         })
       );
@@ -1182,11 +1235,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:reactiverCarte', e); throw e; }
   });
   ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number, offset = 0, limit = 50) => {
-    try { return queries.getInvalidDateRecords(siteId, offset, limit); }
+    try { return queries.getInvalidDateRecords(resolveScopedSiteId(siteId), offset, limit); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
   });
   ipcMain.handle('cartes:getDatesVidesPage', async (_, siteId?: number, offset = 0, limit = 50, query?: string) => {
-    try { return queries.getDatesVidesPage(siteId, offset, limit, query); }
+    try { return queries.getDatesVidesPage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getDatesVidesPage', e); throw e; }
   });
   ipcMain.handle('cartes:updateDate', async (_, id, newDate) => {
@@ -1194,35 +1247,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
   ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getDoublonsStrictsPage(siteId, offset, limit, query, filters); }
+    try { return queries.getDoublonsStrictsPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsPage', e); throw e; }
   });
   ipcMain.handle('cartes:getDoublonsProbablesPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getDoublonsProbablesPage(siteId, offset, limit, query, filters); }
+    try { return queries.getDoublonsProbablesPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsProbablesPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansNumSecuPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getSansNumSecuPage(siteId, offset, limit, query, filters); }
+    try { return queries.getSansNumSecuPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNumSecuPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getSansRangementPage(siteId, offset, limit, query, filters); }
+    try { return queries.getSansRangementPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getSansNomPage(siteId, offset, limit, query, filters); }
+    try { return queries.getSansNomPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNomPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansPrenomPage', async (_, siteId, offset, limit, query, filters) => {
-    try { return queries.getSansPrenomPage(siteId, offset, limit, query, filters); }
+    try { return queries.getSansPrenomPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansPrenomPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansContactPage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansContactPage(siteId, offset, limit, query); }
+    try { return queries.getSansContactPage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansContactPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansLieuNaissancePage', async (_, siteId, offset, limit, query) => {
-    try { return queries.getSansLieuNaissancePage(siteId, offset, limit, query); }
+    try { return queries.getSansLieuNaissancePage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansLieuNaissancePage', e); throw e; }
   });
   ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
@@ -1238,7 +1291,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
   });
   ipcMain.handle('cartes:searchCombinedInventaire', async (_, siteId, queryNomsPrenoms, dateNaissance, lieuNaissance) => {
-    try { return queries.searchCombinedInventaire(siteId, queryNomsPrenoms, dateNaissance, lieuNaissance); }
+    try { return queries.searchCombinedInventaire(resolveScopedSiteId(siteId), queryNomsPrenoms, dateNaissance, lieuNaissance); }
     catch (e) { log.error('IPC Error: cartes:searchCombinedInventaire', e); throw e; }
   });
   ipcMain.handle('cartes:updateApurementHistorique', async (_, id, fields) => {
@@ -1705,21 +1758,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       })();
 
-      const maskSensitive = (champ: string, val: string | null | undefined): string => {
-        if (!val) return 'Vide';
-        if (champ === 'num_secu') return val.length > 4 ? `*********${val.slice(-4)}` : '***';
-        if (champ === 'contact') return val.length > 4 ? `******${val.slice(-4)}` : '***';
-        return val;
-      };
-
       logAudit(
         userLogin,
         'QUALITE_CORRECTION',
         JSON.stringify({
           id_carte,
           champ_corrige,
-          valeur_avant: maskSensitive(champ_corrige, valeur_avant),
-          valeur_apres: maskSensitive(champ_corrige, valeur_apres),
+          valeur_avant: maskSensitiveField(champ_corrige, valeur_avant),
+          valeur_apres: maskSensitiveField(champ_corrige, valeur_apres),
           raison: "Correction de format d'une carte"
         })
       );

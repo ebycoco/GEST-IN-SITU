@@ -77,6 +77,18 @@ export const TEST_USERS: E2ETestUser[] = [
     nom: 'E2E',
     prenom: 'AdminSite',
     siteOnly: true
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) du portail /agent-qualite
+  // (OPERATEUR_QUALITE) — même schéma que operateurVerification (rattaché au
+  // centre du site de test, pas siteOnly).
+  {
+    key: 'operateurQualite',
+    login: 'E2E_OPERATEUR_QUALITE',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'OPERATEUR_QUALITE',
+    nom: 'E2E',
+    prenom: 'Qualite'
   }
 ];
 

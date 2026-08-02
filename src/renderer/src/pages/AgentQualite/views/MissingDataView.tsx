@@ -76,21 +76,25 @@ export default function MissingDataView() {
     setExpandedId(null);
   }, [debouncedFilters, activeTab]);
 
-  const handleSaveField = async (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance', providedValue: string) => {
-    if (!providedValue.trim()) { toast.error('La valeur ne peut pas être vide.'); return; }
-    if (field === 'num_secu' && providedValue.trim().length !== 13) { toast.error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.'); return; }
+  // Retourne un booléen de succès (correctif P1b) : ExpandedManquantDetails.handleSave
+  // n'en dépend que pour décider de refermer ou non le champ en édition — les erreurs
+  // de validation (toast.error ci-dessous) ne lèvent jamais d'exception, donc un
+  // simple try/catch côté enfant ne suffisait pas à détecter l'échec.
+  const handleSaveField = async (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance', providedValue: string): Promise<boolean> => {
+    if (!providedValue.trim()) { toast.error('La valeur ne peut pas être vide.'); return false; }
+    if (field === 'num_secu' && providedValue.trim().length !== 13) { toast.error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.'); return false; }
     if (field === 'contact') {
       const digits = providedValue.replace(/\D/g, '');
       if (digits.length !== 10) {
         toast.error('Le contact doit faire exactement 10 chiffres locaux (ex: 0708090010).');
-        return;
+        return false;
       }
     }
     if (field === 'date_de_naissance') {
-      if (providedValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
+      if (providedValue.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return false; }
       if (!isValidCalendarDate(providedValue)) {
         toast.error('Date physiquement impossible dans le calendrier (ex: 30/02). Veuillez saisir une date correcte.');
-        return;
+        return false;
       }
     }
 
@@ -104,9 +108,11 @@ export default function MissingDataView() {
       });
       toast.success('Donnée mise à jour avec succès !');
       loadTabData();
+      return true;
     } catch (err) {
       console.error(err);
       toast.error('Erreur lors de la mise à jour.');
+      return false;
     } finally {
       setIsResolving(prev => ({ ...prev, [card.id_carte]: false }));
     }
@@ -231,9 +237,7 @@ export default function MissingDataView() {
                           <ExpandedManquantDetails
                             record={r}
                             isResolving={!!isResolving[r.id_carte]}
-                            onSaveField={async (field, value) => {
-                              await handleSaveField(r, field as any, value);
-                            }}
+                            onSaveField={(field, value) => handleSaveField(r, field as any, value)}
                             colorTheme="#14b8a6"
                           />
                         </td>

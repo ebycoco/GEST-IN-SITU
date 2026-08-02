@@ -28,7 +28,7 @@ export default function AgentQualiteLayout() {
     };
   }, []);
 
-  const { dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -54,7 +54,11 @@ export default function AgentQualiteLayout() {
     return () => { cancelled = true; };
   }, [user, activeSiteId, dirtyCartesCount]);
 
-  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  // cloudCartesCount vaut -1 en sentinelle d'indisponibilite Supabase (voir
+  // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
+  // Meme correctif que AgentVerificationLayout.tsx (cloudCartesCount === 0 ne couvrait
+  // pas le cas -1, laissant le bouton actif alors que le cloud est injoignable).
+  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
@@ -81,6 +85,23 @@ export default function AgentQualiteLayout() {
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            {stats?.total !== undefined && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 16px',
+                background: 'rgba(74, 222, 128, 0.05)',
+                borderRadius: 12,
+                border: '1px solid rgba(74, 222, 128, 0.2)',
+                color: 'var(--text-secondary)'
+              }}>
+                <Database size={16} color="#4ade80" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Cartes disponibles en local :</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'white' }}>
+                  {stats.total.toLocaleString('fr-FR')}
+                </span>
+              </div>
+            )}
+
             <button
               onClick={() => handlePullSiteCards(false)}
               disabled={pullDisabled}

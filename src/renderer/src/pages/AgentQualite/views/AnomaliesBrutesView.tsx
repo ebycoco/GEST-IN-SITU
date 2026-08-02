@@ -252,13 +252,17 @@ export default function AnomaliesBrutesView() {
                             record={row}
                             isResolving={false}
                             onSaveField={async (field, value) => {
+                              // Retourne un booléen de succès (correctif P1b) : ExpandedAnomalyDetails.handleSave
+                              // ne referme le champ en édition que si la sauvegarde a réellement réussi.
                               try {
                                 await window.api.import.updateAnomalyField(row.id, field, value);
                                 toast.success('Champ modifié avec succès.');
                                 loadAnomalies();
+                                return true;
                               } catch (err) {
                                 console.error(err);
                                 toast.error('Erreur lors de la modification.');
+                                return false;
                               }
                             }}
                             colorTheme={row?.type_anomalie === 'STATUT_INCONNU' ? "#f59e0b" : "#ff6348"}

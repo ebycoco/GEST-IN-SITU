@@ -17,7 +17,7 @@ export interface IManquantRecord {
 interface ExpandedManquantDetailsProps {
   record: IManquantRecord;
   isResolving: boolean;
-  onSaveField: (field: string, value: string) => Promise<void>;
+  onSaveField: (field: string, value: string) => Promise<boolean>;
   colorTheme?: string;
 }
 
@@ -36,8 +36,15 @@ export function ExpandedManquantDetails({ record, isResolving, onSaveField, colo
   };
 
   const handleSave = async (field: string) => {
-    await onSaveField(field, editValue);
-    setEditingField(null);
+    // Correctif P1b : onSaveField renvoie désormais un booléen de succès (le parent
+    // peut échouer silencieusement côté validation/serveur en se contentant d'un
+    // toast.error, sans lever d'exception). On ne referme l'édition que si la
+    // sauvegarde a réellement réussi, pour ne jamais faire perdre la saisie en cours
+    // de l'agent quand une validation échoue (ex. contact ou date invalide).
+    const success = await onSaveField(field, editValue);
+    if (success) {
+      setEditingField(null);
+    }
   };
 
   return (

@@ -332,10 +332,22 @@ export async function processOutboxPending(): Promise<{ processed: number; error
           continue;
         }
 
-        // Succès → marquer SYNCED
-        db.prepare(`
-          UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL WHERE id = ?
-        `).run(entry.id);
+        // Succès → marquer SYNCED + remettre à zéro le flag local is_dirty
+        // (même connexion/transaction que le reste du traitement outbox —
+        // voir _clearLocalDirtyFlag). Sans cela, une entité modifiée localement
+        // puis synchronisée avec succès restait signalée "en attente" (is_dirty
+        // = 1) indéfiniment, faussant les compteurs UI (ex: bandeau "corrections
+        // en attente" du Portail Qualité après une fusion de doublons).
+        db.transaction(() => {
+          db.prepare(`
+            UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL WHERE id = ?
+          `).run(entry.id);
+
+          if (entry.operation !== 'DELETE') {
+            const syncIdValue = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
+            _clearLocalDirtyFlag(db, entry.table_name, syncIdValue);
+          }
+        })();
 
         log.info(`[OutboxService] ✓ ${entry.table_name} [${entry.operation}] synchronisé (id=${entry.id})`);
         processed++;
@@ -415,6 +427,51 @@ function _markOutboxError(
     `).run(errorMsg, attempts, id);
   } catch (err: any) {
     log.error(`[OutboxService] Impossible de marquer l'entrée ${id} en ERROR :`, err.message);
+  }
+}
+
+/**
+ * Remet à zéro le flag local `is_dirty` (et `synced_at` quand la colonne
+ * existe) de l'entité correspondant à une entrée outbox INSERT/UPDATE dont
+ * l'upsert Supabase vient d'être confirmé en succès.
+ *
+ * Corrige un défaut où une carte (ou autre entité) modifiée localement puis
+ * synchronisée avec succès restait signalée "en attente" (is_dirty = 1) de
+ * façon permanente — outbox.service.ts ne touchait jamais aux tables
+ * métier après un upsert réussi, contrairement à upload-worker.js:272 qui le
+ * fait pour son propre chemin (bulk upload manuel "Envoyer les corrections").
+ *
+ * Portée volontairement limitée aux tables qui possèdent réellement is_dirty
+ * ET transitent par enqueueOutbox() : t_cartes et t_users (is_dirty +
+ * synced_at, voir schema.ts), t_sites et t_centres (is_dirty seul, pas de
+ * colonne synced_at sur ces deux tables). t_user_roles/t_postes n'ont pas de
+ * notion is_dirty équivalente sur ce chemin → ignorés (défaut absent).
+ * Ne s'applique jamais à un DELETE : la ligne locale est déjà supprimée
+ * physiquement par l'appelant dans ce cas (voir plus haut dans la boucle).
+ */
+function _clearLocalDirtyFlag(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  tableName: string,
+  syncIdValue: string | undefined
+): void {
+  if (!syncIdValue) return;
+  try {
+    switch (tableName) {
+      case 't_cartes':
+      case 't_users':
+        db.prepare(`UPDATE ${tableName} SET is_dirty = 0, synced_at = datetime('now') WHERE sync_id = ?`).run(syncIdValue);
+        break;
+      case 't_sites':
+      case 't_centres':
+        db.prepare(`UPDATE ${tableName} SET is_dirty = 0 WHERE sync_id = ?`).run(syncIdValue);
+        break;
+      default:
+        // Table sans notion is_dirty équivalente sur ce chemin (t_postes,
+        // t_user_roles) — rien à faire.
+        break;
+    }
+  } catch (err: any) {
+    log.error(`[OutboxService] Erreur lors de la remise à zéro locale de is_dirty pour ${tableName} (sync_id=${syncIdValue}) :`, err.message || err);
   }
 }
 

@@ -3,6 +3,7 @@ import { X, Save, AlertTriangle } from 'lucide-react';
 import { confirmService } from '../confirmService';
 import DateInput from '../DateInput';
 import toast from 'react-hot-toast';
+import { normalizeDate } from '../../../../shared/utils/date';
 
 export interface ICarte {
   id_carte?: number;
@@ -68,8 +69,26 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
       if (!targetId) throw new Error("ID de la fiche manquant");
       
       // On peut injecter le type d'enregistrement dans les updates pour que le backend sache quelle table mettre à jour
-      const finalData = { ...formData, _recordType: (record as any)._recordType };
-      
+      const finalData: Partial<ICarte> & { _recordType?: string } = { ...formData, _recordType: (record as any)._recordType };
+
+      // Correctif P0 : la date de naissance stockée peut être dans un format hérité
+      // non-ISO (ex. import legacy "01-01-90"), ce qui échoue systématiquement à la
+      // revalidation stricte (isValidDateStrict, AAAA-MM-JJ) côté updateCarte() —
+      // bloquant alors la sauvegarde de TOUT autre champ modifié dans ce panneau,
+      // même quand la date elle-même n'a jamais été touchée par l'agent.
+      // - Si l'agent n'a pas modifié ce champ : on ne le resoumet pas du tout (il n'y
+      //   a rien à corriger sur ce champ, inutile de le revalider).
+      // - Si l'agent l'a modifié via DateInput (qui restitue toujours du JJ/MM/AAAA,
+      //   jamais de l'ISO) : on le convertit en AAAA-MM-JJ avec normalizeDate, le même
+      //   utilitaire déjà utilisé par InvalidFormatView.tsx/SaisiePage.tsx pour cette
+      //   conversion, avant de l'envoyer au backend.
+      const originalDate = record.date_de_naissance || '';
+      if (finalData.date_de_naissance === originalDate) {
+        delete finalData.date_de_naissance;
+      } else {
+        finalData.date_de_naissance = normalizeDate(finalData.date_de_naissance || '');
+      }
+
       await onSave(targetId, finalData);
       toast.success('Données mises à jour avec succès');
       onClose();

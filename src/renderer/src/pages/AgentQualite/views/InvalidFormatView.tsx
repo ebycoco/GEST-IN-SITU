@@ -95,20 +95,24 @@ export default function InvalidFormatView() {
     }
   };
 
-  const handleSaveContactLieu = async (card: any, champ: string, valeur: string) => {
-    if (!valeur.trim()) { toast.error('La valeur ne peut pas être vide.'); return; }
+  // Retourne un booléen de succès (correctif P1b) : ExpandedAnomalyDetails.handleSave
+  // n'en dépend que pour décider de refermer ou non le champ en édition — les erreurs
+  // de validation (toast.error ci-dessous) ne lèvent jamais d'exception, donc un
+  // simple try/catch côté enfant ne suffisait pas à détecter l'échec.
+  const handleSaveContactLieu = async (card: any, champ: string, valeur: string): Promise<boolean> => {
+    if (!valeur.trim()) { toast.error('La valeur ne peut pas être vide.'); return false; }
     if (champ === 'contact') {
       const digits = valeur.replace(/\D/g, '');
       if (digits.length !== 10) {
         toast.error('Le contact doit faire exactement 10 chiffres locaux (ex: 0708090010).');
-        return;
+        return false;
       }
     }
     if (champ === 'date_de_naissance') {
-      if (valeur.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return; }
+      if (valeur.length !== 10) { toast.error('Format de date invalide (JJ/MM/AAAA)'); return false; }
       if (!isValidCalendarDate(valeur)) {
         toast.error('Date physiquement impossible dans le calendrier (ex: 30/02 ou 31/04). Veuillez saisir une date correcte.');
-        return;
+        return false;
       }
     }
     try {
@@ -121,7 +125,7 @@ export default function InvalidFormatView() {
         valeur_apres: champ === 'contact' ? valeur.replace(/\D/g, '') : champ === 'date_de_naissance' ? valeur : valeur.trim().toUpperCase()
       });
       window.api.log.info(`[QUALITÉ] Succès correction '${champ}' pour ID=${card.id_carte}`);
-      
+
       let label = champ;
       if (champ === 'contact') label = 'Contact';
       else if (champ === 'lieu_de_naissance') label = 'Lieu de naissance';
@@ -129,13 +133,15 @@ export default function InvalidFormatView() {
       else if (champ === 'date_de_naissance') label = 'Date de naissance';
       else if (champ === 'noms') label = 'Noms';
       else if (champ === 'prenoms') label = 'Prénoms';
-      
+
       toast.success(`${label} corrigé avec succès !`);
-      
+
       loadTabData();
+      return true;
     } catch (err: any) {
       window.api.log.error(`[QUALITÉ] ERREUR correction '${champ}' pour ID=${card.id_carte} : ${err}`);
       toast.error('Erreur lors de la mise à jour.');
+      return false;
     } finally {
       setIsResolving(prev => ({ ...prev, [card.id_carte]: false }));
     }

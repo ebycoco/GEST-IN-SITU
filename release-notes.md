@@ -7,15 +7,25 @@
 
 - **Délivrance/transfert de carte interrompus par une corruption FTS5 non rattrapée** (`SqliteError: database disk image is malformed`) : `delivrerCarte()` et `transfererCarte()` appliquent désormais le même mécanisme d'auto-guérison que `updateCarte()` (suppression du trigger fautif, rejeu sûr de la transaction, reset FTS5 en tâche de fond). Confirmé sans perte de donnée sur 15+ répétitions réelles avant/après correctif.
 - **Délivrances de cartes jamais remontées vers Supabase** (bug présent en production depuis le 22/07) : `delivrerCarte()`, `resoudreAbsence()`, `signalerAbsence()`, `autoEnqueueCorrection()` et la fusion de cartes (module Qualité) enfilaient un payload outbox minimal ou déjà transformé, rejeté systématiquement par la validation `site_id` côté envoi. Les cinq points enfilent désormais la ligne carte complète et fraîche.
+- **Fuite de lecture cross-site sur le portail Qualité** : 12 endpoints de listing/recherche (doublons, données manquantes, dates invalides, recherche universelle) transmettaient le `site_id` reçu du client directement à la requête SQL, sans vérifier qu'il correspondait à l'utilisateur connecté — un opérateur Qualité pouvait consulter noms, dates de naissance, numéros de sécurité sociale et contacts d'un autre site en falsifiant ce paramètre. Tous les endpoints recadrent désormais systématiquement sur le site réel de l'utilisateur (sauf SUPER ADMIN).
+- **Panneau de correction Qualité structurellement bloqué sur une fiche à date de naissance invalide** : toute correction (y compris d'un champ sans rapport, ex. numéro de sécurité sociale) échouait car le composant resoumettait systématiquement la date affichée dans un format non conforme. Corrigé — le champ date n'est plus resoumis s'il n'a pas été modifié, et normalisé au bon format sinon.
 
 ## 🟠 Corrections importantes (P1)
 
 - `upload-worker.js` (bouton "Synchroniser mes actions") omettait 9 champs (dont `agent_signalement_absence`) par rapport au mapping standard — traçabilité des signalements d'absence perdue si ce chemin faisait le premier envoi. Champs alignés, confirmé sur Supabase dev.
+- Journal d'audit des corrections Qualité (numéro de sécurité sociale, contact) affiché en clair sur deux chemins de sauvegarde — masquage désormais appliqué de façon cohérente sur les deux.
+- Bouton "Récupérer depuis le Cloud" du portail Qualité restait actif malgré un cloud injoignable (même défaut déjà corrigé sur le portail Vérification, propagé ici).
+- Saisie perdue silencieusement dans les écrans de correction Qualité (Données Manquantes, Autres Anomalies) quand une validation échouait — le champ reste désormais ouvert avec la valeur saisie intacte.
+- Indicateur "corrections en attente" restait affiché à tort après une fusion de doublons pourtant synchronisée avec succès (`is_dirty` jamais remis à 0 sur ce chemin) — corrigé, avec la même correction étendue à `t_sites`/`t_centres`.
 - Notification de résolution de signalement renvoyait vers une route inexistante (écran blanc, navigation perdue) — corrigée vers `/agent-verification/signalements?tab=resolus`, avec ouverture directe de l'onglet "Résolus".
 - Statistiques "Aujourd'hui"/"Hier" du portail de vérification toujours à 0 (comparaison de date incompatible avec l'horodatage réel) — corrigé.
 - Bouton "Récupérer depuis le Cloud" restait actif quand le cloud était injoignable (sentinelle d'erreur mal interprétée) — corrigé.
 - Badge "Escaladée au Site" ne s'affichait jamais (comparaison sur une valeur jamais écrite en base) — corrigé.
 - Écran "Base de données locale vide" ne s'affichait jamais pour le rôle Opérateur Vérification — corrigé.
+
+## 🚀 Nouveautés
+
+- Portail Qualité : indicateur "Cartes disponibles en local" dans l'en-tête, identique à celui déjà présent sur le portail Vérification.
 
 ## 🟡 Optimisations & fiabilité (P2)
 
@@ -27,7 +37,7 @@
 
 ## 🧪 Infrastructure de test
 
-Mise en place d'une suite e2e Playwright isolée (`e2e/`), avec base SQLite jetable par run et garde-fou dédié empêchant tout accès accidentel au Supabase de production. Couverture ajoutée : parcours complet du rôle Opérateur Vérification (recherche, délivrance, signalements, cloisonnement site/centre), et scénarios de synchro cloud réelle contre un projet Supabase de développement dédié.
+Mise en place d'une suite e2e Playwright isolée (`e2e/`), avec base SQLite jetable par run et garde-fou dédié empêchant tout accès accidentel au Supabase de production. Couverture ajoutée : parcours complet des rôles Opérateur Vérification (recherche, délivrance, signalements, cloisonnement site/centre) et Opérateur Qualité (doublons, données manquantes, dates invalides, anomalies brutes, recherche universelle, cloisonnement site), et scénarios de synchro cloud réelle (hors-ligne → envoi → récupération inter-postes) contre un projet Supabase de développement dédié.
 
 ---
 
