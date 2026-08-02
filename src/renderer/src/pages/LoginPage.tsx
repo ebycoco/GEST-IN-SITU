@@ -257,7 +257,8 @@ export default function LoginPage() {
             <div className="form-group">
               <label className="form-label">Identifiant</label>
               <input className="form-input" type="text" placeholder="Entrez votre identifiant"
-                value={login} onChange={(e) => setLogin(e.target.value)} autoFocus />
+                value={login} onChange={(e) => setLogin(e.target.value)} autoFocus
+                data-testid="login-input" />
             </div>
 
             <div className="form-group">
@@ -265,7 +266,8 @@ export default function LoginPage() {
               <div style={{ position: 'relative' }}>
                 <input className="form-input" type={showPwd ? 'text' : 'password'}
                   placeholder="Entrez votre mot de passe" style={{ width: '100%', paddingRight: 44 }}
-                  value={password} onChange={(e) => setPassword(e.target.value)} />
+                  value={password} onChange={(e) => setPassword(e.target.value)}
+                  data-testid="password-input" />
                 <button type="button" onClick={() => setShowPwd(!showPwd)}
                   style={{
                     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
@@ -276,11 +278,12 @@ export default function LoginPage() {
               </div>
             </div>
 
-            <button 
-              type="submit" 
-              className="btn btn-primary" 
+            <button
+              type="submit"
+              className="btn btn-primary"
               disabled={isLoading}
               style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
+              data-testid="login-submit"
             >
               {isLoading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
               {isLoading ? 'Connexion...' : 'Se connecter'}

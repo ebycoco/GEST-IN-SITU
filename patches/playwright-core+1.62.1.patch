@@ -1,0 +1,123 @@
+diff --git a/node_modules/playwright-core/lib/coreBundle.js b/node_modules/playwright-core/lib/coreBundle.js
+index d9041dd..5b3e814 100644
+--- a/node_modules/playwright-core/lib/coreBundle.js
++++ b/node_modules/playwright-core/lib/coreBundle.js
+@@ -43972,7 +43972,7 @@ var init_electron = __esm({
+       }
+       async launch(progress2, options) {
+         let app = void 0;
+-        let electronArguments = ["--inspect=0", "--remote-debugging-port=0", ...options.args || []];
++        let electronArguments = ["--inspect=0", ...options.args || []];
+         if (import_os14.default.platform() === "linux") {
+           if (!options.chromiumSandbox && electronArguments.indexOf("--no-sandbox") === -1)
+             electronArguments.unshift("--no-sandbox");
+diff --git a/node_modules/playwright-core/lib/server/electron/loader.js b/node_modules/playwright-core/lib/server/electron/loader.js
+index f90cc20..25d6353 100644
+--- a/node_modules/playwright-core/lib/server/electron/loader.js
++++ b/node_modules/playwright-core/lib/server/electron/loader.js
+@@ -90,29 +90,81 @@ var chromiumSwitches = (options) => [
+ ].filter(Boolean);
+ 
+ // packages/playwright-core/src/server/electron/loader.ts
+-process.argv.splice(1, process.argv.indexOf("--remote-debugging-port=0"));
+-for (const arg of chromiumSwitches()) {
+-  const match = arg.match(/--([^=]*)=?(.*)/);
+-  import_electron.app.commandLine.appendSwitch(match[1], match[2]);
++// PATCHED (GEST-IN-SITU, patch-package, dev-only) : voir patches/playwright-core+*.patch
++//
++// Électron 30+ rejette "--remote-debugging-port=0" comme argument CLI brut
++// (crash natif avant même l'exécution de ce fichier — voir
++// https://github.com/microsoft/playwright/issues/39008). Le port n'est donc
++// plus injecté dans les arguments CLI (coreBundle.js) ; il est appliqué ici
++// via app.commandLine.appendSwitch(), avant app.whenReady().
++//
++// ⚠️ Point de synchronisation NON déterministe (constat empirique révisé) :
++// un premier correctif accédait à `import_electron.app` de façon synchrone,
++// immédiatement après `require('electron')`. Un sondage instrumenté sur 18
++// lancements contrôlés (voir .tmp-timing/, session de diagnostic) a montré
++// `app` disponible de façon synchrone dans 100% des cas mesurés ici — mais
++// un crash `TypeError: Cannot read properties of undefined (reading
++// 'commandLine')` a été reproduit de façon indépendante et répétée (2/2)
++// dans un autre environnement, au MÊME point d'accès synchrone, y compris
++// dans la boucle chromiumSwitches déjà présente avant tout correctif. Cause
++// exacte non identifiée (charge machine, cache disque, variabilité du
++// bootstrap natif d'Electron sous chargement via `-r`) — mais le fait
++// qu'elle survienne de façon reproductible ailleurs suffit à disqualifier
++// tout accès synchrone non gardé comme fix fiable.
++//
++// Solution retenue : ne JAMAIS supposer `app` disponible. `ensureAppReady()`
++// vérifie sa présence et, si absent, réessaie au tick suivant
++// (`process.nextTick`) — sans délai fixe deviné, sans coût observable dans
++// le cas (majoritaire, mesuré 18/18) où `app` est déjà là (une seule
++// vérification synchrone avant de continuer), et sans jamais accéder à
++// `app.commandLine`/`app.whenReady` avant confirmation. Un plafond de
++// tentatives fait échouer bruyamment (erreur explicite) plutôt que de
++// bloquer indéfiniment si `app` ne devient jamais disponible.
++var MAX_APP_READY_ATTEMPTS = 2000; // ~plusieurs secondes de marge via nextTick
++function ensureAppReady(attempt) {
++  attempt = attempt || 0;
++  if (import_electron.app && import_electron.app.commandLine) {
++    setupElectronApp();
++    return;
++  }
++  if (attempt >= MAX_APP_READY_ATTEMPTS) {
++    throw new Error(
++      "[playwright-core PATCHED] electron.app n'est jamais devenu disponible après " +
++      MAX_APP_READY_ATTEMPTS + " tentatives (process.nextTick). Abandon explicite " +
++      "plutôt qu'un blocage silencieux."
++    );
++  }
++  process.nextTick(() => ensureAppReady(attempt + 1));
+ }
+-var originalWhenReady = import_electron.app.whenReady();
+-var originalEmit = import_electron.app.emit.bind(import_electron.app);
+-var readyEventArgs;
+-import_electron.app.emit = (event, ...args) => {
+-  if (event === "ready") {
+-    readyEventArgs = args;
+-    return import_electron.app.listenerCount("ready") > 0;
++
++function setupElectronApp() {
++  process.argv.splice(1, process.argv.indexOf("--inspect=0"));
++  for (const arg of chromiumSwitches()) {
++    const match = arg.match(/--([^=]*)=?(.*)/);
++    import_electron.app.commandLine.appendSwitch(match[1], match[2]);
+   }
+-  return originalEmit(event, ...args);
+-};
+-var isReady = false;
+-var whenReadyCallback;
+-var whenReadyPromise = new Promise((f) => whenReadyCallback = f);
+-import_electron.app.isReady = () => isReady;
+-import_electron.app.whenReady = () => whenReadyPromise;
+-globalThis.__playwright_run = async () => {
+-  const event = await originalWhenReady;
+-  isReady = true;
+-  whenReadyCallback(event);
+-  originalEmit("ready", ...readyEventArgs);
+-};
++  import_electron.app.commandLine.appendSwitch("remote-debugging-port", "0");
++  var originalWhenReady = import_electron.app.whenReady();
++  var originalEmit = import_electron.app.emit.bind(import_electron.app);
++  var readyEventArgs;
++  import_electron.app.emit = (event, ...args) => {
++    if (event === "ready") {
++      readyEventArgs = args;
++      return import_electron.app.listenerCount("ready") > 0;
++    }
++    return originalEmit(event, ...args);
++  };
++  var isReady = false;
++  var whenReadyCallback;
++  var whenReadyPromise = new Promise((f) => whenReadyCallback = f);
++  import_electron.app.isReady = () => isReady;
++  import_electron.app.whenReady = () => whenReadyPromise;
++  globalThis.__playwright_run = async () => {
++    const event = await originalWhenReady;
++    isReady = true;
++    whenReadyCallback(event);
++    originalEmit("ready", ...readyEventArgs);
++  };
++}
++
++ensureAppReady();

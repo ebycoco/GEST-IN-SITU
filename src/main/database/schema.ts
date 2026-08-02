@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 59;
+export const SCHEMA_VERSION = 60;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -309,6 +309,11 @@ export function runMigrations(db: Database.Database): void {
     if (currentVersion < 59) {
       log.info('Running migration v59: Update t_cartes CHECK constraint to allow DOUBLON');
       migrateV59(db);
+    }
+
+    if (currentVersion < 60) {
+      log.info('Running migration v60: Rebuilding t_cartes to durably enforce DOUBLON in CHECK(statut) — supersedes the ineffective sqlite_schema patch of v59 (defensive mode blocks direct writable_schema edits)');
+      migrateV60(db);
     }
 
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -2917,6 +2922,12 @@ export function migrateV58(db: Database.Database): void {
   }
 }
 
+// NOTE: cette migration est inopérante en production (writable_schema bloqué par le mode
+// defensive de better-sqlite3 — erreur "table sqlite_master may not be modified" avalée par le
+// catch ci-dessous). L'échec est silencieux : user_version passe quand même à 59, laissant la
+// contrainte CHECK réelle de t_cartes inchangée (sans 'DOUBLON'). Corrigée par migrateV60
+// (reconstruction complète de table, façon migrateV54). Conservée intacte à titre d'archive
+// historique — ne plus modifier ni réutiliser cette technique writable_schema.
 export function migrateV59(db: Database.Database): void {
   try {
     log.info('[MIGRATION V59] Updating CHECK constraint for t_cartes to allow DOUBLON...');
@@ -2932,5 +2943,156 @@ export function migrateV59(db: Database.Database): void {
   } catch (e: any) {
     log.error('[MIGRATION V59] Failed to update CHECK constraint:', e);
     // On ignore l'erreur si sqlite_schema n'est pas modifiable, car safety net ne check pas ca
+  }
+}
+
+// =====================================================
+// MIGRATION V60 : Reconstruction sécurisée de t_cartes pour imposer durablement 'DOUBLON'
+// dans la contrainte CHECK(statut). Corrige l'échec silencieux de migrateV59 (le mode
+// defensive de better-sqlite3 bloque l'écriture directe dans sqlite_master même avec
+// writable_schema=ON). Technique identique à migrateV54 : backup physique, transaction
+// EXCLUSIVE, capture/restauration dynamique de tous les index et triggers, vérification
+// d'intégrité avant COMMIT.
+// =====================================================
+export function migrateV60(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V60] Démarrage V60 - Vérification/reconstruction de la contrainte CHECK(statut) de t_cartes...');
+
+    // GARDE D'IDEMPOTENCE : si la contrainte contient déjà 'DOUBLON' (poste où V59 aurait
+    // exceptionnellement fonctionné, ou double exécution), on sort immédiatement sans
+    // backup ni reconstruction.
+    const tableRow = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='t_cartes'"
+    ).get() as { sql: string } | undefined;
+
+    if (!tableRow || !tableRow.sql) {
+      throw new Error('[MIGRATION V60] Table t_cartes introuvable dans sqlite_master.');
+    }
+
+    const currentCheckMatch = tableRow.sql.match(/CHECK\s*\(\s*statut\s+IN\s*\([^)]+\)\s*\)/i);
+    if (currentCheckMatch && currentCheckMatch[0].includes("'DOUBLON'")) {
+      log.info('[MIGRATION V60] CHECK(statut) contient déjà DOUBLON — reconstruction inutile, sortie anticipée.');
+      return;
+    }
+
+    // ÉTAPE 1 : BACKUP PHYSIQUE
+    const { join, dirname } = require('path');
+    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const dbPath = (db as any).name as string;
+
+    if (dbPath !== ':memory:') {
+      const backupDir = join(dirname(dbPath), 'backups_migrations');
+      try {
+        mkdirSync(backupDir, { recursive: true });
+      } catch (e) {}
+      const timestamp = new Date().getTime();
+      const backupPath = join(backupDir, `backup_pre_v60_${timestamp}.sqlite`);
+      copyFileSync(dbPath, backupPath);
+      const backupSize = statSync(backupPath).size;
+      log.info(`[MIGRATION V60] Backup physique pré-reconstruction créé avec succès : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
+    }
+
+    const countBefore = db.prepare('SELECT COUNT(*) FROM t_cartes').get() as any;
+    log.info(`[MIGRATION V60] t_cartes contient ${countBefore['COUNT(*)']} lignes.`);
+
+    const currentColumnsRaw = db.pragma('table_info(t_cartes)') as { name: string }[];
+    const colsToCopy = currentColumnsRaw.map(c => c.name).join(', ');
+
+    // Désactiver FK pour la reconstruction
+    const fkState = db.pragma('foreign_keys', { simple: true });
+    log.info(`[MIGRATION V60] Initial PRAGMA foreign_keys: ${fkState}`);
+    db.pragma('foreign_keys = OFF');
+
+    db.exec('BEGIN EXCLUSIVE TRANSACTION');
+    try {
+      // Capture dynamique de TOUS les index et triggers existants (pas de liste d'exclusion :
+      // cette migration ne déprécie rien, tout doit être restauré à l'identique).
+      const oldIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='t_cartes' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+      const oldTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='t_cartes' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+
+      db.exec('ALTER TABLE t_cartes RENAME TO t_cartes_backup_v59');
+
+      const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='t_cartes_backup_v59'").get() as { sql: string };
+      if (!row || !row.sql) {
+        throw new Error("Impossible de lire la définition de t_cartes_backup_v59");
+      }
+
+      let newCreateSql = row.sql.replace(/\"?t_cartes_backup_v59\"?/g, 't_cartes');
+      // Remplacement ciblé de la clause CHECK sur 'statut' (le \s+ après 'statut' exclut
+      // naturellement 'statut_physique' grâce à l'underscore qui suit).
+      newCreateSql = newCreateSql.replace(
+        /CHECK\s*\(\s*statut\s+IN\s*\([^)]+\)\s*\)/i,
+        "CHECK(statut IN ('EN STOCK','DELIVRE','DISTRIBUEE','RETIRE','ANNULE','BROUILLON','DOUBLON'))"
+      );
+
+      // Vérification anti-régression : si le replace n'a rien matché (schéma inattendu sur un
+      // poste divergent), on échoue bruyamment plutôt que de créer une table avec une
+      // contrainte inchangée (c'est exactement l'anti-pattern qui a causé le bug de V59).
+      if (!newCreateSql.includes("'DOUBLON'")) {
+        throw new Error("Le remplacement de la contrainte CHECK(statut) a échoué : 'DOUBLON' absent du SQL généré.");
+      }
+
+      db.exec(newCreateSql);
+
+      db.exec(`INSERT INTO t_cartes (${colsToCopy}) SELECT ${colsToCopy} FROM t_cartes_backup_v59`);
+
+      const countAfter = db.prepare('SELECT COUNT(*) FROM t_cartes').get() as any;
+      if (countBefore['COUNT(*)'] !== countAfter['COUNT(*)']) {
+        throw new Error(`Perte de données détectée ! Avant=${countBefore['COUNT(*)']}, Après=${countAfter['COUNT(*)']}`);
+      }
+      log.info(`[MIGRATION V60] Copie vérifiée. ${countAfter['COUNT(*)']} lignes.`);
+
+      // DROP ancienne table POUR LIBÉRER LES NOMS d'INDEX et TRIGGERS !
+      db.exec('DROP TABLE t_cartes_backup_v59');
+
+      // Restauration dynamique de TOUS les index capturés
+      for (const idx of oldIndexes) {
+        db.exec(idx.sql);
+      }
+
+      // Restauration dynamique de TOUS les triggers capturés
+      for (const trg of oldTriggers) {
+        db.exec(trg.sql);
+      }
+
+      const integrity = db.pragma('integrity_check', { simple: true });
+      if (typeof integrity === 'string' && integrity.toLowerCase() !== 'ok') {
+        throw new Error(`Integrity check failed: ${integrity}`);
+      }
+      log.info('[MIGRATION V60] PRAGMA integrity_check (avant commit) = ok');
+
+      const fkErrors = db.pragma('foreign_key_check(t_cartes)') as any[];
+      if (fkErrors.length > 0) {
+        throw new Error(`Foreign key check failed: ${JSON.stringify(fkErrors)}`);
+      }
+      log.info('[MIGRATION V60] PRAGMA foreign_key_check(t_cartes) = pass');
+
+      db.exec('COMMIT');
+      log.info('[MIGRATION V60] Transaction COMMIT successfully.');
+    } catch (e: any) {
+      db.exec('ROLLBACK');
+      log.error(`[MIGRATION V60] ROLLBACK déclenché suite à erreur : ${e.message}`);
+      throw e;
+    }
+
+    if (fkState) {
+      db.pragma('foreign_keys = ON');
+    }
+
+    try {
+      db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild')");
+      log.info('[MIGRATION V60] FTS rebuild triggered.');
+    } catch (e: any) {
+      log.warn(`[MIGRATION V60] FTS rebuild skipped or failed: ${e.message}`);
+    }
+
+    const globalIntegrity = db.pragma('integrity_check', { simple: true });
+    log.info(`[MIGRATION V60] GLOBAL PRAGMA integrity_check de fin = ${globalIntegrity}`);
+    log.info("[MIGRATION V60] CHECK constraint de t_cartes.statut mise à jour avec succès pour inclure 'DOUBLON'.");
+  } catch (e: any) {
+    log.error('[MIGRATION V60] Échec :', e.message);
+    // Contrairement à V59 : on NE catch PAS silencieusement l'échec — on le remonte pour
+    // déclencher le catch global de runMigrations (reconstruction d'urgence).
+    throw e;
   }
 }

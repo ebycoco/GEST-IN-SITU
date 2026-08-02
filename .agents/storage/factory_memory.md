@@ -376,4 +376,30 @@ Le bouton "Synchroniser mes saisies" était dupliqué en dur sur 8 interfaces di
 **Décision & Implémentation :**
 - **Action stricte en lecture/écriture** : Modification ciblée des libellés (texte et animation de chargement) dans `AgentVerificationLayout.tsx` ("Synchroniser mes actions" / "ACTUALISATION...") et `AgentQualiteLayout.tsx` ("Envoyer les corrections" / "ENVOI...").
 - **Découverte post-analyse** : Les interfaces `SiteAdminView.tsx` et `GovernanceView.tsx` (tableaux de bord Administrateur) ne contenaient finalement pas de libellé statique mais des états fortement dynamiques et liés au processus (`ENVOYER LES MODIFICATIONS (X cartes)`, `ENVOYER LES ANOMALIES`, etc.). Ces boutons n'ont donc **délibérément pas été altérés** pour préserver la précision de l'UX d'administration.
+
+---
+
+### 2026-07-31 — Plan d'Implémentation Étanche : Suite E2E Automatisée (Playwright + Electron)
+
+**Problématique :**
+Les vérifications fonctionnelles vivantes reposent aujourd'hui uniquement sur `agent-13-qa-terrain-tester` (sessions manuelles guidées par agent, non rejouables en CI). L'objectif est d'outiller une suite E2E automatisée (`npm run test:e2e`) complémentaire, sans jamais toucher à une base réelle et sans interférer avec `vitest`/`npm test`.
+
+**Statut :** Plan uniquement (agent-1). Aucun code livré. Implémentation à confier à `agent-3-coder` (specs/fixtures) et `agent-4-db-sync` (validation du script de seed contre le schéma v60) après validation utilisateur.
+
+**Découvertes clés du code existant :**
+- 8 rôles réels (voir `RoleRedirect.tsx`) : `SUPER ADMIN`, `ADMINISTRATEUR_SITE`, `ADMIN_CENTRE`, `OPERATEUR_VERIFICATION`, `OPERATEUR_QUALITE`, `OPERATEUR_SAISIE`, `OPERATEUR_LOGISTIQUE`/`OPERATEUR_INVENTAIRE` — la liste de `agent-13` (5 rôles) était incomplète.
+- `getDbPath()` (`connection.ts`) dérive systématiquement de `app.getPath('userData')`, jamais codé en dur → le switch Chromium natif `--user-data-dir` suffit à isoler une instance E2E **sans modifier `connection.ts` ni `index.ts`**.
+- `schema.ts::runMigrations()` n'importe QUE `better-sqlite3`, `electron-log`, `local-auth` (bcrypt pur) et `payload-mapper` — aucune dépendance à l'API `electron` (`app`, `BrowserWindow`). Il est donc invocable tel quel depuis un script Node pur (fixture Playwright globalSetup), garantissant que la base de test a **exactement** le schéma v60 de production (zéro schéma dupliqué/dérivé).
+- `auth:registerSuperAdmin` (handlers.ts:216) nécessite Supabase (réseau) → **inutilisable** pour un bootstrap offline-first ; le seed de test doit passer par insertion SQLite directe (mêmes contraintes que `seedUserFromCloud`).
+- Le login `ROOT` failsafe (handlers.ts:143, gated par `process.env.FAILSAFE_ROOT_PASSWORD`) offre un bootstrap SUPER ADMIN sans seed DB, mais avec `site_id: null` — utile uniquement pour des scénarios SUPER ADMIN globaux, pas pour les rôles cloisonnés site/centre.
+- `app.requestSingleInstanceLock()` (index.ts:50) est appelé au chargement du module, avant `app.whenReady()` — un `--user-data-dir` distinct par run E2E place le lock dans un répertoire différent de celui d'une session dev/terrain réelle, éliminant le risque de collision/kill accidentel.
+- Aucun `data-testid` nulle part dans `src/renderer` : les specs devront s'appuyer sur `role`/`text` Playwright dans un premier temps, avec ajout incrémental de `data-testid` scopés aux fichiers de la page testée.
+- Pas de `vitest.config.ts` à la racine (config par défaut implicite) → risque réel que le pattern global de vitest capture aussi les specs E2E si elles sont nommées `*.spec.ts`/`*.test.ts` dans un dossier scanné par défaut.
+
+**Plan complet restitué intégralement à l'utilisateur/orchestrateur dans la réponse de cette session** (périmètre fichiers, dépendances, isolation DB, risques, ordre de livraison, STOP & WARN). Résumé des décisions structurantes :
+1. **Isolation** : `--user-data-dir=<tmp>` passé à `_electron.launch()`, zéro modification de `connection.ts`/`index.ts` en scénario nominal. Fallback documenté (gated par `E2E_TEST=1`) si le switch natif s'avère insuffisant en pratique — ce fallback **touche `index.ts` (bootstrap partagé)** et doit faire l'objet d'un STOP & WARN explicite avant application.
+2. **Seed** : script Node (`e2e/fixtures/seed-database.ts`) qui appelle `runMigrations()` directement sur une base SQLite neuve, puis insère site/centre/utilisateurs de test (login préfixé `E2E_`, hash bcrypt local) — jamais via l'UI de premier lancement.
+3. **Build préalable** : `test:e2e` nécessite un `electron-vite build` (pas `electron-builder`) en pré-requis via un script `pretest:e2e`. Conformément à `CLAUDE.md` §1, cette commande ne doit **jamais** être déclenchée par un agent de sa propre initiative — uniquement par l'utilisateur via `npm run test:e2e`.
+4. **Périmètre UI touché** (hors fixtures) : `AgentVerificationLayout.tsx` + `views/{Overview,RechercheView,SignalementsView}.tsx` (spécifiques au rôle, risque faible) pour ajout de `data-testid`. `LoginPage.tsx` est **partagé par tous les rôles en production** → ajout de `data-testid` signalé en STOP & WARN (changement additif, non structurant, mais périmètre partagé).
+5. **Ordre incrémental** : Login (tous rôles) → OPERATEUR_VERIFICATION (recherche, vérification physique, délivrance, preuve de retrait, signalement d'absence) → extension progressive aux autres rôles.
 - **Dette technique consignée** : L'absence de composant partagé (`<SyncButton />`) a été documentée dans `GEMINI.md` (§13.10) en vue d'un refactoring ultérieur. Aucun changement de logique ou de structure n'a été appliqué.
