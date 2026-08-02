@@ -114,7 +114,7 @@ function createWindow(): void {
     backgroundColor: '#0a0e27'
   });
 
-  mainWindow.on('ready-to-show', () => {
+  mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
     if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();

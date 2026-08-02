@@ -234,7 +234,7 @@ export default function TopBar() {
         }
         setNotifications(prev => prev.filter(item => item.id_log !== n.id_log));
         setShowNotifications(false);
-        navigate('/verification/recherche?tab=resolus');
+        navigate('/agent-verification/signalements?tab=resolus');
       } else {
         let parsed = null;
         try {

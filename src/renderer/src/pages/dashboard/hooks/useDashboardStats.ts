@@ -2,6 +2,38 @@ import { useState, useEffect, useCallback } from 'react';
 import { useCacheStore } from '../../../stores/cacheStore';
 import { useAuthStore } from '../../../stores/authStore';
 
+/**
+ * Récupère le compteur de cartes cloud avec un retry léger et borné (2-3 tentatives).
+ *
+ * Contexte (asynchrone / résilience) : juste après une transition réseau OFFLINE→ONLINE,
+ * ou juste après un remontage de l'écran, le client Supabase côté main process peut ne pas
+ * être encore pleinement stabilisé au moment du tout premier appel IPC — l'appel échoue une
+ * fois, et sans retry le compteur reste figé à sa valeur précédente (potentiellement 0/périmée)
+ * jusqu'à un futur remontage manuel de l'écran.
+ *
+ * Bornage : nombre de tentatives et délai fixes, PAS de polling illimité (conforme à la
+ * politique low-memory du projet, CLAUDE.md §2). N'affecte pas le rendu (fire-and-forget côté
+ * appelant) — seul le setTimeout interne est asynchrone.
+ */
+async function fetchCloudCountWithRetry(
+  siteId: number,
+  maxAttempts = 3,
+  delayMs = 2500
+): Promise<number> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await window.api.sync.getCloudCartesCount(siteId);
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
 export function useDashboardStats(user: any, activeSiteId: number | null, isGovernanceView: boolean) {
   const [stats, setStats] = useState<any>(null);
   const [globalStats, setGlobalStats] = useState<any>(null);
@@ -73,14 +105,14 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         setDirtyCartesCount(cartesCount);
         setDetailedSyncStats(syncStats);
 
-        window.api.sync.getCloudCartesCount(siteIdToUse!).then(count => {
+        fetchCloudCountWithRetry(siteIdToUse!).then(count => {
           setCloudCartesCount(count);
           useCacheStore.getState().setDashboardCache({
             ...useCacheStore.getState().dashboardCache,
             cloudCartesCount: count
           });
         }).catch(err => {
-          console.error('Failed to fetch cloud count:', err);
+          console.error('Failed to fetch cloud count after retries:', err);
           setCloudCartesCount(-1);
         });
 
@@ -113,15 +145,15 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
             window.api.stats.getDetailedSyncStats(siteIdToUse)
           ]);
           
-          // Fetch cloud count non-blockingly
-          window.api.sync.getCloudCartesCount(siteIdToUse).then(count => {
+          // Fetch cloud count non-blockingly (avec retry léger et borné, voir fetchCloudCountWithRetry)
+          fetchCloudCountWithRetry(siteIdToUse).then(count => {
             setCloudCartesCount(count);
             useCacheStore.getState().setDashboardCache({
               ...useCacheStore.getState().dashboardCache,
               cloudCartesCount: count
             });
           }).catch(err => {
-            console.error('Failed to fetch cloud count:', err);
+            console.error('Failed to fetch cloud count after retries:', err);
             setCloudCartesCount(-1);
           });
 

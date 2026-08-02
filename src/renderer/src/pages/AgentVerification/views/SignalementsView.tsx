@@ -1,11 +1,17 @@
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 import { ResolusTab } from '../../VerificationSearchPage/components/ResolusTab';
 import { NonResolusTab } from '../../VerificationSearchPage/components/NonResolusTab';
 import CentreContextSwitcher from '../../../components/layout/CentreContextSwitcher';
 
 export default function SignalementsView() {
-  const [activeTab, setActiveTab] = useState<'NON_RESOLUS' | 'RESOLUS'>('NON_RESOLUS');
+  const [searchParams] = useSearchParams();
+  // Permet d'atterrir directement sur l'onglet "Resolus" via ?tab=resolus
+  // (utilise par TopBar.tsx lors du clic sur une notification de resolution).
+  const [activeTab, setActiveTab] = useState<'NON_RESOLUS' | 'RESOLUS'>(
+    searchParams.get('tab') === 'resolus' ? 'RESOLUS' : 'NON_RESOLUS'
+  );
 
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1200, margin: '0 auto' }}>

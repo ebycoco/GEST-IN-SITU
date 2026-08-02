@@ -2,6 +2,13 @@ import { net } from 'electron';
 import log from 'electron-log';
 import { EventEmitter } from 'events';
 
+// ─── GARDE-FOU E2E (positionnée UNIQUEMENT par e2e/fixtures/electron-app.ts) ─
+// Quand cette variable vaut '1', AUCUNE requête réseau réelle ne doit jamais
+// atteindre Supabase (ni ping, ni sync) — même via forcePing()/resetAndRetry()
+// déclenchés depuis l'UI (bouton "Réessayer"). Jamais positionnée par défaut
+// en dev ou en production.
+const E2E_DISABLE_SYNC = process.env.GEST_IN_SITU_E2E_DISABLE_SYNC === '1';
+
 export type NetworkState = 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE';
 
 export class NetworkMonitor extends EventEmitter {
@@ -38,6 +45,10 @@ export class NetworkMonitor extends EventEmitter {
   }
 
   public start(): void {
+    if (E2E_DISABLE_SYNC) {
+      log.warn('[NetworkMonitor] Démarrage ignoré : GEST_IN_SITU_E2E_DISABLE_SYNC=1 (contexte E2E isolé).');
+      return;
+    }
     if (this.pingInterval) return;
     // Si l'état permanent offline a déjà été atteint, ne pas redémarrer le monitor
     if (this.isPermanentOffline) {
@@ -134,6 +145,10 @@ export class NetworkMonitor extends EventEmitter {
    * Effectue une requête HTTP légère vers Supabase pour valider la connectivité réseau réelle.
    */
   private async checkConnection(): Promise<void> {
+    // Rempart final : quel que soit le chemin d'appel (cycle automatique,
+    // forcePing(), resetAndRetry() depuis le bouton "Réessayer"...), aucun
+    // net.request réel vers Supabase ne doit partir en contexte E2E isolé.
+    if (E2E_DISABLE_SYNC) return;
     if (this.isChecking) return;
 
     // Si on est en PERMANENT_OFFLINE, bloquer tout nouveau ping

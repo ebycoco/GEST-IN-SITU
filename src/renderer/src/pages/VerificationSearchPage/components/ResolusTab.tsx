@@ -46,6 +46,23 @@ export const ResolusTab = () => {
     loadData();
   }, [user]);
 
+  // ─── Rafraîchissement temps réel (sync:updated-data) ──────────────────────
+  // Si l'onglet "Résolus" est déjà monté quand une résolution de signalement
+  // survient (côté main process, cf. src/main/ipc/handlers.ts:1149/1164/1178),
+  // on recharge la liste sans attendre un démontage/remontage du composant.
+  // Abonnement IPC nettoyé au démontage (return unsubscribe) pour éviter toute
+  // fuite de listener (politique low-memory, CLAUDE.md §2).
+  useEffect(() => {
+    if (window.api && window.api.onDatabaseUpdated) {
+      const unsubscribe = window.api.onDatabaseUpdated((data) => {
+        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'CARTE_RETROUVEE') {
+          loadData();
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
+
   const handleArchive = async (id: number) => {
     if (user?.login) {
       try {

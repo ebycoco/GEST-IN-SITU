@@ -199,6 +199,20 @@ async function run() {
       // d'AUJOURD'HUI pour être garantie détectable par tout autre poste, même si son
       // propre repère de tirage a déjà avancé au-delà de la date d'édition d'origine.
       const pushedAt = new Date().toISOString();
+      // ATTENTION SYNCHRONISATION MANUELLE : ce mapping doit rester aligné avec
+      // mapCardPayload() dans src/main/sync/payload-mapper.ts (et son homonyme
+      // dans src/main/sync/upstream.ts). Ce fichier tourne dans un worker_threads
+      // séparé, copié tel quel (copyFileSync, voir copyWorkerPlugin dans
+      // electron.vite.config.ts) SANS passer par le bundler TypeScript — il ne
+      // peut donc pas `require()`/`import` payload-mapper.ts directement (pas de
+      // module .js compilé et adressable séparément pour ce fichier .ts, tout est
+      // inliné dans le bundle unique dist/main/index.js). Une vraie source unique
+      // partagée impliquerait d'extraire ce mapping dans un module .js pur, requis
+      // à la fois par les workers et par le bundle TS, et de mettre à jour
+      // copyWorkerPlugin pour le copier — un changement d'infrastructure de build
+      // jugé disproportionné pour ce correctif ciblé sur une appli en prod active.
+      // Tout ajout/retrait de champ carte->Supabase doit donc être répercuté
+      // MANUELLEMENT dans les 3 endroits.
       const mappedCards = validCards.map(c => ({
         sync_id: c.sync_id,
         noms: c.noms,
@@ -211,6 +225,7 @@ async function run() {
         rangement: c.rangement || null,
         statut: c.statut || 'EN STOCK',
         date_delivrance: c.date_delivrance || null,
+        agent_saisie: c.agent_saisie || null,
         agent_distributeur: c.agent_distributeur || null,
         centre_retrait: c.centre_retrait || null,
         nom_retirant: c.nom_retirant || null,
@@ -218,10 +233,18 @@ async function run() {
         cle_doublon: c.cle_doublon || null,
         cle_doublon_flex: c.cle_doublon_flex || null,
         statut_physique: c.statut_physique || 'OK',
+        agent_signalement_absence: c.agent_signalement_absence || null,
+        date_signalement_absence: c.date_signalement_absence || null,
+        date_resolution_absence: c.date_resolution_absence || null,
+        agent_resolution_absence: c.agent_resolution_absence || null,
+        note_resolution: c.note_resolution || null,
+        notif_lue: c.notif_lue ?? 1,
         id_site: c.site_id || 1,
         id_centre: c.centre_id || null,
         id_poste: c.poste_id || null,
         qr_code_data: c.qr_code_data || null,
+        is_exported: c.is_exported || 0,
+        created_by: c.created_by || null,
         updated_at: pushedAt
       }));
 

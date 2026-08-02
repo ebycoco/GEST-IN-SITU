@@ -2,6 +2,7 @@ import { getDatabase } from '../connection';
 import { v4 as uuidv4 } from 'uuid';
 import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
+import { networkMonitor } from '../../sync/network-monitor';
 
 export function signalerAbsence(id: number, agentLogin: string, agentInfo: string, commentaire: string = '', currentUser?: { role: string; site_id?: number; id_user?: number; centre_id?: number }) {
   const db = getDatabase()!;
@@ -31,7 +32,7 @@ export function signalerAbsence(id: number, agentLogin: string, agentInfo: strin
       throw new Error("Accès non autorisé aux données de ce site");
     }
 
-    const card = db.prepare('SELECT site_id, centre_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    const card = db.prepare('SELECT site_id, centre_id, noms, prenoms, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
     if (card) {
       const siteId = card.site_id;
       const centreId = card.centre_id;
@@ -40,6 +41,21 @@ export function signalerAbsence(id: number, agentLogin: string, agentInfo: strin
       const userLogin = agentLogin;
       // centre_id inclus dans le payload : seul l'ADMIN_CENTRE de ce centre doit être notifié en temps réel
       const logPayload = JSON.stringify({ read: false, id_carte: id, centre_id: centreId });
+
+      // Propagation vers Supabase : sans cet enqueue, le signalement reste local tant qu'aucun
+      // envoi manuel en masse n'est déclenché (le cycle upstream automatique ne traite que t_outbox).
+      // Payload complet (pas juste { sync_id }) : outbox.service.ts applique mapCardPayload()
+      // au moment de l'envoi, qui exige site_id — un payload minimal fait échouer
+      // systématiquement cette validation ("site_id manquant"), l'entrée outbox part en ERROR
+      // définitif sans jamais atteindre Supabase (bug confirmé sur le même pattern dans
+      // delivrerCarte(), voir cartes.queries.ts).
+      if (card.sync_id) {
+        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+        if (networkMonitor.getState() === 'ONLINE') {
+          scheduleOutboxProcessing();
+        }
+      }
 
       try {
         db.prepare(`
@@ -164,12 +180,10 @@ export function resoudreAbsence(id: number, data: { status: string; agent: strin
       }
       
       if (card.sync_id) {
-        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', {
-          statut_physique: data.status,
-          rangement: card.rangement,
-          escalade_niveau: 'RESOLU',
-          updated_at: now
-        });
+        // Payload complet requis (site_id manquant sinon -> rejet systématique par
+        // mapCardPayload() dans outbox.service.ts, même défaut que delivrerCarte()).
+        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
         scheduleOutboxProcessing();
       }
     }

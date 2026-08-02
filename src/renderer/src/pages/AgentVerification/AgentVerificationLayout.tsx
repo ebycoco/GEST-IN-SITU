@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { OnlineBadge } from '../../components/OnlineBadge';
 
 import { Outlet, NavLink } from 'react-router-dom';
@@ -31,7 +31,43 @@ export default function AgentVerificationLayout() {
     handleStartBulkUpload
   } = useForceSyncActions(user, activeSiteId, loadStats);
 
-  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  // cloudCartesCount vaut -1 en sentinelle d'indisponibilite Supabase (voir
+  // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
+  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
+
+  // ── Indicateur local "pull tout juste réussi" ──────────────────────────────
+  // Contexte : après un pull réussi, src/main/sync/downstream.ts (moteur de synchro,
+  // hors périmètre de ce composant) recule volontairement le watermark de 2 minutes
+  // par sécurité anti-décalage d'horloge. Conséquence : cloudCartesCount peut rester
+  // non-nul jusqu'à ~2 minutes après un pull qui a pourtant parfaitement réussi, ce
+  // qui peut laisser croire à l'agent que la récupération a échoué. On affiche donc
+  // un indicateur "à jour" local le temps de cette fenêtre, sans toucher au moteur.
+  const [justPulledSuccess, setJustPulledSuccess] = useState<boolean>(false);
+  const pullSuccessTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Nettoyage du timer au démontage pour éviter tout setState après unmount
+  useEffect(() => {
+    return () => {
+      if (pullSuccessTimeoutRef.current) clearTimeout(pullSuccessTimeoutRef.current);
+    };
+  }, []);
+
+  const handlePullClick = async () => {
+    if (pullSuccessTimeoutRef.current) {
+      clearTimeout(pullSuccessTimeoutRef.current);
+      pullSuccessTimeoutRef.current = null;
+    }
+    setJustPulledSuccess(false);
+    const res = await handlePullSiteCards(false);
+    if (res && (res as any).success) {
+      setJustPulledSuccess(true);
+      // Fenêtre bornée à 2 min, alignée sur le recul de watermark de downstream.ts
+      pullSuccessTimeoutRef.current = setTimeout(() => {
+        setJustPulledSuccess(false);
+        pullSuccessTimeoutRef.current = null;
+      }, 120000);
+    }
+  };
   // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
   // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
   // des cartes que l'envoi rejettera silencieusement.
@@ -78,30 +114,37 @@ export default function AgentVerificationLayout() {
               </div>
             )}
             
-            <button
-              onClick={() => handlePullSiteCards(false)}
-              disabled={pullDisabled}
-              className="btn-outline"
-              style={{
-                padding: '12px 24px',
-                borderRadius: 12,
-                fontWeight: 700,
-                cursor: pullDisabled ? 'not-allowed' : 'pointer',
-                opacity: pullDisabled ? 0.5 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                background: 'rgba(255, 255, 255, 0.03)',
-                color: 'white',
-                flex: '1 1 auto',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 auto' }}>
+              <button
+                onClick={handlePullClick}
+                disabled={pullDisabled}
+                className="btn-outline"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  cursor: pullDisabled ? 'not-allowed' : 'pointer',
+                  opacity: pullDisabled ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  color: 'white',
+                  width: '100%',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              </button>
+              {justPulledSuccess && !isPullingCards && cloudCartesCount > 0 && (
+                <span style={{ fontSize: 11, fontWeight: 600, color: '#4ade80', textAlign: 'center' }}>
+                  ✅ À jour (dernière récupération réussie)
+                </span>
+              )}
+            </div>
 
             <button
               onClick={() => handleStartBulkUpload(false, false, false)}

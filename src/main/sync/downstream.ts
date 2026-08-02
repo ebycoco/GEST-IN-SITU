@@ -7,6 +7,24 @@ import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
 
+// ─── Garde de réentrance : preloadUsersFromCloud() ──────────────────────────
+// `syncEngine.init()` est déclenché depuis `mainWindow.on('ready-to-show', ...)`
+// (src/main/index.ts). Si cet événement Electron se déclenche plus d'une fois
+// sur la même fenêtre (observé empiriquement lors d'une investigation QA sur
+// perte de données : deux occurrences de "[PERF] Cold Start" dans les logs
+// d'une seule session, ~32s d'écart, coïncidant avec la transition réseau
+// OFFLINE->ONLINE), `preloadUsersFromCloud()` peut être invoquée deux fois en
+// recouvrement. Sans garde, ces deux exécutions concurrentes déclenchent
+// chacune leurs propres `db.transaction()` sur t_sites/t_centres/t_users sur
+// LA MÊME connexion partagée, en plus de dupliquer 4 requêtes Supabase
+// parallèles — un doublement injustifié de la pression concurrente sur SQLite
+// pendant la fenêtre exacte où l'utilisateur peut être en train de créer/
+// délivrer une carte. Cette garde ne corrige pas la cause du double
+// déclenchement (hors périmètre autorisé, voir rapport final : STOP & WARN
+// sur src/main/index.ts), mais neutralise son effet d'amplification ici,
+// dans le module qui possède la logique de préchargement.
+let _isPreloadingUsers = false;
+
 /**
  * Récupère les données depuis Supabase modifiées après le watermark et les intègre localement.
  * Réalise la résolution de conflit (Pilier 4) et évite les boucles infinies.
@@ -40,20 +58,33 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     }
     const siteData = siteDataList[0];
 
-    db.prepare(`
-      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
-      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
-    `).run({
-      id: siteData.id,
-      nom: siteData.nom,
-      code: siteData.code,
-      is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
-      max_centres: siteData.max_centres || 4,
-      created_at: siteData.created_at || new Date().toISOString(),
-      sync_id: siteData.sync_id || null,
-      expiry_date: siteData.expiry_date || null,
-      is_permanent: siteData.is_permanent ? 1 : 0
-    });
+    // ── Filet de sécurité FK (parité avec syncUsersFromCloud, ~ligne 452) ────
+    // `INSERT OR REPLACE` sur une PK déjà existante est un DELETE+INSERT
+    // implicite côté SQLite. t_centres référence t_sites(id) SANS
+    // ON DELETE CASCADE (schema.ts) : le PRAGMA OFF/finally garantit que ce
+    // cycle automatique (rejoué à chaque tirage downstream tant qu'un
+    // utilisateur est connecté) ne peut jamais être bloqué par une violation
+    // FK transitoire, quelle que soit l'activité concurrente sur t_centres/
+    // t_cartes au même instant.
+    db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      db.prepare(`
+        INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+        VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
+      `).run({
+        id: siteData.id,
+        nom: siteData.nom,
+        code: siteData.code,
+        is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
+        max_centres: siteData.max_centres || 4,
+        created_at: siteData.created_at || new Date().toISOString(),
+        sync_id: siteData.sync_id || null,
+        expiry_date: siteData.expiry_date || null,
+        is_permanent: siteData.is_permanent ? 1 : 0
+      });
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON;');
+    }
     log.info(`[SYNC] Site ${siteId} ("${siteData.nom}") mis à jour localement avec succès.`);
   } catch (err: any) {
     log.error(`[SYNC] Exception lors de la synchronisation du site courant :`, err.message || err);
@@ -72,25 +103,33 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     if (centresError) {
       log.error(`[SYNC] Impossible de récupérer les centres du site ${siteId} :`, centresError.message);
     } else if (centresData && centresData.length > 0) {
-      db.transaction(() => {
-        const insertCentreStmt = db.prepare(`
-          INSERT OR REPLACE INTO t_centres (id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu)
-          VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
-        `);
-        for (const c of centresData) {
-          insertCentreStmt.run({
-            id: c.id,
-            site_id: c.site_id,
-            nom: c.nom,
-            numero: c.numero,
-            created_at: c.created_at || new Date().toISOString(),
-            sync_id: c.sync_id || null,
-            prefixe_rangement: c.prefixe_rangement || null,
-            code: null,
-            lieu: c.lieu || null
-          });
-        }
-      })();
+      // Même filet de sécurité FK que pour t_sites ci-dessus : t_cartes référence
+      // centre_id sans cascade, et ce REPLACE tourne en boucle tant que la session
+      // reste connectée.
+      db.exec('PRAGMA foreign_keys = OFF;');
+      try {
+        db.transaction(() => {
+          const insertCentreStmt = db.prepare(`
+            INSERT OR REPLACE INTO t_centres (id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu)
+            VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
+          `);
+          for (const c of centresData) {
+            insertCentreStmt.run({
+              id: c.id,
+              site_id: c.site_id,
+              nom: c.nom,
+              numero: c.numero,
+              created_at: c.created_at || new Date().toISOString(),
+              sync_id: c.sync_id || null,
+              prefixe_rangement: c.prefixe_rangement || null,
+              code: null,
+              lieu: c.lieu || null
+            });
+          }
+        })();
+      } finally {
+        db.exec('PRAGMA foreign_keys = ON;');
+      }
       log.info(`[SYNC] ${centresData.length} centres assurés localement pour le site ${siteId}.`);
     }
   } catch (err: any) {
@@ -377,20 +416,28 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     }
     const siteData = siteDataList[0];
 
-    db.prepare(`
-      INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
-      VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
-    `).run({
-      id: siteData.id,
-      nom: siteData.nom,
-      code: siteData.code,
-      is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
-      max_centres: siteData.max_centres || 4,
-      created_at: siteData.created_at || new Date().toISOString(),
-      sync_id: siteData.sync_id || null,
-      expiry_date: siteData.expiry_date || null,
-      is_permanent: siteData.is_permanent ? 1 : 0
-    });
+    // Filet de sécurité FK (parité avec la garde déjà appliquée un peu plus
+    // bas dans cette même fonction pour t_users) : voir le commentaire détaillé
+    // sur le premier INSERT OR REPLACE t_sites de ce fichier (runDownstream).
+    db.exec('PRAGMA foreign_keys = OFF;');
+    try {
+      db.prepare(`
+        INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+        VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
+      `).run({
+        id: siteData.id,
+        nom: siteData.nom,
+        code: siteData.code,
+        is_active: siteData.is_active !== undefined ? siteData.is_active : 1,
+        max_centres: siteData.max_centres || 4,
+        created_at: siteData.created_at || new Date().toISOString(),
+        sync_id: siteData.sync_id || null,
+        expiry_date: siteData.expiry_date || null,
+        is_permanent: siteData.is_permanent ? 1 : 0
+      });
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON;');
+    }
     log.info(`[syncUsersFromCloud] Site parent ${siteId} assuré localement.`);
   } catch (err: any) {
     log.error(`[syncUsersFromCloud] Exception lors de la sécurisation du site parent ${siteId} :`, err.message || err);
@@ -551,6 +598,11 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
  * localement via un INSERT OR REPLACE.
  */
 export async function preloadUsersFromCloud(): Promise<void> {
+  if (_isPreloadingUsers) {
+    log.warn('[preloadUsersFromCloud] Appel ignoré : un préchargement est déjà en cours (garde de réentrance).');
+    return;
+  }
+  _isPreloadingUsers = true;
   log.info('Preload: Rapatriement en tâche de fond de tous les utilisateurs depuis Supabase...');
   log.info("📥 [SUPABASE] Tentative de préchargement des utilisateurs depuis le cloud...");
   try {
@@ -604,25 +656,31 @@ export async function preloadUsersFromCloud(): Promise<void> {
       } else if (!sitesData || sitesData.length === 0) {
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: 'Données non récupérées ou vides' });
       } else {
-        db.transaction(() => {
-          const insertSiteStmt = db.prepare(`
-            INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
-            VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
-          `);
-          for (const s of sitesData) {
-            insertSiteStmt.run({
-              id: s.id,
-              nom: s.nom,
-              code: s.code,
-              is_active: s.is_active !== undefined ? s.is_active : 1,
-              max_centres: s.max_centres || 4,
-              created_at: s.created_at || new Date().toISOString(),
-              sync_id: s.sync_id || null,
-              expiry_date: s.expiry_date || null,
-              is_permanent: s.is_permanent ? 1 : 0
-            });
-          }
-        })();
+        // Filet de sécurité FK — même justification que runDownstream/syncUsersFromCloud.
+        db.exec('PRAGMA foreign_keys = OFF;');
+        try {
+          db.transaction(() => {
+            const insertSiteStmt = db.prepare(`
+              INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
+              VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
+            `);
+            for (const s of sitesData) {
+              insertSiteStmt.run({
+                id: s.id,
+                nom: s.nom,
+                code: s.code,
+                is_active: s.is_active !== undefined ? s.is_active : 1,
+                max_centres: s.max_centres || 4,
+                created_at: s.created_at || new Date().toISOString(),
+                sync_id: s.sync_id || null,
+                expiry_date: s.expiry_date || null,
+                is_permanent: s.is_permanent ? 1 : 0
+              });
+            }
+          })();
+        } finally {
+          db.exec('PRAGMA foreign_keys = ON;');
+        }
         log.info(`Preload: ${sitesData.length} sites parents assurés localement.`);
         logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_sites', count: sitesData.length });
       }
@@ -639,25 +697,31 @@ export async function preloadUsersFromCloud(): Promise<void> {
       } else if (!centresData || centresData.length === 0) {
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: 'Données non récupérées' });
       } else {
-        db.transaction(() => {
-          const insertCentreStmt = db.prepare(`
-            INSERT OR REPLACE INTO t_centres (id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu)
-            VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
-          `);
-          for (const c of centresData) {
-            insertCentreStmt.run({
-              id: c.id,
-              site_id: c.site_id,
-              nom: c.nom,
-              numero: c.numero,
-              created_at: c.created_at || new Date().toISOString(),
-              sync_id: c.sync_id || null,
-              prefixe_rangement: c.prefixe_rangement || null,
-              code: null,
-              lieu: c.lieu || null
-            });
-          }
-        })();
+        // Filet de sécurité FK — même justification que runDownstream/syncUsersFromCloud.
+        db.exec('PRAGMA foreign_keys = OFF;');
+        try {
+          db.transaction(() => {
+            const insertCentreStmt = db.prepare(`
+              INSERT OR REPLACE INTO t_centres (id, site_id, nom, numero, created_at, sync_id, prefixe_rangement, code, lieu)
+              VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
+            `);
+            for (const c of centresData) {
+              insertCentreStmt.run({
+                id: c.id,
+                site_id: c.site_id,
+                nom: c.nom,
+                numero: c.numero,
+                created_at: c.created_at || new Date().toISOString(),
+                sync_id: c.sync_id || null,
+                prefixe_rangement: c.prefixe_rangement || null,
+                code: null,
+                lieu: c.lieu || null
+              });
+            }
+          })();
+        } finally {
+          db.exec('PRAGMA foreign_keys = ON;');
+        }
         log.info(`Preload: ${centresData.length} centres parents assurés localement.`);
         logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_centres', count: centresData.length });
       }
@@ -791,6 +855,8 @@ export async function preloadUsersFromCloud(): Promise<void> {
     }
   } catch (err: any) {
     log.error('Preload: Exception attrapée lors de la synchronisation des utilisateurs (mode hors-ligne ou erreur réseau) :', err.message || err);
+  } finally {
+    _isPreloadingUsers = false;
   }
 }
 

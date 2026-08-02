@@ -35,8 +35,14 @@ function autoEnqueueCorrection(id_carte: number): void {
     `).get(card.site_id, card.noms, card.prenoms, card.date_de_naissance) as { c: number };
     if (probableDup.c > 1) return;
 
-    const payload = mapCardPayload(card);
-    enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', payload);
+    // Validation uniquement (voir commentaire ci-dessus) : le résultat mappé
+    // n'est PAS ce qui est enfilé — outbox.service.ts applique déjà
+    // mapCardPayload() lui-même au moment de l'envoi. L'enfiler une seconde
+    // fois ici casserait la validation ("site_id manquant") car le payload
+    // mappé porte id_site/id_centre, pas site_id/centre_id (double-mapping,
+    // bug confirmé).
+    mapCardPayload(card);
+    enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', card);
     if (networkMonitor.getState() === 'ONLINE') {
       scheduleOutboxProcessing();
     }
@@ -626,9 +632,14 @@ export function delivrerCarte(
       throw new Error("Erreur lors de la mise à jour de la carte.");
     }
 
-    // Synchroniser vers Supabase
+    // Synchroniser vers Supabase — on relit la ligne fraîchement mise à jour
+    // (payload complet, avec site_id) : un payload minimal { sync_id } fait
+    // systématiquement échouer mapCardPayload() côté outbox.service.ts ("site_id
+    // manquant"), l'entrée outbox part alors en ERROR définitif sans jamais
+    // atteindre Supabase via ce chemin immédiat (bug confirmé, voir historique).
     if (carte.sync_id) {
-      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', { sync_id: carte.sync_id });
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
         scheduleOutboxProcessing();
       }
@@ -637,17 +648,38 @@ export function delivrerCarte(
     return result;
   });
 
-  return runTx();
+  // Miroir du garde-fou déjà en place dans updateCarte() (ligne ~463 plus haut) :
+  // trg_cartes_au (déclenché ici par le UPDATE ci-dessus, qui touche toujours contact/
+  // rangement via COALESCE) peut remonter "database disk image is malformed" en cas de
+  // corruption des shadow tables FTS5 — un incident déjà rencontré et documenté sur
+  // updateCarte(), mais qui plantait ici de façon non rattrapée (transaction annulée dans
+  // son intégralité, l'utilisateur perd son action de délivrance sans recours). On applique
+  // le même remède éprouvé : supprimer le trigger fautif, rejouer la même transaction
+  // (sûr — le premier essai a été intégralement annulé par SQLite, aucun état partiel),
+  // puis planifier un reset nucléaire FTS5 en arrière-plan.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[delivrerCarte] FTS5 shadow tables corrompues. Suppression du trigger pour délivrance sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[delivrerCarte] Délivrance exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
 }
 
 export function transfererCarte(
-  id: number, 
+  id: number,
   data: { centre_id: number; rangement?: string; agent_transfert: string },
   currentUser?: { role: string; site_id?: number, login?: string, id_user?: number }
 ) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  
+
   const query = `
     UPDATE t_cartes SET
       centre_id = @centre_id,
@@ -657,14 +689,31 @@ export function transfererCarte(
       is_dirty = 1
     WHERE id_carte = @id AND statut = 'EN STOCK'
   `;
-  const params: any = { 
+  const params: any = {
     id,
     centre_id: data.centre_id,
     rangement: data.rangement || null,
     now,
     updated_by: currentUser?.id_user || null
   };
-  const result = db.prepare(query).run(params);
+
+  // Même garde-fou FTS5 que delivrerCarte()/updateCarte() : cette UPDATE touche toujours
+  // `rangement` (COALESCE), donc déclenche systématiquement trg_cartes_au.
+  let result: any;
+  try {
+    result = db.prepare(query).run(params);
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[transfererCarte] FTS5 shadow tables corrompues. Suppression du trigger pour transfert sécurisé...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      result = db.prepare(query).run(params);
+      log.info('[transfererCarte] Transfert exécuté sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+    } else {
+      throw err;
+    }
+  }
+
   if (result.changes === 0) {
     throw new Error("Carte introuvable ou n'est plus EN STOCK.");
   }

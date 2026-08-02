@@ -1,3 +1,10 @@
+// ATTENTION SYNCHRONISATION MANUELLE : ce mapping est dupliqué (par nécessité
+// technique, pas par choix) dans src/main/sync/upstream.ts (fonction locale
+// mapCardPayload) ET dans src/main/workers/upload-worker.js (const mappedCards).
+// upload-worker.js tourne dans un worker_threads séparé, copié tel quel sans
+// passer par le bundler TS (voir copyWorkerPlugin dans electron.vite.config.ts)
+// — il ne peut donc pas importer directement ce fichier .ts. Tout ajout/retrait
+// de champ carte->Supabase doit être répercuté MANUELLEMENT dans les 3 endroits.
 export function mapCardPayload(c: any): any {
   if (!c.site_id) throw new Error("Erreur de validation de la carte : site_id manquant.");
   

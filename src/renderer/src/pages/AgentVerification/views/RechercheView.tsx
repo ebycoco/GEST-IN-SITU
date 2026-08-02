@@ -17,6 +17,12 @@ export default function RechercheView() {
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
   const [showProofModal, setShowProofModal] = useState<boolean>(false);
   const [userCentre, setUserCentre] = useState<any>(null);
+  // Marque la fin du PREMIER chargement asynchrone de userCentre (loadUserCentre ci-dessous).
+  // Sert de garde pour fetchTotal : evite de calculer totalCards pendant la fenetre ou
+  // userCentre vaut encore sa valeur initiale (null) le temps que loadUserCentre resolve,
+  // ce qui produisait un isPrincipal errone (false) et donc un totalCards transitoirement
+  // sous-estime (parfois 0 -> ecran "Base de donnees locale vide" affiche a tort).
+  const [userCentreReady, setUserCentreReady] = useState(false);
   const [totalCards, setTotalCards] = useState<number | null>(null);
   const nomInputRef = useRef<HTMLInputElement>(null);
 
@@ -31,6 +37,10 @@ export default function RechercheView() {
   };
 
   useEffect(() => {
+    // Garde anti-race : ignore un setState issu d'un run precedent de cet effet
+    // si un nouveau run a demarre entre-temps (deps changees) ou si le composant
+    // a ete demonte pendant l'appel IPC asynchrone.
+    let cancelled = false;
     const loadUserCentre = async () => {
       const targetCentreId = selectedCentreId || user?.centre_id;
       if (targetCentreId) {
@@ -38,29 +48,51 @@ export default function RechercheView() {
           const siteIdToUse = user?.site_id || activeSiteId;
           const centres = await window.api.hierarchy.getCentres(siteIdToUse || undefined);
           const centreObj = centres.find((c: any) => c.id === targetCentreId);
-          setUserCentre(centreObj);
+          if (!cancelled) setUserCentre(centreObj);
         } catch (err) {
           console.error('Failed to load user centre prefix:', err);
         }
       }
+      // Le "premier chargement" est termine que targetCentreId ait existe ou non,
+      // sinon fetchTotal resterait bloque indefiniment pour un utilisateur sans centre.
+      if (!cancelled) setUserCentreReady(true);
     };
     loadUserCentre();
+    return () => { cancelled = true; };
   }, [user, selectedCentreId, activeSiteId]);
 
   useEffect(() => {
+    // Ne calcule totalCards qu'une fois le premier chargement de userCentre termine
+    // (userCentreReady). Avant ce correctif, cet effet se re-declenchait des que
+    // userCentre changeait, y compris lors de sa toute premiere valeur (null, pendant
+    // que loadUserCentre est encore en vol). Dans cette fenetre, isCentrePrincipal(null)
+    // vaut false, donc la requete stats.get partait avec un filtre centre errone et
+    // pouvait renvoyer un total transitoirement sous-estime (parfois 0), declenchant
+    // a tort l'ecran bloquant "Base de donnees locale vide" juste apres une creation
+    // de carte. userCentreReady ne repasse jamais a false apres son premier passage a
+    // true, donc les recalculs legitimes suivants (changement de centre, etc.) ne sont
+    // pas impactes par cette garde.
+    if (!userCentreReady) return;
+    // activeSiteId n'est initialise au login que pour ADMINISTRATEUR_SITE/ADMIN_CENTRE
+    // (voir authStore.ts) : il reste null pour OPERATEUR_VERIFICATION, ce qui bloquait
+    // cet effet en permanence. Meme pattern que useVerificationSearch.ts (site_id direct
+    // sur l'utilisateur sauf pour SUPER ADMIN, qui utilise le site actif selectionne).
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    let cancelled = false;
     const fetchTotal = async () => {
-      if (activeSiteId) {
+      if (siteIdToUse) {
         try {
           const isPrincipal = isCentrePrincipal(userCentre) || Number(selectedCentreId || user?.centre_id) === 1;
-          const stats = await window.api.stats.get(activeSiteId, isPrincipal ? undefined : (selectedCentreId || undefined));
-          setTotalCards(stats?.total || 0);
+          const stats = await window.api.stats.get(siteIdToUse, isPrincipal ? undefined : (selectedCentreId || undefined));
+          if (!cancelled) setTotalCards(stats?.total || 0);
         } catch (e) {
-          setTotalCards(0);
+          if (!cancelled) setTotalCards(0);
         }
       }
     };
     fetchTotal();
-  }, [activeSiteId, selectedCentreId, userCentre, user]);
+    return () => { cancelled = true; };
+  }, [activeSiteId, selectedCentreId, userCentre, user, userCentreReady]);
 
   const {
     nomRetirant, setNomRetirant, telRetirant, setTelRetirant,

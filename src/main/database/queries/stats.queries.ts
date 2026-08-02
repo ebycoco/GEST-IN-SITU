@@ -99,11 +99,18 @@ export function getVerificationStats(agentUsername: string, siteId: number) {
   
   // Précalculer les dates en JavaScript pour des requêtes index-friendly
   const todayStr = new Date().toISOString().split('T')[0];
-  
+
+  // Borne de fin (exclusive) pour la journée "aujourd'hui" : le lendemain à 00:00,
+  // nécessaire car date_delivrance est stockée en ISO complet avec heure (ex.
+  // "2026-07-31T19:16:36.645Z") — une égalité stricte avec todayStr ne matche jamais.
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
   const dYesterday = new Date();
   dYesterday.setDate(dYesterday.getDate() - 1);
   const yesterdayStr = dYesterday.toISOString().split('T')[0];
-  
+
   const dWeek = new Date();
   dWeek.setDate(dWeek.getDate() - 7);
   const weekStr = dWeek.toISOString().split('T')[0];
@@ -115,15 +122,15 @@ export function getVerificationStats(agentUsername: string, siteId: number) {
   const yearStartStr = `${new Date().getFullYear()}-01-01`;
 
   const stats = db.prepare(`
-    SELECT 
-      SUM(CASE WHEN date_delivrance = ? THEN 1 ELSE 0 END) as today,
-      SUM(CASE WHEN date_delivrance = ? THEN 1 ELSE 0 END) as yesterday,
+    SELECT
+      SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as today,
+      SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as yesterday,
       SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as week,
       SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as month,
       SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as year
-    FROM t_cartes 
+    FROM t_cartes
     WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ?
-  `).get(todayStr, yesterdayStr, weekStr, monthStr, yearStartStr, agentUsername, siteId) as { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
+  `).get(todayStr, tomorrowStr, yesterdayStr, todayStr, weekStr, monthStr, yearStartStr, agentUsername, siteId) as { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
 
   const weekdays = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
   const last7Days: { dayName: string; count: number }[] = [];

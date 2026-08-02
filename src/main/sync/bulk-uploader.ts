@@ -48,6 +48,18 @@ export async function runBulkUpload(
   userLogin: string = 'system'
 ): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean }> {
   
+  // ─── GARDE-FOU E2E (positionnée UNIQUEMENT par e2e/fixtures/electron-app.ts) ─
+  // Ce flux construit son propre client Supabase à partir des variables d'env
+  // DANS le Worker Thread (upload-worker.js), en contournant entièrement
+  // getSupabaseClient() ET networkMonitor (il force explicitement
+  // setBypassForceOnline(true) juste après). Il doit donc être coupé ici,
+  // avant tout accès aux credentials ou démarrage du worker. Jamais
+  // positionnée par défaut en dev ou en production.
+  if (process.env.GEST_IN_SITU_E2E_DISABLE_SYNC === '1') {
+    log.warn('[BulkUpload] Upload annulé : GEST_IN_SITU_E2E_DISABLE_SYNC=1 (contexte E2E isolé).');
+    return { success: false, uploadedCount: 0, message: 'Synchronisation désactivée en contexte de test E2E.' };
+  }
+
   const dbPath = getDbPath();
   const supabaseUrl = process.env.VITE_SUPABASE_URL || '';
   const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';

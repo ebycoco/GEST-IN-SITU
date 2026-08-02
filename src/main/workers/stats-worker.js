@@ -14,7 +14,15 @@ parentPort.on('message', (msg) => {
         db.pragma('synchronous = NORMAL');
         db.pragma('cache_size = -64000'); // 64MB cache
         db.pragma('temp_store = MEMORY');
-        db.pragma('mmap_size = 268435456'); // 256MB mmap
+        // mmap désactivé (était 256MB) : mesure défensive low-memory (CLAUDE.md §2, cible
+        // 8Go RAM terrain) — ce worker readonly tournait en permanence avec un mmap actif
+        // du même fichier que la connexion writer principale (elle-même mmap 256MB, voir
+        // connection.ts) pendant toute la durée de vie de l'appli. Aucun bénéfice mesuré
+        // qui justifie 256MB dédiés pour des requêtes déjà <20ms (cf. logs [WORKER PERF]) ;
+        // le cache_size (64MB, page cache SQLite classique) suffit largement. Combinée au
+        // correctif de résilience FTS5 sur delivrerCarte()/transfererCarte() (cartes.queries.ts),
+        // cette réduction limite l'exposition de cette connexion readonly de longue durée.
+        db.pragma('mmap_size = 0');
         db.pragma('busy_timeout = 60000');
       } catch(e) {
         // Ignorer si readonly

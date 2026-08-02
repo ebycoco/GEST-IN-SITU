@@ -11,5 +11,16 @@ build/
 .DS_Store
 doc/
 build-log.txt
-dist-electron-builder/  
- 
+dist-electron-builder/
+
+# Suite E2E (Playwright)
+playwright-report/
+test-results/
+
+# Build isolé e2e-cloud (mode --mode e2e, voir electron.vite.config.ts et
+# e2e/fixtures/electron-app.ts) — dossier distinct de dist/, jamais packagé.
+dist-e2e-cloud/
+
+# Identifiants Supabase du projet dev/staging e2e-cloud — jamais committés.
+.env.e2e
+.env.e2e.local

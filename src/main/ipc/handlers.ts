@@ -1567,10 +1567,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           db.prepare(`UPDATE t_cartes SET ${updates.join(', ')}, updated_at = datetime('now'), is_dirty = 1 WHERE id_carte = ?`).run(...params);
           const updatedTarget = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id_carte_cible) as any;
           if (updatedTarget && updatedTarget.sync_id) {
-             // Volontairement pas de try/catch ici : si l'enfilage échoue (payload invalide),
+             // Volontairement pas de try/catch ici : si la validation échoue (payload invalide),
              // toute la transaction (y compris la suppression de la source) doit être annulée
-             // pour éviter de perdre les champs fusionnés côté Supabase.
-             enqueueOutbox(updatedTarget.sync_id, 't_cartes', 'UPDATE', mapCardPayload(updatedTarget));
+             // pour éviter de perdre les champs fusionnés côté Supabase. mapCardPayload() n'est
+             // appelé ici que pour cette validation/abandon volontaire — son résultat MAPPÉ (clés
+             // Supabase id_site/id_centre) ne doit PAS être ce qui est enfilé : outbox.service.ts
+             // applique déjà mapCardPayload() lui-même au moment de l'envoi, et l'appliquer une
+             // seconde fois sur un payload déjà mappé fait échouer la validation "site_id
+             // manquant" à coup sûr (double-mapping, bug confirmé sur le même pattern ailleurs).
+             mapCardPayload(updatedTarget);
+             enqueueOutbox(updatedTarget.sync_id, 't_cartes', 'UPDATE', updatedTarget);
              targetUpdatePending = true;
           }
         }

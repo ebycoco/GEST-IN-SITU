@@ -1,3 +1,36 @@
+# GEST-IN-SITU — Correctifs post-v2.9.0 (non publiés)
+
+> **Date :** 2 août 2026
+> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié), en attente de publication formelle (version/SCHEMA_VERSION à trancher par le release manager)
+
+## 🔴 Corrections critiques (P0)
+
+- **Délivrance/transfert de carte interrompus par une corruption FTS5 non rattrapée** (`SqliteError: database disk image is malformed`) : `delivrerCarte()` et `transfererCarte()` appliquent désormais le même mécanisme d'auto-guérison que `updateCarte()` (suppression du trigger fautif, rejeu sûr de la transaction, reset FTS5 en tâche de fond). Confirmé sans perte de donnée sur 15+ répétitions réelles avant/après correctif.
+- **Délivrances de cartes jamais remontées vers Supabase** (bug présent en production depuis le 22/07) : `delivrerCarte()`, `resoudreAbsence()`, `signalerAbsence()`, `autoEnqueueCorrection()` et la fusion de cartes (module Qualité) enfilaient un payload outbox minimal ou déjà transformé, rejeté systématiquement par la validation `site_id` côté envoi. Les cinq points enfilent désormais la ligne carte complète et fraîche.
+
+## 🟠 Corrections importantes (P1)
+
+- `upload-worker.js` (bouton "Synchroniser mes actions") omettait 9 champs (dont `agent_signalement_absence`) par rapport au mapping standard — traçabilité des signalements d'absence perdue si ce chemin faisait le premier envoi. Champs alignés, confirmé sur Supabase dev.
+- Notification de résolution de signalement renvoyait vers une route inexistante (écran blanc, navigation perdue) — corrigée vers `/agent-verification/signalements?tab=resolus`, avec ouverture directe de l'onglet "Résolus".
+- Statistiques "Aujourd'hui"/"Hier" du portail de vérification toujours à 0 (comparaison de date incompatible avec l'horodatage réel) — corrigé.
+- Bouton "Récupérer depuis le Cloud" restait actif quand le cloud était injoignable (sentinelle d'erreur mal interprétée) — corrigé.
+- Badge "Escaladée au Site" ne s'affichait jamais (comparaison sur une valeur jamais écrite en base) — corrigé.
+- Écran "Base de données locale vide" ne s'affichait jamais pour le rôle Opérateur Vérification — corrigé.
+
+## 🟡 Optimisations & fiabilité (P2)
+
+- Onglet "Résolus" ne se rafraîchissait pas automatiquement à la réception d'une résolution si déjà ouvert — écoute désormais l'événement de synchro en temps réel.
+- Écran de recherche de vérification pouvait afficher un flash transitoire "base vide" juste après une création de carte — course entre deux effets React corrigée.
+- Compteur "cartes cloud disponibles" sans retry en cas d'échec réseau transitoire — ajout d'un retry borné, et indicateur "À jour" après un pull réussi pour clarifier la fenêtre de marge du repère de synchro.
+- Double déclenchement de l'événement `ready-to-show` au démarrage (doublait l'initialisation du moteur de synchro) — corrigé.
+- Gardes `PRAGMA foreign_keys` et verrou de réentrance ajoutés autour des upserts site/centre du cycle de tirage descendant.
+
+## 🧪 Infrastructure de test
+
+Mise en place d'une suite e2e Playwright isolée (`e2e/`), avec base SQLite jetable par run et garde-fou dédié empêchant tout accès accidentel au Supabase de production. Couverture ajoutée : parcours complet du rôle Opérateur Vérification (recherche, délivrance, signalements, cloisonnement site/centre), et scénarios de synchro cloud réelle contre un projet Supabase de développement dédié.
+
+---
+
 # GEST-IN-SITU — Release v2.9.0
 
 > **Date de publication :** 30 juillet 2026  
