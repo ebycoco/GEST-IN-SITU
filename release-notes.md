@@ -1,9 +1,12 @@
-# GEST-IN-SITU — Correctifs post-v2.9.0 (non publiés)
+# GEST-IN-SITU — Release v2.10.0 (préparation)
 
-> **Date :** 2 août 2026
-> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié), en attente de publication formelle (version/SCHEMA_VERSION à trancher par le release manager)
+> **Date :** 3 août 2026
+> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — migration SQLite additive v60 + faille de sécurité critiques, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
+> **SCHEMA_VERSION :** 60 (migration additive `migrateV60` — voir point dédié ci-dessous)
 
 ## 🔴 Corrections critiques (P0)
+
+- **Contrainte `CHECK(statut)` `DOUBLON` réellement effective en production (`SCHEMA_VERSION` 59 → 60)** : la migration `migrateV59` livrée avec la v2.9.0 (fonctionnalité "Import sécurisé — Statuts valides") échouait silencieusement sur les postes en production — le mode défensif de `better-sqlite3` bloque l'écriture directe dans `sqlite_master`, laissant la contrainte réelle de `t_cartes` inchangée malgré `user_version` passé à 59. `migrateV60` corrige cela par reconstruction complète et sécurisée de la table (backup physique automatique, transaction exclusive, vérification d'intégrité et de clés étrangères avant validation, restauration de tous les index/triggers). Migration additive, aucune perte de données.
 
 - **Délivrance/transfert de carte interrompus par une corruption FTS5 non rattrapée** (`SqliteError: database disk image is malformed`) : `delivrerCarte()` et `transfererCarte()` appliquent désormais le même mécanisme d'auto-guérison que `updateCarte()` (suppression du trigger fautif, rejeu sûr de la transaction, reset FTS5 en tâche de fond). Confirmé sans perte de donnée sur 15+ répétitions réelles avant/après correctif.
 - **Délivrances de cartes jamais remontées vers Supabase** (bug présent en production depuis le 22/07) : `delivrerCarte()`, `resoudreAbsence()`, `signalerAbsence()`, `autoEnqueueCorrection()` et la fusion de cartes (module Qualité) enfilaient un payload outbox minimal ou déjà transformé, rejeté systématiquement par la validation `site_id` côté envoi. Les cinq points enfilent désormais la ligne carte complète et fraîche.

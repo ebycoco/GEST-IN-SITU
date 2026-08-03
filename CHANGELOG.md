@@ -4,6 +4,40 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.10.0] - 2026-08-03
+
+### 🚨 Sécurité (Critique)
+
+- **Cloisonnement site sur la gestion de la hiérarchie (sites/centres) :** les opérations de consultation, modification et suppression de sites/centres sont désormais strictement limitées au périmètre de l'utilisateur connecté (le SUPER ADMIN conserve l'accès multi-site) — empêchait auparavant un Administrateur de Site d'agir sur un site qui n'était pas le sien, y compris en suppression en cascade.
+- **Fermeture d'un accès de secours détourné :** le mécanisme de secours administrateur (purge d'urgence, import de base) dérive désormais systématiquement l'identité de la session serveur réelle plutôt que d'un identifiant transmis par le client — le véritable mot de passe d'urgence reste fonctionnel et intact.
+- **Export/Import de base de données protégés :** l'export complet de la base est désormais réservé aux rôles habilités ; l'import — y compris depuis l'écran de connexion, avant authentification — exige désormais la saisie du mot de passe SUPER ADMIN réel.
+- **12 handlers IPC supplémentaires recadrés sur le site réel de l'utilisateur** (consultation/transfert de cartes, signalements, inventaire physique, recherche CMU, synchronisation des agents, journal d'audit, profils).
+- **Fuite de lecture cross-site sur le portail Qualité :** les points de recherche/listing (doublons, données manquantes, dates invalides, recherche universelle) recadrent désormais systématiquement sur le site réel de l'utilisateur connecté, empêchant la consultation de données personnelles (identité, contacts, numéro de sécurité sociale) d'un autre site.
+
+### 🛠️ Corrections & Sécurité
+
+- **Corruption FTS5 non rattrapée :** la délivrance, le transfert de carte, le scan d'inventaire physique et la résolution/réactivation de signalement appliquent désormais le même mécanisme d'auto-guérison déjà en place sur la modification de carte, mettant fin à des blocages `database disk image is malformed` rencontrés en usage terrain.
+- **Délivrances de cartes jamais remontées vers Supabase** (bug présent en production depuis le 22 juillet) : la délivrance, la résolution/le signalement d'absence et la fusion de doublons enfilent désormais systématiquement la ligne carte complète et à jour vers la file d'envoi, au lieu d'un payload partiel auparavant rejeté silencieusement.
+- **Panneau de correction Qualité bloqué sur une fiche à date de naissance invalide :** toute correction, même sans rapport avec la date, échouait auparavant — corrigé.
+- **Portail Vérification :** statistiques "Aujourd'hui"/"Hier" figées à 0, notification de résolution de signalement pointant vers un écran blanc, badge "Escaladée au Site" jamais affiché et écran "Base de données locale vide" jamais déclenché — tous corrigés.
+- **Recherche rapide logistique (`searchQuickLogistique`) totalement inopérante** (erreur de syntaxe SQL) — corrigée.
+
+### ⚡ Performances & Optimisations
+
+- **Journal d'audit Qualité :** masquage cohérent du numéro de sécurité sociale et du contact sur les deux chemins de sauvegarde des corrections.
+- **Purge Cloud & synchronisation :** reprise automatique (retry) sur incident réseau transitoire lors de la purge et du tirage descendant ; gardes de réentrance ajoutées autour des upserts site/centre.
+- **Worker d'envoi (`upload-worker.js`) :** alignement des champs transmis (dont `agent_signalement_absence`) sur le mapping standard, préservant la traçabilité des signalements d'absence.
+
+### 🧱 Base de Données
+
+- **Migration `SCHEMA_VERSION` 59 → 60 :** `migrateV60` reconstruit la table `t_cartes` pour imposer durablement le statut `DOUBLON` dans la contrainte `CHECK(statut)`, corrigeant l'échec silencieux de la migration v59 (écriture directe dans `sqlite_master` bloquée par le mode défensif de `better-sqlite3` — la fonctionnalité "Import sécurisé — Statuts valides" de la v2.9.0 n'était donc pas réellement effective en production jusqu'ici). Migration additive et non destructive : backup physique automatique, transaction exclusive, vérification d'intégrité et de clés étrangères avant validation, restauration de tous les index/triggers existants.
+
+### 🧪 Infrastructure de Test
+
+- Mise en place d'une suite de tests end-to-end Playwright isolée (base SQLite jetable, garde-fou anti-production), avec couverture des rôles Opérateur Vérification, Opérateur Qualité et Administrateur Site, ainsi qu'une suite de non-régression sécurité dédiée.
+
+---
+
 ## [2.9.0] - 2026-07-30
 
 ### 🚀 Nouveautés & Ergonomie
