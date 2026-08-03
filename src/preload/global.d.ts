@@ -189,7 +189,7 @@ declare global {
       database: {
         getCardsCount: () => Promise<number>;
         export: (currentUser?: any) => Promise<{ success: boolean; filePath?: string; reason?: string }>;
-        import: (currentUser?: any) => Promise<{ success: boolean; reason?: string }>;
+        import: (currentUser?: any, password?: string) => Promise<{ success: boolean; reason?: string }>;
       };
       db: {
         purge: (siteId?: number, currentUser?: any) => Promise<{ success: boolean; count: number }>;

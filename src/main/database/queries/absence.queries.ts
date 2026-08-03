@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
 import { networkMonitor } from '../../sync/network-monitor';
+import { nuclearResetFts5 } from './cartes.queries';
 
 export function signalerAbsence(id: number, agentLogin: string, agentInfo: string, commentaire: string = '', currentUser?: { role: string; site_id?: number; id_user?: number; centre_id?: number }) {
   const db = getDatabase()!;
@@ -123,7 +124,7 @@ export function getSignalementsResolus(agent: string, siteId?: number): any[] {
 
 export function resoudreAbsence(id: number, data: { status: string; agent: string; note: string; rangement: string }, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
-  return db.transaction(() => {
+  const runTx = db.transaction(() => {
     const now = new Date().toISOString();
     let query = `
       UPDATE t_cartes 
@@ -189,7 +190,27 @@ export function resoudreAbsence(id: number, data: { status: string; agent: strin
     }
 
     return result;
-  })();
+  });
+
+  // Même garde-fou FTS5 que delivrerCarte() (cartes.queries.ts) : l'UPDATE ci-dessus touche
+  // `rangement`, ce qui déclenche systématiquement trg_cartes_au et peut remonter "database
+  // disk image is malformed" en cas de corruption des shadow tables FTS5 (incident confirmé
+  // sur ce chemin précis, cartes:resoudreAbsence). Même remède éprouvé : supprimer le trigger
+  // fautif, rejouer la même transaction (sûr — la première a été intégralement annulée par
+  // SQLite, aucun état partiel), puis planifier un reset nucléaire FTS5 en arrière-plan.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[resoudreAbsence] FTS5 shadow tables corrompues. Suppression du trigger pour résolution sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[resoudreAbsence] Résolution exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
 }
 
 export function declarerPerdue(id: number, currentUser?: { role: string; site_id?: number }) {
@@ -273,7 +294,7 @@ export function getHistoriquePertes(siteId?: number): any[] {
 
 export function reactiverCarte(id: number, nouveauRangement: string, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
-  return db.transaction(() => {
+  const runTx = db.transaction(() => {
     const now = new Date().toISOString();
     let updateQuery = `
       UPDATE t_cartes 
@@ -310,7 +331,28 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
     }
 
     return result;
-  })();
+  });
+
+  // Même garde-fou FTS5 que delivrerCarte()/resoudreAbsence() (voir plus haut) : l'UPDATE
+  // ci-dessus touche `rangement`, ce qui déclenche systématiquement trg_cartes_au et peut
+  // remonter "database disk image is malformed" en cas de corruption des shadow tables FTS5
+  // (incident confirmé sur ce chemin précis, cartes:reactiverCarte). Même remède éprouvé :
+  // supprimer le trigger fautif, rejouer la même transaction (sûr — la première a été
+  // intégralement annulée par SQLite, aucun état partiel), puis planifier un reset nucléaire
+  // FTS5 en arrière-plan.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[reactiverCarte] FTS5 shadow tables corrompues. Suppression du trigger pour réactivation sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[reactiverCarte] Réactivation exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
 }
 
 export function getAbsencesCentre(centreId: number): any[] {
@@ -348,16 +390,23 @@ export function getAbsencesSite(siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
-export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number }) {
+export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number; role?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  
+
   let query = `
-    UPDATE t_cartes 
+    UPDATE t_cartes
     SET escalade_niveau = 'SITE', updated_at = @now, is_dirty = 1
     WHERE id_carte = @id AND statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE'
   `;
   const params: any = { now, id };
+  // Sécurité (cloisonnement §3, même modèle que resoudreAbsence/declarerPerdue/reactiverCarte
+  // ci-dessus) : pour tout rôle non-SUPER-ADMIN, restreint l'escalade aux cartes du site de
+  // l'appelant — absent avant ce correctif (aucun filtrage site_id n'existait ici).
+  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+    query += ' AND site_id = @site_id';
+    params.site_id = currentUser.site_id;
+  }
   const result = db.prepare(query).run(params);
   
   if (result.changes > 0) {

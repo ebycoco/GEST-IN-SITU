@@ -52,7 +52,7 @@ function autoEnqueueCorrection(id_carte: number): void {
 }
 
 /** Reset nucléaire de l'index FTS5 : DROP + CREATE + REBUILD pour réparer une corruption profonde */
-function nuclearResetFts5(): void {
+export function nuclearResetFts5(): void {
   setImmediate(() => {
     const db = getDatabase();
     if (!db) return;
@@ -680,6 +680,24 @@ export function transfererCarte(
   const db = getDatabase()!;
   const now = new Date().toISOString();
 
+  // Sécurité (cloisonnement §3, même modèle que delivrerCarte() ci-dessus) : pour tout rôle
+  // non-SUPER-ADMIN, vérifie côté serveur que la carte source ET le centre cible appartiennent
+  // bien au site_id de l'appelant — avant ce correctif, aucune de ces deux appartenances
+  // n'était contrôlée, permettant un transfert cross-site via un id/centre_id forgé.
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  if (siteIdToUse !== null) {
+    const carte = db.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ? AND statut = ?').get(id, 'EN STOCK') as { site_id: number } | undefined;
+    if (!carte || carte.site_id !== siteIdToUse) {
+      throw new Error("Carte introuvable, déjà distribuée, ou accès non autorisé pour votre site.");
+    }
+
+    const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(data.centre_id) as { site_id: number } | undefined;
+    if (!centre || centre.site_id !== siteIdToUse) {
+      throw new Error("Action refusée : le centre de destination n'appartient pas à votre site.");
+    }
+  }
+
   const query = `
     UPDATE t_cartes SET
       centre_id = @centre_id,
@@ -1283,8 +1301,8 @@ export function searchQuickLogistique(siteId: number, critere: string) {
         UPPER(num_secu) = UPPER(?) 
         OR contact = ? 
         OR date_de_naissance = ? 
-        OR (noms || " " || prenoms LIKE ?) 
-        OR (prenoms || " " || noms LIKE ?)
+        OR (noms || ' ' || prenoms LIKE ?)
+        OR (prenoms || ' ' || noms LIKE ?)
         OR lieu_de_naissance LIKE ?
       )
     ORDER BY noms ASC, prenoms ASC
@@ -1365,30 +1383,53 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
   );
 }
 
-export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string) {
+export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string, currentUser?: { role: string; site_id?: number }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const cleanedId = identifiant.trim().toUpperCase();
   const targetRangement = rangement.trim().toUpperCase();
 
-  // Search for the card by num_secu (or id_carte if it's the sync_id/cle_doublon, but assuming num_secu or similar unique field)
-  const carte = db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
-  
+  // Sécurité (cloisonnement §3) : pour tout rôle non-SUPER-ADMIN, la recherche par identifiant
+  // (num_secu) est restreinte au site de l'appelant — absent avant ce correctif (seul appelant :
+  // cartes:inventairePhysiqueScan, aucun autre consommateur trouvé dans le code).
+  const scoped = currentUser && currentUser.role !== 'SUPER ADMIN';
+  const carte = scoped
+    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
+    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
+
   if (!carte) {
     return { success: false, message: "Carte introuvable avec cet identifiant." };
   }
 
-  db.prepare(`
+  const query = `
     UPDATE t_cartes
     SET statut = 'EN STOCK',
         rangement = ?,
         updated_at = ?,
         is_dirty = 1
     WHERE id_carte = ?
-  `).run(targetRangement, now, carte.id_carte);
+  `;
 
-  return { 
-    success: true, 
+  // Même garde-fou FTS5 que delivrerCarte()/transfererCarte()/updateCarte() (voir plus haut) :
+  // cette UPDATE touche toujours `rangement`, donc déclenche systématiquement trg_cartes_au,
+  // qui peut remonter "database disk image is malformed" en cas de corruption des shadow
+  // tables FTS5 (incident confirmé sur ce chemin précis, cartes:inventairePhysiqueScan).
+  try {
+    db.prepare(query).run(targetRangement, now, carte.id_carte);
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[updateCarteRangementAndStatusRapid] FTS5 shadow tables corrompues. Suppression du trigger pour mise à jour sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      db.prepare(query).run(targetRangement, now, carte.id_carte);
+      log.info('[updateCarteRangementAndStatusRapid] Mise à jour exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+    } else {
+      throw err;
+    }
+  }
+
+  return {
+    success: true,
     carte: {
       ...carte,
       rangement: targetRangement

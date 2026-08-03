@@ -27,13 +27,17 @@ export default function LoginPage() {
 
   const [showImportModal, setShowImportModal] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  // Mot de passe SUPER ADMIN requis par le handler IPC 'database:import' (fail-closed).
+  // Conservé en mémoire uniquement le temps de la modale, jamais persisté.
+  const [importPassword, setImportPassword] = useState('');
+  const [showImportPwd, setShowImportPwd] = useState(false);
 
   const handleImportDatabase = async () => {
     setShowImportModal(false);
     setIsImporting(true);
     const toastId = toast.loading("Préparation de l'importation...");
     try {
-      const res = await window.api.database.import();
+      const res = await window.api.database.import(undefined, importPassword);
       if (res.success) {
         toast.success("Base de données importée avec succès ! Redémarrage...", { id: toastId });
       } else if (res.reason === 'cancelled') {
@@ -42,12 +46,16 @@ export default function LoginPage() {
         toast.error("Extension de fichier invalide. Requis: .db ou .sqlite", { id: toastId });
       } else if (res.reason === 'invalid_sqlite_header') {
         toast.error("Format de fichier SQLite invalide.", { id: toastId });
+      } else if (res.reason === 'unauthorized') {
+        toast.error("Mot de passe SUPER ADMIN incorrect.", { id: toastId });
       } else {
         toast.error(`Échec de l'importation : ${res.reason}`, { id: toastId });
       }
     } catch (err: any) {
       toast.error(`Erreur : ${err.message || err}`, { id: toastId });
     } finally {
+      // Le mot de passe SUPER ADMIN ne doit jamais rester en mémoire au-delà de la tentative.
+      setImportPassword('');
       setIsImporting(false);
     }
   };
@@ -357,11 +365,27 @@ export default function LoginPage() {
               <br/><br/>
               Voulez-vous continuer ?
             </p>
+            <div className="form-group" style={{ textAlign: 'left', marginBottom: 24 }}>
+              <label className="form-label">Mot de passe SUPER ADMIN</label>
+              <div style={{ position: 'relative' }}>
+                <input className="form-input" type={showImportPwd ? 'text' : 'password'}
+                  placeholder="Entrez le mot de passe SUPER ADMIN" style={{ width: '100%', paddingRight: 44 }}
+                  value={importPassword} onChange={(e) => setImportPassword(e.target.value)}
+                  data-testid="import-password-input" />
+                <button type="button" onClick={() => setShowImportPwd(!showImportPwd)}
+                  style={{
+                    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                    background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)'
+                  }}>
+                  {showImportPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
             <div style={{ display: 'flex', gap: 12 }}>
-              <button onClick={handleImportDatabase} className="btn btn-primary" style={{ flex: 1, backgroundColor: '#ef4444', backgroundImage: 'none' }}>
+              <button onClick={handleImportDatabase} className="btn btn-primary" disabled={!importPassword} style={{ flex: 1, backgroundColor: '#ef4444', backgroundImage: 'none' }}>
                 Oui, Importer
               </button>
-              <button onClick={() => setShowImportModal(false)} className="btn btn-secondary" style={{ flex: 1 }}>
+              <button onClick={() => { setShowImportModal(false); setImportPassword(''); }} className="btn btn-secondary" style={{ flex: 1 }}>
                 Annuler
               </button>
             </div>

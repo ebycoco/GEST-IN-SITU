@@ -408,8 +408,8 @@ const api = {
       ipcRenderer.invoke('database:getCardsCount'),
     export: (currentUser?: any): Promise<{ success: boolean; filePath?: string; reason?: string }> => 
       ipcRenderer.invoke('database:export', currentUser),
-    import: (currentUser?: any): Promise<{ success: boolean; reason?: string }> => 
-      ipcRenderer.invoke('database:import', currentUser),
+    import: (currentUser?: any, password?: string): Promise<{ success: boolean; reason?: string }> =>
+      ipcRenderer.invoke('database:import', currentUser, password),
   },
   db: {
     purge: (siteId?: number, currentUser?: any): Promise<{ success: boolean; count: number }> => 

@@ -190,7 +190,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             log.error('Failed to log ROOT login action:', logErr);
           }
 
-          return {
+          const rootUser = {
             id_user: FAILSAFE_ROOT_ID,
             login: 'ROOT',
             role: 'SUPER ADMIN',
@@ -200,6 +200,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             centre_id: null,
             sessionToken: 'ROOT-FAILSAFE-TOKEN-' + Date.now()
           };
+          // Sécurité (P0-2, correctif compagnon) : établit une vraie session serveur
+          // pour ROOT, exactement comme le fait le chemin d'authentification normal
+          // ci-dessous (startSessionHeartbeat). Avant ce correctif, ce chemin ne
+          // l'appelait JAMAIS : getSecureCurrentUser() ne reflétait donc jamais un
+          // login ROOT réel, ce qui aurait cassé le bypass légitime de db:purge /
+          // db:emergency-purge une fois ces handlers migrés vers getSecureCurrentUser()
+          // (ils ne dérivaient plus l'identité que d'un paramètre client falsifiable).
+          startSessionHeartbeat(rootUser, rootUser.sessionToken);
+          return rootUser;
         }
       }
 
@@ -348,21 +357,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // CARTES
   ipcMain.handle('cartes:getPage', async (_, offset, limit, filters) => {
     try {
-      const userLogin = getCurrentUserLogin();
+      // Sécurité (cloisonnement §3) : le recadrage site_id doit s'appliquer à TOUT rôle
+      // non-SUPER-ADMIN (ADMIN_CENTRE, OPERATEUR_*, etc.), pas seulement ADMINISTRATEUR_SITE.
+      // resolveScopedSiteId dérive le site réel de la session serveur (getSecureCurrentUser),
+      // en ignorant tout site_id forgé côté renderer.
+      const secureUser = getSecureCurrentUser();
       const db = getDatabase();
       let finalFilters = filters || {};
-      if (userLogin && db) {
-        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        if (user && user.role === 'ADMINISTRATEUR_SITE') {
-          finalFilters = {
-            ...finalFilters,
-            site_id: String(user.site_id)
-          };
-          if (finalFilters.centre_id) {
-            const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(finalFilters.centre_id)) as { site_id: number } | undefined;
-            if (!centre || centre.site_id !== user.site_id) {
-              finalFilters.centre_id = '';
-            }
+      if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+        const scopedSiteId = resolveScopedSiteId(filters?.site_id);
+        finalFilters = {
+          ...finalFilters,
+          site_id: String(scopedSiteId)
+        };
+        if (finalFilters.centre_id && db) {
+          const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(finalFilters.centre_id)) as { site_id: number } | undefined;
+          if (!centre || centre.site_id !== scopedSiteId) {
+            finalFilters.centre_id = '';
           }
         }
       }
@@ -590,8 +601,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('cartes:getById', async (_, id) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    try { 
-      const carte = await queries.getCarteById(id) as any;
+    try {
+      // Sécurité : currentUser dérivé de la session serveur (jamais du renderer) pour que
+      // getCarteById applique son filtrage site_id (cloisonnement §3) aux rôles non-SUPER-ADMIN.
+      const secureUser = getSecureCurrentUser();
+      const carte = await queries.getCarteById(id, secureUser ?? undefined) as any;
       
       if (carte) {
         setImmediate(() => {
@@ -779,7 +793,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('cmu:searchCarte', async (_, query, limit, filters, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try {
-      const res = await queries.searchCartesFTS(query, limit, filters);
+      // Sécurité (cloisonnement §3) : force le site_id réel de la session serveur pour tout
+      // rôle non-SUPER-ADMIN, même pattern que cartes:search (finalFilters ci-dessus).
+      let finalFilters = filters || {};
+      const secureUser = getSecureCurrentUser();
+      if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+        finalFilters = {
+          ...finalFilters,
+          site_id: String(resolveScopedSiteId(finalFilters.site_id))
+        };
+      }
+      const res = await queries.searchCartesFTS(query, limit, finalFilters);
       const count = Array.isArray(res) ? res.length : 0;
       
       setImmediate(() => {
@@ -843,7 +867,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('cmu:getDossierComplet', async (_, id, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
     try {
-      const carte = await queries.getCarteById(id, currentUser) as any;
+      // Sécurité : currentUser dérivé de la session serveur (jamais du renderer) pour que
+      // getCarteById applique son filtrage site_id (cloisonnement §3) aux rôles non-SUPER-ADMIN.
+      const secureUser = getSecureCurrentUser();
+      const carte = await queries.getCarteById(id, secureUser ?? undefined) as any;
       if (carte) {
         setImmediate(() => {
           try {
@@ -1129,13 +1156,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
   });
 
-  ipcMain.handle('cartes:transferer', async (_, id, data, currentUser) => {
+  ipcMain.handle('cartes:transferer', async (_, id, data) => {
+    // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur (non
+    // falsifiable via IPC) — currentUser (renderer) n'est plus utilisé. Ce handler n'avait
+    // auparavant aucun verifyUserRole. Périmètre aligné sur l'usage légitime (CartesPage.tsx,
+    // bouton "Transférer la carte" masqué pour OPERATEUR_SAISIE), même liste que cartes:delivrer
+    // hors rôles de recherche/vérification qui ne transfèrent pas.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:transferer : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour transférer une carte.");
+    }
     try {
-      const res = await queries.transfererCarte(id, data);
+      const res = await queries.transfererCarte(id, data, secureUser);
       BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
-      if (currentUser?.login) {
-        queries.insertAuditLog(currentUser.login, 'CARTE_TRANSFEREE', `Transfert carte ${id} vers le centre ${data.centre_id}`);
-      }
+      queries.insertAuditLog(secureUser.login || 'SYSTEM', 'CARTE_TRANSFEREE', `Transfert carte ${id} vers le centre ${data.centre_id}`);
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:transferer', e); throw e; }
@@ -1151,7 +1186,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:signalerAbsence', e); throw e; }
   });
   ipcMain.handle('cartes:getAbsences', async (_, siteId?: number) => {
-    try { return queries.getAbsencesReportees(siteId); }
+    // Sécurité (cloisonnement §3, P1) : siteId dérivé de la session serveur — un siteId omis
+    // ou forgé côté renderer renvoyait auparavant TOUT le système (getAbsencesReportees ne
+    // filtre que si un siteId non-null/undefined est fourni).
+    try { return queries.getAbsencesReportees(resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getAbsences', e); throw e; }
   });
   ipcMain.handle('cartes:getAbsencesCentre', async (_, centreId: number) => {
@@ -1159,12 +1197,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getAbsencesCentre', e); throw e; }
   });
   ipcMain.handle('cartes:getAbsencesSite', async (_, siteId?: number) => {
-    try { return queries.getAbsencesSite(siteId); }
+    // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
+    try { return queries.getAbsencesSite(resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getAbsencesSite', e); throw e; }
   });
-  ipcMain.handle('cartes:escaladerAuSite', async (_, id: number, currentUser) => {
-    try { 
-      const res = await queries.escaladerAuSite(id, currentUser);
+  ipcMain.handle('cartes:escaladerAuSite', async (_, id: number) => {
+    // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur (non
+    // falsifiable via IPC) — currentUser (renderer) n'est plus utilisé. Handler auparavant
+    // dépourvu de tout verifyUserRole ; escaladerAuSite() ne filtrait pas non plus par site.
+    // Périmètre aligné sur l'usage légitime (AdminQueuePage.tsx, route protégée SUPER ADMIN /
+    // ADMINISTRATEUR_SITE / ADMIN_CENTRE).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:escaladerAuSite : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour escalader ce signalement.");
+    }
+    try {
+      const res = await queries.escaladerAuSite(id, secureUser);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_ESCALADEE' });
       }
@@ -1173,11 +1222,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:escaladerAuSite', e); throw e; }
   });
   ipcMain.handle('cartes:getAgentAbsences', async (_, agent: string, siteId?: number) => {
-    try { return queries.getAgentAbsences(agent, siteId); }
+    // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
+    try { return queries.getAgentAbsences(agent, resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getAgentAbsences', e); throw e; }
   });
   ipcMain.handle('cartes:getSignalementsResolus', async (_, agent: string, siteId?: number) => {
-    try { return queries.getSignalementsResolus(agent, siteId); }
+    // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
+    try { return queries.getSignalementsResolus(agent, resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getSignalementsResolus', e); throw e; }
   });
   
@@ -1190,11 +1241,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getArchivedSignalements(agentLogin); }
     catch (e) { log.error('IPC Error: cartes:getArchivedSignalements', e); throw e; }
   });
-  ipcMain.handle('cartes:resoudreAbsence', async (_, id, data, currentUser) => {
+  ipcMain.handle('cartes:resoudreAbsence', async (_, id, data) => {
+    // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur —
+    // le handler ignorait auparavant totalement le currentUser (même client-fourni), et donc
+    // n'activait jamais le filtrage site_id déjà supporté par queries.resoudreAbsence().
+    // Périmètre aligné sur l'usage légitime (AdminQueuePage.tsx).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:resoudreAbsence : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour résoudre ce signalement.");
+    }
     try {
-      const res = await queries.resoudreAbsence(id, data);
+      const res = await queries.resoudreAbsence(id, data, secureUser);
       queries.insertAuditLog(
-        currentUser?.login || data.agent_resolution_absence || 'ADMIN',
+        secureUser.login || data.agent_resolution_absence || 'ADMIN',
         'VALIDATION',
         `Validation/RÃ©solution d'absence physique pour la carte ID ${id}. Nouveau rangement : ${data.nouveau_rangement}.`
       );
@@ -1205,11 +1265,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:resoudreAbsence', e); throw e; }
   });
-  ipcMain.handle('cartes:declarerPerdue', async (_, id, currentUser) => {
+  ipcMain.handle('cartes:declarerPerdue', async (_, id) => {
+    // Sécurité (P0) : idem cartes:resoudreAbsence — currentUser (renderer) n'est plus utilisé,
+    // le filtrage site_id déjà supporté par queries.declarerPerdue() est désormais activé.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:declarerPerdue : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour déclarer cette carte perdue.");
+    }
     try {
-      const res = await queries.declarerPerdue(id);
+      const res = await queries.declarerPerdue(id, secureUser);
       queries.insertAuditLog(
-        currentUser?.login || 'ADMIN',
+        secureUser.login || 'ADMIN',
         'VALIDATION',
         `DÃ©claration de perte validÃ©e pour la carte ID ${id}.`
       );
@@ -1221,12 +1288,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:declarerPerdue', e); throw e; }
   });
   ipcMain.handle('cartes:getHistoriquePertes', async (_, siteId?: number) => {
-    try { return queries.getHistoriquePertes(siteId); }
+    // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
+    try { return queries.getHistoriquePertes(resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getHistoriquePertes', e); throw e; }
   });
-  ipcMain.handle('cartes:reactiverCarte', async (_, id, nouveauRangement, currentUser) => {
+  ipcMain.handle('cartes:reactiverCarte', async (_, id, nouveauRangement) => {
+    // Sécurité (P0) : identité dérivée exclusivement de la session serveur — l'ancien
+    // currentUser (renderer) était falsifiable et directement injecté dans le filtrage
+    // site_id de queries.reactiverCarte(). Handler auparavant dépourvu de tout verifyUserRole.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:reactiverCarte : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour réactiver cette carte.");
+    }
     try {
-      const res = await queries.reactiverCarte(id, nouveauRangement, currentUser);
+      const res = await queries.reactiverCarte(id, nouveauRangement, secureUser);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'CARTE_RETROUVEE' });
       }
@@ -1279,15 +1355,52 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getSansLieuNaissancePage', e); throw e; }
   });
   ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
-    try { return queries.updateQuickFields(id, fields); }
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
+    // Vérification identique dans l'esprit à qualite:corrigerFormat (même famille d'action :
+    // correction ponctuelle de champs sur une carte), sans toucher à la fonction partagée
+    // queries.updateQuickFields() elle-même — utilisée aussi par le flux de correction Qualité
+    // (déjà validé en amont côté site avant son propre appel, voir qualite:corrigerFormat).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:updateQuickFields : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette fiche.");
+    }
+    try {
+      if (secureUser.role !== 'SUPER ADMIN') {
+        const db = getDatabase();
+        const card = db?.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number } | undefined;
+        if (!card || card.site_id !== secureUser.site_id) {
+          throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
+        }
+      }
+      return queries.updateQuickFields(id, fields);
+    }
     catch (e) { log.error('IPC Error: cartes:updateQuickFields', e); throw e; }
   });
   ipcMain.handle('cartes:searchQuickLogistique', async (_, siteId, critere) => {
-    try { return queries.searchQuickLogistique(siteId, critere); }
+    // Sécurité (cloisonnement §3) : aligné sur cartes:searchCombinedInventaire ci-dessous —
+    // le site_id doit venir de la session serveur, jamais du renderer tel quel.
+    try { return queries.searchQuickLogistique(resolveScopedSiteId(siteId), critere); }
     catch (e) { log.error('IPC Error: cartes:searchQuickLogistique', e); throw e; }
   });
   ipcMain.handle('cartes:updateRangementEtFiche', async (_, id, fields) => {
-    try { return queries.updateRangementEtFiche(id, fields); }
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
+    // Périmètre aligné sur l'usage légitime (InventaireLogistique.tsx, route "inventaire").
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:updateRangementEtFiche : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette fiche.");
+    }
+    try {
+      if (secureUser.role !== 'SUPER ADMIN') {
+        const db = getDatabase();
+        const card = db?.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number } | undefined;
+        if (!card || card.site_id !== secureUser.site_id) {
+          throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
+        }
+      }
+      return queries.updateRangementEtFiche(id, fields);
+    }
     catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
   });
   ipcMain.handle('cartes:searchCombinedInventaire', async (_, siteId, queryNomsPrenoms, dateNaissance, lieuNaissance) => {
@@ -1295,12 +1408,38 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:searchCombinedInventaire', e); throw e; }
   });
   ipcMain.handle('cartes:updateApurementHistorique', async (_, id, fields) => {
-    try { return queries.updateApurementHistorique(id, fields); }
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
+    // Périmètre aligné sur l'usage légitime (InventaireApurement.tsx, route "inventaire").
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:updateApurementHistorique : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette fiche.");
+    }
+    try {
+      if (secureUser.role !== 'SUPER ADMIN') {
+        const db = getDatabase();
+        const card = db?.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number } | undefined;
+        if (!card || card.site_id !== secureUser.site_id) {
+          throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
+        }
+      }
+      return queries.updateApurementHistorique(id, fields);
+    }
     catch (e) { log.error('IPC Error: cartes:updateApurementHistorique', e); throw e; }
   });
 
   ipcMain.handle('cartes:inventairePhysiqueScan', async (_, identifiant, rangement) => {
-    try { return queries.updateCarteRangementAndStatusRapid(identifiant, rangement); }
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
+    // Recherche par identifiant (num_secu) : le filtrage de site est délégué à
+    // queries.updateCarteRangementAndStatusRapid() (voir cartes.queries.ts), seul appelant de
+    // cette fonction — signature étendue en conséquence avec un currentUser optionnel.
+    // Périmètre aligné sur l'usage légitime (InventairePhysiqueScan.tsx, route "inventaire").
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:inventairePhysiqueScan : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try { return queries.updateCarteRangementAndStatusRapid(identifiant, rangement, secureUser); }
     catch (e) { log.error('IPC Error: cartes:inventairePhysiqueScan', e); throw e; }
   });
 
@@ -1962,16 +2101,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // IMPORT - Process file using Worker Thread (NON-BLOCKING!)
-  // AUD-005 : userId optionnel pour vérification directe (plus sécurisé que la recherche par login)
-  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number, userId?: number) => {
+  // Sécurité (même défaut que P0-2, corrigé ici) : ce handler recevait auparavant un
+  // `userId` optionnel FOURNI PAR LE CLIENT (ImportPage.tsx envoyait user?.id_user, une
+  // valeur d'état renderer falsifiable) et le passait DIRECTEMENT à verifyUserRole(), qui
+  // court-circuite intégralement sa vérification pour userId === FAILSAFE_ROOT_ID (999999)
+  // — un compte quelconque pouvait donc forger userId=999999 pour importer des cartes en
+  // masse avec des privilèges SUPER ADMIN, sans jamais s'être authentifié via le vrai login
+  // ROOT. L'identité est désormais dérivée exclusivement de la session serveur réelle.
+  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number) => {
     return new Promise((resolve, reject) => {
-      const db = getDatabase();
-      if (db) {
-        // Vérification de rôle par ID (sécurisée) avec fallback par login (rétro-compatibilité)
-        const resolvedUserId = userId ?? (db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(agent) as { id_user: number } | undefined)?.id_user;
-        if (!resolvedUserId || !verifyUserRole(resolvedUserId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
-          return reject(new Error("Accès refusé. Privilèges insuffisants pour importer des données."));
-        }
+      const secureUser = getSecureCurrentUser();
+      const resolvedUserId = secureUser?.id_user;
+      if (!resolvedUserId || !verifyUserRole(resolvedUserId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        return reject(new Error("Accès refusé. Privilèges insuffisants pour importer des données."));
+      }
+      // Cloisonnement (même pattern que hierarchy:getCentres/P0-1) : un ADMINISTRATEUR_SITE
+      // ne peut importer que sur son propre site, quel que soit le siteId envoyé par le
+      // renderer.
+      if (secureUser!.role !== 'SUPER ADMIN') {
+        siteId = secureUser!.site_id ?? undefined;
       }
 
       // Resolve the path to better-sqlite3 native module
@@ -2474,9 +2622,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     return queries.getUsers(scopedSiteId, scopedCentreId);
   });
   ipcMain.handle('users:getProfile', async (_, login: string) => {
+    // Sécurité (P2) : ce handler n'avait aucune vérification — tout compte authentifié
+    // pouvait consulter le profil (rôle, site_id, centre_id) de n'importe quel autre
+    // utilisateur en connaissant son login (énumération possible). Aucun appelant renderer
+    // câblé à ce jour (canal exposé mais inutilisé côté UI) — restriction a minima : session
+    // valide requise, et périmètre limité au site de l'appelant pour tout rôle non-SUPER-ADMIN
+    // (cloisonnement §3), comme le reste des lectures de ce fichier.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) {
+      log.warn('[SECURITY] Acces refuse a users:getProfile : session invalide.');
+      return null;
+    }
     const db = getDatabase();
     if (!db) return null;
-    return db.prepare('SELECT id_user, login, role, nom_user, prenom_user, site_id, centre_id, sync_id FROM t_users WHERE login = ?').get(login);
+    if (secureUser.role === 'SUPER ADMIN') {
+      return db.prepare('SELECT id_user, login, role, nom_user, prenom_user, site_id, centre_id, sync_id FROM t_users WHERE login = ?').get(login);
+    }
+    return db.prepare('SELECT id_user, login, role, nom_user, prenom_user, site_id, centre_id, sync_id FROM t_users WHERE login = ? AND site_id = ?').get(login, secureUser.site_id);
   });
   ipcMain.handle('users:create', async (_, data) => {
     // SECURITY fix : l'identité de l'appelant doit venir de la session sécurisée
@@ -2699,38 +2861,68 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // HIERARCHY
   ipcMain.handle('hierarchy:getSites', async () => {
-    try { return queries.getSites(); }
+    // Sécurité (P0-1) : identité dérivée exclusivement de la session serveur réelle
+    // (getSecureCurrentUser(), jamais falsifiable depuis le renderer). Tout rôle
+    // non-SUPER-ADMIN est cantonné à son propre site — même pattern que
+    // hierarchy:getCentres, seul lieu où il est nécessaire de rester permissif au
+    // niveau rôle (Sidebar/TopBar/ExportPage/SaisiePage/VerificationSearchPage
+    // appellent tous ce canal, quel que soit le rôle, uniquement pour afficher le
+    // nom du site courant). Avant ce correctif, AUCUNE vérification n'existait :
+    // tout compte authentifié recevait la liste complète de tous les sites.
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) {
+        throw new Error("Session invalide.");
+      }
+      const sites = queries.getSites() as any[];
+      if (secureUser.role === 'SUPER ADMIN') return sites;
+      return sites.filter((s) => s.id === secureUser.site_id);
+    }
     catch (e) { log.error('IPC Error: hierarchy:getSites', e); throw e; }
   });
   ipcMain.handle('hierarchy:getSitesSummary', async () => {
     try { return queries.getSitesSummary(); }
     catch (e) { log.error('IPC Error: hierarchy:getSitesSummary', e); throw e; }
   });
-  ipcMain.handle('hierarchy:createSite', async (_, data, currentUser) => {
-    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+  ipcMain.handle('hierarchy:createSite', async (_, data) => {
+    // Sécurité (P0-1) : SUPER ADMIN uniquement, dérivé de la session serveur réelle
+    // — jamais du paramètre client `currentUser` (falsifiable, ex: {role:'SUPER ADMIN'}
+    // envoyé directement par un renderer compromis). Business : SitesPage.tsx ne
+    // propose la création de site qu'à SUPER ADMIN (onglet "Sites" jamais rendu pour
+    // un autre rôle) — aucune régression pour l'UI légitime.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
       throw new Error("Accès refusé. Seul le SUPER ADMIN peut créer un site.");
     }
     try { return queries.createSite(data); }
     catch (e) { log.error('IPC Error: hierarchy:createSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:updateSite', async (_, id, data) => {
+    // Sécurité (P0-1) : SUPER ADMIN uniquement, dérivé de la session serveur réelle.
+    // L'ancien contrôle se basait sur getCurrentUserLogin() (jamais vérifié pour
+    // BLOQUER un rôle non-SUPER-ADMIN — seulement pour retirer nom/code de `data`,
+    // laissant passer is_active/max_centres/expiry_date/is_permanent sur N'IMPORTE
+    // QUEL site pour N'IMPORTE QUEL compte authentifié). Business : handleSecureAction
+    // (SitesPage.tsx) n'appelle updateSite que depuis l'onglet "Sites", exclusivement
+    // rendu pour SUPER ADMIN — aucune régression pour l'UI légitime.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN peut modifier un site.");
+    }
     try {
-      const userLogin = getCurrentUserLogin();
-      if (userLogin) {
-        const db = getDatabase();
-        if (db) {
-          const user = db.prepare('SELECT role FROM t_users WHERE login = ?').get(userLogin) as { role: string } | undefined;
-          if (user && user.role !== 'SUPER ADMIN') {
-            delete data.nom;
-            delete data.code;
-          }
-        }
-      }
       return queries.updateSite(id, data);
     }
     catch (e) { log.error('IPC Error: hierarchy:updateSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:deleteSite', async (_, id) => {
+    // Sécurité (P0-1) : SUPER ADMIN uniquement, dérivé de la session serveur réelle.
+    // Avant ce correctif, AUCUNE vérification n'existait sur ce handler — cascade
+    // destructrice complète (cartes, users, centres, postes, logs) accessible à tout
+    // compte authentifié, quel que soit son rôle ou son site.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN peut supprimer un site.");
+    }
     try { return queries.deleteSite(id); }
     catch (e) { log.error('IPC Error: hierarchy:deleteSite', e); throw e; }
   });
@@ -2788,6 +2980,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('hierarchy:createCentre', async (_, data) => {
     console.log("Données reçues pour createCentre:", data);
+    // Sécurité (P0-1) : rôle et site_id dérivés de la session serveur réelle. Tout
+    // rôle non-SUPER-ADMIN est recadré de force sur son propre site_id (même pattern
+    // que hierarchy:getCentres), quel que soit le site_id envoyé par le renderer —
+    // avant ce correctif, AUCUNE vérification n'existait sur ce handler.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès refusé. Privilèges administrateur requis pour créer un centre.");
+    }
+    if (secureUser.role !== 'SUPER ADMIN') {
+      if (secureUser.site_id === undefined || secureUser.site_id === null) {
+        throw new Error("Session invalide : site_id introuvable pour cet utilisateur.");
+      }
+      data.site_id = secureUser.site_id;
+    }
     const currentUser = getCurrentUserLogin() || 'system';
     let siteNom = 'Inconnu';
     try {
@@ -2840,16 +3046,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('hierarchy:updateCentre', async (_, id, data) => {
+    // Sécurité (P0-1) : rôle dérivé de la session serveur réelle — avant ce correctif,
+    // AUCUNE vérification n'existait sur ce handler (ni rôle, ni site cible).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès refusé. Privilèges administrateur requis pour modifier un centre.");
+    }
     const currentUser = getCurrentUserLogin() || 'system';
     let siteNom = 'Inconnu';
     let oldCentreNom = 'Inconnu';
     try {
       const db = getDatabase();
       if (db) {
-        const centre = db.prepare('SELECT c.nom, s.nom as site_nom FROM t_centres c LEFT JOIN t_sites s ON c.site_id = s.id WHERE c.id = ?').get(id) as { nom: string; site_nom: string } | undefined;
+        const centre = db.prepare('SELECT c.nom, c.site_id, s.nom as site_nom FROM t_centres c LEFT JOIN t_sites s ON c.site_id = s.id WHERE c.id = ?').get(id) as { nom: string; site_id: number; site_nom: string } | undefined;
         if (centre) {
           oldCentreNom = centre.nom;
           siteNom = centre.site_nom || 'Inconnu';
+
+          // Sécurité (P0-1) : le centre ciblé doit appartenir au site de l'appelant
+          // pour tout rôle non-SUPER-ADMIN.
+          if (secureUser.role !== 'SUPER ADMIN' && centre.site_id !== secureUser.site_id) {
+            throw new Error("Accès refusé. Vous ne pouvez pas modifier un centre d'un autre site.");
+          }
         }
 
         // Validation du préfixe de rangement
@@ -2916,6 +3134,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   const handleDeleteCentreLogic = async (id: number) => {
+    // Sécurité (P0-1) : rôle et site cible dérivés de la session serveur réelle —
+    // avant ce correctif, ce handler (partagé par hierarchy:deleteCentre ET
+    // centre:delete) n'effectuait AUCUNE vérification de rôle ni de site.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès refusé. Privilèges administrateur requis pour supprimer un centre.");
+    }
     const currentUser = getCurrentUserLogin() || 'system';
     let siteNom = 'Inconnu';
     let centreNom = 'Inconnu';
@@ -2926,6 +3151,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         if (centre) {
           centreNom = centre.nom;
           siteNom = centre.site_nom || 'Inconnu';
+
+          // Sécurité (P0-1) : le centre ciblé doit appartenir au site de l'appelant
+          // pour tout rôle non-SUPER-ADMIN.
+          if (secureUser.role !== 'SUPER ADMIN' && centre.site_id !== secureUser.site_id) {
+            throw new Error("Accès refusé. Vous ne pouvez pas supprimer un centre d'un autre site.");
+          }
 
           // Sécurité stricte pour le centre principal
           const isPrincipal = centre.numero === 1 || (centre.nom && centre.nom.toUpperCase().includes('PRINCIPAL'));
@@ -3029,21 +3260,30 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('db:purge', async (_, siteId, currentUser) => {
+  ipcMain.handle('db:purge', async (_, siteId) => {
+    // Sécurité (P0-2) : identité dérivée EXCLUSIVEMENT de la session serveur réelle
+    // (getSecureCurrentUser()), jamais du paramètre client `currentUser` (falsifiable
+    // -- un ADMINISTRATEUR_SITE normal pouvait forger {id_user: 999999, role: 'SUPER
+    // ADMIN'} pour contourner le controle de cloisonnement ci-dessous, sans jamais
+    // s'etre authentifie via le vrai login ROOT). Si getSecureCurrentUser() renvoie
+    // id_user === FAILSAFE_ROOT_ID, c'est que la session serveur a reellement ete
+    // etablie via un vrai login ROOT (mot de passe verifie cote serveur, voir
+    // auth:login) -- le bypass reste alors legitime.
+    const secureUser = getSecureCurrentUser();
     try {
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
         throw new Error("AccÃ¨s refusÃ©. Vous devez Ãªtre administrateur pour purger la base de donnÃ©es.");
       }
 
       // â”€â”€â”€ LOG AVANT ACTION DESTRUCTRICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de donnÃ©es locale pour le site ID ${siteId} par l'utilisateur '${currentUser?.login}'.`);
+      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de donnÃ©es locale pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
       const purgeStartTime = performance.now();
       // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
       const db = getDatabase()!;
       // Si l'utilisateur est administrateur de site, on vÃ©rifie que siteId correspond Ã  son site_id
-      if (userId !== 999999) {
+      if (userId !== FAILSAFE_ROOT_ID) {
         const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
         if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
@@ -3051,7 +3291,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       queries.insertAuditLog(
-        currentUser?.login || 'ADMIN',
+        secureUser?.login || 'ADMIN',
         'VALIDATION',
         `Purge de la base de donnÃ©es locale (cartes et historique associÃ©) pour le site ID ${siteId}.`
       );
@@ -3083,7 +3323,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         log.info(`[PURGE LOCALE] Purge locale rÃ©ussie. Reconstruction du schÃ©ma effectuÃ©e en ${purgeDuration} ms pour le site ID ${siteId}.`);
         // AUD-004 : Audit log post-succes (logAudit)
         logAudit(
-          currentUser?.login || 'ADMIN',
+          secureUser?.login || 'ADMIN',
           'PURGE_LOCALE',
           `Purge locale reussie pour le site ID ${siteId}. ${(res as any)?.count ?? 0} cartes supprimees.`
         );
@@ -3103,21 +3343,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('db:emergency-purge', async (event, siteId, currentUser) => {
+  ipcMain.handle('db:emergency-purge', async (event, siteId) => {
+    // Sécurité (P0-2) : identité dérivée EXCLUSIVEMENT de la session serveur réelle,
+    // jamais du paramètre client `currentUser` (falsifiable) -- même correctif et
+    // même justification que db:purge ci-dessus.
+    const secureUser = getSecureCurrentUser();
     // Suspendre temporairement le sync engine pour Ã©viter des verrous SQLite concurrents (Database is locked)
     syncEngine.pause();
     // â”€â”€â”€ LOG AVANT ACTION DESTRUCTRICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    log.info(`[MAINTENANCE] Initialisation de la rÃ©paration forcÃ©e (Emergency Purge) pour le site ID ${siteId} par l'utilisateur '${currentUser?.login}'.`);
+    log.info(`[MAINTENANCE] Initialisation de la rÃ©paration forcÃ©e (Emergency Purge) pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
     const repairStartTime = performance.now();
     // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     try {
-      const userId = currentUser?.id_user;
+      const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
         throw new Error("AccÃ¨s refusÃ©. PrivilÃ¨ges administrateur requis pour la purge forcÃ©e.");
       }
-      
+
       const db = getDatabase()!;
-      if (userId !== 999999) {
+      if (userId !== FAILSAFE_ROOT_ID) {
         const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
         if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
@@ -4100,14 +4344,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try {
       const secureUser = getSecureCurrentUser();
       if (!secureUser) throw new Error("Session invalide.");
+      // Sécurité (P1) : verifyUserRole + isCentreAdmin/restrictCentreId dérivés de la session
+      // serveur réelle (getSecureCurrentUser), jamais du paramètre `currentUser` fourni par le
+      // client (falsifiable). Périmètre aligné sur l'usage légitime (AgentsPage.tsx, route
+      // protégée SUPER ADMIN / ADMINISTRATEUR_SITE).
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        throw new Error("Accès refusé : rôle insuffisant pour récupérer les agents.");
+      }
       siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
 
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la rÃ©cupÃ©ration.");
       }
-      
-      const isCentreAdmin = currentUser?.role === 'ADMIN_CENTRE';
-      const restrictCentreId = isCentreAdmin ? currentUser?.centre_id : undefined;
+
+      const isCentreAdmin = secureUser.role === 'ADMIN_CENTRE';
+      const restrictCentreId = isCentreAdmin ? secureUser.centre_id : undefined;
 
       logAudit(
         userLogin,
@@ -4135,29 +4386,36 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // RÉCUPÉRATION FORCÉE DES UTILISATEURS (ADMIN CENTRE & SUPER ADMIN)
   ipcMain.handle('admin:syncUsersFromSupabase', async (_, siteId: number, currentUser?: any) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
-    const userRole = currentUser?.role || 'OPERATEUR';
+    // Sécurité (P0) : rôle, site et centre dérivés de la session serveur réelle
+    // (getSecureCurrentUser), jamais du paramètre `currentUser` fourni par le client
+    // (falsifiable) — même pattern que sync:pullAgents. Périmètre de rôles aligné sur
+    // l'usage légitime (AdminCentreLayout.tsx, route protégée ADMIN_CENTRE ; SUPER ADMIN
+    // conservé car déjà autorisé avant ce correctif).
+    const secureUser = getSecureCurrentUser();
+    const userRole = secureUser?.role || 'OPERATEUR';
     try {
-      if (!['SUPER ADMIN', 'ADMIN_CENTRE'].includes(userRole)) {
+      if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMIN_CENTRE'])) {
         throw new Error("Accès refusé : rôle insuffisant pour forcer la synchronisation des utilisateurs.");
       }
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis.");
       }
 
-      const restrictCentreId = userRole === 'ADMIN_CENTRE' ? currentUser?.centre_id : undefined;
+      const effectiveSiteId = userRole === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
+      const restrictCentreId = userRole === 'ADMIN_CENTRE' ? secureUser.centre_id : undefined;
 
       logAudit(
         userLogin,
         'SYNC_USERS_FORCED_INIT',
-        JSON.stringify({ site_id: siteId, restrictCentreId })
+        JSON.stringify({ site_id: effectiveSiteId, restrictCentreId })
       );
-      
-      const res = await queries.pullAgentsFromCloud(Number(siteId), restrictCentreId);
-      
+
+      const res = await queries.pullAgentsFromCloud(Number(effectiveSiteId), restrictCentreId);
+
       logAudit(
         userLogin,
         'SYNC_USERS_FORCED_SUCCESS',
-        JSON.stringify({ site_id: siteId, restrictCentreId, result: res })
+        JSON.stringify({ site_id: effectiveSiteId, restrictCentreId, result: res })
       );
       return res;
     } catch (error: any) {
@@ -4210,6 +4468,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // DB EXPORT
   ipcMain.handle('database:export', async (_, currentUser?: any) => {
+    // Sécurité (P0) : accès strictement réservé aux rôles autorisés côté serveur, dérivé de la
+    // session réelle (getSecureCurrentUser()) — jamais du paramètre `currentUser` fourni par le
+    // client (falsifiable), conservé ci-dessous UNIQUEMENT pour l'étiquette du log d'audit,
+    // comme avant. Périmètre de rôles aligné sur l'exposition UI existante (ProfilePage.tsx,
+    // bouton "Exporter la base locale" ~ligne 266 : isSuperAdmin || ADMINISTRATEUR_SITE) : avant
+    // ce correctif, N'IMPORTE QUEL utilisateur authentifié (quel que soit son rôle) pouvait
+    // télécharger l'intégralité de la base SQLite de production (toutes les cartes de tous les
+    // sites, num_secu, contacts, ET les mots de passe hachés de tous les comptes utilisateurs) —
+    // ce handler n'était protégé par AUCUN contrôle de rôle serveur.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      log.warn('[SECURITY] Accès refusé à database:export : session invalide ou rôle non autorisé.');
+      return { success: false, reason: 'unauthorized' };
+    }
+
     try {
       const result = await dialog.showSaveDialog(mainWindow, {
         title: 'Exporter la base de données SQLite',
@@ -4246,7 +4519,37 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // DB IMPORT
-  ipcMain.handle('database:import', async (_, currentUser?: any) => {
+  ipcMain.handle('database:import', async (_, currentUser?: any, password?: string) => {
+    // Sécurité (P0 CRITIQUE) : ce handler REMPLACE PUREMENT ET SIMPLEMENT le fichier de base de
+    // données de PRODUCTION (toutes les cartes de tous les sites + comptes utilisateurs) puis
+    // relance l'application dessus (app.relaunch() plus bas) — l'action la plus destructive de
+    // toute l'application. Avant ce correctif, AUCUN contrôle n'existait : le bouton
+    // "Importation Technique" est exposé sur l'écran de connexion LUI-MÊME (LoginPage.tsx,
+    // zone "Importation Technique (Base locale)"), donc AVANT toute authentification —
+    // n'importe qui ayant accès au poste pouvait écraser la base de production par un fichier
+    // arbitraire (sous réserve de l'extension .db/.sqlite et d'un en-tête SQLite valide), sans
+    // même se connecter.
+    // Comme aucune session serveur n'existe à cet écran (getSecureCurrentUser() y est
+    // systématiquement null), le pattern verifyUserRole()/getSecureCurrentUser() utilisé
+    // ailleurs dans ce fichier (ex. maintenance:clearAll) ne peut PAS s'appliquer ici : la seule
+    // protection possible est une preuve de connaissance du mot de passe SUPER ADMIN réel,
+    // vérifiée directement contre son hash en base — même fonction que le fallback de
+    // hierarchy:verifyPassword quand aucun login n'est fourni. `currentUser` reste utilisé
+    // UNIQUEMENT pour l'étiquette du log d'audit plus bas, jamais pour un contrôle d'accès.
+    //
+    // ⚠️ IMPACT UI CONNU (STOP & WARN — hors périmètre de cette intervention) : LoginPage.tsx
+    // (handleImportDatabase, modale de confirmation ~ligne 340) appelle aujourd'hui
+    // `window.api.database.import()` SANS mot de passe. Cet appel sera donc désormais
+    // systématiquement rejeté ('unauthorized') tant que LoginPage.tsx n'aura pas été mis à jour
+    // pour collecter le mot de passe SUPER ADMIN dans sa modale existante et le transmettre ici
+    // — LoginPage.tsx n'étant pas dans le périmètre autorisé de cette tâche, ce correctif choisit
+    // volontairement un état fail-closed (fonctionnalité de restauration d'urgence indisponible)
+    // plutôt que de laisser un écrasement de la base de production accessible sans authentification.
+    if (!password || !queries.verifySuperAdminPassword(password)) {
+      log.warn('[SECURITY] Accès refusé à database:import : mot de passe SUPER ADMIN manquant ou invalide.');
+      return { success: false, reason: 'unauthorized' };
+    }
+
     try {
       const result = await dialog.showOpenDialog(mainWindow, {
         title: 'Sélectionner une base de données SQLite à importer',
@@ -4394,9 +4697,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
 
   // AUDIT LOGS
-  ipcMain.handle('audit:getPage', async (_, offset: number, limit: number, currentUser?: any) => {
+  ipcMain.handle('audit:getPage', async (_, offset: number, limit: number) => {
     try {
-      const restrictCentreId = currentUser?.role === 'ADMIN_CENTRE' ? currentUser?.centre_id : undefined;
+      // Sécurité : le cantonnement ADMIN_CENTRE était auparavant décidé à partir du paramètre
+      // client `currentUser` (role/centre_id falsifiables) — un ADMIN_CENTRE pouvait forger un
+      // rôle différent pour voir les audits de tout le site. Dérivé désormais de la session
+      // serveur réelle.
+      // Sécurité (P1) : verifyUserRole ajouté — ce handler n'avait auparavant aucun contrôle de
+      // rôle serveur (seul le cantonnement centre existait). Périmètre aligné sur l'usage
+      // légitime (LogsPage.tsx, route protégée SUPER ADMIN / ADMINISTRATEUR_SITE / ADMIN_CENTRE),
+      // même liste que audit:delete ci-dessous.
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+        log.warn('[SECURITY] Accès refusé à audit:getPage : session invalide ou rôle non autorisé.');
+        throw new Error("Accès refusé. Session ou rôle non autorisé à consulter les journaux d'audit.");
+      }
+      const restrictCentreId = secureUser?.role === 'ADMIN_CENTRE' ? secureUser?.centre_id : undefined;
       return queries.getAuditLogsPage(offset, limit, restrictCentreId);
     } catch (e) {
       log.error('IPC Error: audit:getPage', e);
