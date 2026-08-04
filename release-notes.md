@@ -2,7 +2,7 @@
 
 > **Date :** 3 août 2026
 > **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — migration SQLite additive v60 + faille de sécurité critiques, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
-> **SCHEMA_VERSION :** 61 (migrations additives `migrateV60`/`migrateV61` — voir points dédiés ci-dessous)
+> **SCHEMA_VERSION :** 62 (migrations additives `migrateV60`/`migrateV61`/`migrateV62` — voir points dédiés ci-dessous)
 
 ## 🔴 Corrections critiques (P0)
 
@@ -18,7 +18,7 @@
 - **12 handlers IPC supplémentaires sans cloisonnement site suffisant** (`cartes:getById`, `getPage`, `transferer`, la famille des signalements/pertes/réactivations, `inventairePhysiqueScan`, `cmu:searchCarte`/`getDossierComplet`, `searchQuickLogistique`, `admin:syncUsersFromSupabase`, `sync:pullAgents`, `audit:getPage`, `users:getProfile`) : identifiés par audit de sécurité dédié, tous corrigés pour dériver le périmètre site/rôle de la session serveur réelle. Confirmé par test e2e réel sans régression sur l'usage légitime.
 - **3 workflows terrain bloqués par une corruption FTS5 non rattrapée** (scan inventaire physique, résolution et réactivation de signalement) : même mécanisme d'auto-guérison que celui déjà appliqué à la délivrance/au transfert de carte, désormais étendu à ces trois fonctions.
 - **Écran "Base de données locale vide" affiché à tort, bloquant la recherche** : un agent dont le stock physique de son propre centre était faible ou nul se voyait bloqué en recherche, alors que le site (seul périmètre réellement pertinent pour la recherche) contenait bien des cartes. Le calcul concerné filtrait par erreur sur le centre de l'agent au lieu du site — corrigé pour toujours refléter le site entier, cohérent avec le comportement de la recherche elle-même (jamais filtrée par centre, seule la délivrance l'est).
-- **Chargement initial du tableau de bord très lent sur les sites à fort volume** (~400 000 cartes et plus) : une requête statistique manquait d'un index adapté, forçant un accès disque par carte candidate. Jusqu'à 7 secondes sur ce type de volume, ramené à 1-2 millisecondes (`SCHEMA_VERSION` 60 → 61, migration additive, aucune donnée modifiée).
+- **Chargement initial du tableau de bord très lent sur les sites à fort volume** (~400 000 cartes et plus), en deux temps : une première requête statistique manquait d'un index adapté (jusqu'à 7 secondes ramenées à 1-2 millisecondes, `SCHEMA_VERSION` 60 → 61) ; une seconde étape ("Extraction des KPI globaux", répartition des cartes par centre) souffrait du même défaut (jusqu'à 5,5 secondes ramenées à moins d'une seconde, `SCHEMA_VERSION` 61 → 62). Temps total de l'étape ramené d'environ 12 secondes à environ 7 secondes sur ce volume. Les deux migrations sont additives, aucune donnée modifiée, validées sur le cycle complet nouvelle installation et mise à niveau depuis une base existante.
 
 ## 🟠 Corrections importantes (P1)
 

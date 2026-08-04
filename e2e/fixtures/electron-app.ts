@@ -186,6 +186,40 @@ export async function launchSeededApp(options: LaunchSeededAppOptions = {}): Pro
 
   const seed = await runSeedInElectronNode(userDataDir);
 
+  const app = await launchAppOnUserDataDir(userDataDir, { allowRealSync });
+  const window = await waitForMainWindow(app, 120_000);
+  await window.waitForLoadState('domcontentloaded');
+
+  return { app, window, userDataDir, seed };
+}
+
+/**
+ * Variante de `launchAppOnUserDataDir` exposée pour les specs QA terrain
+ * ponctuelles qui doivent relancer l'application sur un `userDataDir` DÉJÀ
+ * seedé (via `runSeedInElectronNode`) et ÉVENTUELLEMENT altéré entre-temps
+ * (ex: `PRAGMA user_version` forcé à une version antérieure via
+ * `db-migration-probe-runner.ts`, pour valider le chemin d'upgrade réel de
+ * `runMigrations()` au prochain démarrage). Ne reseed JAMAIS la base — usage
+ * réservé à un `userDataDir` déjà initialisé par `runSeedInElectronNode()`.
+ * Comportement de lancement strictement identique à `launchSeededApp`
+ * (mêmes garde-fous réseau/build), seule la phase de seed est sautée.
+ */
+export async function launchExistingApp(
+  userDataDir: string,
+  options: LaunchSeededAppOptions = {}
+): Promise<{ app: ElectronApplication; window: Page }> {
+  const app = await launchAppOnUserDataDir(userDataDir, options);
+  const window = await waitForMainWindow(app, 120_000);
+  await window.waitForLoadState('domcontentloaded');
+  return { app, window };
+}
+
+async function launchAppOnUserDataDir(
+  userDataDir: string,
+  options: LaunchSeededAppOptions
+): Promise<ElectronApplication> {
+  const { allowRealSync = false } = options;
+
   const mainEntry = allowRealSync ? MAIN_ENTRY_E2E_CLOUD : MAIN_ENTRY_PROD;
   if (allowRealSync && !existsSync(mainEntry)) {
     throw new Error(
@@ -210,27 +244,10 @@ export async function launchSeededApp(options: LaunchSeededAppOptions = {}): Pro
     delete baseEnv.GEST_IN_SITU_E2E_DISABLE_SYNC;
   }
 
-  const app = await electron.launch({
+  return electron.launch({
     args: [mainEntry, `--user-data-dir=${userDataDir}`],
     env: baseEnv
   });
-
-  // ⚠️ Découverte empirique : `app.firstWindow()` retourne la toute première
-  // fenêtre détectée par CDP, qui peut être la fenêtre de SPLASHSCREEN
-  // (créée par `createSplashWindow()` dans src/main/index.ts, plusieurs
-  // secondes AVANT la fenêtre principale) plutôt que la fenêtre applicative
-  // réelle. Le splash se ferme ensuite automatiquement (sur `ready-to-show`
-  // de la fenêtre principale), ce qui invalide la référence `Page` déjà
-  // capturée par `firstWindow()` et casse tout `waitForURL()` ultérieur
-  // avec `Target page, context or browser has been closed` — observé de
-  // façon intermittente (course entre les deux fenêtres). Fix contenu à
-  // cette fixture (aucune modification de index.ts) : on ignore
-  // explicitement toute fenêtre dont l'URL contient `splash.html` et on
-  // attend la fenêtre applicative réelle (dist/renderer/index.html).
-  const window = await waitForMainWindow(app, 120_000);
-  await window.waitForLoadState('domcontentloaded');
-
-  return { app, window, userDataDir, seed };
 }
 
 /**
