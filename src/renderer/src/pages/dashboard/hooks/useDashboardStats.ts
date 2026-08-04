@@ -76,7 +76,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
   };
 
-  const loadStats = useCallback(async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => {
+  const loadStats = useCallback(async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }, forceRefresh = false) => {
     try {
       if (!silent) {
         setLoading(true);
@@ -125,7 +125,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       } else {
         // Chargement des stats KPI avec bridage centre si ADMIN_CENTRE
         if (!silent) useAuthStore.getState().setInitialDataProgress(40, 'Extraction des KPI globaux...');
-        const data = await window.api.stats.get(siteIdToUse || undefined, centreIdToUse);
+        const data = await window.api.stats.get(siteIdToUse || undefined, centreIdToUse, forceRefresh);
         setStats(data);
         
         let saisiesToday: any[] = [];

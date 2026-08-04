@@ -46,7 +46,7 @@ interface SiteAdminViewProps {
   isOnline: boolean;
   user: any;
   activeSiteId: number | null;
-  loadStats: (silent?: boolean, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }) => Promise<void>;
+  loadStats: (silent?: boolean, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }, forceRefresh?: boolean) => Promise<void>;
   isSiteSyncing: boolean;
   isSyncingAgents: boolean;
   isPullingCards?: boolean;
@@ -582,7 +582,12 @@ export function SiteAdminView({
               : (selectedCentreId ? Number(selectedCentreId) : undefined);
             const agentId = selectedAgentId ? Number(selectedAgentId) : undefined;
             const dateStr = selectedDate || undefined;
-            loadStats(false, activeTab === 'supervision' ? { centreId, agentId, dateStr } : undefined);
+            // Clic explicite utilisateur sur "Actualiser" : forceRefresh: true contourne
+            // le cache mémoire TTL 15s de stats:get (bug P1 agent-13 : KPI périmé jusqu'à
+            // 15s après un clic). Les autres appels à loadStats (chargement initial,
+            // rafraîchissements silencieux) restent inchangés et bénéficient toujours
+            // normalement de la mémoïsation.
+            loadStats(false, activeTab === 'supervision' ? { centreId, agentId, dateStr } : undefined, true);
             toast.success("Tableau de bord actualisé");
           }}
           disabled={isStatsLoading}

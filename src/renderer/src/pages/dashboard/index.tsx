@@ -98,6 +98,7 @@ export default function DashboardPage() {
         handleStartBulkUpload={handleStartBulkUpload}
         handlePullSiteCards={handlePullSiteCards}
         loading={loading}
+        loadStats={loadStats}
       />
     );
   }

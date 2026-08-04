@@ -194,6 +194,22 @@ export function GovernanceView({
         marginBottom: 24,
       }}>
         <button
+          onClick={() => loadGlobalData()}
+          disabled={isStatsLoading}
+          className="btn"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+            cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
+          }}
+          onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+          onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+        >
+          <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
+          {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
+        </button>
+
+        <button
           id="btn-force-global-sync"
           onClick={() => setShowSyncConfirmModal(true)}
           disabled={isForceSyncing}

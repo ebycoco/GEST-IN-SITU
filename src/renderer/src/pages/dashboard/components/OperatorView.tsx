@@ -1,7 +1,7 @@
 import React from 'react';
 import { OnlineBadge } from '../../../components/OnlineBadge';
 
-import { Activity, Database, Globe } from 'lucide-react';
+import { Activity, Database, Globe, RefreshCw } from 'lucide-react';
 
 interface OperatorViewProps {
   operatorTodayCount: number;
@@ -14,6 +14,7 @@ interface OperatorViewProps {
   isBulkUploading: boolean;
   handleStartBulkUpload: () => void;
   handlePullSiteCards: () => void;
+  loadStats: (silent?: boolean, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }, forceRefresh?: boolean) => Promise<void>;
 }
 
 export function OperatorView({
@@ -26,6 +27,7 @@ export function OperatorView({
   isBulkUploading,
   handleStartBulkUpload,
   handlePullSiteCards,
+  loadStats,
   loading: isStatsLoading = false
 }: OperatorViewProps) {
   if (isStatsLoading && operatorTodayCount === undefined) {
@@ -53,9 +55,26 @@ export function OperatorView({
           <h1 style={{ fontSize: 24, fontWeight: 900, color: 'white', margin: 0 }}>TABLEAU DE BORD OPÉRATEUR</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: 13, margin: '4px 0 0 0' }}>Suivi quotidien de vos performances de saisie de fiches.</p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.15)', padding: '10px 16px', borderRadius: 14 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ffd700' }} className="animate-pulse" />
-          <span style={{ fontSize: 12, fontWeight: 700, color: '#ffd700' }}>SESSION ACTIVE</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,215,0,0.06)', border: '1px solid rgba(255,215,0,0.15)', padding: '10px 16px', borderRadius: 14 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ffd700' }} className="animate-pulse" />
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#ffd700' }}>SESSION ACTIVE</span>
+          </div>
+          <button
+            onClick={() => loadStats(false, undefined, true)}
+            disabled={isStatsLoading}
+            className="btn"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+              background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+              cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+            onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+          >
+            <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
+            {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
+          </button>
         </div>
       </div>
 

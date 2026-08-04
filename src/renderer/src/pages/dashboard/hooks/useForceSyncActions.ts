@@ -4,7 +4,7 @@ import { useVisibilityBufferedCallback } from '../../../hooks/useVisibilityBuffe
 import { useSyncDownstreamStore } from '../../../stores/syncDownstreamStore';
 import { useCloudActionGuard } from '../../../hooks/useCloudActionGuard';
 
-export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: () => Promise<void>, setDirtyUsersCount?: (count: number) => void) {
+export function useForceSyncActions(user: any, activeSiteId: number | null, loadStats: (silent?: boolean, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }, forceRefresh?: boolean) => Promise<void>, setDirtyUsersCount?: (count: number) => void) {
   const [isForceSyncing, setIsForceSyncing] = useState<boolean>(false);
   const [forceSyncResult, setForceSyncResult] = useState<any | null>(null);
   const [isSiteSyncing, setIsSiteSyncing] = useState<boolean>(false);
@@ -271,7 +271,11 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         } else if (toastId) {
           toast.success("✅ Vos données locales sont déjà à jour.", { id: toastId, duration: 4000 });
         }
-        await loadStats(); 
+        // forceRefresh: true — un pull cloud réussi vient de rapatrier des données
+        // fraîches en base locale ; sans ce contournement, le cache mémoire TTL 15s
+        // de stats:get pourrait encore renvoyer les KPI d'AVANT le pull (même bug
+        // P1 que le bouton "Actualiser", voir SiteAdminView.tsx).
+        await loadStats(false, undefined, true);
       } else if (toastId) {
         toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 8000 });
       }

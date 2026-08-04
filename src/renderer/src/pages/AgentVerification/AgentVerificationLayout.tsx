@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { OnlineBadge } from '../../components/OnlineBadge';
 
 import { Outlet, NavLink } from 'react-router-dom';
-import { Database, Globe, LayoutDashboard, Search, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Database, Globe, LayoutDashboard, Search, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
@@ -22,7 +22,7 @@ export default function AgentVerificationLayout() {
     };
   }, []);
 
-  const { stats, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+  const { stats, cloudCartesCount, detailedSyncStats, loadStats, loading: isStatsLoading } = useDashboardStats(user, activeSiteId, false);
 
   // ── Badge "cartes du centre" (purement informatif) ─────────────────────────
   // Contexte : le badge existant `stats.total` (useDashboardStats) reste
@@ -151,6 +151,22 @@ export default function AgentVerificationLayout() {
                 </span>
               </div>
             )}
+
+            <button
+              onClick={() => loadStats(false, undefined, true)}
+              disabled={isStatsLoading}
+              className="btn"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+                background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+                cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+              onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+            >
+              <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
+              {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
+            </button>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 auto' }}>
               <button

@@ -22,6 +22,7 @@
 
 ## 🟠 Corrections importantes (P1)
 
+- **Bouton "Actualiser" pouvant afficher des KPI périmés** : un cache serveur de 15 secondes sur le calcul des indicateurs du tableau de bord ne faisait aucune différence entre un rafraîchissement automatique en arrière-plan et un clic explicite sur "Actualiser" — un clic dans les 15 secondes suivant le dernier calcul pouvait donc afficher d'anciennes valeurs sans le signaler. Un clic explicite sur "Actualiser" contourne désormais systématiquement ce cache pour garantir des chiffres à jour ; les rafraîchissements automatiques/silencieux continuent d'en bénéficier normalement.
 - `upload-worker.js` (bouton "Synchroniser mes actions") omettait 9 champs (dont `agent_signalement_absence`) par rapport au mapping standard — traçabilité des signalements d'absence perdue si ce chemin faisait le premier envoi. Champs alignés, confirmé sur Supabase dev.
 - Journal d'audit des corrections Qualité (numéro de sécurité sociale, contact) affiché en clair sur deux chemins de sauvegarde — masquage désormais appliqué de façon cohérente sur les deux.
 - Bouton "Récupérer depuis le Cloud" du portail Qualité restait actif malgré un cloud injoignable (même défaut déjà corrigé sur le portail Vérification, propagé ici).
@@ -38,6 +39,7 @@
 
 - Portail Qualité : indicateur "Cartes disponibles en local" dans l'en-tête, identique à celui déjà présent sur le portail Vérification.
 - Portail Vérification : un second indicateur "Les cartes de ce centre" affiché à côté du total du site — permet à l'agent de distinguer d'un coup d'œil ce qui est disponible pour la recherche (tout le site) de ce qui est physiquement délivrable depuis son propre centre.
+- Bouton "Actualiser" ajouté sur les écrans qui n'en avaient pas encore : portail Vérification, tableau de bord Opérateur Saisie, vue globale SUPER ADMIN, Journaux, portail Qualité, portail Saisie.
 
 ## 🟡 Optimisations & fiabilité (P2)
 

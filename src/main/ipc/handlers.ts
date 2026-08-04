@@ -1448,7 +1448,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   const STATS_CACHE_TTL_MS = 15000;
   let statsCache: { [key: string]: { promise: Promise<any>; timestamp: number } } = {};
 
-  ipcMain.handle('stats:get', async (_, siteId, centreId?: number) => {
+  ipcMain.handle('stats:get', async (_, siteId, centreId?: number, forceRefresh?: boolean) => {
     try {
       // Sécurité : le périmètre site/centre est imposé par la session serveur pour tout rôle
       // non-SUPER ADMIN (défense en profondeur, non falsifiable via IPC).
@@ -1464,7 +1464,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       // Retourner la promesse en cours (rÃ©sout le problÃ¨me des requÃªtes concurrentes)
       // OU le rÃ©sultat en cache s'il a moins de 15 secondes
-      if (statsCache[cacheKey] && (now - statsCache[cacheKey].timestamp < STATS_CACHE_TTL_MS)) {
+      // â”€â”€â”€ Contournement explicite du cache (forceRefresh) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // Bug P1 (agent-13) : un clic sur "Actualiser" pouvait recevoir une rÃ©ponse
+      // vieille de jusqu'Ã  STATS_CACHE_TTL_MS sans aucune indication de pÃ©remption.
+      // Quand forceRefresh === true, on ignore volontairement une entrÃ©e de cache
+      // encore valide et on recalcule un rÃ©sultat frais pour CET appel prÃ©cis.
+      // Le rÃ©sultat frais est nÃ©anmoins toujours rÃ©-Ã©crit dans statsCache[cacheKey]
+      // plus bas (comportement inchangÃ©) : d'Ã©ventuels appels concurrents dans les
+      // millisecondes suivantes (chargement initial, autres composants montÃ©s en
+      // parallÃ¨le) continuent de bÃ©nÃ©ficier normalement de la mÃ©moÃ¯sation.
+      if (!forceRefresh && statsCache[cacheKey] && (now - statsCache[cacheKey].timestamp < STATS_CACHE_TTL_MS)) {
         return await statsCache[cacheKey].promise;
       }
 

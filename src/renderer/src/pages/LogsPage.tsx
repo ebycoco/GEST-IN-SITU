@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { FileText, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
+import { FileText, ChevronLeft, ChevronRight, Trash2, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { confirmService } from '../components/confirmService';
@@ -17,6 +17,7 @@ export default function LogsPage() {
   const [total, setTotal] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const { user } = useAuthStore();
   const limit = 15; // Pagination stricte demandée
 
@@ -72,6 +73,7 @@ export default function LogsPage() {
 
   const loadLogs = () => {
      const offset = (currentPage - 1) * limit;
+     setIsRefreshing(true);
      window.api.logs.consultation(offset, limit, {}).then((res: any) => {
        if (res) {
          setLogs(res.rows || []);
@@ -79,6 +81,8 @@ export default function LogsPage() {
        }
      }).catch((err: any) => {
        console.error('Erreur lors du chargement des logs d\'audit:', err);
+     }).finally(() => {
+       setIsRefreshing(false);
      });
    };
 
@@ -101,7 +105,22 @@ export default function LogsPage() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12 }}>
-          <button 
+          <button
+            onClick={loadLogs}
+            disabled={isRefreshing}
+            className="btn"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+              background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+              cursor: isRefreshing ? 'not-allowed' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+            onMouseOut={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+          >
+            <RefreshCw size={16} style={{ animation: isRefreshing ? 'spin 1.5s linear infinite' : 'none' }} />
+            {isRefreshing ? 'Actualisation...' : 'Actualiser'}
+          </button>
+          <button
             className="btn btn-secondary"
             onClick={handleExport}
             style={{ display: 'flex', alignItems: 'center', gap: 8 }}

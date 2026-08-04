@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { OnlineBadge } from '../../components/OnlineBadge';
 
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { Database, Globe, AlertTriangle, Users, Calendar, Fingerprint, LayoutDashboard, Search } from 'lucide-react';
+import { Database, Globe, AlertTriangle, Users, Calendar, Fingerprint, LayoutDashboard, Search, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
@@ -13,6 +13,7 @@ import { useQualityUIStore } from '../../stores/qualityUIStore';
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const location = useLocation();
   const isOverview = location.pathname === '/agent-qualite' || location.pathname === '/agent-qualite/';
   const { activeCard, correctionType, closeCorrection, isGuideOpen, closeGuide, guideInitialName, triggerRefresh, openCorrection, isFetchingQuery } = useQualityUIStore();
@@ -62,6 +63,15 @@ export default function AgentQualiteLayout() {
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
+  // triggerRefresh() est un simple incrément synchrone de compteur (cf. qualityUIStore.ts) :
+  // pas de promesse à attendre. isRefreshing ne sert ici qu'à donner un retour visuel bref
+  // (icône qui tourne ~600ms) au clic, sans jamais bloquer le bouton plus longtemps.
+  const handleRefreshClick = () => {
+    setIsRefreshing(true);
+    triggerRefresh();
+    setTimeout(() => setIsRefreshing(false), 600);
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
       {/* En-tête Premium */}
@@ -101,6 +111,22 @@ export default function AgentQualiteLayout() {
                 </span>
               </div>
             )}
+
+            <button
+              onClick={handleRefreshClick}
+              disabled={isRefreshing}
+              className="btn"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+                background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+                cursor: isRefreshing ? 'not-allowed' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+              onMouseOut={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+            >
+              <RefreshCw size={16} style={{ animation: isRefreshing ? 'spin 1.5s linear infinite' : 'none' }} />
+              {isRefreshing ? 'Actualisation...' : 'Actualiser'}
+            </button>
 
             <button
               onClick={() => handlePullSiteCards(false)}

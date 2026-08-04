@@ -14,7 +14,7 @@ declare global {
         onPreloadStatus: (callback: (isPreloading: boolean) => void) => () => void;
       };
       stats: {
-        get: (siteId?: number, centreId?: number) => Promise<any>;
+        get: (siteId?: number, centreId?: number, forceRefresh?: boolean) => Promise<any>;
         getCentre: (centreId: number, siteId: number) => Promise<any>;
         getCentreOperateurs: (centreId: number) => Promise<any[]>;
         getGlobal: () => Promise<any>;

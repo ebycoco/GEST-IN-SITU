@@ -164,8 +164,8 @@ const api = {
       ipcRenderer.invoke('logistique:inventairePhysique', payload),
   },
   stats: { 
-    get: (siteId?: number, centreId?: number): Promise<any> => 
-      ipcRenderer.invoke('stats:get', siteId, centreId),
+    get: (siteId?: number, centreId?: number, forceRefresh?: boolean): Promise<any> =>
+      ipcRenderer.invoke('stats:get', siteId, centreId, forceRefresh),
     getCentre: (centreId: number, siteId: number): Promise<Record<string, number>> => 
       ipcRenderer.invoke('stats:getCentre', centreId, siteId),
     getCentreOperateurs: (centreId: number): Promise<any[]> => 
