@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 60;
+export const SCHEMA_VERSION = 61;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -314,6 +314,11 @@ export function runMigrations(db: Database.Database): void {
     if (currentVersion < 60) {
       log.info('Running migration v60: Rebuilding t_cartes to durably enforce DOUBLON in CHECK(statut) — supersedes the ineffective sqlite_schema patch of v59 (defensive mode blocks direct writable_schema edits)');
       migrateV60(db);
+    }
+
+    if (currentVersion < 61) {
+      log.info('Running migration v61: Adding covering index idx_cartes_created_by_created_at (dashboard getSiteSaisieStatsToday perf)');
+      migrateV61(db);
     }
 
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -730,6 +735,7 @@ function migrateV1(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_cartes_stats_dp_v2 ON t_cartes(site_id, noms, prenoms, date_de_naissance, cle_doublon);
     CREATE INDEX IF NOT EXISTS idx_cartes_stats_kpi ON t_cartes(site_id, statut, statut_physique, num_secu, rangement);
     CREATE INDEX IF NOT EXISTS idx_cartes_site_date_delivrance ON t_cartes(site_id, date_delivrance);
+    CREATE INDEX IF NOT EXISTS idx_cartes_created_by_created_at ON t_cartes(created_by, created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_t_cartes_sync_id ON t_cartes(sync_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_t_users_sync_id ON t_users(sync_id);
 
@@ -3093,6 +3099,32 @@ export function migrateV60(db: Database.Database): void {
     log.error('[MIGRATION V60] Échec :', e.message);
     // Contrairement à V59 : on NE catch PAS silencieusement l'échec — on le remonte pour
     // déclencher le catch global de runMigrations (reconstruction d'urgence).
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V61 : Index couvrant (created_by, created_at) sur t_cartes —
+// accélère getSiteSaisieStatsToday (dashboard "Chargement sécurisé en cours...").
+//
+// Preuve mesurée (profiling sur 400 562 cartes, EXPLAIN QUERY PLAN + chrono réel) :
+// AVANT : SEARCH c USING INDEX idx_cartes_created_by (created_by=?) LEFT-JOIN
+//         → non couvrant : un lookup table par ligne candidate pour lire created_at
+//         → ~1.6 à 6.9 secondes selon le volume de cartes du site.
+// APRÈS : SEARCH c USING COVERING INDEX idx_cartes_created_by_created_at
+//         (created_by=? AND created_at>? AND created_at<?) LEFT-JOIN
+//         → aucun accès à la table principale (id_carte = rowid, déjà dans l'index)
+//         → ~1 à 2 millisecondes, même résultat (vérifié par somme des totaux).
+// Purement additif (CREATE INDEX IF NOT EXISTS) : aucune donnée modifiée, aucun
+// changement de comportement métier.
+// =====================================================
+function migrateV61(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V61] Démarrage de la migration V61...');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_created_by_created_at ON t_cartes(created_by, created_at);');
+    log.info('[MIGRATION V61] Index idx_cartes_created_by_created_at créé.');
+  } catch (e: any) {
+    log.error('[MIGRATION V61] Échec lors de la création de l\'index :', e.message);
     throw e;
   }
 }

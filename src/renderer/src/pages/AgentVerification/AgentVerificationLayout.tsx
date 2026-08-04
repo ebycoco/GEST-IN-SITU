@@ -23,6 +23,27 @@ export default function AgentVerificationLayout() {
   }, []);
 
   const { stats, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+
+  // ── Badge "cartes du centre" (purement informatif) ─────────────────────────
+  // Contexte : le badge existant `stats.total` (useDashboardStats) reste
+  // volontairement scopé au SITE pour ce rôle (recherche multi-centre autorisée,
+  // cf. correctif RechercheView.tsx). Ce second badge est un appel IPC
+  // totalement indépendant, avec `centreId` explicitement fourni cette fois,
+  // pour afficher en plus le sous-total propre au centre de l'agent (utile pour
+  // savoir ce qu'il a physiquement sous la main à délivrer). Aucune réutilisation
+  // de `stats`/`useDashboardStats` afin de ne prendre aucun risque de régression
+  // sur le badge site déjà correct.
+  const [centreCardsCount, setCentreCardsCount] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (siteIdToUse && user?.centre_id) {
+      window.api.stats.get(siteIdToUse, user.centre_id)
+        .then((s: any) => { if (!cancelled) setCentreCardsCount(s?.total ?? 0); })
+        .catch(() => { if (!cancelled) setCentreCardsCount(null); });
+    }
+    return () => { cancelled = true; };
+  }, [user?.site_id, user?.centre_id, user?.role, activeSiteId]);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -113,7 +134,24 @@ export default function AgentVerificationLayout() {
                 </span>
               </div>
             )}
-            
+
+            {centreCardsCount !== null && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 16px',
+                background: 'rgba(96, 165, 250, 0.05)',
+                borderRadius: 12,
+                border: '1px solid rgba(96, 165, 250, 0.2)',
+                color: 'var(--text-secondary)'
+              }}>
+                <Database size={16} color="#60a5fa" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Les cartes de ce centre :</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'white' }}>
+                  {centreCardsCount.toLocaleString('fr-FR')}
+                </span>
+              </div>
+            )}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: '1 1 auto' }}>
               <button
                 onClick={handlePullClick}

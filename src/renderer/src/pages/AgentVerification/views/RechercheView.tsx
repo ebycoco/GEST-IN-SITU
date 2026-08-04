@@ -82,8 +82,18 @@ export default function RechercheView() {
     const fetchTotal = async () => {
       if (siteIdToUse) {
         try {
-          const isPrincipal = isCentrePrincipal(userCentre) || Number(selectedCentreId || user?.centre_id) === 1;
-          const stats = await window.api.stats.get(siteIdToUse, isPrincipal ? undefined : (selectedCentreId || undefined));
+          // totalCards ne sert qu'a decider si l'ecran bloquant "Base de donnees
+          // locale vide" doit s'afficher (voir totalCards === 0 plus bas). La
+          // recherche elle-meme (useVerificationSearch.ts) n'est JAMAIS filtree
+          // par centre pour ce role : seule la delivrance l'est (cloisonnement
+          // centre applique ailleurs, au moment de delivrer). Ce total doit donc
+          // suivre la meme regle que la recherche : filtre SITE uniquement, sans
+          // jamais transmettre selectedCentreId/isPrincipal ici. Avant ce correctif,
+          // un agent d'un centre non-principal a faible/0 stock local voyait ce
+          // total limite a tort a son propre centre, provoquant l'affichage de cet
+          // ecran bloquant alors que le site avait bien des cartes disponibles
+          // (bug P0 reproduit par e2e/specs/verification/centrefilter-total-badge.e2e.spec.ts).
+          const stats = await window.api.stats.get(siteIdToUse);
           if (!cancelled) setTotalCards(stats?.total || 0);
         } catch (e) {
           if (!cancelled) setTotalCards(0);

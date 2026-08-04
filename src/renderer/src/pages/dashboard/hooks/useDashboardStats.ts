@@ -165,8 +165,10 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           });
 
           if (!silent) useAuthStore.getState().setInitialDataProgress(70, 'Extraction des indicateurs Qualité & Logistique...');
-          qualiteToday = await window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
-          logistiqueToday = await window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr);
+          [qualiteToday, logistiqueToday] = await Promise.all([
+            window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
+            window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr)
+          ]);
           setSiteSaisiesStats(saisiesToday);
           setSiteQualiteStats(qualiteToday);
           setSiteLogistiqueStats(logistiqueToday);

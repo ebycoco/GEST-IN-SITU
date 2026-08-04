@@ -2,7 +2,7 @@
 
 > **Date :** 3 août 2026
 > **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — migration SQLite additive v60 + faille de sécurité critiques, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
-> **SCHEMA_VERSION :** 60 (migration additive `migrateV60` — voir point dédié ci-dessous)
+> **SCHEMA_VERSION :** 61 (migrations additives `migrateV60`/`migrateV61` — voir points dédiés ci-dessous)
 
 ## 🔴 Corrections critiques (P0)
 
@@ -17,6 +17,8 @@
 - **`database:export`/`database:import` sans aucun contrôle d'accès** : n'importe quel utilisateur authentifié pouvait télécharger l'intégralité de la base de production (toutes les cartes de tous les sites, numéros de sécurité sociale, contacts, mots de passe hachés de tous les comptes) ou écraser complètement la base de production par un fichier arbitraire — ce dernier point étant accessible **avant même la connexion**, depuis l'écran de login. Export réservé aux rôles habilités ; import désormais protégé par vérification du mot de passe SUPER ADMIN réel, avec le champ de saisie correspondant restauré sur l'écran de connexion.
 - **12 handlers IPC supplémentaires sans cloisonnement site suffisant** (`cartes:getById`, `getPage`, `transferer`, la famille des signalements/pertes/réactivations, `inventairePhysiqueScan`, `cmu:searchCarte`/`getDossierComplet`, `searchQuickLogistique`, `admin:syncUsersFromSupabase`, `sync:pullAgents`, `audit:getPage`, `users:getProfile`) : identifiés par audit de sécurité dédié, tous corrigés pour dériver le périmètre site/rôle de la session serveur réelle. Confirmé par test e2e réel sans régression sur l'usage légitime.
 - **3 workflows terrain bloqués par une corruption FTS5 non rattrapée** (scan inventaire physique, résolution et réactivation de signalement) : même mécanisme d'auto-guérison que celui déjà appliqué à la délivrance/au transfert de carte, désormais étendu à ces trois fonctions.
+- **Écran "Base de données locale vide" affiché à tort, bloquant la recherche** : un agent dont le stock physique de son propre centre était faible ou nul se voyait bloqué en recherche, alors que le site (seul périmètre réellement pertinent pour la recherche) contenait bien des cartes. Le calcul concerné filtrait par erreur sur le centre de l'agent au lieu du site — corrigé pour toujours refléter le site entier, cohérent avec le comportement de la recherche elle-même (jamais filtrée par centre, seule la délivrance l'est).
+- **Chargement initial du tableau de bord très lent sur les sites à fort volume** (~400 000 cartes et plus) : une requête statistique manquait d'un index adapté, forçant un accès disque par carte candidate. Jusqu'à 7 secondes sur ce type de volume, ramené à 1-2 millisecondes (`SCHEMA_VERSION` 60 → 61, migration additive, aucune donnée modifiée).
 
 ## 🟠 Corrections importantes (P1)
 
@@ -35,6 +37,7 @@
 ## 🚀 Nouveautés
 
 - Portail Qualité : indicateur "Cartes disponibles en local" dans l'en-tête, identique à celui déjà présent sur le portail Vérification.
+- Portail Vérification : un second indicateur "Les cartes de ce centre" affiché à côté du total du site — permet à l'agent de distinguer d'un coup d'œil ce qui est disponible pour la recherche (tout le site) de ce qui est physiquement délivrable depuis son propre centre.
 
 ## 🟡 Optimisations & fiabilité (P2)
 
