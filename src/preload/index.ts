@@ -14,8 +14,10 @@ const api = {
   auth: {
     login: (login: string, password: string): Promise<any> => 
       ipcRenderer.invoke('auth:login', login, password),
-    logout: (login?: string): Promise<void> => 
+    logout: (login?: string): Promise<void> =>
       ipcRenderer.invoke('auth:logout', login),
+    setActiveRole: (role: string): Promise<{ success: boolean; activeRole?: string; message?: string }> =>
+      ipcRenderer.invoke('auth:setActiveRole', role),
     updateSelfProfile: (
       userId: number, 
       data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string }

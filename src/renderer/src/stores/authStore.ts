@@ -26,7 +26,7 @@ interface AuthState {
   setActiveSiteId: (id: number | null) => void;
   setInitialDataLoading: (loading: boolean) => void;
   setInitialDataProgress: (progress: number, stepText?: string) => void;
-  setActiveRole: (role: string) => void;
+  setActiveRole: (role: string) => Promise<void>;
   checkAuth: () => Promise<void>;
 }
 
@@ -107,7 +107,17 @@ export const useAuthStore = create<AuthState>((set) => ({
       loadingStepText: stepText || state.loadingStepText
     }));
   },
-  setActiveRole: (role) => {
+  setActiveRole: async (role) => {
+    // Le rôle actif est désormais validé et propagé côté serveur (Main Process) via
+    // auth:setActiveRole — sans cela, getSecureCurrentUser().role restait figé sur le rôle
+    // de connexion pour toute la session, cassant le cantonnement centre de plusieurs
+    // handlers pour un compte multi-rôles. Le store local n'est mis à jour qu'après
+    // confirmation serveur (jamais en optimiste) pour ne jamais désynchroniser l'UI de la
+    // session réelle.
+    const res = await window.api.auth.setActiveRole(role);
+    if (!res.success) {
+      throw new Error(res.message || 'Changement de rôle refusé par le serveur.');
+    }
     set((state) => {
       if (state.user) {
         return { user: { ...state.user, role } };

@@ -36,13 +36,17 @@ export default function RoleSelectorPage() {
 
   const roles = user.roles ?? [user.role];
 
-  const handleSelect = (role: string) => {
-    setActiveRole(role);
-    // Log de sélection de rôle
-    console.info(`[ROLE_SELECTOR] Rôle sélectionné : ${role} par ${user.login}`);
-    toast.success(`Connecté en tant que : ${ROLE_META[role]?.label ?? role}`, { duration: 3000 });
-    // Naviguer vers '/' → RoleRedirect prend le relais
-    navigate('/', { replace: true });
+  const handleSelect = async (role: string) => {
+    try {
+      await setActiveRole(role);
+      // Log de sélection de rôle
+      console.info(`[ROLE_SELECTOR] Rôle sélectionné : ${role} par ${user.login}`);
+      toast.success(`Connecté en tant que : ${ROLE_META[role]?.label ?? role}`, { duration: 3000 });
+      // Naviguer vers '/' → RoleRedirect prend le relais
+      navigate('/', { replace: true });
+    } catch (e: any) {
+      toast.error(e.message || 'Impossible de sélectionner ce rôle.');
+    }
   };
 
   return (

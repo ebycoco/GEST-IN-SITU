@@ -13,7 +13,7 @@ import { syncEngine } from '../sync/sync-engine';
 import { runBulkUpload, cancelBulkUpload } from '../sync/bulk-uploader';
 import { runDownstream } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
-import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser } from '../auth/session-heartbeat';
+import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser, setActiveRole } from '../auth/session-heartbeat';
 import { logAudit } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
@@ -255,6 +255,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e) {
       log.error('Logout error', e);
       return false;
+    }
+  });
+
+  // Changement du rôle ACTIF de la session (compte multi-rôles, via RoleSelectorPage après
+  // connexion). Correctif du bug de cantonnement centre : sans ce handler, `getSecureCurrentUser().role`
+  // restait figé sur le rôle DE CONNEXION pour toute la session, cassant le cantonnement de
+  // plusieurs handlers pour tout compte dont le rôle actif diffère du rôle de connexion.
+  // Validation serveur stricte : le rôle demandé doit faire partie des rôles réellement
+  // attribués au compte (t_user_roles), jamais approuvé sur simple confiance du renderer.
+  ipcMain.handle('auth:setActiveRole', async (_, requestedRole: string) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+
+      const granted = secureUser.id_user === FAILSAFE_ROOT_ID
+        ? ['SUPER ADMIN']
+        : queries.resolveGrantedRoles(secureUser.id_user, secureUser.loginRole ?? secureUser.role);
+
+      if (!granted.includes(requestedRole)) {
+        log.warn(`[SECURITY] Changement de rôle actif refusé : ${secureUser.login} → ${requestedRole} (rôles autorisés: ${granted.join(',')})`);
+        throw new Error("Accès refusé : ce rôle ne fait pas partie des rôles attribués à ce compte.");
+      }
+
+      setActiveRole(requestedRole);
+      queries.insertAuditLog(secureUser.login, 'ROLE_SWITCH', `${secureUser.loginRole ?? secureUser.role} → ${requestedRole}`);
+      return { success: true, activeRole: requestedRole };
+    } catch (e: any) {
+      log.error('IPC Error: auth:setActiveRole', e);
+      return { success: false, message: e.message || 'Erreur lors du changement de rôle.' };
     }
   });
 

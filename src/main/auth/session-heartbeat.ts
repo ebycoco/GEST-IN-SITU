@@ -17,6 +17,11 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
   currentUserLogin = user.login;
   
   const secureUserCopy = { ...user };
+  // Traçage/audit pur : conserve le rôle DE CONNEXION (celui utilisé pour authentifier la
+  // session), invariant après un éventuel changement de rôle actif via `setActiveRole`.
+  // Aucun consommateur existant ne doit lire ce champ pour une décision de cantonnement —
+  // seul `role` (mutable via setActiveRole) fait foi pour le cantonnement site/centre.
+  secureUserCopy.loginRole = user.role;
   if (secureUserCopy.role === 'ADMINISTRATEUR_SITE' && !secureUserCopy.centre_id && secureUserCopy.site_id) {
     try {
       const db = getDatabase();
@@ -63,4 +68,20 @@ export function getCurrentUserLogin(): string | null {
 
 export function getSecureCurrentUser(): any | null {
   return secureCurrentUser;
+}
+
+/**
+ * Met à jour le rôle ACTIF de la session serveur en cours (post-sélection via
+ * RoleSelectorPage, pour un compte multi-rôles). Ne touche jamais à `site_id`/`centre_id` :
+ * ils sont invariants par rôle pour un même compte (attachés au compte, pas au rôle — cf.
+ * PK composite `(id_user, role)` de `t_user_roles`, sans colonne site_id/centre_id).
+ * Le champ `loginRole` (rôle de connexion d'origine) n'est jamais modifié ici — pur
+ * traçage/audit.
+ * Validation des rôles autorisés : entièrement à la charge de l'appelant (handler IPC
+ * `auth:setActiveRole`), cette fonction ne fait qu'appliquer la mutation.
+ */
+export function setActiveRole(role: string): boolean {
+  if (!secureCurrentUser) return false;
+  secureCurrentUser.role = role;
+  return true;
 }

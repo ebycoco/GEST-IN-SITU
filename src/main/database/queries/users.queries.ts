@@ -65,6 +65,23 @@ export function seedUserFromCloud(userData: {
   });
 }
 
+/**
+ * Résout les rôles attribués à un utilisateur (multi-rôles via `t_user_roles`), avec
+ * fallback sur son rôle unique (`t_users.role`) si aucune ligne n'existe dans
+ * `t_user_roles`. Extrait tel quel de la logique historiquement inline dans
+ * `authenticateUser` (zéro changement de comportement) pour être réutilisable par le
+ * handler IPC `auth:setActiveRole` (validation serveur du rôle actif demandé).
+ */
+export function resolveGrantedRoles(userId: number, baseRole: string): string[] {
+  const db = getDatabase()!;
+  const rolesRows = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(userId) as { role: string }[];
+  let roles = rolesRows.map(r => r.role);
+  if (roles.length === 0 && baseRole) {
+    roles = [baseRole];
+  }
+  return roles;
+}
+
 export async function authenticateUser(login: string, password: string): Promise<any> {
   const db = getDatabase()!;
   
@@ -104,11 +121,7 @@ export async function authenticateUser(login: string, password: string): Promise
     }
   }
 
-  const rolesRows = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(user.id_user) as { role: string }[];
-  let roles = rolesRows.map(r => r.role);
-  if (roles.length === 0 && user.role) {
-    roles = [user.role];
-  }
+  const roles = resolveGrantedRoles(user.id_user, user.role);
 
   if (user.role === 'ADMINISTRATEUR_SITE' && !user.centre_id && user.site_id) {
     const mainCentre = db.prepare(`

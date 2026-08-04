@@ -6,6 +6,7 @@ declare global {
       auth: {
         login: (login: string, mdp: string) => Promise<any>;
         logout: (login?: string) => Promise<boolean>;
+        setActiveRole: (role: string) => Promise<{ success: boolean; activeRole?: string; message?: string }>;
         updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean; message?: string }>;
         registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
         onSessionExpired: (callback: () => void) => () => void;
