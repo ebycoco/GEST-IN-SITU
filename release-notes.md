@@ -1,7 +1,7 @@
-# GEST-IN-SITU — Release v2.11.0 (préparation)
+# GEST-IN-SITU — Release v2.11.0
 
-> **Date :** 4 août 2026
-> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — deux migrations SQLite additives supplémentaires v61/v62 depuis v2.10.0, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** — y compris la question de savoir si `v2.10.0` a été effectivement publiée en release GitHub ou non (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
+> **Date de publication :** 4 août 2026
+> **Statut :** Production — Postes opérationnels en Côte d'Ivoire
 > **SCHEMA_VERSION :** 62 (migrations additives `migrateV60`/`migrateV61`/`migrateV62` — voir points dédiés ci-dessous)
 
 ## 🔴 Corrections critiques (P0)
@@ -52,65 +52,3 @@
 ## 🧪 Infrastructure de test
 
 Mise en place d'une suite e2e Playwright isolée (`e2e/`), avec base SQLite jetable par run et garde-fou dédié empêchant tout accès accidentel au Supabase de production. Couverture ajoutée : parcours complet des rôles Opérateur Vérification (recherche, délivrance, signalements, cloisonnement site/centre), Opérateur Qualité (doublons, données manquantes, dates invalides, anomalies brutes, recherche universelle, cloisonnement site) et Administrateur Site (dashboard, importation, gestion des agents, infrastructures, cloisonnement sécurité) ; scénarios de synchro cloud réelle (hors-ligne → envoi → récupération inter-postes) contre un projet Supabase de développement dédié ; suite de non-régression sécurité dédiée (`e2e/specs/security/`) couvrant les contournements de cloisonnement identifiés.
-
----
-
-# GEST-IN-SITU — Release v2.9.0
-
-> **Date de publication :** 30 juillet 2026  
-> **Statut :** Production — Postes opérationnels en Côte d'Ivoire  
-> **SCHEMA_VERSION :** 59 (inchangé — aucune migration BDD requise)
-
----
-
-## 🚀 Nouveautés & Ergonomie
-
-### Module Qualité — Onglet "Autres Anomalies"
-Nouvel onglet dédié sur la page Qualité permettant de consulter, filtrer et corriger les cartes dont le statut est inconnu (ex : `ERREUR`, `NUMERO INCORRECT`, `INJOIGNABLE`). L'agent peut désormais :
-- Visualiser toutes les cartes à statut non reconnu en un seul endroit
-- Ouvrir le panneau de correction rapide (`CorrectionSidePanel`)
-- Voir le détail expandable de chaque carte (`ExpandedAnomalyDetails`)
-
-### Module Qualité — Données Manquantes Expandable
-Intégration du composant `ExpandedManquantDetails` sur l'onglet "Données Manquantes" pour un affichage carte par carte des champs absents, avec action de correction directe depuis la liste.
-
-### Nouvelles Métriques KPI — Tableau de Bord Admin
-Deux nouveaux indicateurs sont affichés dans le tableau de bord :
-- **Autres Anomalies** : nombre de cartes à statut inconnu
-- **Dates Vides** : nombre de cartes sans date de naissance
-
-Chaque KPI est cliquable et redirige directement vers l'onglet de correction correspondant.
-
-### Import Sécurisé — Validation des Statuts
-Lors de l'import CSV/Excel, seul `DOUBLON` est accepté comme statut alternatif à `DELIVRE` ou `EN STOCK`. Les statuts terrain non standard (`NUMERO INCORRECT`, `INJOIGNABLE`, `ERREUR`) sont désormais :
-- Rejetés silencieusement
-- Tracés comme `STATUT_INCONNU`
-- La carte est sauvegardée en stock avec un message d'avertissement précisant le statut exact en **gras**
-
-### Bouton "Forcer en Stock" repositionné
-Le bouton est désormais intégré à l'intérieur du panneau de détail de la carte, conformément à l'ergonomie terrain attendue.
-
----
-
-## 🛠️ Corrections & Sécurité
-
-- **Outbox Upstream :** Robustesse accrue pour les opérations en attente lors d'interruptions réseau
-- **Download Worker :** Meilleure gestion des conflits de fusion lors du tirage descendant
-- **Heartbeat de Session :** Prévention des déconnexions intempestives
-- **Requêtes Hiérarchie & Import :** Fiabilisation du pipeline d'import multi-formats
-
----
-
-## ⚡ Optimisations
-
-- Suppression de 3 pages obsolètes (`AdminCentreDashboardPage`, `AnomaliesView`, `QualiteAssainissementPage`)
-- Nouveau hook `useDebounce` limitant les appels IPC dans les barres de recherche
-- Refactorisation du store Zustand `qualityUIStore`
-
----
-
-## ℹ️ Mise à jour automatique
-
-Cette release est distribuée via le système d'auto-update Electron.  
-Les postes connectés recevront la notification de mise à jour automatiquement.  
-**Aucune action manuelle n'est requise sur les centres en production.**
