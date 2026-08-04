@@ -4,6 +4,36 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.11.0] - 2026-08-04
+
+### 🛠️ Corrections & Sécurité
+
+- **Écran "Base de données locale vide" affiché à tort sur le portail Vérification :** le calcul se basait par erreur sur le stock du CENTRE de l'agent au lieu du SITE, bloquant la recherche pour un agent d'un centre à faible/0 stock local alors que le site contenait bien des cartes. Corrigé pour rester cohérent avec la recherche elle-même (jamais filtrée par centre, seule la délivrance l'est).
+- **Bouton "Actualiser" pouvant afficher des KPI périmés :** le cache serveur (TTL 15s) sur le calcul des indicateurs du tableau de bord ne distinguait pas un rafraîchissement automatique en arrière-plan d'un clic explicite — un clic dans les 15 secondes suivant le dernier calcul pouvait afficher d'anciennes valeurs sans le signaler. Un clic explicite sur "Actualiser" contourne désormais systématiquement ce cache (également appliqué au rafraîchissement post-pull cloud réussi) ; les rafraîchissements automatiques/silencieux continuent d'en bénéficier normalement.
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Portail Vérification :** ajout d'un second indicateur "Les cartes de ce centre" à côté du total du site existant, pour distinguer d'un coup d'œil ce qui est disponible pour la recherche (le site) de ce qui est physiquement délivrable depuis son propre centre.
+- **Bouton "Actualiser" ajouté sur 6 interfaces qui n'en disposaient pas :** portail Vérification, tableau de bord Opérateur Saisie, vue globale SUPER ADMIN, Journaux, portail Qualité, portail Saisie.
+
+### ⚡ Performances & Optimisations
+
+- **Chargement initial du tableau de bord très lent sur les sites à fort volume** (~400 000 cartes et plus), corrigé en deux temps :
+  - Nouvel index composite `idx_cartes_created_by_created_at` (`migrateV61`, `SCHEMA_VERSION` 60 → 61) : jusqu'à 7 secondes ramenées à 1-2 millisecondes sur la requête statistique concernée.
+  - Nouvel index composite `idx_cartes_site_centre_statut` (`migrateV62`, `SCHEMA_VERSION` 61 → 62) : la sous-requête de répartition des cartes par centre dans le calcul des KPI globaux (étape "Extraction des KPI globaux") passe d'environ 5,5 secondes à environ 0,7 seconde sur le même volume.
+  - Les deux migrations sont additives (aucune donnée modifiée), validées sur le cycle complet nouvelle installation et mise à niveau depuis une base existante (v60/v61 → v62, aucune perte de données), avec résultats de `getStats()` identiques avant/après.
+  - Parallélisation mineure de deux requêtes indépendantes dans `useDashboardStats.ts`.
+
+### 🧱 Base de Données
+
+- **Migrations `SCHEMA_VERSION` 60 → 62** (`migrateV61`, `migrateV62`) : deux migrations additives dédiées à la performance du tableau de bord (voir détail dans la section Performances ci-dessus). Aucune perte ni altération de données existantes.
+
+### 🧪 Infrastructure de Test
+
+- Couverture e2e additionnelle : reproduction et validation du filtre centre/site sur la recherche Vérification, cycle de migration v60/v61→v62 avec vérification d'intégrité et de conservation des données, reproduction du cache KPI périmé sur "Actualiser", et validation des 6 nouveaux boutons "Actualiser".
+
+---
+
 ## [2.10.0] - 2026-08-03
 
 ### 🚨 Sécurité (Critique)

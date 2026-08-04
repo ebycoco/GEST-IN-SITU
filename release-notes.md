@@ -1,7 +1,7 @@
-# GEST-IN-SITU — Release v2.10.0 (préparation)
+# GEST-IN-SITU — Release v2.11.0 (préparation)
 
-> **Date :** 3 août 2026
-> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — migration SQLite additive v60 + faille de sécurité critiques, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
+> **Date :** 4 août 2026
+> **Statut :** Correctifs validés par tests e2e réels (build isolé + projet Supabase de dev dédié). Version et SCHEMA_VERSION tranchés par agent-11-release-manager (MINOR — deux migrations SQLite additives supplémentaires v61/v62 depuis v2.10.0, sans rupture de compatibilité descendante). **En attente de validation explicite de l'utilisateur avant publication** — y compris la question de savoir si `v2.10.0` a été effectivement publiée en release GitHub ou non (le rattrapage du retard `origin/main`/tags Git est hors périmètre de cette préparation, à traiter séparément).
 > **SCHEMA_VERSION :** 62 (migrations additives `migrateV60`/`migrateV61`/`migrateV62` — voir points dédiés ci-dessous)
 
 ## 🔴 Corrections critiques (P0)
