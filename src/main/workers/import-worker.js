@@ -18,7 +18,7 @@ async function run() {
   // invalides), par opposition aux anomalies STATUT_INCONNU qui restent importées malgré
   // l'anomalie tracée. Sert à ne pas gonfler artificiellement le compteur "duplicates".
   var totalExcludedFromBatch = 0;
-  const { dbPath, filePath, agent, totalEstimate, siteId, routingTable } = workerData;
+  const { dbPath, filePath, agent, totalEstimate, siteId, routingTable, excludedRowIndices } = workerData;
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -334,7 +334,7 @@ async function run() {
     noms:              ['NOMS', 'NOM', 'NAME', 'LASTNAME', 'NOM ASSURE'],
     prenoms:           ['PRENOMS', 'PRENOM', 'FIRSTNAME', 'PRENOM ASSURE'],
     date_de_naissance: ['DATE DE NAISSANCE', 'DATE_DE_NAISSANCE', 'DDN', 'NAISSANCE', 'DATE NAISS'],
-    num_secu:          ['NUM SECU', 'NUM_SECU', 'NUMERO SECURITE', 'ID CMU', 'NUMERO CMU', 'NUM CMU'],
+    num_secu:          ['NUM SECU', 'NUM_SECU', 'NUMERO SECURITE', 'ID CMU', 'NUMERO CMU', 'NUM CMU', 'N° SECU', 'N° SÉCU'],
     contact:           ['CONTACT', 'TELEPHONE', 'TEL', 'PHONE', 'NUMERO TEL'],
     lieu_de_naissance: ['LIEU DE NAISSANCE', 'LIEU_DE_NAISSANCE', 'LIEU NAISS', 'COMMUNE NAISS'],
     lieu_enrolement:   ['LIEU ENROLEMENT', 'LIEU_ENROLEMENT', 'ENROLEMENT', 'SITE ENROLEMENT'],
@@ -563,6 +563,10 @@ async function run() {
   var lineCount = 0;
   var processedRows = 0;
   var sep = ';';
+  // P0 fix : Set des index (0-based, même ordre que preview.rows côté renderer, en-tête
+  // exclu, lignes vides exclues) des lignes retirées de l'aperçu par l'utilisateur via la
+  // corbeille. Lookup O(1) pour ne pas dégrader la boucle principale sur les gros fichiers.
+  var excludedSet = new Set(Array.isArray(excludedRowIndices) ? excludedRowIndices : []);
 
   function isValidDate(dateStr) {
     if (!dateStr) return false;
@@ -593,6 +597,22 @@ async function run() {
       colMap = buildColumnMap(headers);
       console.log('[CSV WORKER] Column map resolved:', JSON.stringify(colMap));
     } else {
+      // P0 fix : ligne exclue par l'utilisateur depuis l'aperçu (corbeille). L'invariant
+      // d'alignement des index tient parce que ce bloc `else` (ligne de donnée) n'est
+      // atteint qu'après le header (lineCount===0, traité ci-dessus) ET après le `continue`
+      // des lignes vides (ligne ~587, qui saute lineCount++ AVANT d'y arriver) — donc à cet
+      // instant, lineCount vaut exactement 1 + (nombre de lignes de données déjà vues),
+      // soit dataRowIndex = lineCount - 1 pour la ligne de donnée courante (0-based, même
+      // ordre que preview.rows côté renderer). On incrémente lineCount manuellement avant
+      // le `continue` car celui-ci saute l'incrément normal de fin de boucle (~ligne 780) —
+      // sans ça, l'indexation de toutes les lignes suivantes serait décalée. Aucun compteur
+      // de statistiques (processedRows, totalRejected, batch, anomaliesBatch) n'est touché
+      // pour une ligne exclue : elle ne doit apparaître dans aucun total du Bilan de Migration.
+      var dataRowIndex = lineCount - 1;
+      if (excludedSet.has(dataRowIndex)) {
+        lineCount++;
+        continue;
+      }
       try {
         var cols = line.split(sep).map(function(c) { return c.trim().replace(/^"|"$/g, ''); });
 
@@ -814,6 +834,35 @@ async function run() {
     console.log(`[CSV WORKER] ${dedupResult.changes} doublon(s) strict(s) retiré(s) de t_import_temp avant fusion.`);
   }
 
+  // MISSION 4 — DétecterDoublonsProbables : calculé ICI, AVANT la boucle de fusion/insertion
+  // ci-dessous, sur l'état de t_cartes tel qu'il existait avant que cet import n'y ajoute ses
+  // propres nouvelles fiches. CORRECTIF : ce comptage était auparavant exécuté APRÈS la fusion,
+  // ce qui faisait qu'une carte fraîchement insérée par CE MÊME import matchait sa PROPRE clé
+  // exacte (cle_doublon) via le NOT EXISTS ci-dessous — invalidant la détection pour elle-même
+  // et empêchant quasiment toujours ce compteur de se déclencher en pratique. On compte les
+  // lignes qui vont finir par créer une NOUVELLE fiche (aucune correspondance exacte via
+  // cle_doublon) mais qui partagent une identité approximative (cle_doublon_flex, sans le lieu
+  // de naissance) avec une fiche déjà existante — signe d'un doublon probable (variante
+  // d'orthographe/lieu) que la clé stricte ne peut pas détecter. Purement en lecture, aucun
+  // impact sur la logique d'insertion/fusion qui suit.
+  let probableDuplicatesCount = 0;
+  try {
+    const probableRow = db.prepare(`
+      SELECT COUNT(*) as count
+      FROM t_import_temp t
+      WHERE NOT EXISTS (
+        SELECT 1 FROM t_cartes c WHERE c.cle_doublon = t.cle_doublon AND c.site_id = t.site_id
+      )
+      AND EXISTS (
+        SELECT 1 FROM t_cartes c2
+        WHERE c2.cle_doublon_flex = t.cle_doublon_flex AND c2.site_id = t.site_id AND c2.cle_doublon != t.cle_doublon
+      )
+    `).get();
+    probableDuplicatesCount = (probableRow && probableRow.count) || 0;
+  } catch (err) {
+    console.error('[CSV WORKER] Échec du comptage des doublons probables:', err);
+  }
+
   // Fusion phase - transactions courtes par chunk pour éviter la saturation du WAL
   var now = new Date().toISOString();
 
@@ -977,31 +1026,6 @@ Total COMMIT & Auto-Checkpoint WAL : ${totalCommitMs.toFixed(2)}ms
 Total Attente Entre Chunks : ${totalBetweenMs.toFixed(2)}ms
 Seuil Auto-Checkpoint : ${walAutoCheckpoint} pages (~${(walAutoCheckpoint * 4096 / 1024 / 1024).toFixed(2)} MB)
 `);
-  }
-
-  // MISSION 4 — DétecterDoublonsProbables : la table temp est encore présente à ce stade
-  // (purgée juste après), donc c'est le dernier moment pour l'interroger. On compte les
-  // lignes qui ont fini par créer une NOUVELLE fiche (aucune correspondance exacte via
-  // cle_doublon) mais qui partagent une identité approximative (cle_doublon_flex, sans le
-  // lieu de naissance) avec une fiche déjà existante — signe d'un doublon probable (variante
-  // d'orthographe/lieu) que la clé stricte ne peut pas détecter. Purement en lecture, aucun
-  // impact sur la logique d'insertion/fusion ci-dessus.
-  let probableDuplicatesCount = 0;
-  try {
-    const probableRow = db.prepare(`
-      SELECT COUNT(*) as count
-      FROM t_import_temp t
-      WHERE NOT EXISTS (
-        SELECT 1 FROM t_cartes c WHERE c.cle_doublon = t.cle_doublon AND c.site_id = t.site_id
-      )
-      AND EXISTS (
-        SELECT 1 FROM t_cartes c2
-        WHERE c2.cle_doublon_flex = t.cle_doublon_flex AND c2.site_id = t.site_id AND c2.cle_doublon != t.cle_doublon
-      )
-    `).get();
-    probableDuplicatesCount = (probableRow && probableRow.count) || 0;
-  } catch (err) {
-    console.error('[CSV WORKER] Échec du comptage des doublons probables:', err);
   }
 
   parentPort.postMessage({ type: 'progress', value: 98 });

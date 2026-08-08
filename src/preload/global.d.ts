@@ -128,7 +128,7 @@ declare global {
         parseCSV: (path: string) => Promise<{rows: any[], headers: string[], total: number, error?: string}>;
         executeBatch: (rows: any[], agent: string, siteId?: number) => Promise<void>;
         clearTemp: (siteId?: number) => Promise<void>;
-        processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number) => Promise<any>;
+        processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number, excludedRowIndices?: number[]) => Promise<any>;
         fusionner: (agent: string, siteId?: number) => Promise<{updated: number, inserted: number}>;
         getAnomalies: (siteId: number, offset?: number, limit?: number, query?: string) => Promise<{rows: any[], total: number}>;
         clearAnomalies: (siteId: number) => Promise<void>;
@@ -195,7 +195,7 @@ declare global {
       db: {
         purge: (siteId?: number, currentUser?: any) => Promise<{ success: boolean; count: number }>;
         emergencyPurge: (siteId: number, currentUser?: any) => Promise<{ success: boolean }>;
-        getCardCount: () => Promise<number>;
+        getCardCount: (siteId?: number) => Promise<number>;
         onPurgeProgress: (callback: (p: number) => void) => () => void;
       };
       sync: {

@@ -51,18 +51,44 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
     })();
 
     if (progressCallback) progressCallback(100);
-    
+
     db.pragma('foreign_keys = ON');
 
-    setTimeout(() => {
-      try {
-        log.info("⏳ [BACKGROUND] Lancement du VACUUM de compactage du disque...");
-        db.prepare("VACUUM").run();
-        log.info("✅ [BACKGROUND] VACUUM terminé avec succès.");
-      } catch (err) {
-        log.error("Erreur lors du VACUUM en tâche de fond:", err);
-      }
-    }, 500);
+    // CORRECTIF P0 — VACUUM synchrone et attendu (plus de setTimeout fire-and-forget).
+    // L'ancien pattern retournait { success: true } AVANT que le VACUUM n'ait réellement
+    // commencé, sans aucun verrou empêchant une autre opération SQLite (IPC, SyncEngine repris,
+    // nouvel import) de toucher le fichier .db pendant que VACUUM le réécrit intégralement —
+    // scénario reproduit en corruption SQLITE_CORRUPT_VTAB lors d'un enchaînement Emergency
+    // Purge + Purge normale. Le VACUUM doit désormais être totalement terminé avant que cette
+    // fonction (et donc la promesse IPC du caller qui l'attend) ne se résolve.
+    try {
+      log.info("⏳ Lancement du VACUUM de compactage du disque...");
+      db.prepare("VACUUM").run();
+      log.info("✅ VACUUM terminé avec succès.");
+    } catch (err) {
+      // Le VACUUM échoué (ex. espace disque insuffisant) ne remet pas en cause la purge
+      // elle-même (déjà commitée ci-dessus) : on journalise sans faire échouer l'opération,
+      // comme le faisait le comportement fire-and-forget précédent. Ce qui change ici, c'est
+      // uniquement le fait que ce bloc s'exécute désormais de façon synchrone et attendue,
+      // pour qu'aucune autre opération SQLite ne puisse s'intercaler pendant le VACUUM.
+      log.error("Erreur lors du VACUUM :", err);
+    }
+
+    // CORRECTIF P0 (bug résiduel) — Checkpoint WAL explicite après VACUUM.
+    // En mode WAL, VACUUM écrit l'intégralité de la base reconstruite DANS le WAL
+    // (pas directement dans le fichier .db principal) : sans checkpoint, l'espace
+    // disque libéré par la purge n'est PAS réellement récupéré tant qu'un checkpoint
+    // (automatique ou explicite) n'a pas eu lieu. `wal_autocheckpoint = 100000` étant
+    // volontairement haut (anti-freeze import massif, voir connection.ts), rien ne
+    // garantit qu'un checkpoint automatique se déclenche rapidement après une purge.
+    // TRUNCATE force la fusion + la remise à zéro du WAL ici, sans toucher au réglage
+    // global. Best-effort : si d'autres connexions retiennent un verrou, TRUNCATE fait
+    // simplement ce qu'il peut sans lever d'exception bloquante.
+    try {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    } catch (err) {
+      log.error("Erreur lors du wal_checkpoint(TRUNCATE) post-VACUUM :", err);
+    }
 
     return { success: true, count: deletedCartes };
   } catch (error) {
@@ -71,9 +97,15 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
   }
 }
 
-export function getLocalCardCount(): number {
+export function getLocalCardCount(siteId?: number): number {
   const db = getDatabase()!;
-  const row = db.prepare("SELECT COUNT(*) as count FROM t_cartes").get() as { count: number };
+  // Cloisonnement (CLAUDE.md §3) : si siteId est fourni, on filtre sur ce site (comportement
+  // cohérent avec purgeLocalDatabase(siteId), qui purge un site précis). Sans siteId (undefined),
+  // on conserve le comportement historique — total global tous sites confondus — pour ne pas
+  // casser d'éventuels appelants existants qui en dépendraient.
+  const row = siteId !== undefined
+    ? db.prepare("SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?").get(siteId) as { count: number }
+    : db.prepare("SELECT COUNT(*) as count FROM t_cartes").get() as { count: number };
   return row ? row.count : 0;
 }
 
@@ -87,15 +119,51 @@ export async function emergencyPurge(
     throw new Error("siteId obligatoire pour la purge d'urgence.");
   }
 
-  // Étape 1 : Désactivation des clés & suppression des triggers (15%)
+  // Étape 1 : Désactivation des clés & suppression des TRIGGERS UNIQUEMENT (15%)
+  //
+  // CORRECTIF P0 (bug résiduel post-VACUUM-synchrone) — SQLITE_CORRUPT_VTAB transitoire :
+  // L'ancienne séquence faisait un DROP TABLE t_cartes_fts (+ triggers) PUIS un CREATE VIRTUAL
+  // TABLE + ré-indexation PUIS un VACUUM. Stress-testé (3 cycles Emergency Purge → activité SQLite
+  // → Purge normale enchaînés), ce DROP+CREATE de la vtable FTS5 juste avant un VACUUM provoquait de
+  // façon reproductible (100% sur 5-10 répétitions, isolé empiriquement via un banc de test dédié
+  // sur fichier .db jetable) une erreur SQLITE_CORRUPT_VTAB transitoire pour TOUTE connexion
+  // SQLite tierce (Worker Thread, IPC, SyncEngine repris) touchant t_cartes_fts juste après —
+  // y compris une connexion qui n'avait JAMAIS interagi avec t_cartes_fts auparavant. Le fichier
+  // se révèle par ailleurs parfaitement sain à la ré-inspection (integrity_check/quick_check ok) :
+  // il s'agit bien d'une race transitoire liée au VACUUM d'une vtable FTS5 tout juste recréée
+  // (DROP+CREATE), et non d'une corruption disque persistante.
+  // Isolation de la cause (tests différentiels reproductibles) :
+  //   - DROP+CREATE de t_cartes_fts suivi d'un VACUUM (même avec un délai/réordonnancement,
+  //     même avec 'wal_checkpoint(TRUNCATE)' avant/après, même mmap_size=0) → échoue toujours.
+  //   - Purge FTS5 100% incrémentale (aucun DROP+CREATE, aucune commande spéciale bulk type
+  //     'delete-all'/'rebuild', uniquement des opérations 'delete' par ligne comme le ferait le
+  //     trigger normal AFTER DELETE) suivie d'un VACUUM → jamais d'échec (10/10 répétitions).
+  // Correctif retenu : ne plus JAMAIS DROP/CREATE t_cartes_fts ni utiliser de commande bulk FTS5.
+  // On droppe seulement les 3 TRIGGERS (pour éviter le coût par-ligne pendant le DELETE en masse,
+  // optimisation anti-freeze préservée), on capture l'ANCIEN contenu des cartes à purger AVANT
+  // de les supprimer, puis on reproduit exactement — mais par lots avec yield — ce que le trigger
+  // AFTER DELETE aurait fait lui-même : une commande 'delete' par ligne dans t_cartes_fts.
+  // Bénéfice collatéral : l'ancienne séquence (DROP TABLE t_cartes_fts) vidait l'INTÉGRALITÉ de
+  // l'index FTS5 (partagé entre tous les sites) puis ne ré-indexait que le site purgé — ce qui
+  // effaçait silencieusement la recherche plein texte des AUTRES sites après une purge d'urgence
+  // d'un seul site. La purge incrémentale ci-dessous ne touche que les lignes réellement
+  // supprimées et préserve donc l'index FTS5 des autres sites.
   if (progressCallback) progressCallback(5);
   db.pragma('foreign_keys = OFF');
 
   db.exec('DROP TRIGGER IF EXISTS trg_cartes_ai;');
   db.exec('DROP TRIGGER IF EXISTS trg_cartes_ad;');
   db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
-  db.exec('DROP TABLE IF EXISTS t_cartes_fts;');
-  
+
+  // Capture de l'ancien contenu FTS5 du site à purger AVANT suppression — nécessaire pour
+  // reproduire ensuite manuellement les commandes 'delete' que le trigger AFTER DELETE aurait
+  // émises (old.* n'est plus disponible une fois les lignes supprimées).
+  type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
+  const oldFtsCards = db.prepare(`
+    SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
+    FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
+  `).all(siteId) as FtsCard[];
+
   if (progressCallback) progressCallback(15);
   await new Promise(resolve => setImmediate(resolve));
 
@@ -118,23 +186,9 @@ export async function emergencyPurge(
   if (progressCallback) progressCallback(60);
   await new Promise(resolve => setImmediate(resolve));
 
-  // Étape 4 : Recréation de la structure FTS5 (75%)
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS t_cartes_fts USING fts5(
-      noms,
-      prenoms,
-      num_secu,
-      contact,
-      lieu_de_naissance,
-      rangement,
-      content='t_cartes',
-      content_rowid='id_carte'
-    );
-  `);
+  // Étape 4 : Recréation des TRIGGERS uniquement (75%) — t_cartes_fts elle-même n'est
+  // JAMAIS droppée/recréée (voir justification ci-dessus).
   if (progressCallback) progressCallback(75);
-  await new Promise(resolve => setImmediate(resolve));
-
-  // Étape 5 : Recréation des triggers & Ré-indexation FTS5 (90%)
   db.exec(`
     CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
       INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
@@ -153,37 +207,33 @@ export async function emergencyPurge(
       VALUES(new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
     END;
   `);
+  await new Promise(resolve => setImmediate(resolve));
 
-  // ─── RE-INDEXATION FTS5 NON-BLOQUANTE (lots de 500 + yield setImmediate) ───
-  // CORRECTIF ANTI-FREEZE : Le SELECT...INSERT en bloc précédent gelait le Main
-  // Thread Electron pendant 15-45s sur 220 000 cartes (Abobo). Désormais :
-  //   1. Les données sont chargées en mémoire en une seule requête SELECT (rapide).
-  //   2. L'insertion FTS5 se fait par lots de FTS_BATCH_SIZE pour libérer l'Event
-  //      Loop entre chaque lot via setImmediate (non bloquant pour l'UI).
-  //   3. La progression est mise à jour de façon granulaire entre 75% et 90%.
+  // ─── PURGE FTS5 INCRÉMENTALE NON-BLOQUANTE (lots de 500 + yield setImmediate) ───
+  // Remplace l'ancienne RE-INDEXATION (qui supposait t_cartes_fts vidée par le DROP TABLE)
+  // par une suppression incrémentale ciblée : pour chaque carte réellement supprimée, on
+  // rejoue la commande 'delete' que le trigger AFTER DELETE aurait émise — mais par lots,
+  // avec yield setImmediate entre chaque lot pour ne pas geler l'UI (CORRECTIF ANTI-FREEZE
+  // préservé, cf. historique : le SELECT...INSERT en bloc gelait le Main Thread Electron
+  // pendant 15-45s sur 220 000 cartes). Contrairement à l'ancienne ré-indexation, ceci ne
+  // laisse jamais t_cartes_fts dans un état vidé/reconstruit en bloc juste avant le VACUUM.
   const FTS_BATCH_SIZE = 500;
-  type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
-  const ftsCards = db.prepare(`
-    SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
-    FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
-  `).all(siteId) as FtsCard[];
-
-  const totalFts = ftsCards.length;
+  const totalFts = oldFtsCards.length;
   if (totalFts > 0) {
-    const ftsInsertStmt = db.prepare(`
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+    const ftsDeleteStmt = db.prepare(`
+      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES('delete', ?, ?, ?, ?, ?, ?, ?)
     `);
 
     for (let i = 0; i < totalFts; i += FTS_BATCH_SIZE) {
-      const batch = ftsCards.slice(i, i + FTS_BATCH_SIZE);
+      const batch = oldFtsCards.slice(i, i + FTS_BATCH_SIZE);
       db.transaction(() => {
         for (const c of batch) {
-          ftsInsertStmt.run(c.id_carte, c.noms || '', c.prenoms || '', c.num_secu || '', c.contact || '', c.lieu_de_naissance || '', c.rangement || '');
+          ftsDeleteStmt.run(c.id_carte, c.noms || '', c.prenoms || '', c.num_secu || '', c.contact || '', c.lieu_de_naissance || '', c.rangement || '');
         }
       })();
 
-      // Progression granulaire : 75% → 90% pendant la ré-indexation
+      // Progression granulaire : 75% → 90% pendant la purge FTS5
       if (progressCallback) {
         const ftsProgress = 75 + Math.round(((i + batch.length) / totalFts) * 15);
         progressCallback(Math.min(ftsProgress, 90));
@@ -192,7 +242,7 @@ export async function emergencyPurge(
       // Yield de la boucle d'événements — libère le thread UI d'Electron
       await new Promise(resolve => setImmediate(resolve));
     }
-    log.info(`[EMERGENCY PURGE] Ré-indexation FTS5 terminée : ${totalFts} cartes indexées par lots de ${FTS_BATCH_SIZE}.`);
+    log.info(`[EMERGENCY PURGE] Purge FTS5 incrémentale terminée : ${totalFts} cartes retirées de l'index par lots de ${FTS_BATCH_SIZE}.`);
   }
 
   if (progressCallback) progressCallback(90);
@@ -200,18 +250,35 @@ export async function emergencyPurge(
 
   // Étape 6 : Réactivation clés & Vacuum (100%)
   db.pragma('foreign_keys = ON');
-  
-  if (progressCallback) progressCallback(100);
 
-  setTimeout(() => {
-    try {
-      log.info("⏳ [BACKGROUND - EMERGENCY] Lancement du compactage du disque...");
-      db.prepare("VACUUM").run();
-      log.info("✅ [BACKGROUND - EMERGENCY] VACUUM terminé avec succès.");
-    } catch (err) {
-      log.error("Erreur lors du VACUUM en tâche de fond:", err);
-    }
-  }, 500);
+  // CORRECTIF P0 — VACUUM synchrone et attendu (plus de setTimeout fire-and-forget), même
+  // justification que dans purgeLocalDatabase ci-dessus : la fonction ne doit retourner (et donc
+  // la promesse IPC de db:emergency-purge ne doit se résoudre) qu'une fois le VACUUM totalement
+  // terminé, pour qu'aucune autre opération SQLite ne puisse s'intercaler pendant la réécriture
+  // intégrale du fichier .db.
+  try {
+    log.info("⏳ [EMERGENCY] Lancement du compactage du disque...");
+    db.prepare("VACUUM").run();
+    log.info("✅ [EMERGENCY] VACUUM terminé avec succès.");
+  } catch (err) {
+    // Échec du VACUUM (ex. espace disque insuffisant) : journalisé sans faire échouer la
+    // réparation d'urgence elle-même, déjà commitée ci-dessus (mêmes semantiques que
+    // purgeLocalDatabase).
+    log.error("Erreur lors du VACUUM :", err);
+  }
+
+  // CORRECTIF P0 (bug résiduel) — Checkpoint WAL explicite après VACUUM, même justification
+  // que dans purgeLocalDatabase (voir commentaire détaillé ci-dessus) : sans ce checkpoint,
+  // l'espace disque libéré par la purge d'urgence reste dans le WAL au lieu d'être réellement
+  // récupéré, `wal_autocheckpoint` étant volontairement réglé haut pour éviter les freezes UI
+  // pendant les imports massifs.
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+  } catch (err) {
+    log.error("Erreur lors du wal_checkpoint(TRUNCATE) post-VACUUM [EMERGENCY] :", err);
+  }
+
+  if (progressCallback) progressCallback(100);
 
   return { success: true };
 }

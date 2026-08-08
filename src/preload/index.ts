@@ -219,8 +219,8 @@ const api = {
       ipcRenderer.invoke('import:executeBatch', rows, agent, siteId),
     clearTemp: (siteId?: number): Promise<void> => 
       ipcRenderer.invoke('import:clearTemp', siteId),
-    processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number): Promise<{ success: boolean; message: string }> => 
-      ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId, userId),
+    processFile: (path: string, agent: string, totalEstimate?: number, siteId?: number, userId?: number, excludedRowIndices?: number[]): Promise<{ success: boolean; message: string }> =>
+      ipcRenderer.invoke('import:processFile', path, agent, totalEstimate, siteId, userId, excludedRowIndices),
     fusionner: (agent: string, siteId?: number): Promise<{ updated: number; inserted: number }> => 
       ipcRenderer.invoke('import:fusionner', agent, siteId),
     getAnomalies: (siteId: number, offset = 0, limit = 50, query?: string): Promise<{rows: any[], total: number}> =>
@@ -418,8 +418,8 @@ const api = {
       ipcRenderer.invoke('db:purge', siteId, currentUser),
     emergencyPurge: (siteId: number, currentUser?: any): Promise<{ success: boolean }> => 
       ipcRenderer.invoke('db:emergency-purge', siteId, currentUser),
-    getCardCount: (): Promise<number> => 
-      ipcRenderer.invoke('db:getCardCount'),
+    getCardCount: (siteId?: number): Promise<number> =>
+      ipcRenderer.invoke('db:getCardCount', siteId),
     onPurgeProgress: (callback: (p: number) => void) => {
       const listener = (_: any, p: number) => callback(p);
       ipcRenderer.on('db:purge-progress', listener);

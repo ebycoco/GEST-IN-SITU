@@ -35,10 +35,20 @@ export default function ImportPage() {
   const [isEmergencyPurging, setIsEmergencyPurging] = useState(false);
   const [purgeProgress, setPurgeProgress] = useState(0);
   const [cardCount, setCardCount] = useState<number>(0);
+  // Index (0-based, même ordre que preview.rows, en-tête exclu, lignes vides exclues)
+  // des lignes d'aperçu exclues par l'utilisateur via la corbeille. On ne modifie JAMAIS
+  // preview.rows par splice() : ça décalerait les index et romprait la correspondance
+  // avec lineCount côté Worker (cf. import-worker.js). Un Set préserve l'invariant
+  // d'indexation quel que soit le nombre/ordre des suppressions successives.
+  const [excludedRowIndices, setExcludedRowIndices] = useState<Set<number>>(new Set());
 
   const fetchCardCount = async (silent = false) => {
     try {
-      const count = await window.api.db.getCardCount();
+      // P4 fix : isolation site — même calcul de siteIdToUse que le reste du fichier,
+      // pour que le compteur de cartes n'agrège plus tous les sites pour un
+      // ADMINISTRATEUR_SITE / SUPER ADMIN avec un site actif sélectionné.
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      const count = await window.api.db.getCardCount(siteIdToUse ? Number(siteIdToUse) : undefined);
       setCardCount(count);
       useCacheStore.getState().setImportCache(count);
     } catch (err) {
@@ -85,7 +95,8 @@ export default function ImportPage() {
       setFile(path);
       setResult(null);
       setPreview(null);
-      
+      setExcludedRowIndices(new Set());
+
       const data = await window.api.import.parseCSV(path);
       if (data.error) {
         toast.error(`Erreur de lecture: ${data.error}`);
@@ -165,7 +176,10 @@ export default function ImportPage() {
 
     try {
       await window.api.import.clearTemp(Number(siteIdToUse));
-      const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, Number(siteIdToUse), user?.id_user);
+      // P0 fix : transmet les index (0-based) des lignes retirées de l'aperçu par
+      // l'utilisateur (corbeille), pour que le Worker les saute réellement au lieu
+      // de les importer quand même (le fichier disque n'est jamais réécrit).
+      const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, Number(siteIdToUse), user?.id_user, Array.from(excludedRowIndices));
       setResult(res);
       toast.success(`Migration terminée !`);
       await fetchCardCount();
@@ -454,7 +468,12 @@ export default function ImportPage() {
 
                 {/* Rejected */}
                 <div className="premium-glass" style={{ padding: '20px 24px', borderRadius: 20, border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'center', background: 'rgba(239, 68, 68, 0.02)' }}>
-                  <p style={{ fontSize: 11, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: '0.05em' }}>Rejetées / Erreurs</p>
+                  <p
+                    title="Inclut les lignes rejetées (non importées, ex. date invalide) et les lignes importées avec une anomalie à corriger (ex. statut inconnu normalisé en EN STOCK)."
+                    style={{ fontSize: 11, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: '0.05em', cursor: 'help' }}
+                  >
+                    Anomalies Signalées
+                  </p>
                   <p style={{ fontSize: 24, fontWeight: 900, color: '#ef4444', margin: 0 }}>{result.rejected?.toLocaleString('fr') || 0}</p>
                 </div>
               </div>
@@ -463,7 +482,7 @@ export default function ImportPage() {
             <div style={{ display: 'flex', justifyContent: 'center' }}>
               <button 
                 className="btn btn-primary" 
-                onClick={() => { setFile(null); setResult(null); }} 
+                onClick={() => { setFile(null); setResult(null); setExcludedRowIndices(new Set()); }}
                 style={{ padding: '20px 56px', borderRadius: 20, fontSize: 18, fontWeight: 800 }}
               >
                 Nouvelle Migration
@@ -530,18 +549,22 @@ export default function ImportPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {(preview.rows || []).slice(0, 50).map((row, i) => (
+                          {(preview.rows || []).slice(0, 50).map((row, i) => {
+                            // P0 fix : on ne fait plus splice() sur preview.rows (ça décalerait
+                            // les index et romprait l'invariant d'alignement avec lineCount côté
+                            // Worker). On masque simplement la ligne au rendu tout en conservant
+                            // l'index d'origine `i`, qui reste transmis au Worker via excludedRowIndices.
+                            if (excludedRowIndices.has(i)) return null;
+                            return (
                             <tr key={i} className="table-row-hover">
                               {activeHeaders.map((h, j) => {
                                 if (h.id === 'action') {
                                   return (
                                     <td key={j} style={{ padding: '12px 24px', textAlign: 'center', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                                      <button 
-                                        className="btn btn-icon" 
+                                      <button
+                                        className="btn btn-icon"
                                         onClick={() => {
-                                          const newRows = [...preview.rows];
-                                          newRows.splice(i, 1);
-                                          setPreview({ ...preview, rows: newRows, total: preview.total - 1 });
+                                          setExcludedRowIndices(prev => new Set(prev).add(i));
                                           toast.success('Ligne retirée de l\'aperçu');
                                         }}
                                         style={{ background: 'rgba(231, 76, 60, 0.1)', color: 'var(--accent-red)', borderRadius: 10 }}
@@ -553,8 +576,8 @@ export default function ImportPage() {
                                 }
                                 const rowKey = (h.csvHeader || '').toLowerCase().replace(/\s+/g, '_');
                                 return (
-                                  <td key={j} style={{ 
-                                    padding: '16px 24px', fontSize: 13, color: 'rgba(255,255,255,0.7)', 
+                                  <td key={j} style={{
+                                    padding: '16px 24px', fontSize: 13, color: 'rgba(255,255,255,0.7)',
                                     borderBottom: '1px solid rgba(255,255,255,0.03)', whiteSpace: 'nowrap',
                                     fontWeight: 500
                                   }}>
@@ -563,7 +586,8 @@ export default function ImportPage() {
                                 );
                               })}
                             </tr>
-                          ))}
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -602,7 +626,7 @@ export default function ImportPage() {
                     <div style={{ display: 'flex', gap: 48, flexWrap: 'wrap' }}>
                       <div>
                         <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', fontWeight: 800, textTransform: 'uppercase', margin: 0 }}>Volume</p>
-                        <p style={{ color: 'white', fontWeight: 900, fontSize: 22, margin: 0 }}>{preview.total.toLocaleString('fr')}</p>
+                        <p style={{ color: 'white', fontWeight: 900, fontSize: 22, margin: 0 }}>{(preview.total - excludedRowIndices.size).toLocaleString('fr')}</p>
                       </div>
                       <div>
                         <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', fontWeight: 800, textTransform: 'uppercase', margin: 0 }}>Colonnes</p>
@@ -711,7 +735,7 @@ export default function ImportPage() {
             }
             const isConfirmed = await confirmService.confirm({
               title: "Réparer & Forcer la Synchronisation",
-              message: "Cette action réinitialise l'index de recherche locale FTS5 et vide la file d'attente Outbox locale pour ce site. Vos données cloud de Supabase restent en parfaite sécurité.",
+              message: "Cette action supprime TOUTES les cartes locales de ce site sur ce poste, réinitialise l'index de recherche FTS5 et vide la file d'attente Outbox locale. Vos données cloud de Supabase restent en parfaite sécurité et permettront de tout re-télécharger.",
               isDanger: true,
               requirePassword: true,
               actionName: "[SYSTÈME] Réparation et forçage de la synchronisation locale"

@@ -2146,7 +2146,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // — un compte quelconque pouvait donc forger userId=999999 pour importer des cartes en
   // masse avec des privilèges SUPER ADMIN, sans jamais s'être authentifié via le vrai login
   // ROOT. L'identité est désormais dérivée exclusivement de la session serveur réelle.
-  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number) => {
+  ipcMain.handle('import:processFile', (_, filePath: string, agent: string, totalEstimate: number, siteId?: number, _userId?: number, excludedRowIndices?: number[]) => {
     return new Promise((resolve, reject) => {
       const secureUser = getSecureCurrentUser();
       const resolvedUserId = secureUser?.id_user;
@@ -2229,7 +2229,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           agent,
           siteId,
           routingTable,
-          totalEstimate: totalEstimate || 220000
+          totalEstimate: totalEstimate || 220000,
+          // P0 fix : index (0-based) des lignes retirées de l'aperçu par l'utilisateur
+          // (corbeille), à sauter dans la boucle du Worker sans les compter dans les
+          // statistiques du Bilan de Migration. Cf. import-worker.js pour l'invariant
+          // d'alignement des index avec lineCount.
+          excludedRowIndices: excludedRowIndices || []
         }
       });
 
@@ -3456,8 +3461,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.info(`[MAINTENANCE] RÃ©paration forcÃ©e exÃ©cutÃ©e, synchronisation rÃ©activÃ©e pour le site ID ${siteId}.`);
     }
   });
-  ipcMain.handle('db:getCardCount', async () => {
-    try { return queries.getLocalCardCount(); }
+  ipcMain.handle('db:getCardCount', async (_, siteId?: number) => {
+    try {
+      // Sécurité/cloisonnement (P1) : identité dérivée de la session serveur réelle
+      // (getSecureCurrentUser()), même pattern que sync:getCloudCartesCount ci-dessus. Un
+      // SUPER ADMIN peut passer un siteId explicite (lié à son site actif) ; tout autre rôle
+      // est forcé sur son propre site_id, sans possibilité de le contourner via le paramètre
+      // client. Si aucune session sécurisée n'est disponible, on retombe sur le comportement
+      // historique (comptage global) pour ne pas casser l'appel existant côté renderer.
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return queries.getLocalCardCount();
+      const effectiveSiteId = secureUser.role === 'SUPER ADMIN'
+        ? (siteId !== undefined && siteId !== null ? Number(siteId) : undefined)
+        : secureUser.site_id;
+      return queries.getLocalCardCount(effectiveSiteId);
+    }
     catch (e) { log.error('IPC Error: db:getCardCount', e); throw e; }
   });
 
