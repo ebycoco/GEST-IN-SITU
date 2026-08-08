@@ -233,47 +233,6 @@ export function SiteAdminView({
     message: string;
   } | null>(null);
 
-  const [isAuditing, setIsAuditing] = useState(false);
-  const [auditProgress, setAuditProgress] = useState<{ processed: number; total: number; movedCount: number } | null>(null);
-
-  React.useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    
-    if (isAuditing) {
-      unsubscribe = (window as any).api.qualite.onAuditProgress((_: any, data: { processed: number; total: number; movedCount: number }) => {
-        setAuditProgress(data);
-      });
-    }
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [isAuditing]);
-
-  const handleAuditDates = async () => {
-    setIsAuditing(true);
-    setAuditProgress({ processed: 0, total: 0, movedCount: 0 });
-    
-    // S'abonner aux événements de progression est maintenant géré par useEffect
-    // pour éviter les fuites de mémoire.
-
-    try {
-      const res = await (window as any).api.qualite.auditDates();
-      if (res.success) {
-        toast.success(`Audit terminé : ${res.movedCount} dates invalides déplacées vers le tableau de bord Qualité.`);
-        loadStats();
-      }
-    } catch (e: any) {
-      console.error(e);
-      toast.error(`Erreur lors de l'audit: ${e.message}`);
-    } finally {
-      setIsAuditing(false);
-      setAuditProgress(null);
-    }
-  };
-
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -1040,37 +999,6 @@ export function SiteAdminView({
                       </p>
                     </div>
 
-                    <div>
-                      <button
-                        onClick={handleAuditDates}
-                        disabled={isAuditing || loading || isClearingCloud}
-                        className="btn"
-                        title="Vérifie toutes les dates de naissance du stock et isole les dates invalides"
-                        style={{
-                          padding: '12px 24px',
-                          borderRadius: 12,
-                          fontWeight: 700,
-                          backgroundColor: 'rgba(234, 179, 8, 0.1)',
-                          color: '#eab308',
-                          border: '1px solid rgba(234, 179, 8, 0.25)',
-                          cursor: (isAuditing || loading || isClearingCloud) ? 'not-allowed' : 'pointer',
-                          opacity: (isAuditing || loading || isClearingCloud) ? 0.5 : 1,
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '8px',
-                          width: 'fit-content'
-                        }}
-                      >
-                        <Search size={18} style={{ animation: isAuditing ? 'spin 2s linear infinite' : 'none' }} />
-                        {isAuditing ? (
-                          auditProgress ? `Audit en cours (${auditProgress.processed}/${auditProgress.total}) - ${auditProgress.movedCount} anomalies` : 'Audit en cours...'
-                        ) : 'Auditer les Dates Invalides'}
-                      </button>
-                      <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                        Recherche et déplace automatiquement les cartes ayant une date de naissance impossible vers les anomalies.
-                      </p>
-                    </div>
-
                     {syncAlert && (
                       <div className="glass-card" style={{ border: '1px solid rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.05)', padding: '16px 20px', borderRadius: 12, display: 'flex', flexDirection: 'column', gap: 12 }}>
                         <div style={{ color: 'white', fontSize: 13, lineHeight: 1.5 }}>
@@ -1242,12 +1170,12 @@ export function SiteAdminView({
                   </p>
                   <button
                     onClick={handleClearDatabase}
-                    disabled={loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading}
+                    disabled={loading || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading}
                     className="btn-danger"
                     style={{
                       padding: '12px 24px', alignSelf: 'flex-start', borderRadius: 12, fontWeight: 700, boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)',
-                      cursor: (loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 'not-allowed' : 'pointer',
-                      opacity: (loading || isAuditing || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 0.5 : 1
+                      cursor: (loading || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 'not-allowed' : 'pointer',
+                      opacity: (loading || isClearingCloud || isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading) ? 0.5 : 1
                     }}
                   >
                     <Trash2 size={18} /> PURGER LES CARTES DU SITE
@@ -1269,7 +1197,7 @@ export function SiteAdminView({
                   </p>
                   <button
                     onClick={handleClearCloudDatabaseClick}
-                    disabled={isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
+                    disabled={isClearingCloud || loading || totalCloudCartesCount === 0 || totalCloudCartesCount === -1}
                     className="btn-danger"
                     style={{
                       padding: '12px 24px',
@@ -1277,8 +1205,8 @@ export function SiteAdminView({
                       borderRadius: 12,
                       fontWeight: 700,
                       boxShadow: '0 4px 15px rgba(239, 68, 68, 0.3)',
-                      cursor: (isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
-                      opacity: (isClearingCloud || loading || isAuditing || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
+                      cursor: (isClearingCloud || loading || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 'not-allowed' : 'pointer',
+                      opacity: (isClearingCloud || loading || totalCloudCartesCount === 0 || totalCloudCartesCount === -1) ? 0.5 : 1
                     }}
                   >
                     <Trash2 size={18} /> 
@@ -1294,7 +1222,7 @@ export function SiteAdminView({
         </>
       )}
       {/* Bouclier global anti-clics et curseur de chargement — seulement si PAS en arrière-plan */}
-      {(isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading || loading || isClearingCloud || isAuditing) && (
+      {(isSiteSyncing || isSyncingAgents || isPullingCards || isBulkUploading || loading || isClearingCloud) && (
         <div style={{
           position: 'fixed',
           top: 0,

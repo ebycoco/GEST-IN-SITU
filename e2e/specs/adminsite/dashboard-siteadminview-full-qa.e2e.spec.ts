@@ -832,40 +832,86 @@ test.describe.serial('QA Terrain — Dashboard SiteAdminView complet (agent-13)'
     expect(after).toBe(before); // aucune carte "consommée" par un envoi déclenché à tort
   });
 
-  test('WIZ-5. "Auditer les Dates Invalides" déplace une carte à date calendaire impossible vers t_import_anomalies', async () => {
+  // NOTE (agent-13, revalidation retrait) : cette section testait auparavant le bouton
+  // "Auditer les Dates Invalides" (audit rétroactif ponctuel des dates calendaires
+  // impossibles, déplacement vers t_import_anomalies). Sur demande explicite de
+  // l'utilisateur, la fonctionnalité a été intégralement retirée (renderer, handler IPC
+  // `qualite:auditDates`, bridge preload `qualite.auditDates`/`qualite.onAuditProgress`).
+  // WIZ-5 est donc réorienté vers la PREUVE D'ABSENCE plutôt que la preuve de fonctionnement,
+  // et WIZ-5B ajoute la non-régression explicite demandée sur les conditions composées
+  // nettoyées (isAuditing retiré de disabled/opacity de "PURGER LES CARTES DU SITE",
+  // "PURGER LES CARTES CLOUD" et de l'overlay de blocage global). Le test KPI "Dates
+  // Invalides" lui-même (calcul LENGTH(TRIM(...)) < 10 + t_import_anomalies existantes)
+  // reste intégralement couvert par KPI-1/BAN-1/WIZ-1, non affecté par ce retrait : seul le
+  // bouton d'audit RÉTROACTIF disparaît, pas la détection/l'affichage des dates invalides.
+  test('WIZ-5. [RETRAIT CONFIRMÉ] "Auditer les Dates Invalides" totalement absent (DOM + bridge preload), aucune régression console', async () => {
     const { window } = env;
-    const now = Date.now();
-    await dbQuery(
-      `INSERT INTO t_cartes (noms, prenoms, date_de_naissance, rangement, num_secu, statut, site_id, centre_id, cle_doublon, sync_id)
-       VALUES (?, 'X', '9999-99-99', 'CASIERAUDIT', 'NSAUDIT', 'EN STOCK', ?, ?, ?, ?)`,
-      [`ZZTEST_AUDITDATE_${now}`, siteAId(), siteACentreId(), cleDoublon(`ZZTEST_AUDITDATE_${now}`, 'X', '9999-99-99', '', ''), `zztest-auditdate-${now}`]
-    );
-    const beforeCarte = await count1(`SELECT COUNT(*) as count FROM t_cartes WHERE noms = ?`, [`ZZTEST_AUDITDATE_${now}`]);
-    expect(beforeCarte).toBe(1);
+    const consoleErrors: string[] = [];
+    const onConsole = (msg: import('@playwright/test').ConsoleMessage) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    };
+    window.on('console', onConsole);
 
-    await window.getByRole('button', { name: /Auditer les Dates Invalides/i }).click();
-    await expect(window.getByText(/Audit terminé/)).toBeVisible({ timeout: 30000 });
-
-    const afterCarte = await count1(`SELECT COUNT(*) as count FROM t_cartes WHERE noms = ?`, [`ZZTEST_AUDITDATE_${now}`]);
-    const anomalyRow = await dbQuery(`SELECT type_anomalie FROM t_import_anomalies WHERE noms = ?`, [`ZZTEST_AUDITDATE_${now}`]);
-    expect(afterCarte).toBe(0); // déplacée hors de t_cartes
-    expect(anomalyRow.length).toBe(1);
-    expect(anomalyRow[0].type_anomalie).toBe('DATE_INVALIDE');
-
-    // Le compteur KPI "Dates Invalides" doit refléter cette anomalie après un loadStats forcé.
+    // 1) Absence totale du bouton/texte, sur les deux onglets (Système / Pilotage), pour
+    // ADMINISTRATEUR_SITE (rôle actif à ce stade du run).
     await bounceDashboard();
-    await clickActualiser();
-    const uiDatesInvalides = await readKpiTile(window, 'Dates Invalides');
-    const expectedDatesInvalides = await count1(
-      `SELECT COUNT(*) as count FROM (
-         SELECT id_carte FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND TRIM(date_de_naissance) != '' AND LENGTH(TRIM(date_de_naissance)) < 10) AND site_id = ?
-         UNION ALL
-         SELECT id FROM t_import_anomalies WHERE type_anomalie = 'DATE_INVALIDE' AND site_id = ?
-       )`,
-      [siteAId(), siteAId()]
-    );
-    expect(uiDatesInvalides).toBe(expectedDatesInvalides);
-    console.log(`[WIZ-5] Tuile "Dates Invalides" mise à jour après audit : UI=${uiDatesInvalides} SQL=${expectedDatesInvalides}.`);
+    await window.getByRole('button', { name: 'Indicateurs Système' }).click();
+    await window.waitForTimeout(300);
+    await expect(window.getByRole('button', { name: /Auditer les Dates Invalides/i })).toHaveCount(0);
+    await expect(window.getByText(/Auditer les Dates Invalides/i)).toHaveCount(0);
+
+    await window.getByRole('button', { name: 'Pilotage des Activités de Terrain' }).click();
+    await window.waitForTimeout(300);
+    await expect(window.getByRole('button', { name: /Auditer les Dates Invalides/i })).toHaveCount(0);
+    await expect(window.getByText(/Auditer les Dates Invalides/i)).toHaveCount(0);
+
+    await window.getByRole('button', { name: 'Indicateurs Système' }).click();
+    await window.waitForTimeout(300);
+
+    window.off('console', onConsole);
+    console.log(`[WIZ-5] Erreurs console capturées pendant la bascule d'onglets (post-retrait) : ${consoleErrors.length}`);
+    if (consoleErrors.length > 0) console.log(JSON.stringify(consoleErrors));
+    expect(consoleErrors).toEqual([]);
+
+    // 2) Bridge preload : window.api.qualite.auditDates / onAuditProgress doivent être
+    // totalement absents (plus jamais exposés depuis le main process côté renderer).
+    const bridgeState = await window.evaluate(() => ({
+      auditDates: typeof (window as any).api?.qualite?.auditDates,
+      onAuditProgress: typeof (window as any).api?.qualite?.onAuditProgress,
+      // Contrôle négatif : une méthode `qualite` voisine, jamais retirée, doit elle rester
+      // exposée — confirme que c'est bien CE retrait précis qui a eu lieu, pas une
+      // suppression accidentelle plus large du bridge `qualite`.
+      supprimerIncoherences: typeof (window as any).api?.qualite?.supprimerIncoherences
+    }));
+    console.log(`[WIZ-5] window.api.qualite -> auditDates=${bridgeState.auditDates}, onAuditProgress=${bridgeState.onAuditProgress}, supprimerIncoherences=${bridgeState.supprimerIncoherences}`);
+    expect(bridgeState.auditDates).toBe('undefined');
+    expect(bridgeState.onAuditProgress).toBe('undefined');
+    expect(bridgeState.supprimerIncoherences).toBe('function');
+  });
+
+  test('WIZ-5B. [Non-régression] Bouclier global de blocage toujours déclenché par isBulkUploading (retrait de isAuditing des conditions composées sans effet de bord)', async () => {
+    const { window } = env;
+    // Réutilise la carte "parfaite" dirty insérée en WIZ-4 : sous
+    // GEST_IN_SITU_E2E_DISABLE_SYNC=1, bulk-uploader.ts:58-61 renvoie avant toute écriture,
+    // donc is_dirty reste à 1 et le bouton Étape 1 "ENVOYER LES CARTES VERS LE CLOUD" est
+    // toujours disponible ici (déjà confirmé sans consommation réelle par MODAL-1).
+    const uploadBtn = window.locator('button', { hasText: /ENVOYER LES CARTES VERS LE CLOUD/ });
+    await expect(uploadBtn).toBeVisible({ timeout: 15000 });
+    await uploadBtn.click();
+    await expect(window.getByText('Transfert de Masse Cloud')).toBeVisible({ timeout: 10000 });
+
+    // Clic "Confirmer" SANS l'attendre entièrement : ipcRenderer.invoke('sync:startBulk', ...)
+    // garantit au moins un aller-retour asynchrone entre setIsBulkUploading(true) (posé AVANT
+    // l'await, useForceSyncActions.ts ~106) et le `finally` qui le repasse à false (~133) —
+    // fenêtre suffisante pour observer le bouclier global déclenché par isBulkUploading.
+    const confirmClickPromise = window.getByRole('button', { name: 'Confirmer' }).click();
+
+    await expect(window.getByText(/Transfert de masse vers le Cloud/)).toBeVisible({ timeout: 5000 });
+    console.log('[WIZ-5B] Confirmé : le bouclier global de blocage plein écran se déclenche toujours pendant isBulkUploading.');
+
+    await confirmClickPromise;
+    await window.waitForTimeout(500);
+    await expect(window.getByText(/Transfert de masse vers le Cloud/)).toHaveCount(0);
   });
 
   test('WIZ-6. [Limitation structurelle du harnais] Le panneau syncAlert (BLOCKED_*) est inatteignable en E2E offline', async () => {
@@ -996,6 +1042,46 @@ test.describe.serial('QA Terrain — Dashboard SiteAdminView complet (agent-13)'
     await expect(window.getByText('Initialisation Cloud (Mass Upload)')).toBeVisible();
     // Le bloc "Synchronisation Cloud — Centre" (simplifié, ADMIN_CENTRE) ne doit PAS apparaître.
     await expect(window.getByText('Synchronisation Cloud — Centre')).toHaveCount(0);
+  });
+
+  test('SA-4. [Non-régression retrait "Auditer les Dates Invalides"] "PURGER LES CARTES DU SITE" reste désactivé pendant isBulkUploading', async () => {
+    const { window } = env;
+    const now = Date.now();
+
+    // "PURGER LES CARTES DU SITE" n'existe que pour SUPER ADMIN (SiteAdminView.tsx ~1160 :
+    // `user?.role === 'SUPER ADMIN' && activeSiteId`) — impossible à tester sous
+    // ADMINISTRATEUR_SITE (WIZ-5B), d'où ce test dédié ici. Site A vidé par SA-2 : on réinsère
+    // 1 carte "parfaite" dirty pour faire réapparaître le bouton Étape 1 du Mass Upload.
+    await dbQuery(
+      `INSERT INTO t_cartes (noms, prenoms, date_de_naissance, rangement, num_secu, statut, site_id, centre_id, cle_doublon, sync_id, is_dirty)
+       VALUES (?, 'X', '1993-01-01', 'CASIERSA4', 'NSSA4', 'EN STOCK', ?, ?, ?, ?, 1)`,
+      [`ZZTEST_SA4_${now}`, siteAId(), siteACentreId(), cleDoublon(`ZZTEST_SA4_${now}`, 'X', '1993-01-01', '', ''), `zztest-sa4-${now}`]
+    );
+    await clickActualiser();
+
+    const purgeSiteBtn = window.locator('button', { hasText: 'PURGER LES CARTES DU SITE' });
+    await expect(purgeSiteBtn).toBeEnabled({ timeout: 15000 }); // baseline avant tout transfert
+
+    const uploadBtn = window.locator('button', { hasText: /ENVOYER LES CARTES VERS LE CLOUD/ });
+    await expect(uploadBtn).toBeVisible({ timeout: 15000 });
+    await uploadBtn.click();
+    await expect(window.getByText('Transfert de Masse Cloud')).toBeVisible({ timeout: 10000 });
+
+    // Clic "Confirmer" sans l'attendre entièrement, même logique de fenêtre asynchrone que
+    // WIZ-5B (garantie par le round-trip ipcRenderer.invoke('sync:startBulk', ...)).
+    const confirmClickPromise = window.getByRole('button', { name: 'Confirmer' }).click();
+
+    // Fenêtre isBulkUploading=true : disabled={loading || isClearingCloud || isSiteSyncing ||
+    // isSyncingAgents || isPullingCards || isBulkUploading} (SiteAdminView.tsx ~1173) —
+    // dépendance NON touchée par le retrait de isAuditing de cette même condition composée.
+    await expect(window.getByText(/Transfert de masse vers le Cloud/)).toBeVisible({ timeout: 5000 });
+    await expect(purgeSiteBtn).toBeDisabled();
+    console.log('[SA-4] Confirmé : "PURGER LES CARTES DU SITE" reste désactivé pendant isBulkUploading — le nettoyage de isAuditing n\'a pas cassé cette dépendance restante.');
+
+    await confirmClickPromise;
+    await window.waitForTimeout(500);
+    await expect(purgeSiteBtn).toBeEnabled({ timeout: 10000 });
+    console.log('[SA-4] Bouton réactivé une fois isBulkUploading retombé à false.');
   });
 
   // ══════════════════════════════════════════════════════════════════════

@@ -310,14 +310,6 @@ const api = {
       ipcRenderer.invoke('qualite:supprimerIncoherences', payload),
     assainirGlobal: (payload: { site_id: number }): Promise<{ success: boolean; deleted: number; details: any }> =>
       ipcRenderer.invoke('qualite:assainirGlobal', payload),
-    auditDates: (): Promise<{ success: boolean; movedCount: number; total: number }> =>
-      ipcRenderer.invoke('qualite:auditDates'),
-    onAuditProgress: (callback: (event: any, data: { processed: number; total: number; movedCount: number }) => void) => {
-      ipcRenderer.on('qualite:auditProgress', callback);
-      return () => {
-        ipcRenderer.removeListener('qualite:auditProgress', callback);
-      };
-    }
   },
   // Hierarchy
   hierarchy: {
