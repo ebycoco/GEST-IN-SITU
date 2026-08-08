@@ -46,13 +46,13 @@ export default function SyncStatusDashboard() {
           errors: res.errors || []
         });
         if (showToast) {
-          toast.success("Indicateurs mis à jour en temps réel.");
+          toast.success("Indicateurs mis à jour en temps réel.", { id: 'sync-status-refresh' });
         }
       }
     } catch (err) {
       console.error("Impossible de récupérer le statut de synchronisation:", err);
       if (showToast) {
-        toast.error("Échec de la mise à jour des indicateurs.");
+        toast.error("Échec de la mise à jour des indicateurs.", { id: 'sync-status-refresh' });
       }
     } finally {
       if (!silent) setLoading(false);
@@ -60,6 +60,12 @@ export default function SyncStatusDashboard() {
   };
 
   useEffect(() => {
+    // Libère l'overlay global "Chargement sécurisé en cours..." (MainLayout) :
+    // cette page peut être le premier écran consulté après connexion (ex. SUPER
+    // ADMIN cliquant directement sur "Monitoring Synchronisation" dans la
+    // sidebar), donc elle doit lever le flag comme les autres pages d'entrée.
+    useAuthStore.getState().setInitialDataLoading(false);
+
     loadStatus();
 
     const interval = setInterval(() => {
@@ -122,7 +128,7 @@ export default function SyncStatusDashboard() {
         if (res && res.success) {
           toast.success("✅ Synchronisation effectuée avec succès !", { id: toastId });
         } else {
-          toast.error("⚠️ Synchronisation terminée avec des avertissements.", { id: toastId });
+          toast.error(`⚠️ ${res?.message || 'Synchronisation terminée avec des avertissements.'}`, { id: toastId });
         }
       }
       await loadStatus();

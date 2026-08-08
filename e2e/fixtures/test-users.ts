@@ -89,6 +89,20 @@ export const TEST_USERS: E2ETestUser[] = [
     role: 'OPERATEUR_QUALITE',
     nom: 'E2E',
     prenom: 'Qualite'
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) de /sync/status (Monitoring
+  // Synchronisation), qui requiert explicitement SUPER ADMIN ou ADMINISTRATEUR_SITE
+  // (voir App.tsx:163). `siteOnly: true` : même raisonnement que administrateurSite
+  // ci-dessus (pas de centre_id assigné en base pour ce niveau de rôle).
+  {
+    key: 'superAdmin',
+    login: 'E2E_SUPER_ADMIN',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'SUPER ADMIN',
+    nom: 'E2E',
+    prenom: 'SuperAdmin',
+    siteOnly: true
   }
 ];
 

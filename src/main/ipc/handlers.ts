@@ -4020,14 +4020,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       try {
-        errors = db.prepare(`
-          SELECT id_log AS id, action, detail AS details, date_heure AS timestamp 
-          FROM (
-            SELECT * FROM t_logs ORDER BY id_log DESC LIMIT 500
-          )
-          WHERE action LIKE '%ERROR%' OR action LIKE '%ECHEC%' OR action LIKE '%FAILURE%'
-          LIMIT 5
-        `).all();
+        // Cloisonnement site (CLAUDE.md §3) : le tableau "Dernières anomalies détectées"
+        // ne doit exposer que les logs du site de l'utilisateur connecté. Le site est
+        // dérivé de la session serveur réelle (getSecureCurrentUser), jamais d'un
+        // paramètre client falsifiable — même pattern que sync:pullSiteCards /
+        // sync:pullAgents. SUPER ADMIN conserve la vue de supervision globale existante
+        // (seul autre rôle autorisé sur cette route). Session invalide => tableau vide,
+        // on reste défensif plutôt que de planter.
+        const secureUser = getSecureCurrentUser();
+        if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+          errors = db.prepare(`
+            SELECT id_log AS id, action, detail AS details, date_heure AS timestamp
+            FROM (
+              SELECT * FROM t_logs WHERE site_id = ? ORDER BY id_log DESC LIMIT 500
+            )
+            WHERE action LIKE '%ERROR%' OR action LIKE '%ECHEC%' OR action LIKE '%FAILURE%'
+               OR action LIKE '%WARN%' OR action LIKE '%LIMIT%'
+            LIMIT 5
+          `).all(secureUser.site_id);
+        } else if (secureUser) {
+          errors = db.prepare(`
+            SELECT id_log AS id, action, detail AS details, date_heure AS timestamp
+            FROM (
+              SELECT * FROM t_logs ORDER BY id_log DESC LIMIT 500
+            )
+            WHERE action LIKE '%ERROR%' OR action LIKE '%ECHEC%' OR action LIKE '%FAILURE%'
+               OR action LIKE '%WARN%' OR action LIKE '%LIMIT%'
+            LIMIT 5
+          `).all();
+        }
         log.info('[SYNC] getStatus corrigé');
       } catch (e) {
         log.error('sync:getStatus - logs error:', e);
