@@ -99,9 +99,7 @@ export function SiteAdminView({
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'system' | 'supervision'>('system');
   const [centres, setCentres] = React.useState<any[]>([]);
-  const [selectedCentreId, setSelectedCentreId] = React.useState<string>(
-    user?.role === 'ADMIN_CENTRE' ? String(user.centre_id) : ''
-  );
+  const [selectedCentreId, setSelectedCentreId] = React.useState<string>('');
   
   // Nouveaux filtres de pilotage de terrain
   const [selectedAgentId, setSelectedAgentId] = React.useState<string>('');
@@ -123,9 +121,7 @@ export function SiteAdminView({
     if (activeTab === 'supervision') {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
       if (siteIdToUse) {
-        const centreId = user?.role === 'ADMIN_CENTRE' 
-          ? Number(user.centre_id) 
-          : (selectedCentreId ? Number(selectedCentreId) : undefined);
+        const centreId = selectedCentreId ? Number(selectedCentreId) : undefined;
         const agentId = selectedAgentId ? Number(selectedAgentId) : undefined;
         const dateStr = selectedDate || undefined;
 
@@ -136,7 +132,7 @@ export function SiteAdminView({
 
   // Filtrer les agents affichés dans le sélecteur d'agent en fonction du centre sélectionné
   const filteredAgentsForSelect = React.useMemo(() => {
-    const centreToFilter = user?.role === 'ADMIN_CENTRE' ? user.centre_id : (selectedCentreId ? Number(selectedCentreId) : null);
+    const centreToFilter = selectedCentreId ? Number(selectedCentreId) : null;
     if (centreToFilter) {
       return siteAgents.filter(a => a.centre_id === centreToFilter);
     }
@@ -144,9 +140,6 @@ export function SiteAdminView({
   }, [siteAgents, selectedCentreId, user]);
 
   const filteredSaisies = React.useMemo(() => {
-    if (user?.role === 'ADMIN_CENTRE') {
-      return siteSaisiesStats.filter(agent => agent.centre_id === user.centre_id);
-    }
     if (selectedCentreId) {
       return siteSaisiesStats.filter(agent => agent.centre_id === Number(selectedCentreId));
     }
@@ -154,9 +147,6 @@ export function SiteAdminView({
   }, [siteSaisiesStats, selectedCentreId, user]);
 
   const filteredQualite = React.useMemo(() => {
-    if (user?.role === 'ADMIN_CENTRE') {
-      return siteQualiteStats.filter(agent => agent.centre_id === user.centre_id);
-    }
     if (selectedCentreId) {
       return siteQualiteStats.filter(agent => agent.centre_id === Number(selectedCentreId));
     }
@@ -164,9 +154,6 @@ export function SiteAdminView({
   }, [siteQualiteStats, selectedCentreId, user]);
 
   const filteredLogistique = React.useMemo(() => {
-    if (user?.role === 'ADMIN_CENTRE') {
-      return siteLogistiqueStats.filter(agent => agent.centre_id === user.centre_id);
-    }
     if (selectedCentreId) {
       return siteLogistiqueStats.filter(agent => agent.centre_id === Number(selectedCentreId));
     }
@@ -577,9 +564,7 @@ export function SiteAdminView({
 
         <button
           onClick={() => {
-            const centreId = user?.role === 'ADMIN_CENTRE' 
-              ? Number(user.centre_id) 
-              : (selectedCentreId ? Number(selectedCentreId) : undefined);
+            const centreId = selectedCentreId ? Number(selectedCentreId) : undefined;
             const agentId = selectedAgentId ? Number(selectedAgentId) : undefined;
             const dateStr = selectedDate || undefined;
             // Clic explicite utilisateur sur "Actualiser" : forceRefresh: true contourne
@@ -664,34 +649,31 @@ export function SiteAdminView({
               })()}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end', marginTop: 12 }}>
-              {/* Filtre Centre : Masqué pour l'ADMIN_CENTRE */}
-              {user?.role !== 'ADMIN_CENTRE' && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Centre :</span>
-                  <select
-                    value={selectedCentreId}
-                    onChange={(e) => {
-                      setSelectedCentreId(e.target.value);
-                      setSelectedAgentId(''); // Réinitialiser l'agent sélectionné lors du changement de centre
-                    }}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      borderRadius: 10,
-                      color: 'white',
-                      padding: '6px 12px',
-                      fontSize: 12,
-                      outline: 'none',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <option value="" style={{ background: '#181a26' }}>-- Tous les centres --</option>
-                    {centres.map(c => (
-                      <option key={c.id} value={c.id} style={{ background: '#181a26' }}>{c.nom}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>Centre :</span>
+                <select
+                  value={selectedCentreId}
+                  onChange={(e) => {
+                    setSelectedCentreId(e.target.value);
+                    setSelectedAgentId(''); // Réinitialiser l'agent sélectionné lors du changement de centre
+                  }}
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    borderRadius: 10,
+                    color: 'white',
+                    padding: '6px 12px',
+                    fontSize: 12,
+                    outline: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <option value="" style={{ background: '#181a26' }}>-- Tous les centres --</option>
+                  {centres.map(c => (
+                    <option key={c.id} value={c.id} style={{ background: '#181a26' }}>{c.nom}</option>
+                  ))}
+                </select>
+              </div>
 
               {/* Filtre Agent */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -742,7 +724,7 @@ export function SiteAdminView({
                   <button
                     type="button"
                     onClick={() => {
-                      if (user?.role !== 'ADMIN_CENTRE') setSelectedCentreId('');
+                      setSelectedCentreId('');
                       setSelectedAgentId('');
                       setSelectedDate(new Date().toISOString().split('T')[0]);
                     }}
@@ -998,73 +980,6 @@ export function SiteAdminView({
                 </div>
               </div>
             </div>
-
-            {user?.role === 'ADMIN_CENTRE' && user?.site_id && (
-              <div className="glass-card" style={{ border: '1px solid rgba(52, 211, 153, 0.3)', background: 'rgba(52, 211, 153, 0.04)', padding: 24, borderRadius: 16 }}>
-                <div style={{ borderBottom: '1px solid rgba(52, 211, 153, 0.15)', paddingBottom: 16, marginBottom: 16 }}>
-                  <span style={{ fontSize: 16, fontWeight: 700, color: '#34d399', display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <RefreshCw size={20} /> Synchronisation Cloud — Centre
-                  </span>
-                  <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                    Envoyez vos modifications locales vers le serveur, ou récupérez les mises à jour du Cloud pour votre centre.
-                  </p>
-                </div>
-
-                {bulkProgress >= 0 && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '4px', color: 'var(--text-muted)' }}>
-                      <span>Transfert en cours...</span>
-                      <span>{bulkProgress}%</span>
-                    </div>
-                    <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px', overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${bulkProgress}%`, background: '#34d399', transition: 'width 0.2s ease-in-out' }} />
-                    </div>
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  <button
-                    onClick={() => handleStartBulkUploadClick(false, false, false, modifiedCount > 0)}
-                    disabled={isBulkUploading || totalSyncableCards === 0}
-                    style={{
-                      flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                      padding: '11px 18px', borderRadius: 12, border: 'none', fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                      background: (isBulkUploading || totalSyncableCards === 0) ? 'rgba(255,255,255,0.05)' : (modifiedCount > 0 ? '#3b82f6' : 'linear-gradient(135deg, #34d399, #059669)'),
-                      color: (isBulkUploading || totalSyncableCards === 0) ? 'var(--text-muted)' : 'white',
-                      opacity: (isBulkUploading || totalSyncableCards === 0) ? 0.5 : 1,
-                      transition: 'all 0.2s',
-                      boxShadow: (isBulkUploading || totalSyncableCards === 0) ? 'none' : '0 4px 12px rgba(52, 211, 153, 0.25)',
-                    }}
-                  >
-                    <RefreshCw size={16} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                    {isBulkUploading ? 'ENVOI...' : (totalSyncableCards > 0 ? `↑ Envoyer (${totalSyncableCards.toLocaleString('fr')})` : 'Système à jour (Aucune donnée)')}
-                  </button>
-
-                  <button
-                    onClick={() => handlePullSiteCards()}
-                    disabled={isPullingCards || isBackgroundPulling || cloudCartesCount === 0}
-                    style={{
-                      flex: 1, minWidth: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                      padding: '11px 18px', borderRadius: 12, border: '1px solid rgba(52, 211, 153, 0.3)', fontWeight: 700, fontSize: 13, 
-                      cursor: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-                      background: 'transparent',
-                      color: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'var(--text-muted)' : '#34d399',
-                      opacity: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 0.5 : 1,
-                      transition: 'all 0.2s',
-                    }}
-                  >
-                    <RefreshCw size={16} style={{ animation: (isPullingCards || isBackgroundPulling) ? 'spin 1.5s linear infinite' : 'none' }} />
-                    {isBackgroundPulling ? 'TÉLÉCHARGEMENT...' : isPullingCards ? 'RÉCUPÉRATION...' : (cloudCartesCount > 0 ? `↓ Télécharger (${cloudCartesCount.toLocaleString('fr')} cartes)` : '↓ À jour (0 carte)')}
-                  </button>
-                </div>
-
-                {!isOnline && (
-                  <p style={{ margin: '10px 0 0 0', fontSize: 12, color: 'var(--text-muted)', textAlign: 'center' }}>
-                    ⚠️ Hors ligne — Reconnectez-vous pour synchroniser.
-                  </p>
-                )}
-              </div>
-            )}
 
             {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (activeSiteId || user?.site_id) && (
               <div className="glass-card" style={{ border: '1px solid rgba(99, 102, 241, 0.3)', background: 'rgba(99, 102, 241, 0.05)', padding: 24, borderRadius: 16 }}>

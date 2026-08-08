@@ -4283,17 +4283,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       centreId: secureUser.role === 'ADMIN_CENTRE' ? (secureUser.centre_id ?? centreId) : centreId
     };
   }
-  ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number, centreId?: number) => {
+  ipcMain.handle('stats:getSiteSaisieToday', (_, siteId: number, centreId?: number, agentId?: number, dateStr?: string) => {
     const scoped = scopeSiteCentreToSession(siteId, centreId);
-    return queries.getSiteSaisieStatsToday(scoped.siteId, scoped.centreId);
+    return queries.getSiteSaisieStatsToday(scoped.siteId, scoped.centreId, agentId, dateStr);
   });
-  ipcMain.handle('stats:getSiteQualiteToday', (_, siteId: number, centreId?: number) => {
+  ipcMain.handle('stats:getSiteQualiteToday', (_, siteId: number, centreId?: number, agentId?: number, dateStr?: string) => {
     const scoped = scopeSiteCentreToSession(siteId, centreId);
-    return queries.getSiteQualiteStatsToday(scoped.siteId, scoped.centreId);
+    return queries.getSiteQualiteStatsToday(scoped.siteId, scoped.centreId, agentId, dateStr);
   });
-  ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number) => {
+  ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number, agentId?: number, dateStr?: string) => {
     const scoped = scopeSiteCentreToSession(siteId, centreId);
-    return queries.getSiteLogistiqueStatsToday(scoped.siteId, scoped.centreId);
+    return queries.getSiteLogistiqueStatsToday(scoped.siteId, scoped.centreId, agentId, dateStr);
   });
 
   // RETRAITS ANALYTICS HANDLERS
