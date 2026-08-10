@@ -4,6 +4,39 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.12.0] - 2026-08-10
+
+### 🚨 Sécurité (Critique)
+
+- **Fuite de données inter-sites sur le Monitoring Synchronisation :** le tableau des anomalies (`t_logs`) de la page `/sync/status` n'appliquait aucun filtrage `site_id` côté serveur — un ADMINISTRATEUR_SITE pouvait consulter les logs de synchronisation d'un autre site (le SUPER ADMIN conserve légitimement sa vue globale). Corrigé.
+- **Fuite intra-site sur le Portail de Saisie :** un opérateur de saisie pouvait, via un appel IPC forgé, consulter les brouillons d'un autre agent du même site — le handler `cartes:getPage` ne réimposait pas l'identité (`created_by`) de l'agent connecté. Le serveur réimpose désormais systématiquement l'identité réelle de la session.
+
+### 🛠️ Corrections & Sécurité
+
+- **Risque de corruption SQLite en production (`SQLITE_CORRUPT_VTAB`), Centre de Migration :** un enchaînement Réparation d'urgence + Purge pouvait provoquer une corruption transitoire de la base, causée par un `VACUUM` fire-and-forget non synchronisé combiné à une reconstruction complète de l'index FTS5 pendant la réparation d'urgence. Corrigé par un `VACUUM` synchrone/attendu et une purge FTS5 incrémentale (au lieu d'un `DROP`/`CREATE` de la table virtuelle) ; effet de bord corrigé au passage, l'ancien code effaçait aussi l'index de recherche des **autres sites** lors d'une réparation d'urgence.
+- **Risque métier — perte silencieuse du statut "Délivrée" (Portail de Saisie) :** une correction mineure (ex. rangement) sur une carte déjà délivrée mais pas encore synchronisée la faisait repasser silencieusement au statut "En Stock" — risque de double-délivrance et d'incohérence d'inventaire physique. Corrigé : le statut d'une carte n'est plus jamais écrasé lors d'une simple correction de champ.
+- **Corbeille de suppression de ligne inopérante à l'aperçu d'import (Centre de Migration) :** l'exclusion d'une ligne à l'aperçu n'était qu'un filtre d'affichage — la ligne était tout de même importée. L'exclusion est désormais effective jusqu'au Worker d'import.
+- **Brouillon sans date de naissance impossible à sauvegarder (Portail de Saisie) :** le serveur validait la date de naissance même en mode brouillon, alors que l'interface promet explicitement que les informations manquantes sont tolérées à ce stade. Corrigé ; en contrepartie, un brouillon à date invalide ou manquante ne peut désormais plus être promu en "En Stock" sans être revalidé — il reste en brouillon et l'agent est averti du nombre de brouillons ignorés lors de la promotion en masse.
+- **Page "Mes Brouillons" bloquée indéfiniment sur "Chargement en cours..." (Portail de Saisie) :** cause structurelle — le site actif de l'agent n'était jamais résolu correctement pour le rôle OPERATEUR_SAISIE. Corrigé.
+- **Écran de Monitoring Synchronisation pouvant rester figé indéfiniment** derrière l'overlay de chargement global si un SUPER ADMIN y naviguait avant la fin du chargement initial du Dashboard — corrigé.
+- **Filtres Agent et Date du "Pilotage des Activités de Terrain" sans aucun effet** (seul le filtre Centre fonctionnait) : les handlers IPC correspondants ignoraient silencieusement ces paramètres pourtant transmis par l'interface — corrigé.
+- **Logs WARN/WARNING/LIMIT jamais affichés** dans le tableau du Monitoring Synchronisation (filtre SQL trop restrictif) — corrigé.
+- **Message trompeur "Synchronisation terminée avec des avertissements"** affiché même quand la synchronisation n'avait jamais démarré (cas hors-ligne) — affiche désormais le véritable message d'échec.
+- **Détection des "doublons probables" à l'import structurellement inopérante** (ordre d'exécution erroné) — corrigée.
+- **Compteur de cartes locales du Centre de Migration non filtré par site** (activait/désactivait à tort le bouton de purge) — corrigé.
+- **Texte de la modale de réparation d'urgence incomplet :** ne mentionnait pas la suppression des cartes locales qu'elle effectue réellement — texte rendu honnête.
+- **Alias d'en-tête CSV "N° SECU" (sans accent) manquant** à l'import, colonne silencieusement vide — ajouté. Libellé "Rejetées/Erreurs" ambigu clarifié en "Anomalies Signalées".
+- **Message de doublon strict affiché de façon générique** au lieu du message spécifique (Portail de Saisie) — corrigé.
+- **Bouton "Télécharger depuis le Cloud" non désactivé hors-ligne** sur le Portail de Saisie, incohérence avec les autres portails déjà corrigés — corrigé.
+- **Toasts de rafraîchissement pouvant s'empiler** sur clics rapprochés (Monitoring Synchronisation) — corrigé.
+
+### 🧹 Nettoyage
+
+- **Retrait de la fonctionnalité "Auditer les Dates Invalides"** du Tableau de bord (bouton, handler IPC backend, exposition preload) — retrait demandé explicitement, fonctionnalité totalement supprimée sans remplacement.
+- **Retrait d'un bloc de code mort ("Synchronisation Cloud — Centre")** et de 9 branches conditionnelles associées au rôle ADMIN_CENTRE sur le Tableau de bord, confirmé structurellement inatteignable sur cette page par analyse de l'historique git (ce rôle a toujours eu son propre portail dédié).
+
+---
+
 ## [2.11.1] - 2026-08-04
 
 ### 🛠️ Corrections & Sécurité
