@@ -13,11 +13,6 @@ export default function InventaireLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [activeTab, setActiveTab] = useState<Tab>('SCAN');
 
-  useEffect(() => {
-    // Libère la sidebar et l'interface globale
-    useAuthStore.getState().setInitialDataLoading(false);
-  }, []);
-
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loading: isStatsLoading, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,

@@ -57,6 +57,13 @@ export default function ProfilePage() {
   const user = useAuthStore(s => s.user);
   const isSuperAdmin = user?.role === 'SUPER ADMIN';
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent —
+  // particulièrement critique ici car page de repli pour les rôles restreints).
+  React.useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   const [nom, setNom] = useState(user?.nom_user || '');
   const [prenom, setPrenom] = useState(user?.prenom_user || '');
   const [email, setEmail] = useState((user as any)?.email || '');

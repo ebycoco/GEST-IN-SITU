@@ -19,6 +19,12 @@ export default function SearchPage() {
   const [searching, setSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   useEffect(() => {
     if (initialQuery) {
       handleSearch(initialQuery);

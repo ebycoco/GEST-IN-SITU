@@ -19,6 +19,19 @@ export default function MainLayout() {
     }
   }, []);
 
+  // ─── Filet de sécurité (audit agent-9) — évite un gel indéfini si une future
+  // page oublie de lever initialDataLoading. Se déclenche uniquement si le flag
+  // reste bloqué à `true` plus de 10s, sans jamais interférer avec une page qui
+  // le lève normalement (le cleanup annule le timer dans ce cas).
+  useEffect(() => {
+    if (!initialDataLoading) return;
+    const timeoutId = setTimeout(() => {
+      console.warn('[MainLayout] Filet de sécurité déclenché : initialDataLoading est resté bloqué à true plus de 10s — forcé à false. Vérifiez que la page atteinte appelle bien setInitialDataLoading(false).');
+      useAuthStore.getState().setInitialDataLoading(false);
+    }, 10000);
+    return () => clearTimeout(timeoutId);
+  }, [initialDataLoading]);
+
   // ─── ANTI-FREEZE (Couche 3) — Visibility API ─────────────────────────────
   // Détecte le retour de l'utilisateur après une absence (autre fenêtre,
   // explorateur, navigateur) et dispatche un signal 'app:focus-restored'.

@@ -215,6 +215,12 @@ export default function CartesPage() {
   const activeSiteId = useAuthStore(state => state.activeSiteId);
   const listRef = useRef<List>(null);
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   const itemData = useMemo(() => ({
     cartes, selected, setSelected, setShowDelivery, userRole: user?.role
   }), [cartes, selected, user?.role]);

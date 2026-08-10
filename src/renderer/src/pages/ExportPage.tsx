@@ -25,6 +25,12 @@ export default function ExportPage() {
   const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
   const currentSiteName = sites.find(s => s.id === siteIdToUse)?.nom || 'Tous les sites';
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   useEffect(() => {
     setLoadingSites(true);
     window.api.hierarchy.getSites()

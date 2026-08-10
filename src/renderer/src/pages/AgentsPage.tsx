@@ -52,6 +52,12 @@ export default function AgentsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 10;
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   // OPTIM-1 fix : ne réinitialiser la page que sur le changement de filtre, pas sur chaque rechargement de la liste
   useEffect(() => {
     setCurrentPage(1);

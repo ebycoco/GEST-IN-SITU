@@ -20,6 +20,12 @@ export default function AdminQueuePage() {
   const [reactivateCardId, setReactivateCardId] = useState<number | null>(null);
   const [reactivateRangement, setReactivateRangement] = useState('');
 
+  // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
+  // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   const loadAllData = async () => {
     setIsLoading(true);
     try {

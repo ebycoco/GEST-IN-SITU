@@ -19,11 +19,6 @@ import InventaireApurement from '../inventaire/InventaireApurement';
 export default function ApurementLayout() {
   const { user, activeSiteId } = useAuthStore();
 
-  useEffect(() => {
-    // Libère la sidebar et l'interface globale (même pattern que InventaireLayout.tsx)
-    useAuthStore.getState().setInitialDataLoading(false);
-  }, []);
-
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loading: isStatsLoading, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
     isPullingCards,
