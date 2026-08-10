@@ -254,7 +254,11 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
   const lieuN = removeAccents(data.lieu_de_naissance as string || '');
   const contact = normalizeContact(data.contact as string || '');
 
-  if (!isValidDateStrict(ddn)) {
+  // Règle métier brouillon (cf. SaisiePage.tsx handleSave) : en mode BROUILLON, aucun champ
+  // n'est obligatoire (seul un nom/prénom/CMU minimal est requis côté renderer). La validation
+  // stricte de la date ne doit donc s'appliquer qu'en mode final (statut !== 'BROUILLON') ;
+  // elle sera de toute façon réappliquée à la publication du brouillon.
+  if (data.statut !== 'BROUILLON' && !isValidDateStrict(ddn)) {
     throw new Error("Date de naissance invalide. Format attendu : AAAA-MM-JJ (ex : 1990-12-31).");
   }
 
@@ -1536,11 +1540,21 @@ export function countDrafts(siteId: number, userId: number): number {
 /**
  * Publie tous les brouillons d'un agent pour un site.
  * Change leur statut en 'EN STOCK' et les enfile dans la t_outbox.
+ *
+ * Garde-fou (non-régression) : un BROUILLON dont la date de naissance est
+ * invalide/vide n'est PAS promu en EN STOCK (une carte "réelle" ne doit
+ * jamais entrer en base avec une date invalide) — il reste BROUILLON,
+ * is_dirty=1, et n'est pas enfilé dans l'outbox (pas besoin de synchro
+ * puisqu'il reste un brouillon local). Ces cartes sont comptabilisées à
+ * part dans skippedInvalidDateCount pour que l'agent sache qu'il doit
+ * encore les corriger. Les cartes déjà EN STOCK/DELIVRE re-modifiées ne
+ * sont pas des brouillons : elles ne sont pas concernées par cette
+ * validation et continuent d'être enfilées normalement.
  */
-export function publishDrafts(siteId: number, userId: number): { publishedCount: number } {
+export function publishDrafts(siteId: number, userId: number): { publishedCount: number; skippedInvalidDateCount: number } {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  
+
   // Scanner uniquement les cartes modifiées appartenant à cet agent (brouillons ou corrections)
   const modifiedCartes = db.prepare(`
     SELECT * FROM t_cartes
@@ -1548,23 +1562,31 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
   `).all(siteId, userId) as any[];
 
   if (modifiedCartes.length === 0) {
-    return { publishedCount: 0 };
+    return { publishedCount: 0, skippedInvalidDateCount: 0 };
   }
+
+  let skippedInvalidDateCount = 0;
 
   const tx = db.transaction(() => {
     const updateBrouillonStmt = db.prepare(`
-      UPDATE t_cartes 
-      SET statut = 'EN STOCK', updated_at = ? 
+      UPDATE t_cartes
+      SET statut = 'EN STOCK', updated_at = ?
       WHERE id_carte = ? AND statut = 'BROUILLON'
     `);
 
     for (const carte of modifiedCartes) {
       if (carte.statut === 'BROUILLON') {
+        if (!isValidDateStrict(carte.date_de_naissance)) {
+          // Date invalide/vide : le brouillon reste BROUILLON et n'est pas
+          // enfilé vers l'outbox (rien à synchroniser tant qu'il n'est pas corrigé).
+          skippedInvalidDateCount++;
+          continue;
+        }
         updateBrouillonStmt.run(now, carte.id_carte);
         carte.statut = 'EN STOCK';
         carte.updated_at = now;
       }
-      
+
       const updatedCarte = db.prepare('SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie, nom_retirant, num_retirant, agent_distributeur, centre_retrait, cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id, qr_code_data, created_by FROM t_cartes WHERE id_carte = ?').get(carte.id_carte) as any;
 
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', {
@@ -1581,5 +1603,5 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
     scheduleOutboxProcessing();
   }
 
-  return { publishedCount: modifiedCartes.length };
+  return { publishedCount: modifiedCartes.length - skippedInvalidDateCount, skippedInvalidDateCount };
 }

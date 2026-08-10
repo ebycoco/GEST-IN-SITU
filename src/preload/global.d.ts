@@ -45,7 +45,7 @@ declare global {
         getById: (id: number) => Promise<any>;
         create: (data: any) => Promise<any>;
         countDrafts: (siteId: number, currentUser?: any) => Promise<number>;
-        publishDrafts: (siteId: number, currentUser?: any) => Promise<{ publishedCount: number }>;
+        publishDrafts: (siteId: number, currentUser?: any) => Promise<{ publishedCount: number; skippedInvalidDateCount: number }>;
         updateCarte: (id: number, data: any, currentUser?: any) => Promise<any>;
         update: (id: number, data: any, currentUser?: any) => Promise<any>;
         delete: (id: number, currentUser?: any) => Promise<boolean>;

@@ -36,6 +36,11 @@ export interface FormState {
   centre: string;
   centre_id?: number | null;
   poste: string;
+  // Statut réel de la carte (ex. 'EN STOCK', 'BROUILLON', 'DELIVRE'). Optionnel : absent pour
+  // une nouvelle saisie (mode 'create'), potentiellement absent en mode 'edit' selon ce que le
+  // composant appelant transmet dans `initialData`. Voir handleSave() ci-dessous pour la logique
+  // qui empêche l'écrasement silencieux d'un statut existant lorsqu'il n'est pas connu ici.
+  statut?: string;
 }
 
 const INITIAL_STATE: FormState = {
@@ -366,7 +371,7 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
     try {
       setSaved(false);
       const normalizedBirthDate = normalizeDate(formData.date_de_naissance);
-      const finalData = {
+      const finalData: Record<string, unknown> = {
         ...formData,
         date_de_naissance: normalizedBirthDate,
         date_naissance: normalizedBirthDate,
@@ -376,9 +381,29 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         agent_saisie: `${user?.nom_user || ''} ${user?.prenom_user || ''}`.trim() || user?.login || 'OPERATEUR_SAISIE',
         created_by: user?.id_user || null,
         centre_id: selectedCentreId,
-        statut: isDraft ? 'BROUILLON' : ((formData as any).statut || 'EN STOCK'),
         statut_physique: 'OK',
       };
+      // Résolution du statut : ne JAMAIS retomber sur 'EN STOCK' pour une carte existante
+      // dont le statut réel (ex. DELIVRE) n'a pas été transmis dans `formData.statut`. Le
+      // fallback 'EN STOCK' ne s'applique qu'en mode 'create' (nouvelle carte, comportement
+      // historique préservé).
+      delete finalData.statut;
+      if (isDraft) {
+        finalData.statut = 'BROUILLON';
+      } else if (mode === 'create') {
+        finalData.statut = formData.statut || 'EN STOCK';
+      } else if (formData.statut) {
+        // Mode édition avec statut initial connu (ex. transmis via `initialData`) : on le
+        // préserve tel quel, l'utilisateur ne pouvant pas le modifier depuis ce formulaire.
+        finalData.statut = formData.statut;
+      }
+      // Sinon (mode 'edit' sans statut initial connu) : la clé `statut` est volontairement
+      // OMISE du payload. Le handler IPC cartes:updateCarte (src/main/database/queries/
+      // cartes.queries.ts) ne met à jour que les colonnes dont la clé est explicitement
+      // présente dans l'objet reçu (filteredKeys = Object.keys(data) filtré par
+      // allowedColumns) — omettre la clé garantit que le statut réel en base (ex. DELIVRE)
+      // n'est jamais écrasé silencieusement. Ne pas remplacer par `statut: undefined`, qui
+      // ferait échouer le binding better-sqlite3 (paramètre non bindable).
 
       if (onSubmitOverride) {
         await onSubmitOverride(finalData as unknown as FormState);
@@ -402,7 +427,10 @@ export default function SaisiePage({ initialData, mode = 'create', onSubmitOverr
         }, 100);
       }
     } catch (err: any) {
-      if (err?.message?.startsWith('DOUBLON_STRICT:')) {
+      // ipcRenderer.invoke enveloppe l'erreur du Main Process : err.message vaut en réalité
+      // "Error invoking remote method '...': Error: DOUBLON_STRICT: ..." — .includes() (et non
+      // .startsWith()) est donc requis pour détecter correctement ce cas.
+      if (err?.message?.includes('DOUBLON_STRICT:')) {
         toast.error('⚠️ Doublon détecté : cette carte existe déjà dans la base locale.');
         return;
       }

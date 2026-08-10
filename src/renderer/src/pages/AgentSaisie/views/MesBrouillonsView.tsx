@@ -15,11 +15,27 @@ export default function MesBrouillonsView() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
 
+  // Résolution de site alignée sur le pattern déjà utilisé par SaisiePage.tsx et
+  // useDashboardStats.ts : `activeSiteId` (store useAuthStore) ne représente le contexte de
+  // site que pour le SUPER ADMIN (sélecteur de site dans la Sidebar) ; pour tous les autres
+  // rôles — dont OPERATEUR_SAISIE — `activeSiteId` reste TOUJOURS null (voir
+  // useAuthStore.login(): initialSiteId n'est peuplé que pour ADMINISTRATEUR_SITE/ADMIN_CENTRE)
+  // et le site réel de l'utilisateur est `user.site_id`. C'était la cause racine confirmée du
+  // blocage permanent sur "Chargement en cours..." : `if (!activeSiteId) return;` était
+  // TOUJOURS vrai pour OPERATEUR_SAISIE, empêchant fetchBrouillons() de jamais s'exécuter (et
+  // donc `isLoading` de jamais repasser à false).
+  const effectiveSiteId = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+
   const fetchBrouillons = async () => {
-    if (!activeSiteId) return;
+    if (!effectiveSiteId) {
+      // Ne jamais laisser isLoading bloqué à true par un retour anticipé : si le site effectif
+      // n'est pas (encore) disponible, on referme explicitement l'état de chargement.
+      setIsLoading(false);
+      return;
+    }
     try {
       setIsLoading(true);
-      const res = await window.api.cartes.getPage(page * limit, limit, { statut: 'BROUILLON', site_id: activeSiteId.toString(), created_by: user?.id_user?.toString() });
+      const res = await window.api.cartes.getPage(page * limit, limit, { statut: 'BROUILLON', site_id: effectiveSiteId.toString(), created_by: user?.id_user?.toString() });
       setBrouillons(res.rows || []);
       setTotal(res.total || 0);
     } catch (err) {
@@ -54,7 +70,7 @@ export default function MesBrouillonsView() {
     const handleDataUpdated = () => fetchBrouillons();
     window.addEventListener('app:data-updated', handleDataUpdated);
     return () => window.removeEventListener('app:data-updated', handleDataUpdated);
-  }, [user, activeSiteId, page]);
+  }, [user, effectiveSiteId, page]);
 
   const handlePublishAll = async () => {
     if (total === 0) return;
@@ -69,8 +85,12 @@ export default function MesBrouillonsView() {
     if (isConfirmed) {
       try {
         setIsLoading(true);
-        const res = await window.api.cartes.publishDrafts(activeSiteId as number, user);
-        toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès !`);
+        const res = await window.api.cartes.publishDrafts(effectiveSiteId as number, user);
+        if (res.skippedInvalidDateCount > 0) {
+          toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès ! ⚠️ ${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`);
+        } else {
+          toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès !`);
+        }
         setPage(0);
         fetchBrouillons();
         window.dispatchEvent(new CustomEvent('app:data-updated'));

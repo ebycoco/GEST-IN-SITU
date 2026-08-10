@@ -47,7 +47,7 @@ const api = {
   cartes: {
     countDrafts: (siteId: number, currentUser?: any): Promise<number> => 
       ipcRenderer.invoke('cartes:countDrafts', siteId, currentUser),
-    publishDrafts: (siteId: number, currentUser?: any): Promise<{ publishedCount: number }> => 
+    publishDrafts: (siteId: number, currentUser?: any): Promise<{ publishedCount: number; skippedInvalidDateCount: number }> =>
       ipcRenderer.invoke('cartes:publishDrafts', siteId, currentUser),
     searchAllRecords: (siteId: number, filters: any, limit: number): Promise<any[]> => 
       ipcRenderer.invoke('cartes:searchAllRecords', siteId, filters, limit),

@@ -406,6 +406,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           }
         }
       }
+      // Sécurité (isolation intra-site) : un OPERATEUR_SAISIE ne doit jamais pouvoir lister les
+      // brouillons d'un autre agent de saisie via ce handler générique. MesBrouillonsView.tsx
+      // envoie déjà created_by=lui-même légitimement ; on réimpose ici la valeur côté serveur
+      // (non falsifiable) pour ce cas précis, sans affecter les autres usages (CartesPage.tsx
+      // n'expose jamais le statut BROUILLON dans son filtre UI).
+      if (secureUser && secureUser.role === 'OPERATEUR_SAISIE' && finalFilters.statut === 'BROUILLON') {
+        finalFilters = { ...finalFilters, created_by: String(secureUser.id_user) };
+      }
       return queries.getCartesPage(offset, limit, finalFilters);
     }
     catch (e) { log.error('IPC Error: cartes:getPage', e); throw e; }
@@ -809,7 +817,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'CARTE_PUBLICATION_BROUILLONS',
         JSON.stringify({
           site_id: siteId,
-          published_count: res.publishedCount
+          published_count: res.publishedCount,
+          skipped_count: res.skippedInvalidDateCount
         })
       );
       return res;

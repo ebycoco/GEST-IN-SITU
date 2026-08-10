@@ -14,15 +14,25 @@ export default function AgentSaisieLayout() {
   const [draftsCount, setDraftsCount] = useState<number>(0);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
 
+  // Résolution de site alignée sur le pattern déjà utilisé par SaisiePage.tsx (même fichier
+  // parent) et useDashboardStats.ts : `activeSiteId` (store useAuthStore) ne représente le
+  // contexte de site que pour le SUPER ADMIN (sélecteur de site dans la Sidebar) ; pour tous
+  // les autres rôles — dont OPERATEUR_SAISIE — `activeSiteId` reste TOUJOURS null (voir
+  // useAuthStore.login(): initialSiteId n'est peuplé que pour ADMINISTRATEUR_SITE/ADMIN_CENTRE)
+  // et le site réel de l'utilisateur est `user.site_id`. Utiliser `activeSiteId` brut ici
+  // empêchait le badge "Mes Brouillons (N)" et la publication de brouillons de fonctionner
+  // pour OPERATEUR_SAISIE (`if (!activeSiteId) return;` toujours vrai).
+  const effectiveSiteId = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+
   const fetchDraftsCount = React.useCallback(async () => {
-    if (!activeSiteId) return;
+    if (!effectiveSiteId) return;
     try {
-      const count = await window.api.cartes.countDrafts(activeSiteId, user);
+      const count = await window.api.cartes.countDrafts(effectiveSiteId, user);
       setDraftsCount(count);
     } catch (err) {
       console.error("Erreur chargement nombre de brouillons:", err);
     }
-  }, [activeSiteId, user]);
+  }, [effectiveSiteId, user]);
 
   const { cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
@@ -61,7 +71,11 @@ export default function AgentSaisieLayout() {
   }, []);
 
 
-  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  // cloudCartesCount vaut -1 en sentinelle d'indisponibilite Supabase (voir
+  // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
+  // Meme correctif que AgentVerificationLayout.tsx / AgentQualiteLayout.tsx
+  // (cloudCartesCount === 0 ne couvrait pas le cas -1, laissant le bouton actif hors-ligne).
+  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
   // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
   // donnée manquante) — distinct de dirtyCartesCount (brut) pour ne pas activer le bouton
   // sur des cartes que l'envoi rejettera silencieusement.
@@ -144,11 +158,15 @@ export default function AgentSaisieLayout() {
             {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}
             <button
               onClick={async () => {
-                if (!activeSiteId) return;
+                if (!effectiveSiteId) return;
                 setIsPublishing(true);
                 try {
-                  const res = await window.api.cartes.publishDrafts(activeSiteId, user);
-                  toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation.`);
+                  const res = await window.api.cartes.publishDrafts(effectiveSiteId, user);
+                  if (res.skippedInvalidDateCount > 0) {
+                    toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation. ⚠️ ${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`);
+                  } else {
+                    toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation.`);
+                  }
                   fetchDraftsCount();
                   loadStats();
                   window.dispatchEvent(new CustomEvent('app:data-updated'));

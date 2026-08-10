@@ -103,6 +103,18 @@ export const TEST_USERS: E2ETestUser[] = [
     nom: 'E2E',
     prenom: 'SuperAdmin',
     siteOnly: true
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) du portail /agent-saisie
+  // (OPERATEUR_SAISIE) — même schéma que operateurVerification (rattaché au
+  // centre du site de test, pas siteOnly).
+  {
+    key: 'operateurSaisie',
+    login: 'E2E_OPERATEUR_SAISIE',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'OPERATEUR_SAISIE',
+    nom: 'E2E',
+    prenom: 'Saisie'
   }
 ];
 
