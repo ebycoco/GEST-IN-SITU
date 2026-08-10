@@ -75,7 +75,8 @@ CREATE TABLE public.t_users (
                         'OPERATEUR_QUALITE',
                         'OPERATEUR_SAISIE',
                         'OPERATEUR_LOGISTIQUE',
-                        'OPERATEUR_INVENTAIRE'
+                        'OPERATEUR_INVENTAIRE',
+                        'OPERATEUR_APUREMENT'
                     )),
     nom_user        TEXT,
     prenom_user     TEXT,

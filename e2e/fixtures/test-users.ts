@@ -30,7 +30,8 @@ export type E2ERole =
   | 'OPERATEUR_QUALITE'
   | 'OPERATEUR_SAISIE'
   | 'OPERATEUR_LOGISTIQUE'
-  | 'OPERATEUR_INVENTAIRE';
+  | 'OPERATEUR_INVENTAIRE'
+  | 'OPERATEUR_APUREMENT';
 
 export interface E2ETestUser {
   /** Identifiant unique du compte, utilisé dans les specs pour le retrouver. */
@@ -140,6 +141,31 @@ export const TEST_USERS: E2ETestUser[] = [
     role: 'OPERATEUR_LOGISTIQUE',
     nom: 'E2E',
     prenom: 'Logistique'
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) du chantier OPERATEUR_APUREMENT
+  // (nouveau portail dédié /apurement, migration v64) — même schéma que
+  // operateurInventaire (rattaché au centre du site de test, pas siteOnly).
+  {
+    key: 'operateurApurement',
+    login: 'E2E_OPERATEUR_APUREMENT',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'OPERATEUR_APUREMENT',
+    nom: 'E2E',
+    prenom: 'Apurement'
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) du chantier OPERATEUR_APUREMENT :
+  // nécessaire pour valider que ADMIN_CENTRE ne peut ni voir ni forcer l'attribution
+  // de ce nouveau rôle (ASSIGNABLE_ROLES_BY_CREATOR, users.queries.ts). Rattaché au
+  // centre du site de test comme un ADMIN_CENTRE réel (pas siteOnly).
+  {
+    key: 'adminCentre',
+    login: 'E2E_ADMIN_CENTRE',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'ADMIN_CENTRE',
+    nom: 'E2E',
+    prenom: 'AdminCentre'
   }
 ];
 

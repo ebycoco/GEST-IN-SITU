@@ -516,7 +516,7 @@ export function getSiteLogistiqueStatsToday(siteId: number, centreId?: number, a
   
   const targetDate = dateStr || new Date().toISOString().split('T')[0];
   
-  let whereClause = `WHERE u.site_id = ? AND (u.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE') OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE')))`;
+  let whereClause = `WHERE u.site_id = ? AND (u.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT') OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role IN ('OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT')))`;
   const params: unknown[] = [siteId];
 
   if (centreId) {

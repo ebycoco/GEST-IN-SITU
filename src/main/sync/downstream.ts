@@ -487,7 +487,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
   const validRoles = [
     'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
     'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-    'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE'
+    'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
   ];
 
   // ─── FILET DE SÉCURITÉ FK (t_users) ─────────────────────────────────────────
@@ -779,7 +779,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
         const validRolesPreload = [
           'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
           'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE'
+          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
         ];
 
         for (const u of cloudUsers) {
@@ -824,7 +824,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
             const validRolesPreload = [
               'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
               'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-              'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE'
+              'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
             ];
             for (const u of cloudUsers) {
               if (!u.sync_id && !u.login) continue;

@@ -3,7 +3,7 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
-  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database
+  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import iconLogo from '../../assets/icon.png';
@@ -149,6 +149,12 @@ export default function Sidebar() {
     if (user.role === 'OPERATEUR_LOGISTIQUE' || user.role === 'OPERATEUR_INVENTAIRE') {
       return [
         { label: 'Inventaire & Logistique', icon: Package, path: '/inventaire' },
+        ...baseItems.filter(i => i.path === '/profile')
+      ];
+    }
+    if (user.role === 'OPERATEUR_APUREMENT') {
+      return [
+        { label: 'Apurement Historique', icon: BookOpenCheck, path: '/apurement' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

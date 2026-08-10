@@ -18,6 +18,7 @@ import VerificationSearchPage from './pages/VerificationSearchPage';
 import SaisiePage from './pages/SaisiePage';
 import AdminQueuePage from './pages/AdminQueuePage';
 import InventaireLayout from './pages/inventaire/InventaireLayout';
+import ApurementLayout from './pages/apurement/ApurementLayout';
 import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect, useState } from 'react';
@@ -137,6 +138,9 @@ export default function App() {
 
             {/* Routes Opérateur Logistique & Inventaire (Hub 3-en-1) */}
             <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE']}><InventaireLayout /></ProtectedRoute>} />
+
+            {/* Portail dédié Opérateur Apurement (émargement rétroactif des cahiers historiques) */}
+            <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ApurementLayout /></ProtectedRoute>} />
 
             {/* Routes Agent de Qualité & Admin */}
             <Route path="agent-qualite" element={<ProtectedRoute requiredRoles={['OPERATEUR_QUALITE', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentQualiteLayout /></ProtectedRoute>}>

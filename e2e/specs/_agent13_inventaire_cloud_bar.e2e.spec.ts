@@ -480,15 +480,19 @@ test.describe.serial('QA Terrain — Barre cloud INVENTAIRE & LOGISTIQUE (/inven
     // désormais cette colonne (ALTER TABLE ADD COLUMN, purement additif) et le
     // seed e2e (via `runMigrations()` réel, voir seed-database.ts) l'exécute
     // sur une base neuve — donc si ce test passe, il valide À LA FOIS la
-    // fonctionnalité ET le chemin de migration d'une installation neuve vers
-    // user_version=63.
+    // fonctionnalité ET le chemin de migration d'une installation neuve.
+    // [agent-13][MAJ] SCHEMA_VERSION est passée de 63 à 64 avec le chantier
+    // OPERATEUR_APUREMENT (élargissement CHECK(role), voir migrateV64() dans
+    // schema.ts) : l'assertion ci-dessous est mise à jour en conséquence
+    // (64), la logique de re-validation P0#2 (relation_retirant) reste
+    // strictement inchangée.
     const successToast = window.locator('text=Décharge historique enregistrée avec succès.');
     await expect(successToast).toBeVisible({ timeout: 10000 });
     console.log('[agent13][P0#2][APUREMENT] Sauvegarde réussie : plus de SqliteError relation_retirant.');
 
     const userVersion = await pragmaUserVersion();
     console.log(`[agent13][MIGRATION] user_version de la base e2e (seedée via runMigrations réel) = ${userVersion}`);
-    expect(userVersion).toBe(63);
+    expect(userVersion).toBe(64);
 
     const row = await dbQuery(
       `SELECT statut, date_delivrance, nom_retirant, num_retirant, relation_retirant, agent_distributeur, is_dirty

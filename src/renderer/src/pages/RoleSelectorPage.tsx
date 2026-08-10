@@ -13,6 +13,7 @@ const ROLE_META: Record<string, { label: string; description: string; color: str
   'OPERATEUR_LOGISTIQUE':   { label: 'Opérateur Logistique',         description: 'Scan, classement et apurement',                color: '#fb923c', icon: '📦' },
   'OPERATEUR_INVENTAIRE':   { label: 'Opérateur Inventaire',         description: 'Inventaire physique et suivi des stocks',      color: '#38bdf8', icon: '📋' },
   'OPERATEUR_QUALITE':      { label: 'Opérateur Qualité',            description: 'Correction, fusion et contrôle qualité',       color: '#4ade80', icon: '✅' },
+  'OPERATEUR_APUREMENT':    { label: 'Opérateur Apurement',          description: 'Émargement rétroactif des cahiers historiques', color: '#ec4899', icon: '📜' },
 };
 
 export default function RoleSelectorPage() {

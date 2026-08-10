@@ -22,6 +22,7 @@ const AVAILABLE_ROLES = [
   { value: 'OPERATEUR_SAISIE', label: 'Opérateur de Saisie (Nouvelle Saisie)' },
   { value: 'OPERATEUR_LOGISTIQUE', label: 'Opérateur Logistique (Scan, Classement, Apurement)' },
   { value: 'OPERATEUR_QUALITE', label: 'Opérateur Qualité (Correction & Fusion)' },
+  { value: 'OPERATEUR_APUREMENT', label: 'Opérateur Apurement (Émargement historique)' },
   { value: 'ADMINISTRATEUR_SITE', label: 'Administrateur de Site (Totalité)' },
   { value: 'ADMIN_CENTRE', label: 'Administrateur de Centre (Local)' },
 ];
@@ -35,7 +36,7 @@ export default function AgentsPage() {
     }
     // M-2 fix : un ADMIN_CENTRE ne doit pas pouvoir créer un autre ADMIN_CENTRE
     if (userContext?.role === 'ADMIN_CENTRE') {
-      return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(r.value));
+      return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'].includes(r.value));
     }
     return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(r.value));
   }, [userContext?.role]);

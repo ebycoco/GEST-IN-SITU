@@ -1442,6 +1442,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
   });
   ipcMain.handle('cartes:searchCombinedInventaire', async (_, siteId, queryNomsPrenoms, dateNaissance, lieuNaissance) => {
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle de rôle (seul le
+    // site était filtré). Même périmètre de rôles que cartes:updateApurementHistorique
+    // (InventaireApurement.tsx, route "inventaire"), puisque cette recherche alimente cet écran.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:searchCombinedInventaire : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette recherche.");
+    }
     try { return queries.searchCombinedInventaire(resolveScopedSiteId(siteId), queryNomsPrenoms, dateNaissance, lieuNaissance); }
     catch (e) { log.error('IPC Error: cartes:searchCombinedInventaire', e); throw e; }
   });
@@ -1449,7 +1457,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
     // Périmètre aligné sur l'usage légitime (InventaireApurement.tsx, route "inventaire").
     const secureUser = getSecureCurrentUser();
-    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT'])) {
       log.warn('[SECURITY] Acces refuse a cartes:updateApurementHistorique : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette fiche.");
     }

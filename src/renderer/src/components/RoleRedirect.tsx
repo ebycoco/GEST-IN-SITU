@@ -22,6 +22,8 @@ export default function RoleRedirect() {
     case 'OPERATEUR_LOGISTIQUE':
     case 'OPERATEUR_INVENTAIRE':
       return <Navigate to="/inventaire" replace />;
+    case 'OPERATEUR_APUREMENT':
+      return <Navigate to="/apurement" replace />;
     case 'OPERATEUR_QUALITE':
       return <Navigate to="/agent-qualite" replace />;
     case 'ADMINISTRATEUR_SITE':

@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 63;
+export const SCHEMA_VERSION = 64;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -331,6 +331,11 @@ export function runMigrations(db: Database.Database): void {
       migrateV63(db);
     }
 
+    if (currentVersion < 64) {
+      log.info('Running migration v64: Rebuilding t_users and t_user_roles to durably enforce OPERATEUR_APUREMENT in CHECK(role) — nouveau rôle dédié à l\'Apurement des cahiers historiques');
+      migrateV64(db);
+    }
+
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
 
     // â”€â”€â”€ FILET DE SÃ‰CURITÃ‰ UNIVERSEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -639,7 +644,7 @@ function migrateV1(db: Database.Database): void {
       id_user INTEGER PRIMARY KEY AUTOINCREMENT,
       login TEXT UNIQUE NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE','OPERATEUR_APUREMENT')),
       nom_user TEXT,
       prenom_user TEXT,
       email TEXT,
@@ -665,7 +670,7 @@ function migrateV1(db: Database.Database): void {
     -- =====================================================
     CREATE TABLE IF NOT EXISTS t_user_roles (
       id_user INTEGER NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+      role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE','OPERATEUR_APUREMENT')),
       PRIMARY KEY (id_user, role),
       FOREIGN KEY (id_user) REFERENCES t_users(id_user) ON DELETE CASCADE
     );
@@ -2024,7 +2029,7 @@ function migrateV27_safetyNet(db: Database.Database): void {
     db.exec(`
       CREATE TABLE IF NOT EXISTS t_user_roles (
         id_user INTEGER NOT NULL,
-        role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE')),
+        role TEXT NOT NULL CHECK(role IN ('SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE','OPERATEUR_APUREMENT')),
         PRIMARY KEY (id_user, role),
         FOREIGN KEY (id_user) REFERENCES t_users(id_user) ON DELETE CASCADE
       );
@@ -3204,6 +3209,216 @@ function migrateV63(db: Database.Database): void {
     }
   } catch (e: any) {
     log.error('[MIGRATION V63] Failed to alter table:', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V64 — Ajout du rôle OPERATEUR_APUREMENT aux contraintes
+// CHECK(role) de t_users et t_user_roles (nouveau rôle dédié à la
+// fonctionnalité "Apurement des cahiers historiques" — Inventaire,
+// émargement rétroactif de délivrances physiques déjà effectuées mais
+// jamais enregistrées numériquement).
+//
+// SQLite ne permet pas d'ALTER une contrainte CHECK existante : les deux
+// tables sont reconstruites selon EXACTEMENT le même pattern déjà validé
+// sur cycle complet par migrateV60 (CHECK(statut) de t_cartes) : backup
+// physique avant modification, transaction EXCLUSIVE, capture puis
+// restauration de tous les index/triggers existants sur chaque table,
+// vérification du nombre de lignes avant/après, PRAGMA integrity_check
+// et foreign_key_check avant tout COMMIT, gestion d'erreur qui préserve
+// les données existantes (ROLLBACK + backup physique intact) en cas
+// d'échec. t_users est reconstruite avant t_user_roles pour que la
+// contrainte FOREIGN KEY (id_user) REFERENCES t_users(id_user) de
+// t_user_roles retrouve bien la table t_users déjà recréée — sans
+// conséquence pratique puisque foreign_keys=OFF pendant toute la
+// transaction.
+// =====================================================
+export function migrateV64(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V64] Démarrage V64 - Élargissement CHECK(role) de t_users et t_user_roles pour OPERATEUR_APUREMENT...');
+
+    // GARDE D'IDEMPOTENCE : si la contrainte de t_users contient déjà
+    // 'OPERATEUR_APUREMENT' (double exécution, ou poste où la migration a
+    // déjà tourné), on sort immédiatement sans backup ni reconstruction.
+    const usersTableRow = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='t_users'"
+    ).get() as { sql: string } | undefined;
+
+    if (!usersTableRow || !usersTableRow.sql) {
+      throw new Error('[MIGRATION V64] Table t_users introuvable dans sqlite_master.');
+    }
+
+    if (usersTableRow.sql.includes("'OPERATEUR_APUREMENT'")) {
+      log.info('[MIGRATION V64] CHECK(role) de t_users contient déjà OPERATEUR_APUREMENT — reconstruction inutile, sortie anticipée.');
+      return;
+    }
+
+    // ÉTAPE 1 : BACKUP PHYSIQUE
+    const { join, dirname } = require('path');
+    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const dbPath = (db as any).name as string;
+
+    if (dbPath !== ':memory:') {
+      const backupDir = join(dirname(dbPath), 'backups_migrations');
+      try {
+        mkdirSync(backupDir, { recursive: true });
+      } catch (e) {}
+      const timestamp = new Date().getTime();
+      const backupPath = join(backupDir, `backup_pre_v64_${timestamp}.sqlite`);
+      copyFileSync(dbPath, backupPath);
+      const backupSize = statSync(backupPath).size;
+      log.info(`[MIGRATION V64] Backup physique pré-reconstruction créé avec succès : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
+    }
+
+    const NEW_ROLE_LIST = "'SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE','OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE','OPERATEUR_INVENTAIRE','OPERATEUR_APUREMENT'";
+
+    const countUsersBefore = db.prepare('SELECT COUNT(*) AS c FROM t_users').get() as any;
+    const countUserRolesBefore = db.prepare('SELECT COUNT(*) AS c FROM t_user_roles').get() as any;
+    log.info(`[MIGRATION V64] t_users contient ${countUsersBefore.c} lignes, t_user_roles contient ${countUserRolesBefore.c} lignes.`);
+
+    // Désactiver FK pour la reconstruction
+    const fkState = db.pragma('foreign_keys', { simple: true });
+    log.info(`[MIGRATION V64] Initial PRAGMA foreign_keys: ${fkState}`);
+    db.pragma('foreign_keys = OFF');
+
+    db.exec('BEGIN EXCLUSIVE TRANSACTION');
+    try {
+      // ── Reconstruction de t_users ──────────────────────────────────
+      const usersColumnsRaw = db.pragma('table_info(t_users)') as { name: string }[];
+      const usersColsToCopy = usersColumnsRaw.map(c => c.name).join(', ');
+
+      // Capture dynamique de TOUS les index et triggers existants (pas de liste
+      // d'exclusion : cette migration ne déprécie rien, tout doit être restauré
+      // à l'identique).
+      const usersOldIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='t_users' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+      const usersOldTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='t_users' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+
+      db.exec('ALTER TABLE t_users RENAME TO t_users_backup_v63');
+
+      const usersRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='t_users_backup_v63'").get() as { sql: string };
+      if (!usersRow || !usersRow.sql) {
+        throw new Error("Impossible de lire la définition de t_users_backup_v63");
+      }
+
+      let newUsersCreateSql = usersRow.sql.replace(/\"?t_users_backup_v63\"?/g, 't_users');
+      newUsersCreateSql = newUsersCreateSql.replace(
+        /CHECK\s*\(\s*role\s+IN\s*\([^)]+\)\s*\)/i,
+        `CHECK(role IN (${NEW_ROLE_LIST}))`
+      );
+
+      // Vérification anti-régression : si le replace n'a rien matché (schéma
+      // inattendu sur un poste divergent), on échoue bruyamment plutôt que de
+      // créer une table avec une contrainte inchangée.
+      if (!newUsersCreateSql.includes("'OPERATEUR_APUREMENT'")) {
+        throw new Error("Le remplacement de la contrainte CHECK(role) de t_users a échoué : 'OPERATEUR_APUREMENT' absent du SQL généré.");
+      }
+
+      db.exec(newUsersCreateSql);
+      db.exec(`INSERT INTO t_users (${usersColsToCopy}) SELECT ${usersColsToCopy} FROM t_users_backup_v63`);
+
+      const countUsersAfter = db.prepare('SELECT COUNT(*) AS c FROM t_users').get() as any;
+      if (countUsersBefore.c !== countUsersAfter.c) {
+        throw new Error(`Perte de données détectée sur t_users ! Avant=${countUsersBefore.c}, Après=${countUsersAfter.c}`);
+      }
+      log.info(`[MIGRATION V64] t_users copié et vérifié. ${countUsersAfter.c} lignes.`);
+
+      // DROP ancienne table POUR LIBÉRER LES NOMS d'INDEX et TRIGGERS !
+      db.exec('DROP TABLE t_users_backup_v63');
+
+      for (const idx of usersOldIndexes) {
+        db.exec(idx.sql);
+      }
+      for (const trg of usersOldTriggers) {
+        db.exec(trg.sql);
+      }
+
+      // ── Reconstruction de t_user_roles ─────────────────────────────
+      const rolesColumnsRaw = db.pragma('table_info(t_user_roles)') as { name: string }[];
+      const rolesColsToCopy = rolesColumnsRaw.map(c => c.name).join(', ');
+
+      const rolesOldIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='t_user_roles' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+      const rolesOldTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='t_user_roles' AND sql IS NOT NULL").all() as { name: string, sql: string }[];
+
+      db.exec('ALTER TABLE t_user_roles RENAME TO t_user_roles_backup_v63');
+
+      const rolesRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='t_user_roles_backup_v63'").get() as { sql: string };
+      if (!rolesRow || !rolesRow.sql) {
+        throw new Error("Impossible de lire la définition de t_user_roles_backup_v63");
+      }
+
+      let newRolesCreateSql = rolesRow.sql.replace(/\"?t_user_roles_backup_v63\"?/g, 't_user_roles');
+      // SQLite propage automatiquement le RENAME d'une table cible de FOREIGN KEY vers
+      // les tables qui la référencent : au moment où t_users a été renommée en
+      // t_users_backup_v63 (bloc ci-dessus), la clause FOREIGN KEY (id_user) REFERENCES
+      // t_users(...) de t_user_roles a été silencieusement réécrite par SQLite pour
+      // pointer vers "t_users_backup_v63" — table déjà supprimée à ce stade. Sans ce
+      // second remplacement, la nouvelle t_user_roles référencerait une table
+      // inexistante et échouerait au foreign_key_check (confirmé par test).
+      newRolesCreateSql = newRolesCreateSql.replace(/\"?t_users_backup_v63\"?/g, 't_users');
+      newRolesCreateSql = newRolesCreateSql.replace(
+        /CHECK\s*\(\s*role\s+IN\s*\([^)]+\)\s*\)/i,
+        `CHECK(role IN (${NEW_ROLE_LIST}))`
+      );
+
+      if (!newRolesCreateSql.includes("'OPERATEUR_APUREMENT'")) {
+        throw new Error("Le remplacement de la contrainte CHECK(role) de t_user_roles a échoué : 'OPERATEUR_APUREMENT' absent du SQL généré.");
+      }
+
+      db.exec(newRolesCreateSql);
+      db.exec(`INSERT INTO t_user_roles (${rolesColsToCopy}) SELECT ${rolesColsToCopy} FROM t_user_roles_backup_v63`);
+
+      const countUserRolesAfter = db.prepare('SELECT COUNT(*) AS c FROM t_user_roles').get() as any;
+      if (countUserRolesBefore.c !== countUserRolesAfter.c) {
+        throw new Error(`Perte de données détectée sur t_user_roles ! Avant=${countUserRolesBefore.c}, Après=${countUserRolesAfter.c}`);
+      }
+      log.info(`[MIGRATION V64] t_user_roles copié et vérifié. ${countUserRolesAfter.c} lignes.`);
+
+      db.exec('DROP TABLE t_user_roles_backup_v63');
+
+      for (const idx of rolesOldIndexes) {
+        db.exec(idx.sql);
+      }
+      for (const trg of rolesOldTriggers) {
+        db.exec(trg.sql);
+      }
+
+      const integrity = db.pragma('integrity_check', { simple: true });
+      if (typeof integrity === 'string' && integrity.toLowerCase() !== 'ok') {
+        throw new Error(`Integrity check failed: ${integrity}`);
+      }
+      log.info('[MIGRATION V64] PRAGMA integrity_check (avant commit) = ok');
+
+      const fkErrorsUsers = db.pragma('foreign_key_check(t_users)') as any[];
+      if (fkErrorsUsers.length > 0) {
+        throw new Error(`Foreign key check failed (t_users): ${JSON.stringify(fkErrorsUsers)}`);
+      }
+      const fkErrorsRoles = db.pragma('foreign_key_check(t_user_roles)') as any[];
+      if (fkErrorsRoles.length > 0) {
+        throw new Error(`Foreign key check failed (t_user_roles): ${JSON.stringify(fkErrorsRoles)}`);
+      }
+      log.info('[MIGRATION V64] PRAGMA foreign_key_check(t_users, t_user_roles) = pass');
+
+      db.exec('COMMIT');
+      log.info('[MIGRATION V64] Transaction COMMIT successfully.');
+    } catch (e: any) {
+      db.exec('ROLLBACK');
+      log.error(`[MIGRATION V64] ROLLBACK déclenché suite à erreur : ${e.message}`);
+      throw e;
+    }
+
+    if (fkState) {
+      db.pragma('foreign_keys = ON');
+    }
+
+    const globalIntegrity = db.pragma('integrity_check', { simple: true });
+    log.info(`[MIGRATION V64] GLOBAL PRAGMA integrity_check de fin = ${globalIntegrity}`);
+    log.info("[MIGRATION V64] CHECK constraint de t_users.role et t_user_roles.role mise à jour avec succès pour inclure 'OPERATEUR_APUREMENT'.");
+  } catch (e: any) {
+    log.error('[MIGRATION V64] Échec :', e.message);
+    // Contrairement à un swallow silencieux : on NE catch PAS l'échec — on le
+    // remonte pour déclencher le catch global de runMigrations (reconstruction
+    // d'urgence), exactement comme migrateV60.
     throw e;
   }
 }

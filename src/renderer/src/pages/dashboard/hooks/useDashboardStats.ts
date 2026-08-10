@@ -136,7 +136,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         let cloudCartes = -1;
         let syncStats: any = null;
  
-        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE' || user?.role === 'OPERATEUR_VERIFICATION' || user?.role === 'OPERATEUR_INVENTAIRE' || user?.role === 'OPERATEUR_LOGISTIQUE')) {
+        if (siteIdToUse && (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_CENTRE' || user?.role === 'OPERATEUR_QUALITE' || user?.role === 'OPERATEUR_VERIFICATION' || user?.role === 'OPERATEUR_INVENTAIRE' || user?.role === 'OPERATEUR_LOGISTIQUE' || user?.role === 'OPERATEUR_APUREMENT')) {
           if (!silent) useAuthStore.getState().setInitialDataProgress(50, 'Analyse des données du site...');
           [saisiesToday, cartesCount, usersCount, syncStats] = await Promise.all([
             window.api.stats.getSiteSaisieToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
