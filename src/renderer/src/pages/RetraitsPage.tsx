@@ -118,6 +118,7 @@ export default function RetraitsPage() {
       console.error('[RetraitsPage] load error', e);
     } finally {
       if (!isSilent) setLoading(false);
+      useAuthStore.getState().setInitialDataLoading(false);
     }
   }, [siteId, centreId, period, customDate]);
 
