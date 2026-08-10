@@ -223,7 +223,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           try {
             const db = getDatabase();
             if (db) {
-              const pref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${user.login}`) as { value: string } | undefined;
+              const pref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${user.id_user}`) as { value: string } | undefined;
               if (pref && pref.value === 'true') {
                 syncEngine.startAutoDownstreamTimer(user.site_id);
               }
@@ -3696,11 +3696,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('sync:getAutoDownstream', async (_, login: string) => {
+  // Sécurité : l'identité utilisée pour lire/écrire cette préférence DOIT provenir
+  // de la session serveur réelle (getSecureCurrentUser), jamais d'un paramètre
+  // client `login` — un appel IPC forgé aurait pu lire/modifier la préférence
+  // d'auto-récupération d'un autre utilisateur. Même pattern que
+  // auth:updateSelfProfile. Clé dérivée d'id_user (identifiant stable), pas du
+  // login (modifiable depuis ProfilePage) — cf. migration V65 de schema.ts.
+  ipcMain.handle('sync:getAutoDownstream', async () => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return false;
       const db = getDatabase();
       if (!db) return false;
-      const row = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${login}`) as { value: string } | undefined;
+      const row = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${secureUser.id_user}`) as { value: string } | undefined;
       return row ? row.value === 'true' : false;
     } catch (e) {
       log.warn('Erreur getAutoDownstream:', e);
@@ -3708,16 +3716,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('sync:setAutoDownstream', async (_, login: string, enabled: boolean) => {
+  ipcMain.handle('sync:setAutoDownstream', async (_, enabled: boolean) => {
     try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return { success: false };
       const db = getDatabase();
       if (!db) return { success: false };
-      db.prepare("INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(`auto_downstream_${login}`, enabled ? 'true' : 'false');
-      
+      db.prepare("INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(`auto_downstream_${secureUser.id_user}`, enabled ? 'true' : 'false');
+
       if (enabled) {
-        const user = db.prepare("SELECT site_id FROM t_users WHERE login = ?").get(login) as { site_id: number } | undefined;
-        if (user && user.site_id) {
-          syncEngine.startAutoDownstreamTimer(user.site_id);
+        if (secureUser.site_id) {
+          syncEngine.startAutoDownstreamTimer(secureUser.site_id);
         }
       } else {
         syncEngine.stopAutoDownstreamTimer();
@@ -4646,9 +4655,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // USER PROFILE
-  ipcMain.handle('auth:updateSelfProfile', async (_, userId: number, data: any) => {
+  ipcMain.handle('auth:updateSelfProfile', async (_, _userId: number, data: any) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    
+
+    // Sécurité (P1) : l'identité ciblée par la mise à jour DOIT provenir de la
+    // session serveur réelle (getSecureCurrentUser), jamais du paramètre client
+    // `userId` — celui-ci était auparavant transmis tel quel par le renderer et
+    // aurait permis à un appel IPC forgé de modifier le profil (et désormais le
+    // login) de n'importe quel autre utilisateur. Le paramètre client `_userId`
+    // est conservé dans la signature pour compatibilité mais n'est plus utilisé.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) {
+      throw new Error("Session invalide.");
+    }
+    const userId = secureUser.id_user;
+
     // Déterminer s'il y a un changement de mot de passe
     const hasPasswordChange = !!data.password;
     

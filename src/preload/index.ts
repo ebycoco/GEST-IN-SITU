@@ -432,10 +432,13 @@ const api = {
       ipcRenderer.invoke('sync:forcePing'),
     retryConnection: (): Promise<{ success: boolean; state: string }> =>
       ipcRenderer.invoke('network:retry'),
-    getAutoDownstream: (login: string): Promise<boolean> =>
-      ipcRenderer.invoke('sync:getAutoDownstream', login),
-    setAutoDownstream: (login: string, enabled: boolean): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('sync:setAutoDownstream', login, enabled),
+    // Identité dérivée côté main de la session serveur réelle (getSecureCurrentUser) —
+    // aucun paramètre d'identité n'est plus transmis depuis le renderer (cf. migration
+    // V65 de schema.ts : la préférence est désormais indexée par id_user, pas par login).
+    getAutoDownstream: (): Promise<boolean> =>
+      ipcRenderer.invoke('sync:getAutoDownstream'),
+    setAutoDownstream: (enabled: boolean): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:setAutoDownstream', enabled),
     onStatusChanged: (callback: (status: any) => void) => {
       const listener = (_: any, status: any) => callback(status);
       ipcRenderer.on('sync:status-changed', listener);

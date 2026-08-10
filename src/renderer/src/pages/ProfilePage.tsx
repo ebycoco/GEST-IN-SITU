@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download, CloudDownload } from 'lucide-react';
+import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download, CloudDownload, AtSign } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import toast from 'react-hot-toast';
 
@@ -66,6 +66,8 @@ export default function ProfilePage() {
 
   const [nom, setNom] = useState(user?.nom_user || '');
   const [prenom, setPrenom] = useState(user?.prenom_user || '');
+  const [login, setLogin] = useState(user?.login || '');
+  const canEditLogin = user?.role === 'ADMINISTRATEUR_SITE';
   const [email, setEmail] = useState((user as any)?.email || '');
   const formatPhoneString = (value: string): string => {
     let input = value;
@@ -104,8 +106,8 @@ export default function ProfilePage() {
   const [isLoadingSyncPref, setIsLoadingSyncPref] = useState(true);
 
   React.useEffect(() => {
-    if (user?.login) {
-      window.api.sync.getAutoDownstream(user.login).then(val => {
+    if (user?.id_user) {
+      window.api.sync.getAutoDownstream().then(val => {
         setAutoDownstream(val);
         setIsLoadingSyncPref(false);
       }).catch(err => {
@@ -113,13 +115,13 @@ export default function ProfilePage() {
         setIsLoadingSyncPref(false);
       });
     }
-  }, [user?.login]);
+  }, [user?.id_user]);
 
   const handleToggleAutoDownstream = async () => {
-    if (!user?.login) return;
+    if (!user?.id_user) return;
     try {
       const newVal = !autoDownstream;
-      const res = await window.api.sync.setAutoDownstream(user.login, newVal);
+      const res = await window.api.sync.setAutoDownstream(newVal);
       if (res.success) {
         setAutoDownstream(newVal);
         toast.success(`Récupération automatique ${newVal ? 'activée' : 'désactivée'}.`);
@@ -142,6 +144,11 @@ export default function ProfilePage() {
 
     if (!email.trim()) {
       toast.error("L'adresse e-mail est obligatoire.");
+      return;
+    }
+
+    if (canEditLogin && !login.trim()) {
+      toast.error("L'identifiant de connexion (Login) est obligatoire.");
       return;
     }
 
@@ -177,17 +184,23 @@ export default function ProfilePage() {
       if (password) {
         data.password = password;
       }
+      if (canEditLogin) {
+        data.login = login.trim();
+      }
 
       await window.api.auth.updateSelfProfile(user!.id_user, data);
 
-      // Mettre à jour le store global
+      // Mettre à jour le store global. Le login doit être répercuté immédiatement
+      // dans la session en mémoire (sinon les affichages @{user?.login} ailleurs
+      // dans l'app resteraient périmés jusqu'à la prochaine connexion).
       useAuthStore.setState({
         user: {
           ...user!,
           nom_user: nom.trim(),
           prenom_user: prenom.trim(),
           email: email.trim(),
-          telephone: cleanPhone
+          telephone: cleanPhone,
+          ...(canEditLogin ? { login: login.trim() } : {})
         } as any
       });
 
@@ -233,10 +246,12 @@ export default function ProfilePage() {
           </div>
 
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div>
-              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Identifiant unique (Login)</span>
-              <div style={{ fontSize: 14, fontWeight: 600, color: 'white', marginTop: 4 }}>@{user?.login}</div>
-            </div>
+            {!canEditLogin && (
+              <div>
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Identifiant unique (Login)</span>
+                <div style={{ fontSize: 14, fontWeight: 600, color: 'white', marginTop: 4 }}>@{user?.login}</div>
+              </div>
+            )}
             <div>
               <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Rôle système</span>
               <div style={{ fontSize: 14, fontWeight: 600, color: 'white', marginTop: 4 }}>{user?.role}</div>
@@ -343,6 +358,26 @@ export default function ProfilePage() {
                   />
                 </div>
               </div>
+
+              {canEditLogin && (
+                <div className="form-group">
+                  <label className="form-label" style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Identifiant unique (Login)</label>
+                  <div style={{ position: 'relative' }}>
+                    <AtSign size={16} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      className="form-input"
+                      type="text"
+                      value={login}
+                      onChange={e => setLogin(e.target.value)}
+                      style={{ width: '100%', paddingLeft: 44, borderRadius: 12, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.1)', height: 44, color: 'white', outline: 'none' }}
+                      required
+                    />
+                  </div>
+                  <p style={{ margin: '8px 0 0 0', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.4 }}>
+                    Cet identifiant est utilisé pour vous connecter — choisissez-le avec soin.
+                  </p>
+                </div>
+              )}
 
               <div className="form-group">
                 <label className="form-label" style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Adresse Email</label>

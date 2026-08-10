@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 64;
+export const SCHEMA_VERSION = 65;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -334,6 +334,11 @@ export function runMigrations(db: Database.Database): void {
     if (currentVersion < 64) {
       log.info('Running migration v64: Rebuilding t_users and t_user_roles to durably enforce OPERATEUR_APUREMENT in CHECK(role) — nouveau rôle dédié à l\'Apurement des cahiers historiques');
       migrateV64(db);
+    }
+
+    if (currentVersion < 65) {
+      log.info('Running migration v65: Migrating auto_downstream_<login> preferences in t_config to auto_downstream_<id_user> (login is now editable by ADMINISTRATEUR_SITE via ProfilePage, orphaning the old key format)');
+      migrateV65(db);
     }
 
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -3419,6 +3424,94 @@ export function migrateV64(db: Database.Database): void {
     // Contrairement à un swallow silencieux : on NE catch PAS l'échec — on le
     // remonte pour déclencher le catch global de runMigrations (reconstruction
     // d'urgence), exactement comme migrateV60.
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V65 — Migration des préférences "Récupération Automatique"
+// (auto_downstream_<login>) de t_config vers la clé stable auto_downstream_<id_user>.
+//
+// Contexte : cette préférence était jusqu'ici stockée sous la clé
+// `auto_downstream_${login}` (chaîne). Depuis qu'un ADMINISTRATEUR_SITE peut
+// désormais modifier son propre login (ProfilePage.tsx), tout changement de
+// login orphelinait silencieusement cette préférence : l'ancienne clé restait
+// en base, pointant sur un login qui n'existe plus, et la nouvelle lecture
+// (sous le nouveau login) ne trouvait jamais rien. On migre donc vers
+// l'identifiant stable id_user, qui ne change jamais.
+//
+// Purement une réécriture de données dans t_config (aucun changement de
+// schéma/colonne) : pas de reconstruction de table nécessaire, contrairement
+// à migrateV64. Idempotence : une clé déjà au format auto_downstream_<id_user>
+// a un suffixe purement numérique, qui ne correspondra à aucun `login` (les
+// logins ne sont jamais de purs nombres en pratique, mais même dans ce cas
+// extrême on ne migre volontairement qu'une seule fois — la garde ci-dessous
+// exclut tout suffixe numérique de la recherche par login pour éviter une
+// double migration en boucle). Toute clé t_config sans rapport (ne
+// commençant pas par le préfixe) ou dont le suffixe ne correspond à aucun
+// login connu (donnée orpheline) n'est jamais touchée.
+// =====================================================
+function migrateV65(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V65] Démarrage V65 - Migration des préférences auto_downstream_<login> vers auto_downstream_<id_user>...');
+
+    const PREFIX = 'auto_downstream_';
+    const rows = db.prepare(
+      "SELECT key, value, updated_at FROM t_config WHERE key LIKE ? ESCAPE '\\'"
+    ).all(`${PREFIX.replace(/([%_])/g, '\\$1')}%`) as { key: string; value: string; updated_at: string }[];
+
+    if (rows.length === 0) {
+      log.info('[MIGRATION V65] Aucune préférence auto_downstream_* trouvée en base, rien à migrer.');
+      return;
+    }
+
+    const findUserByLogin = db.prepare('SELECT id_user FROM t_users WHERE login = ?');
+    const upsertConfig = db.prepare('INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, ?)');
+    const deleteConfig = db.prepare('DELETE FROM t_config WHERE key = ?');
+
+    let migratedCount = 0;
+    let skippedAlreadyMigrated = 0;
+    let skippedOrphan = 0;
+
+    const runMigration = db.transaction(() => {
+      for (const row of rows) {
+        const suffix = row.key.slice(PREFIX.length);
+        if (!suffix) continue;
+
+        // Suffixe déjà purement numérique = déjà au format id_user (idempotence :
+        // ne cherche jamais un login qui ressemblerait à un id_user).
+        if (/^\d+$/.test(suffix)) {
+          skippedAlreadyMigrated++;
+          continue;
+        }
+
+        const userRow = findUserByLogin.get(suffix) as { id_user: number } | undefined;
+        if (!userRow) {
+          // Aucun login correspondant : clé orpheline (ancien utilisateur supprimé,
+          // ou clé t_config sans rapport partageant le préfixe par coïncidence) —
+          // ne jamais y toucher.
+          skippedOrphan++;
+          continue;
+        }
+
+        const newKey = `${PREFIX}${userRow.id_user}`;
+        if (newKey === row.key) continue; // garde défensive, ne devrait jamais se produire ici
+
+        // INSERT OR REPLACE (et non UPDATE) : au cas extrêmement improbable où un
+        // id_user numérique coïnciderait avec une clé auto_downstream_<id_user>
+        // déjà existante (ex. rejeu partiel), on écrase proprement plutôt que
+        // d'échouer sur la contrainte PRIMARY KEY de t_config.key.
+        upsertConfig.run(newKey, row.value, row.updated_at);
+        deleteConfig.run(row.key);
+        migratedCount++;
+      }
+    });
+
+    runMigration();
+
+    log.info(`[MIGRATION V65] Terminée. ${migratedCount} préférence(s) migrée(s) vers id_user, ${skippedAlreadyMigrated} déjà au format id_user (idempotence), ${skippedOrphan} orpheline(s)/sans login correspondant (ignorée(s) volontairement).`);
+  } catch (e: any) {
+    log.error('[MIGRATION V65] Échec :', e.message);
     throw e;
   }
 }

@@ -206,8 +206,8 @@ declare global {
         forcePing: () => Promise<{ success: boolean; state: string }>;
         retryConnection: () => Promise<{ success: boolean; state: string }>;
 
-        getAutoDownstream: (login: string) => Promise<boolean>;
-        setAutoDownstream: (login: string, enabled: boolean) => Promise<{ success: boolean }>;
+        getAutoDownstream: () => Promise<boolean>;
+        setAutoDownstream: (enabled: boolean) => Promise<{ success: boolean }>;
         onStatusChanged: (callback: (status: any) => void) => () => void;
         startBulk: (
           siteId: number,

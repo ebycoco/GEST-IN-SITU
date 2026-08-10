@@ -640,14 +640,14 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
   return { success: true };
 }
 
-export function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string }): { success: boolean } {
+export function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string; login?: string }): { success: boolean } {
   const db = getDatabase()!;
-  
+
   const user = db.prepare('SELECT role, sync_id, login FROM t_users WHERE id_user = ?').get(userId) as { role: string; sync_id: string; login: string } | undefined;
   if (!user) {
     throw new Error("Utilisateur non trouvé.");
   }
-  
+
   if (user.role === 'SUPER ADMIN') {
     throw new Error("La modification autonome du compte Super Admin est désactivée.");
   }
@@ -657,12 +657,33 @@ export function updateSelfProfile(userId: number, data: { nom_user?: string; pre
   if (data.prenom_user !== undefined) updateData.prenom_user = data.prenom_user;
   if (data.email !== undefined)       updateData.email       = data.email;
   if (data.telephone !== undefined)   updateData.telephone   = data.telephone;
-  
+
   if (data.password) {
     updateData.password_hash = hashPassword(data.password);
   }
 
-  const allowedSelfProfileColumns = ['nom_user', 'prenom_user', 'email', 'telephone', 'password_hash'];
+  // Modification de l'identifiant de connexion (login) : réservée au rôle
+  // ADMINISTRATEUR_SITE, ne jamais faire confiance au seul filtrage visuel du
+  // renderer. Validation d'unicité obligatoire avant écriture pour éviter une
+  // erreur SQLite brute (`UNIQUE constraint failed`) non gérée côté UI.
+  if (data.login !== undefined) {
+    if (user.role !== 'ADMINISTRATEUR_SITE') {
+      throw new Error("Seul un Administrateur de Site peut modifier son identifiant de connexion.");
+    }
+    const newLogin = data.login.trim();
+    if (!newLogin) {
+      throw new Error("L'identifiant de connexion ne peut pas être vide.");
+    }
+    if (newLogin !== user.login) {
+      const collision = db.prepare('SELECT id_user FROM t_users WHERE login = ? AND id_user != ?').get(newLogin, userId);
+      if (collision) {
+        throw new Error("Cet identifiant est déjà utilisé par un autre compte.");
+      }
+      updateData.login = newLogin;
+    }
+  }
+
+  const allowedSelfProfileColumns = ['nom_user', 'prenom_user', 'email', 'telephone', 'password_hash', 'login'];
   const filteredKeys = Object.keys(updateData).filter(k => allowedSelfProfileColumns.includes(k));
 
   if (filteredKeys.length === 0) {
