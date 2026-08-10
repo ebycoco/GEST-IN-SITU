@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 62;
+export const SCHEMA_VERSION = 63;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -324,6 +324,11 @@ export function runMigrations(db: Database.Database): void {
     if (currentVersion < 62) {
       log.info('Running migration v62: Adding covering index idx_cartes_site_centre_statut (dashboard getStats "Extraction des KPI globaux" perf — sous-requête distribParCentre)');
       migrateV62(db);
+    }
+
+    if (currentVersion < 63) {
+      log.info('Running migration v63: Adding relation_retirant column to t_cartes (Inventaire — Apurement des cahiers historiques)');
+      migrateV63(db);
     }
 
     db.pragma(`user_version = ${SCHEMA_VERSION}`);
@@ -1899,6 +1904,8 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_cartes', 'contact_retirant', 'TEXT');
   safeAlter('t_cartes', 'nom_retirant', 'TEXT');
   safeAlter('t_cartes', 'num_retirant', 'TEXT');
+  // Relation du retirant avec le titulaire (V63) — Inventaire, Apurement des cahiers historiques
+  safeAlter('t_cartes', 'relation_retirant', 'TEXT');
   safeAlter('t_cartes', 'agent_distributeur', 'TEXT');
   safeAlter('t_cartes', 'centre_retrait', 'TEXT');
   safeAlter('t_cartes', 'date_delivrance', 'TEXT');
@@ -3171,6 +3178,32 @@ function migrateV62(db: Database.Database): void {
     log.info('[MIGRATION V62] Index idx_cartes_site_centre_statut créé.');
   } catch (e: any) {
     log.error('[MIGRATION V62] Échec lors de la création de l\'index :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V63 — Ajout de la colonne relation_retirant à t_cartes
+// Bug P0 : updateApurementHistorique() (cartes.queries.ts) écrit dans
+// relation_retirant depuis l'origine de la fonctionnalité "Apurement des
+// cahiers historiques" (Inventaire) sans que la colonne n'ait jamais existé
+// sur t_cartes, provoquant un échec systématique
+// (SqliteError: no such column: relation_retirant). Purement additif
+// (ALTER TABLE ADD COLUMN nullable) : aucune donnée existante modifiée.
+// =====================================================
+function migrateV63(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V63] Ajout de la colonne relation_retirant a t_cartes...');
+    const tableInfo = db.pragma('table_info(t_cartes)') as any[];
+    const hasRelationRetirant = tableInfo.some((col: any) => col.name === 'relation_retirant');
+    if (!hasRelationRetirant) {
+      db.exec('ALTER TABLE t_cartes ADD COLUMN relation_retirant TEXT;');
+      log.info('[MIGRATION V63] Colonne relation_retirant ajoutee.');
+    } else {
+      log.info('[MIGRATION V63] Colonne relation_retirant deja presente, migration ignoree.');
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V63] Failed to alter table:', e.message);
     throw e;
   }
 }

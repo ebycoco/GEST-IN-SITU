@@ -1309,7 +1309,7 @@ export function searchQuickLogistique(siteId: number, critere: string) {
         OR (prenoms || ' ' || noms LIKE ?)
         OR lieu_de_naissance LIKE ?
       )
-    ORDER BY noms ASC, prenoms ASC
+    ORDER BY noms ASC, prenoms ASC, id_carte ASC
     LIMIT 20
   `).all(siteId, cleaned, cleaned, cleaned, searchPattern, searchPattern, searchPattern);
 }
@@ -1356,7 +1356,7 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
     SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique
     FROM t_cartes
     ${where}
-    ORDER BY noms ASC, prenoms ASC
+    ORDER BY noms ASC, prenoms ASC, id_carte ASC
     LIMIT 20
   `).all(...params);
 }

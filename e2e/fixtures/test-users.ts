@@ -115,6 +115,31 @@ export const TEST_USERS: E2ETestUser[] = [
     role: 'OPERATEUR_SAISIE',
     nom: 'E2E',
     prenom: 'Saisie'
+  },
+  // Ajouté pour la couverture QA Terrain (agent-13) du portail /inventaire
+  // (Hub 3-en-1 SCAN/LOGISTIQUE/APUREMENT + nouvelle barre d'actions cloud) —
+  // même schéma que operateurVerification (rattaché au centre du site de
+  // test, pas siteOnly).
+  {
+    key: 'operateurInventaire',
+    login: 'E2E_OPERATEUR_INVENTAIRE',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'OPERATEUR_INVENTAIRE',
+    nom: 'E2E',
+    prenom: 'Inventaire'
+  },
+  // Idem, second rôle partageant la même route /inventaire (voir
+  // RoleRedirect.tsx : OPERATEUR_LOGISTIQUE et OPERATEUR_INVENTAIRE
+  // pointent tous deux vers /inventaire).
+  {
+    key: 'operateurLogistique',
+    login: 'E2E_OPERATEUR_LOGISTIQUE',
+    password: 'E2E_Test_Pwd_2026!',
+    passwordHash: hashPassword('E2E_Test_Pwd_2026!'),
+    role: 'OPERATEUR_LOGISTIQUE',
+    nom: 'E2E',
+    prenom: 'Logistique'
   }
 ];
 

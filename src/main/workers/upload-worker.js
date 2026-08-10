@@ -230,6 +230,8 @@ async function run() {
         centre_retrait: c.centre_retrait || null,
         nom_retirant: c.nom_retirant || null,
         num_retirant: c.num_retirant || null,
+        contact_retirant: c.contact_retirant || null,
+        relation_retirant: c.relation_retirant || null,
         cle_doublon: c.cle_doublon || null,
         cle_doublon_flex: c.cle_doublon_flex || null,
         statut_physique: c.statut_physique || 'OK',
