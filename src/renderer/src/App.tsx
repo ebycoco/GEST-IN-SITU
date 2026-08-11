@@ -23,6 +23,7 @@ import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
+import UpdateReadyBanner from './components/UpdateReadyBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import MaintenancePage from './pages/MaintenancePage';
 import RoleSelectorPage from './pages/RoleSelectorPage';
@@ -62,6 +63,7 @@ function ProtectedRoute({ children, requiredRoles }: { children: React.ReactElem
 
 export default function App() {
   const checkAuth = useAuthStore(s => s.checkAuth);
+  const [updateReady, setUpdateReady] = useState(false);
 
   useEffect(() => {
     checkAuth();
@@ -83,11 +85,7 @@ export default function App() {
     });
 
     const unsubUpdateDownloaded = window.api?.updater?.onUpdateDownloaded?.(() => {
-      import('react-hot-toast').then(({ toast }) => {
-        toast.success('Une mise à jour est prête ! Elle sera appliquée au prochain redémarrage de GEST-IN-SITU.', {
-          duration: 10000,
-        });
-      });
+      setUpdateReady(true);
     });
 
     return () => {
@@ -101,6 +99,7 @@ export default function App() {
     <>
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
+      <UpdateReadyBanner visible={updateReady} onAcknowledge={() => setUpdateReady(false)} />
       <HashRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
