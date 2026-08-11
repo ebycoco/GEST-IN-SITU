@@ -150,17 +150,38 @@ test.describe.serial('QA Terrain — Bandeau persistant "Mise à jour prête" (a
 
   // ═══════════════════════════════════════════════════════════════════════
   // Scénario 3 — Contenu du message.
+  //
+  // Mis à jour par agent-13 (re-passage QA) : le texte du bandeau a changé
+  // (git diff -- src/renderer/src/components/UpdateReadyBanner.tsx) pour
+  // mentionner une fenêtre d'installation VISIBLE (au lieu d'une installation
+  // silencieuse) et avertir explicitement de ne pas la fermer manuellement,
+  // en cohérence avec `autoInstallOnAppQuit=false`/`quitAndInstall(false)`
+  // (src/main/auto-updater.ts). Les 3 anciennes assertions regex ci-dessous
+  // ciblaient l'ANCIEN texte ("...va s'installer automatiquement à la
+  // prochaine fermeture...", "...icône du raccourci...peut clignoter ou
+  // blanchir...", "...c'est normal, ce n'est pas une anomalie.") : elles ne
+  // matchaient plus le DOM réel et auraient fait échouer ce spec au prochain
+  // run (constat vérifié par lecture du texte actuellement rendu par le
+  // composant). Remplacées par les phrases réellement présentes aujourd'hui.
   // ═══════════════════════════════════════════════════════════════════════
-  test('3. Message — installation à la prochaine fermeture + clignotement icône normal', async () => {
+  test('3. Message — fenêtre d\'installation visible à la prochaine fermeture + avertissement de ne pas la fermer', async () => {
     const { window } = env;
 
     await expect(
-      window.getByText(/va s'installer.*automatiquement à la prochaine fermeture/i)
+      window.getByText(/va s'installer.*à la prochaine fermeture.*de l'application/i)
     ).toBeVisible();
     await expect(
-      window.getByText(/icône du raccourci sur le bureau peut.*clignoter ou blanchir/i)
+      window.getByText(/une fenêtre d'installation va s'afficher/i)
     ).toBeVisible();
-    await expect(window.getByText(/c'est normal, ce n'est pas une anomalie/i)).toBeVisible();
+    await expect(
+      window.getByText(/l'application redémarrera automatiquement ensuite/i)
+    ).toBeVisible();
+    await expect(
+      window.getByText(/ne fermez pas cette fenêtre manuellement/i)
+    ).toBeVisible();
+    await expect(
+      window.getByText(/pendant la copie des fichiers/i)
+    ).toBeVisible();
   });
 
   // ═══════════════════════════════════════════════════════════════════════

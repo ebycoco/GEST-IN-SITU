@@ -1,7 +1,8 @@
 node_modules/
 dist/
 out/
-build/
+build/*
+!build/installer.nsh
 .env
 .env.local
 *.accdb

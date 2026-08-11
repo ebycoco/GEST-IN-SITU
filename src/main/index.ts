@@ -23,7 +23,8 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { initDatabase, getDatabase } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
 import { ensureSyncIds } from './database/queries/hierarchy.queries';
-import { setupAutoUpdater } from './auto-updater';
+import { setupAutoUpdater, isUpdateReadyToInstall, triggerUpdateInstall } from './auto-updater';
+import * as fs from 'fs';
 import { initBackupScheduler } from './backup';
 import log from 'electron-log';
 import { syncEngine } from './sync/sync-engine';
@@ -195,9 +196,24 @@ function createWindow(): void {
           return;
         }
       }
-      
-      isQuitting = true;
-      app.quit();
+
+      // ─── FILET DE SÉCURITÉ : MISE À JOUR PRÊTE → INSTALLATION VISIBLE ───────
+      // Ajout strictement additif : si une mise à jour a été téléchargée
+      // (isUpdateReadyToInstall(), src/main/auto-updater.ts), on déclenche ici
+      // explicitement l'installation visible APRÈS le passage réussi de la
+      // vérification sync/import ci-dessus — remplace uniquement ce chemin de
+      // app.quit() par triggerUpdateInstall(), qui gère lui-même l'appel final
+      // à app.quit() en interne (autoUpdater.quitAndInstall). Le chemin normal
+      // (pas de mise à jour en attente, immense majorité des fermetures) est
+      // inchangé : même comportement qu'avant (isQuitting = true; app.quit()).
+      if (isUpdateReadyToInstall()) {
+        log.info('[AutoUpdater] Mise à jour en attente détectée à la fermeture — déclenchement de l\'installation visible.');
+        isQuitting = true;
+        triggerUpdateInstall();
+      } else {
+        isQuitting = true;
+        app.quit();
+      }
     } catch (err) {
       log.error('Erreur lors du cycle de fermeture:', err);
       isQuitting = true;
@@ -249,10 +265,46 @@ function setupTheme(): void {
   });
 }
 
+// ─── FILET DE SÉCURITÉ : VÉRIFICATION DU MARQUEUR DE MISE À JOUR AU DÉMARRAGE ───
+// Si triggerUpdateInstall() (src/main/auto-updater.ts) a écrit un marqueur
+// juste avant la fermeture précédente, on compare ici la version effectivement
+// démarrée à la version attendue. Purement déclaratif (log) : pas de UI, pas
+// de nouvelle tentative — le marqueur est supprimé dans tous les cas après ce
+// constat pour ne pas ré-évaluer indéfiniment aux démarrages suivants.
+// Placé délibérément tôt, avant initDatabase(), pour ne dépendre d'aucune
+// migration/état SQLite.
+function checkPendingUpdateMarker(): void {
+  const markerPath = join(app.getPath('userData'), 'pending-update.json');
+  try {
+    if (!fs.existsSync(markerPath)) return;
+
+    const raw = fs.readFileSync(markerPath, 'utf-8');
+    const marker = JSON.parse(raw) as { expectedVersion?: string; triggeredAt?: string };
+    const currentVersion = app.getVersion();
+
+    if (marker.expectedVersion === currentVersion) {
+      log.info(`[AutoUpdater] Mise à jour vers v${currentVersion} confirmée au redémarrage (déclenchée le ${marker.triggeredAt}).`);
+    } else {
+      log.warn(`[AutoUpdater] Mise à jour vers v${marker.expectedVersion ?? '?'} non confirmée après redémarrage — l'app tourne toujours en v${currentVersion}.`);
+    }
+  } catch (err: any) {
+    log.warn('[AutoUpdater] Erreur lors de la lecture du marqueur de mise à jour (non bloquant) :', err?.message || err);
+  } finally {
+    try {
+      if (fs.existsSync(markerPath)) fs.unlinkSync(markerPath);
+    } catch (err: any) {
+      log.warn('[AutoUpdater] Échec de la suppression du marqueur de mise à jour :', err?.message || err);
+    }
+  }
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 app.whenReady().then(async () => {
   log.info('GEST-IN-SITU starting...');
   electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
   createSplashWindow();
+
+  checkPendingUpdateMarker();
 
   // Initialize database
   await initDatabase();

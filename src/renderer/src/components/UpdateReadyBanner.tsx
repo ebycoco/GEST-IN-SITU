@@ -9,10 +9,11 @@ interface UpdateReadyBannerProps {
 /**
  * Bandeau persistant "Mise à jour prête".
  *
- * Remplace l'ancien toast auto-disparaissant (10s) : une mise à jour
- * installée silencieusement à la fermeture de l'app est un événement
- * important pour un agent terrain peu technique — il doit rester visible
- * jusqu'à acquittement explicite, sans jamais bloquer la saisie en cours.
+ * Remplace l'ancien toast auto-disparaissant (10s) : une mise à jour dont
+ * la fenêtre d'installation visible va apparaître à la fermeture de l'app
+ * est un événement important pour un agent terrain peu technique — il doit
+ * rester visible jusqu'à acquittement explicite, sans jamais bloquer la
+ * saisie en cours.
  *
  * Persistance de l'acquittement : mémorisée en mémoire (state React),
  * PAS en localStorage. Choix volontaire — voir justification dans le
@@ -106,7 +107,7 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
         {/* Body */}
         <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
           <p style={{ margin: 0 }}>
-            Une nouvelle version de GEST-IN-SITU va s'installer <strong style={{ color: '#fff' }}>automatiquement à la prochaine fermeture</strong> de l'application. Vous n'avez rien à faire.
+            Une nouvelle version de GEST-IN-SITU va s'installer <strong style={{ color: '#fff' }}>à la prochaine fermeture</strong> de l'application. Une fenêtre d'installation va s'afficher : laissez-la se terminer, l'application redémarrera automatiquement ensuite.
           </p>
           <p style={{ margin: '10px 0 0 0', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <span
@@ -123,7 +124,7 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
               }}
             />
             <span>
-              Pendant l'installation, l'icône du raccourci sur le bureau peut <strong style={{ color: '#fff' }}>clignoter ou blanchir quelques secondes</strong> : c'est normal, ce n'est pas une anomalie.
+              <strong style={{ color: '#fff' }}>Ne fermez pas cette fenêtre manuellement</strong> pendant la copie des fichiers : attendez qu'elle se termine et que l'application se relance d'elle-même.
             </span>
           </p>
         </div>

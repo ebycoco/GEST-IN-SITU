@@ -17,9 +17,16 @@ win:
   icon: resources/icon.ico
   verifyUpdateCodeSignature: false
 nsis:
-  oneClick: false
+  oneClick: true
+  runAfterFinish: true
+  # Script NSIS personnalisé (build/installer.nsh) : désactive le bouton de
+  # fermeture système [X] pendant la copie des fichiers (page MUI_PAGE_INSTFILES),
+  # pour empêcher une interruption manuelle de l'installeur déclenché
+  # automatiquement à la fermeture de l'application (mise à jour auto-updater).
+  include: build/installer.nsh
   perMachine: false
-  allowToChangeInstallationDirectory: true
+  # NOTE : allowToChangeInstallationDirectory retiré — incompatible avec
+  # oneClick: true (InvalidConfigurationError d'app-builder-lib au build).
   deleteAppDataOnUninstall: false
   createDesktopShortcut: true
   createStartMenuShortcut: true
