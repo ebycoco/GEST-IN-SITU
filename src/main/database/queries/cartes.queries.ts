@@ -1352,8 +1352,12 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
     params.push(`%${lieuNaissance.trim()}%`);
   }
 
+  // date_delivrance/agent_distributeur/nom_retirant : ajout pur pour permettre au renderer
+  // (InventaireApurement.tsx::selectCard) d'avertir l'agent quand une fiche DELIVRE est
+  // sélectionnée pour ré-émargement — comportement de filtre/tri inchangé.
   return db.prepare(`
-    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique,
+           date_delivrance, agent_distributeur, nom_retirant
     FROM t_cartes
     ${where}
     ORDER BY noms ASC, prenoms ASC, id_carte ASC

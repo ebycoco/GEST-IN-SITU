@@ -1577,12 +1577,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getGlobalStats(); }
     catch (e) { log.error('IPC Error: stats:getGlobal', e); throw e; }
   });
+  // Sécurité (cloisonnement §3, correctif fuite cross-site) : même politique que
+  // scopeSiteCentreToSession / stats:getApurementCardsTodayPaginated plus bas dans ce fichier —
+  // pour tout rôle non-SUPER ADMIN, l'agent et le site effectifs sont TOUJOURS dérivés de la
+  // session serveur réelle (getSecureCurrentUser()), jamais des paramètres client (falsifiables).
+  // Avant ce correctif, un agent authentifié pouvait consulter les stats/la liste "cardsToday"
+  // de n'importe quel autre agent/site en passant son propre agentUsername/siteId en paramètre
+  // IPC. SUPER ADMIN conserve sa liberté de consultation existante (aucun appelant SUPER ADMIN
+  // trouvé pour ces deux handlers à ce jour — useVerificationStats n'est consommé que par
+  // AgentVerification/views/Overview.tsx et ApurementOverview.tsx, tous deux avec l'utilisateur
+  // connecté lui-même).
   ipcMain.handle('stats:getVerification', async (_, agentUsername, siteId) => {
-    try { return queries.getVerificationStats(agentUsername, siteId); }
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scoped = scopeSiteCentreToSession(siteId);
+      const effectiveAgentUsername = (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.login : agentUsername;
+      return queries.getVerificationStats(effectiveAgentUsername, scoped.siteId);
+    }
     catch (e) { log.error('IPC Error: stats:getVerification', e); throw e; }
   });
   ipcMain.handle('stats:getCardsToday', async (_, agentUsername, siteId) => {
-    try { return queries.getVerificationCardsToday(agentUsername, siteId); }
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scoped = scopeSiteCentreToSession(siteId);
+      const effectiveAgentUsername = (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.login : agentUsername;
+      return queries.getVerificationCardsToday(effectiveAgentUsername, scoped.siteId);
+    }
     catch (e) { log.error('IPC Error: stats:getCardsToday', e); throw e; }
   });
   ipcMain.handle('stats:getUnsyncedCardsCount', async (_, siteId: number) => {
@@ -4218,6 +4238,41 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('stats:getSiteLogistiqueToday', (_, siteId: number, centreId?: number, agentId?: number, dateStr?: string) => {
     const scoped = scopeSiteCentreToSession(siteId, centreId);
     return queries.getSiteLogistiqueStatsToday(scoped.siteId, scoped.centreId, agentId, dateStr);
+  });
+
+  // Portail d'Apurement — liste paginée du "travail du jour" (Vue d'ensemble). Même politique
+  // de cantonnement que scopeSiteCentreToSession ci-dessus : le siteId effectif est toujours
+  // dérivé de la session serveur réelle pour tout rôle non-SUPER ADMIN, jamais du paramètre
+  // client (falsifiable). L'agent dont le travail est affiché est de même toujours celui de la
+  // session réelle (getSecureCurrentUser().login) sauf pour SUPER ADMIN qui garde la liberté de
+  // consultation déjà accordée ailleurs — sans cette substitution, un agent APUREMENT pourrait
+  // consulter le travail d'un collègue en trafiquant `agentUsername` côté renderer.
+  ipcMain.handle('stats:getApurementCardsTodayPaginated', (_, agentUsername: string, siteId: number, page?: number, pageSize?: number) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scoped = scopeSiteCentreToSession(siteId);
+      const effectiveAgentUsername = (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.login : agentUsername;
+      return queries.getApurementCardsTodayPaginated(effectiveAgentUsername, scoped.siteId, page ?? 0, pageSize ?? 20);
+    } catch (e) {
+      log.error('IPC Error: stats:getApurementCardsTodayPaginated', e);
+      throw e;
+    }
+  });
+
+  // 4 KPI (Aujourd'hui/Semaine/Mois/Année) de la Vue d'ensemble du Portail d'Apurement —
+  // voir getApurementStats (stats.queries.ts) pour le détail du filtrage sur `updated_at`.
+  // Même politique de cantonnement site/agent que stats:getApurementCardsTodayPaginated
+  // ci-dessus (session serveur réelle pour tout rôle non-SUPER ADMIN).
+  ipcMain.handle('stats:getApurementStats', (_, agentUsername: string, siteId: number) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scoped = scopeSiteCentreToSession(siteId);
+      const effectiveAgentUsername = (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.login : agentUsername;
+      return queries.getApurementStats(effectiveAgentUsername, scoped.siteId);
+    } catch (e) {
+      log.error('IPC Error: stats:getApurementStats', e);
+      throw e;
+    }
   });
 
   // RETRAITS ANALYTICS HANDLERS

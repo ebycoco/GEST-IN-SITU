@@ -1,23 +1,32 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpenCheck, Database, Globe, RefreshCw } from 'lucide-react';
+import { BookOpenCheck, Database, Globe, RefreshCw, LayoutDashboard } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import InventaireApurement from '../inventaire/InventaireApurement';
+import ApurementOverview from './ApurementOverview';
+
+type Tab = 'OVERVIEW' | 'APUREMENT';
 
 /**
  * Portail dédié au rôle OPERATEUR_APUREMENT.
  *
- * Vue unique (pas de sous-onglets) : rend directement <InventaireApurement /> — le composant
- * est déjà autonome (aucune prop reçue, ne dépend que de useAuthStore pour site_id/login) et
- * reste réutilisé tel quel depuis InventaireLayout.tsx (onglet APUREMENT), donc partagé sans
- * modification entre les deux portails.
+ * Deux onglets internes (pas de nouvelle route react-router, `/apurement` reste unique dans
+ * App.tsx), sur le modèle exact d'InventaireLayout.tsx (`type Tab`, `useState<Tab>`, rendu
+ * conditionnel) :
+ * - "Vue d'ensemble" (ApurementOverview, par défaut à l'ouverture) : 4 KPI + liste paginée du
+ *   travail du jour.
+ * - "Travail d'apurement" : rend <InventaireApurement /> — le composant est déjà autonome
+ *   (aucune prop reçue, ne dépend que de useAuthStore pour site_id/login) et reste réutilisé
+ *   tel quel depuis InventaireLayout.tsx (onglet APUREMENT), donc partagé sans modification
+ *   entre les deux portails.
  *
  * La barre de synchro cloud (badge local + Actualiser + Récupérer + Envoyer les corrections)
  * reprend à l'identique le bloc déjà en place dans InventaireLayout.tsx / AgentQualiteLayout.tsx.
  */
 export default function ApurementLayout() {
   const { user, activeSiteId } = useAuthStore();
+  const [activeTab, setActiveTab] = useState<Tab>('OVERVIEW');
 
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loading: isStatsLoading, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
@@ -156,11 +165,63 @@ export default function ApurementLayout() {
             </button>
           </div>
         </div>
+
+        {/* Onglets internes : Vue d'ensemble / Travail d'apurement (même pattern qu'InventaireLayout.tsx) */}
+        <div style={{ display: 'flex', gap: 12, background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 16, border: '1px solid rgba(255,255,255,0.05)' }}>
+          <button
+            onClick={() => setActiveTab('OVERVIEW')}
+            className="hover-scale"
+            style={{
+              flex: 1,
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              border: 'none',
+              borderRadius: 12,
+              background: activeTab === 'OVERVIEW' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+              color: activeTab === 'OVERVIEW' ? 'white' : 'var(--text-muted)',
+              fontWeight: 800,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: activeTab === 'OVERVIEW' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
+            }}
+          >
+            <LayoutDashboard size={18} />
+            VUE D'ENSEMBLE
+          </button>
+
+          <button
+            onClick={() => setActiveTab('APUREMENT')}
+            className="hover-scale"
+            style={{
+              flex: 1,
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              border: 'none',
+              borderRadius: 12,
+              background: activeTab === 'APUREMENT' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+              color: activeTab === 'APUREMENT' ? 'white' : 'var(--text-muted)',
+              fontWeight: 800,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: activeTab === 'APUREMENT' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
+            }}
+          >
+            <BookOpenCheck size={18} />
+            TRAVAIL D'APUREMENT
+          </button>
+        </div>
       </div>
 
       {/* Contenu Principal */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        <InventaireApurement />
+        {activeTab === 'OVERVIEW' && <ApurementOverview />}
+        {activeTab === 'APUREMENT' && <InventaireApurement />}
       </div>
     </div>
   );

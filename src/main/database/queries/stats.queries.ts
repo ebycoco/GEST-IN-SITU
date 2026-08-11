@@ -198,6 +198,153 @@ export function getVerificationCardsToday(agentUsername: string, siteId: number)
   return row?.count || 0;
 }
 
+/**
+ * Équivalent de getVerificationStats ci-dessus, mais dédié au Portail d'Apurement
+ * (OPERATEUR_APUREMENT — Vue d'ensemble, 4 KPI Aujourd'hui/Semaine/Mois/Année).
+ *
+ * Différence volontaire avec getVerificationStats : ici on indexe/filtre sur `updated_at`
+ * (horodatage réel de l'action serveur, écrit par updateApurementHistorique à chaque
+ * validation — cartes.queries.ts:1364) et NON sur `date_delivrance`. Pour ce flux précis,
+ * `date_delivrance` est saisie librement par l'agent (InventaireApurement.tsx, champ "DATE DU
+ * RETRAIT (Cahier)") et correspond à une date passée du cahier d'émargement historique
+ * dépouillé — elle ne reflète PAS le moment où l'agent a réellement traité la fiche
+ * aujourd'hui. `updated_at` est un ISO complet avec heure, toujours écrit par le serveur à
+ * `now`, donc fiable pour des bornes "Aujourd'hui/Semaine/Mois/Année".
+ * Ne pas fusionner avec getVerificationStats : le portail Vérification (délivrance normale)
+ * utilise correctement date_delivrance (auto-timestampée à `now` dans ce flux-là).
+ */
+export function getApurementStats(agentUsername: string, siteId: number) {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const dYesterday = new Date();
+  dYesterday.setDate(dYesterday.getDate() - 1);
+  const yesterdayStr = dYesterday.toISOString().split('T')[0];
+
+  const dWeek = new Date();
+  dWeek.setDate(dWeek.getDate() - 7);
+  const weekStr = dWeek.toISOString().split('T')[0];
+
+  const dMonth = new Date();
+  dMonth.setDate(dMonth.getDate() - 30);
+  const monthStr = dMonth.toISOString().split('T')[0];
+
+  const yearStartStr = `${new Date().getFullYear()}-01-01`;
+
+  const stats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN updated_at >= ? AND updated_at < ? THEN 1 ELSE 0 END) as today,
+      SUM(CASE WHEN updated_at >= ? AND updated_at < ? THEN 1 ELSE 0 END) as yesterday,
+      SUM(CASE WHEN updated_at >= ? THEN 1 ELSE 0 END) as week,
+      SUM(CASE WHEN updated_at >= ? THEN 1 ELSE 0 END) as month,
+      SUM(CASE WHEN updated_at >= ? THEN 1 ELSE 0 END) as year
+    FROM t_cartes
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ?
+  `).get(todayStr, tomorrowStr, yesterdayStr, todayStr, weekStr, monthStr, yearStartStr, agentUsername, siteId) as { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
+
+  const weekdays = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
+  const last7Days: { dayName: string; count: number }[] = [];
+
+  const dStartWeek = new Date();
+  dStartWeek.setDate(dStartWeek.getDate() - 6);
+  const startWeekStr = dStartWeek.toISOString().split('T')[0];
+
+  const daysStats = db.prepare(`
+    SELECT
+      substr(updated_at, 1, 10) as jour,
+      COUNT(*) as count
+    FROM t_cartes
+    WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ?
+      AND updated_at >= ?
+    GROUP BY jour
+  `).all(agentUsername, siteId, startWeekStr) as { jour: string; count: number }[];
+
+  const statsMap = new Map<string, number>();
+  daysStats.forEach(d => {
+    statsMap.set(d.jour, d.count);
+  });
+
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const dateStr = d.toISOString().split('T')[0];
+    const dayName = weekdays[d.getDay()];
+    last7Days.push({
+      dayName,
+      count: statsMap.get(dateStr) || 0
+    });
+  }
+
+  return {
+    today: stats?.today || 0,
+    yesterday: stats?.yesterday || 0,
+    week: stats?.week || 0,
+    month: stats?.month || 0,
+    year: stats?.year || 0,
+    last7Days
+  };
+}
+
+/**
+ * Liste paginée des fiches d'émargement historique traitées AUJOURD'HUI par un agent
+ * OPERATEUR_APUREMENT donné (Portail d'Apurement, onglet "Vue d'ensemble" > "Travail du jour").
+ * Reprend exactement le même schéma d'écriture que updateApurementHistorique
+ * (cartes.queries.ts:1364 — statut='DELIVRE', agent_distributeur, updated_at) et le même
+ * calcul de bornes de date que getApurementStats ci-dessus : filtrage sur `updated_at`
+ * (horodatage réel de l'action serveur) et non `date_delivrance` (saisie libre, date passée du
+ * cahier — voir commentaire de getApurementStats). `updated_at` est déjà un ISO complet avec
+ * heure, donc le même style de borne exclusive "lendemain à 00:00" fonctionne tel quel.
+ * Politique Low-Memory (RAM 8 Go) : pageSize est toujours borné (LIMIT/OFFSET, plafond 100),
+ * jamais de chargement de l'historique complet en mémoire.
+ */
+export function getApurementCardsTodayPaginated(
+  agentUsername: string,
+  siteId: number,
+  page: number = 0,
+  pageSize: number = 20
+): { rows: any[]; total: number } {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  const whereClause = `
+    FROM t_cartes
+    WHERE statut = 'DELIVRE'
+      AND UPPER(agent_distributeur) = UPPER(?)
+      AND site_id = ?
+      AND updated_at >= ?
+      AND updated_at < ?
+  `;
+  const params: (string | number)[] = [agentUsername, siteId, todayStr, tomorrowStr];
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as total ${whereClause}`).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  // updated_at (et non date_delivrance) pilote aussi le tri et l'affichage "Heure d'apurement"
+  // du renderer (ApurementOverview.tsx) : cohérent avec le filtre ci-dessus, puisque
+  // date_delivrance reste une date passée saisie librement (cahier), sans valeur d'heure fiable.
+  const rows = db.prepare(`
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+           date_delivrance, nom_retirant, num_retirant, relation_retirant, rangement, updated_at
+    ${whereClause}
+    ORDER BY updated_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  return { rows, total };
+}
+
 export function getUnsyncedCardsCount(siteId: number): number {
   const db = getDatabase()!;
   const row = db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ? AND is_dirty = 1').get(siteId) as { count: number };

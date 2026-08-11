@@ -21,6 +21,8 @@ declare global {
         getGlobal: () => Promise<any>;
         getVerification: (agentUsername: string, siteId: number) => Promise<any>;
         getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
+        getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number }>;
+        getApurementStats: (agentUsername: string, siteId: number) => Promise<any>;
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;
         getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;

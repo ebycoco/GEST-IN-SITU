@@ -3,6 +3,7 @@ import { Search, Calendar, MapPin, User, CheckCircle, Clock, ArrowRight, X, Aler
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
+import { confirmService } from '../../components/confirmService';
 
 export default function InventaireApurement() {
   const { user } = useAuthStore();
@@ -80,18 +81,40 @@ export default function InventaireApurement() {
     }
   };
 
-  const selectCard = (carte: any) => {
+  // Applique effectivement la sélection (état + focus) — factorisé pour être appelé soit
+  // directement (carte non encore déchargée), soit après confirmation explicite de l'agent
+  // (carte déjà DELIVRE, cf. selectCard ci-dessous).
+  const applyCardSelection = (carte: any) => {
     setSelectedCarte(carte);
     setResults([]);
     // Init retirant par défaut si soi-même
     setNomRetirant(`${carte.noms} ${carte.prenoms}`);
-    
+
     // Focus sur la date du retrait du cahier
     setTimeout(() => {
       if (dateDelivranceRef.current) {
         dateDelivranceRef.current.focus();
       }
     }, 50);
+  };
+
+  // Sécurité métier : updateApurementHistorique fait un UPDATE sans vérifier l'état actuel de
+  // la carte — une resaisie sur une fiche déjà déchargée (statut === 'DELIVRE') écraserait
+  // silencieusement l'émargement déjà enregistré (date/nom/téléphone du retirant). L'agent peut
+  // avoir oublié qu'il (ou un collègue) a déjà traité cette fiche : on affiche donc un
+  // avertissement explicite avant de laisser resaisir, avec option d'annulation.
+  const selectCard = async (carte: any) => {
+    if (carte.statut === 'DELIVRE') {
+      const confirmed = await confirmService.confirm({
+        title: 'Carte déjà déchargée',
+        message: `Cette carte a déjà été déchargée le ${carte.date_delivrance || '—'} par ${carte.agent_distributeur || 'un agent inconnu'}, au nom de ${carte.nom_retirant || 'un retirant non renseigné'}. Voulez-vous vraiment continuer et remplacer cet émargement ?`,
+        isDanger: true,
+        confirmText: 'Continuer quand même',
+        cancelText: 'Annuler'
+      });
+      if (!confirmed) return;
+    }
+    applyCardSelection(carte);
   };
 
   const handleRelationChange = (e: React.ChangeEvent<HTMLSelectElement>) => {

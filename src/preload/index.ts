@@ -179,8 +179,15 @@ const api = {
       siteId: number
     ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days: { dayName: string; count: number }[] }> => 
       ipcRenderer.invoke('stats:getVerification', agentUsername, siteId),
-    getCardsToday: (agentUsername: string, siteId: number): Promise<number> => 
+    getCardsToday: (agentUsername: string, siteId: number): Promise<number> =>
       ipcRenderer.invoke('stats:getCardsToday', agentUsername, siteId),
+    getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number }> =>
+      ipcRenderer.invoke('stats:getApurementCardsTodayPaginated', agentUsername, siteId, page, pageSize),
+    getApurementStats: (
+      agentUsername: string,
+      siteId: number
+    ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days: { dayName: string; count: number }[] }> =>
+      ipcRenderer.invoke('stats:getApurementStats', agentUsername, siteId),
     getAgentToday: (userId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getAgentToday', userId),
     getAgentRecentSaisies: (userId: number, limit?: number, offset?: number): Promise<{ total: number; rows: any[] }> => 
