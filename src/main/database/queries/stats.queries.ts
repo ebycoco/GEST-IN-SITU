@@ -190,12 +190,66 @@ export function getVerificationCardsToday(agentUsername: string, siteId: number)
   const db = getDatabase()!;
   const todayStr = new Date().toISOString().split('T')[0];
   const row = db.prepare(`
-    SELECT COUNT(*) as count 
-    FROM t_cartes 
+    SELECT COUNT(*) as count
+    FROM t_cartes
     WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ?
       AND date_delivrance = ?
   `).get(agentUsername, siteId, todayStr) as { count: number } | undefined;
   return row?.count || 0;
+}
+
+/**
+ * Liste paginée des fiches DÉLIVRÉES aujourd'hui par un agent OPERATEUR_VERIFICATION donné
+ * (Portail Vérification, onglet "Vue d'ensemble" > "Travail du jour"). Même structure que
+ * getApurementCardsTodayPaginated (pagination LIMIT/OFFSET plafonnée, politique Low-Memory RAM
+ * 8 Go), mais filtrée sur `date_delivrance` (et non `updated_at`) : contrairement au flux
+ * d'Apurement, `date_delivrance` est ici auto-timestampée à `now` au moment de la délivrance
+ * réelle (cartes.queries.ts, mise à jour du statut DELIVRE), donc fiable pour une borne
+ * "aujourd'hui" — c'est déjà ce qu'utilise getVerificationStats ci-dessus pour son bucket
+ * "today", on reste cohérent avec l'existant. `date_delivrance` est un ISO complet avec heure,
+ * donc la même borne exclusive "lendemain à 00:00" que pour l'Apurement fonctionne telle quelle.
+ * Politique Low-Memory (RAM 8 Go) : pageSize est toujours borné (LIMIT/OFFSET, plafond 100),
+ * jamais de chargement de l'historique complet en mémoire.
+ */
+export function getVerificationCardsTodayPaginated(
+  agentUsername: string,
+  siteId: number,
+  page: number = 0,
+  pageSize: number = 20
+): { rows: any[]; total: number } {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  const whereClause = `
+    FROM t_cartes
+    WHERE statut = 'DELIVRE'
+      AND UPPER(agent_distributeur) = UPPER(?)
+      AND site_id = ?
+      AND date_delivrance >= ?
+      AND date_delivrance < ?
+  `;
+  const params: (string | number)[] = [agentUsername, siteId, todayStr, tomorrowStr];
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as total ${whereClause}`).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  const rows = db.prepare(`
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+           date_delivrance, nom_retirant, num_retirant, relation_retirant, rangement
+    ${whereClause}
+    ORDER BY date_delivrance DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  return { rows, total };
 }
 
 /**
@@ -411,13 +465,13 @@ export function getAgentStatsToday(userId: number) {
 
 export function getAgentRecentSaisies(userId: number, limit: number = 25, offset: number = 0) {
   const db = getDatabase()!;
-  
+
   const countRow = db.prepare(`
-    SELECT COUNT(*) as total 
-    FROM t_cartes 
+    SELECT COUNT(*) as total
+    FROM t_cartes
     WHERE created_by = ?
   `).get(userId) as { total: number };
-  
+
   const rows = db.prepare(`
     SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, lieu_de_naissance, rangement, contact, created_at, statut, is_dirty
     FROM t_cartes
@@ -425,11 +479,111 @@ export function getAgentRecentSaisies(userId: number, limit: number = 25, offset
     ORDER BY created_at DESC
     LIMIT ? OFFSET ?
   `).all(userId, limit, offset);
-  
+
   return {
     total: countRow ? countRow.total : 0,
     rows
   };
+}
+
+/**
+ * Vue d'ensemble du Portail de Saisie (OPERATEUR_SAISIE) — 4 KPI (Aujourd'hui/Semaine/Mois/
+ * Année), miroir structurel de getVerificationStats/getApurementStats ci-dessus. Reprend
+ * EXACTEMENT le même filtre que getAgentStatsToday ci-dessus (`created_by = userId AND
+ * created_at >= <borne>`, aucun filtre sur `statut` ni `site_id`) : une saisie compte dès sa
+ * création, brouillon ou non, quel que soit son état de synchronisation — comportement
+ * volontairement inchangé par rapport à getAgentStatsToday, seulement étendu aux 4 périodes.
+ * Ne pas fusionner avec getVerificationStats/getApurementStats : ces deux-là filtrent sur
+ * statut='DELIVRE' + agent_distributeur (flux de délivrance), alors qu'ici on compte les
+ * cartes SAISIES par l'agent (created_by), flux distinct.
+ */
+export function getAgentStats(userId: number) {
+  const db = getDatabase()!;
+
+  const todayStartStr = new Date().toISOString().split('T')[0] + 'T00:00:00.000Z';
+
+  const dYesterday = new Date();
+  dYesterday.setDate(dYesterday.getDate() - 1);
+  const yesterdayStartStr = dYesterday.toISOString().split('T')[0] + 'T00:00:00.000Z';
+
+  const dWeek = new Date();
+  dWeek.setDate(dWeek.getDate() - 7);
+  const weekStartStr = dWeek.toISOString().split('T')[0] + 'T00:00:00.000Z';
+
+  const dMonth = new Date();
+  dMonth.setDate(dMonth.getDate() - 30);
+  const monthStartStr = dMonth.toISOString().split('T')[0] + 'T00:00:00.000Z';
+
+  const yearStartStr = `${new Date().getFullYear()}-01-01T00:00:00.000Z`;
+
+  const stats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as today,
+      SUM(CASE WHEN created_at >= ? AND created_at < ? THEN 1 ELSE 0 END) as yesterday,
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as week,
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as month,
+      SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as year
+    FROM t_cartes
+    WHERE created_by = ?
+  `).get(todayStartStr, yesterdayStartStr, todayStartStr, weekStartStr, monthStartStr, yearStartStr, userId) as
+    { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
+
+  return {
+    today: stats?.today || 0,
+    yesterday: stats?.yesterday || 0,
+    week: stats?.week || 0,
+    month: stats?.month || 0,
+    year: stats?.year || 0
+  };
+}
+
+/**
+ * Liste paginée des fiches SAISIES aujourd'hui par un agent OPERATEUR_SAISIE donné (Portail de
+ * Saisie, onglet "Vue d'ensemble" > "Travail du jour"). Même filtre que getAgentStats/
+ * getAgentStatsToday (`created_by`, aucun filtre `statut`), borné à la journée en cours avec la
+ * même borne exclusive "lendemain à 00:00" que getApurementCardsTodayPaginated/
+ * getVerificationCardsTodayPaginated. Colonnes identiques à getAgentRecentSaisies ci-dessus
+ * (aussi consommées par HistoriqueView.tsx) pour rester cohérent avec l'existant — mais cette
+ * fonction est un NOUVEAU point d'entrée dédié à "aujourd'hui uniquement, paginé" : elle ne
+ * remplace ni ne modifie getAgentRecentSaisies (toutes dates, utilisée par l'historique complet).
+ * Politique Low-Memory (RAM 8 Go) : pageSize est toujours borné (LIMIT/OFFSET, plafond 100),
+ * jamais de chargement de l'historique complet en mémoire.
+ */
+export function getAgentCardsTodayPaginated(
+  userId: number,
+  page: number = 0,
+  pageSize: number = 20
+): { rows: any[]; total: number } {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  const whereClause = `
+    FROM t_cartes
+    WHERE created_by = ?
+      AND created_at >= ?
+      AND created_at < ?
+  `;
+  const params: (string | number)[] = [userId, todayStr, tomorrowStr];
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as total ${whereClause}`).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  const rows = db.prepare(`
+    SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, lieu_de_naissance, rangement, contact, created_at, statut, is_dirty
+    ${whereClause}
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  return { rows, total };
 }
 
 export function getSiteSaisieStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {

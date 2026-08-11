@@ -1605,6 +1605,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: stats:getCardsToday', e); throw e; }
   });
+  // Portail Vérification — liste paginée du "travail du jour" (Vue d'ensemble). Même politique
+  // de cantonnement que stats:getVerification/stats:getCardsToday ci-dessus : agent et site
+  // effectifs toujours dérivés de la session serveur réelle pour tout rôle non-SUPER ADMIN.
+  ipcMain.handle('stats:getVerificationCardsTodayPaginated', async (_, agentUsername, siteId, page?: number, pageSize?: number) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scoped = scopeSiteCentreToSession(siteId);
+      const effectiveAgentUsername = (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.login : agentUsername;
+      return queries.getVerificationCardsTodayPaginated(effectiveAgentUsername, scoped.siteId, page ?? 0, pageSize ?? 20);
+    }
+    catch (e) { log.error('IPC Error: stats:getVerificationCardsTodayPaginated', e); throw e; }
+  });
   ipcMain.handle('stats:getUnsyncedCardsCount', async (_, siteId: number) => {
     try { return queries.getUnsyncedCardsCount(siteId); }
     catch (e) { log.error('IPC Error: stats:getUnsyncedCardsCount', e); throw e; }
@@ -4215,8 +4227,34 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // OPERATEUR STATS HANDLERS
-  ipcMain.handle('stats:getAgentToday', (_, userId: number) => queries.getAgentStatsToday(userId));
-  ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number, offset?: number) => queries.getAgentRecentSaisies(userId, limit, offset));
+  // Sécurité (durcissement P0, cf. correctif déjà appliqué à stats:getVerification/
+  // stats:getApurementCardsTodayPaginated) : ces handlers faisaient précédemment confiance au
+  // userId envoyé par le client sans aucune vérification — un agent authentifié pouvait
+  // consulter les stats/saisies de n'importe quel AUTRE agent en falsifiant userId côté
+  // renderer. L'userId effectif est désormais TOUJOURS dérivé de la session serveur réelle
+  // (getSecureCurrentUser().id_user) pour tout rôle non-SUPER ADMIN, jamais du paramètre client.
+  // Tous les appelants renderer connus (useDashboardStats.ts bloc OPERATEUR_SAISIE,
+  // AgentSaisie/views/Overview.tsx, AgentSaisie/views/HistoriqueView.tsx) passent déjà
+  // exclusivement l'id de l'utilisateur connecté lui-même : ce durcissement ne change donc
+  // aucun comportement observable pour ces appelants légitimes.
+  function scopeUserIdToSession(userId: number): number {
+    const secureUser = getSecureCurrentUser();
+    return (secureUser && secureUser.role !== 'SUPER ADMIN') ? secureUser.id_user : userId;
+  }
+  ipcMain.handle('stats:getAgentToday', (_, userId: number) => queries.getAgentStatsToday(scopeUserIdToSession(userId)));
+  ipcMain.handle('stats:getAgentRecentSaisies', (_, userId: number, limit?: number, offset?: number) => queries.getAgentRecentSaisies(scopeUserIdToSession(userId), limit, offset));
+  // Vue d'ensemble du Portail de Saisie — 4 KPI (Aujourd'hui/Semaine/Mois/Année), même politique
+  // de cantonnement que ci-dessus.
+  ipcMain.handle('stats:getAgentStats', (_, userId: number) => {
+    try { return queries.getAgentStats(scopeUserIdToSession(userId)); }
+    catch (e) { log.error('IPC Error: stats:getAgentStats', e); throw e; }
+  });
+  // Portail de Saisie — liste paginée du "travail du jour" (Vue d'ensemble), même politique de
+  // cantonnement que ci-dessus.
+  ipcMain.handle('stats:getAgentCardsTodayPaginated', (_, userId: number, page?: number, pageSize?: number) => {
+    try { return queries.getAgentCardsTodayPaginated(scopeUserIdToSession(userId), page ?? 0, pageSize ?? 20); }
+    catch (e) { log.error('IPC Error: stats:getAgentCardsTodayPaginated', e); throw e; }
+  });
   // Sécurité : le périmètre site/centre de ces 3 handlers est imposé par la session serveur
   // pour tout rôle non-SUPER ADMIN, quels que soient les paramètres envoyés par le renderer.
   function scopeSiteCentreToSession(siteId: number, centreId?: number): { siteId: number; centreId?: number } {

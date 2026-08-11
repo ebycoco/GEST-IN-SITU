@@ -181,6 +181,8 @@ const api = {
       ipcRenderer.invoke('stats:getVerification', agentUsername, siteId),
     getCardsToday: (agentUsername: string, siteId: number): Promise<number> =>
       ipcRenderer.invoke('stats:getCardsToday', agentUsername, siteId),
+    getVerificationCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number }> =>
+      ipcRenderer.invoke('stats:getVerificationCardsTodayPaginated', agentUsername, siteId, page, pageSize),
     getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number }> =>
       ipcRenderer.invoke('stats:getApurementCardsTodayPaginated', agentUsername, siteId, page, pageSize),
     getApurementStats: (
@@ -188,10 +190,16 @@ const api = {
       siteId: number
     ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days: { dayName: string; count: number }[] }> =>
       ipcRenderer.invoke('stats:getApurementStats', agentUsername, siteId),
-    getAgentToday: (userId: number): Promise<number> => 
+    getAgentToday: (userId: number): Promise<number> =>
       ipcRenderer.invoke('stats:getAgentToday', userId),
-    getAgentRecentSaisies: (userId: number, limit?: number, offset?: number): Promise<{ total: number; rows: any[] }> => 
+    getAgentRecentSaisies: (userId: number, limit?: number, offset?: number): Promise<{ total: number; rows: any[] }> =>
       ipcRenderer.invoke('stats:getAgentRecentSaisies', userId, limit, offset),
+    getAgentStats: (
+      userId: number
+    ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number }> =>
+      ipcRenderer.invoke('stats:getAgentStats', userId),
+    getAgentCardsTodayPaginated: (userId: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number }> =>
+      ipcRenderer.invoke('stats:getAgentCardsTodayPaginated', userId, page, pageSize),
     getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
       ipcRenderer.invoke('stats:getSiteSaisieToday', siteId, centreId, agentId, dateStr),
     getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 

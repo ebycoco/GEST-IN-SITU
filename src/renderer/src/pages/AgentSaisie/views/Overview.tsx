@@ -1,75 +1,154 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Clock, FileText, CheckCircle, RefreshCw } from 'lucide-react';
+import { Activity, Calendar, Target, CalendarDays, ClipboardList, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 
+const PAGE_SIZE = 20;
+
+interface AgentStats {
+  today: number;
+  yesterday: number;
+  week: number;
+  month: number;
+  year: number;
+}
+
+const EMPTY_STATS: AgentStats = { today: 0, yesterday: 0, week: 0, month: 0, year: 0 };
+
+/**
+ * Vue d'ensemble du Portail de Saisie (rôle OPERATEUR_SAISIE) :
+ * - 4 KPI (Aujourd'hui/Semaine/Mois/Année) : endpoint dédié stats:getAgentStats →
+ *   getAgentStats (stats.queries.ts), filtré sur created_by=agent connecté (aucun filtre
+ *   statut/site), même filtre que l'ancien widget "Mes saisies aujourd'hui"
+ *   (stats:getAgentToday) mais étendu aux 4 périodes. Palette or du portail conservée
+ *   (#ffd700 / #eccc68), cohérente visuellement avec les portails Vérification/Apurement pour
+ *   la structure (grille de 4 cartes) mais pas la couleur.
+ * - Liste paginée "Travail du jour" : endpoint stats:getAgentCardsTodayPaginated (LIMIT/OFFSET
+ *   borné, politique Low-Memory RAM 8 Go), remplace l'ancienne section "Activité Récente"
+ *   (non bornée, non paginée, toutes dates confondues) par une liste bornée à aujourd'hui.
+ *   Ne touche pas à getAgentRecentSaisies / stats:getAgentRecentSaisies, toujours utilisée
+ *   telle quelle par HistoriqueView.tsx pour l'historique complet.
+ */
 export default function Overview() {
-  const { user, activeSiteId } = useAuthStore();
-  const [operatorTodayCount, setOperatorTodayCount] = useState<number>(0);
-  const [operatorRecentSaisies, setOperatorRecentSaisies] = useState<any[]>([]);
+  const { user } = useAuthStore();
+  const [stats, setStats] = useState<AgentStats>(EMPTY_STATS);
+
+  const [rows, setRows] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Extrait de l'effet pour être réutilisable par le bouton "Actualiser" ci-dessous,
-  // tout en restant la même fonction utilisée par l'auto-refresh (60s) et le listener
-  // 'app:data-updated' — comportement de rechargement inchangé, seule la portée a bougé.
-  const fetchStats = useCallback(async () => {
-    if (user?.login) {
-      try {
-        const count = await window.api.stats.getAgentToday(user.id_user);
-        setOperatorTodayCount(count);
-
-        if (window.api.stats.getAgentRecentSaisies) {
-          const recent = await window.api.stats.getAgentRecentSaisies(user.id_user, 5);
-          setOperatorRecentSaisies(recent.rows || []);
-        }
-      } catch (err) {
-        console.error("Erreur lors de la récupération des stats de l'opérateur:", err);
-      }
+  const loadStats = useCallback(async () => {
+    if (!user?.id_user) { setStats(EMPTY_STATS); return; }
+    try {
+      const res = await window.api.stats.getAgentStats(user.id_user);
+      if (res) setStats(res);
+    } catch (err) {
+      console.error("Erreur lors du chargement des statistiques de saisie :", err);
     }
-  }, [user]);
+  }, [user?.id_user]);
+
+  const loadCardsToday = useCallback(async () => {
+    if (!user?.id_user) { setRows([]); setTotal(0); setIsLoading(false); return; }
+    try {
+      setIsLoading(true);
+      const res = await window.api.stats.getAgentCardsTodayPaginated(user.id_user, page, PAGE_SIZE);
+      setRows(res?.rows || []);
+      setTotal(res?.total || 0);
+    } catch (err) {
+      console.error("Erreur lors du chargement des saisies du jour :", err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user?.id_user, page]);
 
   useEffect(() => {
-    fetchStats();
+    loadStats();
+    loadCardsToday();
 
-    // Auto-refresh toutes les minutes
-    const interval = setInterval(fetchStats, 60000);
+    // Auto-refresh toutes les minutes, comportement conservé de l'ancien widget.
+    const interval = setInterval(() => {
+      loadStats();
+      loadCardsToday();
+    }, 60000);
 
-    window.addEventListener('app:data-updated', fetchStats);
+    const onDataUpdated = () => {
+      loadStats();
+      loadCardsToday();
+    };
+    window.addEventListener('app:data-updated', onDataUpdated);
 
     return () => {
       clearInterval(interval);
-      window.removeEventListener('app:data-updated', fetchStats);
+      window.removeEventListener('app:data-updated', onDataUpdated);
     };
-  }, [fetchStats]);
+  }, [loadStats, loadCardsToday]);
 
   const handleRefreshClick = async () => {
     setIsRefreshing(true);
     try {
-      await fetchStats();
+      await Promise.all([loadStats(), loadCardsToday()]);
     } finally {
       setIsRefreshing(false);
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
   return (
-    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1000, margin: '0 auto' }}>
-      
-      {/* Hero Widget : Saisies du jour */}
-      <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 24, padding: '32px', background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.05) 0%, rgba(255, 215, 0, 0.01) 100%)', border: '1px solid rgba(255, 215, 0, 0.2)', borderRadius: 16 }}>
-        <div style={{ width: 64, height: 64, borderRadius: 20, background: 'linear-gradient(135deg, #eccc68 0%, #ffd700 100%)', color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(255, 215, 0, 0.2)' }}>
-          <Activity size={32} />
+    <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100, margin: '0 auto' }}>
+
+      {/* KPI: 4 cartes Aujourd'hui / Semaine / Mois / Année (palette or du portail) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 24 }}>
+
+        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '24px', background: 'linear-gradient(135deg, rgba(255, 215, 0, 0.08) 0%, rgba(255, 215, 0, 0.01) 100%)', border: '1px solid rgba(255, 215, 0, 0.2)', borderRadius: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #eccc68 0%, #ffd700 100%)', color: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(255, 215, 0, 0.3)' }}>
+            <Activity size={28} />
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1.1 }}>{stats.today}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#ffd700', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Aujourd'hui</div>
+          </div>
         </div>
-        <div>
-          <div style={{ fontSize: 36, fontWeight: 900, color: 'white', lineHeight: 1.1 }}>{operatorTodayCount}</div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#ffd700', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Mes saisies aujourd'hui</div>
+
+        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '24px', background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(59, 130, 246, 0.01) 100%)', border: '1px solid rgba(59, 130, 246, 0.2)', borderRadius: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(59, 130, 246, 0.3)' }}>
+            <Calendar size={28} />
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1.1 }}>{stats.week}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#3b82f6', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Cette semaine</div>
+          </div>
         </div>
+
+        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '24px', background: 'linear-gradient(135deg, rgba(139, 92, 246, 0.05) 0%, rgba(139, 92, 246, 0.01) 100%)', border: '1px solid rgba(139, 92, 246, 0.2)', borderRadius: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(139, 92, 246, 0.3)' }}>
+            <CalendarDays size={28} />
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1.1 }}>{stats.month}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Ce mois</div>
+          </div>
+        </div>
+
+        <div className="glass-card" style={{ display: 'flex', alignItems: 'center', gap: 20, padding: '24px', background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.05) 0%, rgba(245, 158, 11, 0.01) 100%)', border: '1px solid rgba(245, 158, 11, 0.2)', borderRadius: 16 }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 24px rgba(245, 158, 11, 0.3)' }}>
+            <Target size={28} />
+          </div>
+          <div>
+            <div style={{ fontSize: 32, fontWeight: 900, color: 'white', lineHeight: 1.1 }}>{stats.year}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>Cette année</div>
+          </div>
+        </div>
+
       </div>
 
-      {/* Activité Récente */}
-      <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, borderRadius: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, color: 'white' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Clock size={20} className="text-accent-primary" />
-            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Activité Récente</h2>
+      {/* Travail du jour : fiches saisies aujourd'hui par l'agent connecté */}
+      <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '20px 24px', color: 'white' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ClipboardList size={20} color="#ffd700" />
+            <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Travail du jour</h2>
           </div>
           <button
             onClick={handleRefreshClick}
@@ -88,29 +167,68 @@ export default function Overview() {
           </button>
         </div>
 
-        {operatorRecentSaisies.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {operatorRecentSaisies.map((saisie, idx) => (
-              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 16px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>
-                    <FileText size={16} />
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, color: 'white', fontSize: 14 }}>{saisie.prenoms} {saisie.noms}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{saisie.num_secu}</div>
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <CheckCircle size={14} color="#10b981" /> 
-                  Enregistré
-                </div>
-              </div>
-            ))}
+        {isLoading ? (
+          <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Chargement en cours...</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
+            <ClipboardList size={48} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
+            Aucune saisie enregistrée aujourd'hui pour le moment.
           </div>
         ) : (
-          <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)', background: 'rgba(255,255,255,0.02)', borderRadius: 12 }}>
-            Aucune saisie récente trouvée.
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Identité</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Contact</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Heure de saisie</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                    <td style={{ padding: '16px 24px' }}>
+                      <div style={{ fontWeight: 600, color: 'white' }}>{r.noms} {r.prenoms}</div>
+                      <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                        {r.date_de_naissance || '—'}{r.lieu_de_naissance ? ` · ${r.lieu_de_naissance}` : ''}
+                      </div>
+                    </td>
+                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#eccc68' }}>{r.num_secu || '—'}</td>
+                    <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement || '—'}</td>
+                    <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.contact || '—'}</td>
+                    <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
+                      {r.created_at ? new Date(r.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {total > PAGE_SIZE && (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16, padding: '16px', borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
+            <button
+              onClick={() => setPage(p => Math.max(0, p - 1))}
+              disabled={page === 0}
+              className="btn-outline"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: page === 0 ? 'transparent' : 'rgba(255,255,255,0.05)', color: page === 0 ? 'var(--text-muted)' : 'white', cursor: page === 0 ? 'not-allowed' : 'pointer' }}
+            >
+              <ChevronLeft size={16} /> Précédent
+            </button>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Page {page + 1} sur {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => (p + 1 < totalPages ? p + 1 : p))}
+              disabled={page + 1 >= totalPages}
+              className="btn-outline"
+              style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: page + 1 >= totalPages ? 'transparent' : 'rgba(255,255,255,0.05)', color: page + 1 >= totalPages ? 'var(--text-muted)' : 'white', cursor: page + 1 >= totalPages ? 'not-allowed' : 'pointer' }}
+            >
+              Suivant <ChevronRight size={16} />
+            </button>
           </div>
         )}
       </div>
