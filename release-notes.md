@@ -1,36 +1,23 @@
-# GEST-IN-SITU — Release v2.13.0
+# GEST-IN-SITU — Release v2.13.1
 
 > **Date de publication :** 11 août 2026
 > **Statut :** Production — Postes opérationnels en Côte d'Ivoire
-> **SCHEMA_VERSION :** 65 (migrations additives v62 → v65, aucune perte de données)
+> **SCHEMA_VERSION :** 66 (migration additive v66, aucune perte de données)
 
-## 🚀 Nouveautés & Ergonomie
+## 🛠️ Correctif critique
 
-- **Nouveau rôle OPERATEUR_APUREMENT avec portail dédié (`/apurement`)** : réutilise le composant d'apurement existant avec sa propre barre de synchro cloud ; l'onglet APUREMENT reste également disponible dans Inventaire & Logistique pour les rôles existants (aucun retrait).
-- **Portail Apurement :** nouvel onglet "Vue d'ensemble" avec 4 KPI (Aujourd'hui/Semaine/Mois/Année) et une liste paginée du travail du jour.
-- **Alerte de décharge en doublon** (Apurement / Inventaire & Logistique) : une modale avertit désormais l'agent avant d'écraser l'émargement d'une carte déjà déchargée, en affichant la date, l'agent et le retirant déjà enregistrés.
-- **Portails Vérification et Saisie :** ajout d'un onglet "Travail du jour" paginé.
-- **Inventaire & Logistique :** ajoute le badge "Cartes disponibles en local", le bouton Actualiser, "Récupérer les cartes depuis le Cloud" et "Envoyer les corrections" (jusque-là inopérants pour OPERATEUR_INVENTAIRE/OPERATEUR_LOGISTIQUE).
-- **Mon Profil :** l'ADMINISTRATEUR_SITE peut désormais modifier son propre login.
-- **Mise à jour automatique — bandeau persistant :** remplace l'ancien toast qui disparaissait seul après 10 s par un bandeau non bloquant qui ne disparaît que sur clic explicite.
-- **Mise à jour automatique — installation visible avec relance automatique :** le déclenchement de l'installation passe désormais par la même vérification "synchronisation/import en cours" que la fermeture normale de l'application, avec un installeur NSIS en mode `oneClick` et relance automatique, un script personnalisé grisant le bouton de fermeture pendant la copie des fichiers, et un marqueur de version qui permet de détecter une mise à jour mal appliquée au démarrage suivant.
+- **Migrations SQLite non fiables en cas de données orphelines, avec faux positif "à jour"** (incident production réel constaté sur 2 postes de terrain) : la migration d'élargissement du rôle OPERATEUR_APUREMENT pouvait échouer sur des comptes utilisateurs orphelins (site/centre/poste déjà supprimé), déclenchant un filet de secours de reconstruction d'urgence qui se déclarait à tort "à jour" sans avoir réellement terminé. Sur les postes touchés : schéma durablement incomplet (perte des index de performance, retour du bug de lenteur du tableau de bord déjà corrigé en v2.11.0), avec blocage de toute réparation automatique future.
+  - Les comptes orphelins sont désormais neutralisés (journalisés) avant toute vérification, au lieu de faire échouer la migration.
+  - Le filet de secours de reconstruction d'urgence rejoue désormais la vraie séquence de migrations et ne se déclare "à jour" qu'après succès réel.
+  - Nouvelle vérification structurelle systématique au démarrage (`SCHEMA_VERSION` 65 → 66) : contrôle l'état réel de la base (pas seulement son numéro de version) et répare automatiquement ce qui manque — les postes déjà touchés par l'incident se corrigent d'eux-mêmes à cette mise à jour, sans intervention manuelle poste par poste.
+- **Comptes utilisateurs orphelins lors de la suppression d'un site ou d'un centre :** les comptes restants pointant vers un site/centre supprimé sont désormais nettoyés systématiquement (au lieu d'être laissés dans un état incohérent).
 
-## 🟠 Corrections importantes
+## 🧪 Validation
 
-- **Gel derrière "Chargement sécurisé en cours..." sur 9 pages** (Cartes, Recherche, Profil, Tableau des cartes, Agents, Export, File d'attente Admin, Maintenance, Journaux), ainsi que sur le portail Retraits en cache froid — corrigé, avec ajout d'un filet de sécurité global (timeout 10 s).
-- **Durcissement des statistiques Vérification/Apurement/Saisie et du profil :** l'identité de l'appelant est désormais toujours dérivée de la session serveur (et non d'un paramètre client falsifiable) pour tout rôle non-SUPER ADMIN.
-- **Faille préexistante sur `cartes:searchCombinedInventaire` :** contrôle de rôle jusque-là totalement absent, ajouté.
-
-## 🧱 Base de Données
-
-- **Migrations `SCHEMA_VERSION` 62 → 65**, additives : colonne `relation_retirant` sur `t_cartes` ; élargissement des contraintes de rôle pour OPERATEUR_APUREMENT ; migration des clés de préférence de synchro vers un identifiant stable (`id_user`) au lieu du login. Aucune perte de données.
-
-## ⚠️ Point de vigilance
-
-- Le script NSIS personnalisé (`build/installer.nsh`) et le mode `oneClick` de l'installeur sont vérifiés pour la première fois par une compilation réelle sur cette version.
+- Couverture de test fonctionnel dédiée (poste sain, simulation exacte de l'incident de production, orphelins injectés, suppression de site/centre via l'interface réelle) : verdict GO, aucune anomalie bloquante ou majeure.
 
 ## ℹ️ Mise à jour automatique
 
 Cette release est distribuée via le système d'auto-update Electron.
-Les postes connectés recevront la notification de mise à jour automatiquement (bandeau persistant, installation à la fermeture de l'application).
+Les postes connectés recevront la notification de mise à jour automatiquement (bandeau persistant, installation à la fermeture de l'application). Les postes déjà affectés par l'incident décrit ci-dessus se répareront automatiquement à l'application de cette mise à jour.
 **Aucune action manuelle n'est requise sur les centres en production.**
