@@ -4,6 +4,22 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.1] - 2026-08-11
+
+### 🛠️ Corrections & Sécurité
+
+- **Migrations SQLite non fiables en cas de données orphelines, avec faux positif "à jour" (incident production réel, 2 postes de terrain) :** `migrateV64` (élargissement du rôle OPERATEUR_APUREMENT) échouait sur des lignes `t_users` orphelines (`site_id`/`centre_id`/`poste_id` pointant vers un site/centre/poste déjà supprimé), déclenchant le filet de secours "reconstruction d'urgence" — lequel rejouait une séquence de migrations tronquée puis tamponnait `user_version` sur la cible complète **avant** d'avoir réellement terminé la reconstruction. Conséquence sur les postes touchés : schéma durablement incomplet (perte des index de performance V60-V62, retour du bug de lenteur du tableau de bord déjà corrigé en v2.11.0) tout en se déclarant faussement "à jour", empêchant toute réparation automatique future.
+  - `migrateV64` neutralise désormais elle-même (mise à `NULL`, journalisée) les lignes orphelines avant la vérification des clés étrangères, au lieu d'échouer dessus.
+  - Le filet de secours "reconstruction d'urgence" rejoue désormais dynamiquement la vraie séquence de migrations et ne tamponne `user_version` qu'après son succès réel.
+  - Nouvelle migration **`migrateV66_structuralIntegrityNet`** (`SCHEMA_VERSION` 65 → 66), appelée inconditionnellement à chaque démarrage : vérifie l'état structurel réel de la base (jamais `user_version` seul) et répare individuellement ce qui manque — permet aux postes déjà touchés par l'incident de s'auto-réparer à la prochaine mise à jour, sans intervention manuelle poste par poste.
+- **`deleteSite()` / `deleteCentre()` (Gestion des sites/centres) laissaient des comptes utilisateurs orphelins :** `deleteSite()` excluait déjà les comptes SUPER ADMIN du `DELETE` mais ne les nettoyait jamais ; `deleteCentre()` ne touchait `t_users` dans aucun cas. Les deux neutralisent désormais les comptes restants (au lieu de les laisser pointer dans le vide) ; `deleteCentre()` est aussi rendue transactionnelle pour la première fois.
+
+### 🧪 Infrastructure de Test
+
+- Couverture e2e dédiée (agent-13 QA terrain, verdict GO, 0 P0/P1) : poste sain sans régression, simulation exacte de l'état réel du poste de production affecté (réparation automatique confirmée sans reconstruction d'urgence), orphelins injectés (neutralisation confirmée avant le `foreign_key_check`), et `deleteSite`/`deleteCentre` via l'UI réelle.
+
+---
+
 ## [2.13.0] - 2026-08-11
 
 ### 🚀 Nouveautés & Ergonomie
