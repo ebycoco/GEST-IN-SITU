@@ -4,6 +4,41 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.13.0] - 2026-08-11
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Nouveau rôle OPERATEUR_APUREMENT avec portail dédié (`/apurement`)** : réutilise le composant d'apurement existant avec sa propre barre de synchro cloud ; l'onglet APUREMENT reste également disponible dans Inventaire & Logistique pour les rôles existants (aucun retrait). Routage, redirection post-connexion, écran de sélection de rôle, navigation et compteurs cloud/dirty mis à jour en conséquence.
+- **Portail Apurement :** nouvel onglet "Vue d'ensemble" avec 4 KPI (Aujourd'hui/Semaine/Mois/Année) et une liste paginée du travail du jour, aux côtés de l'onglet existant "Travail d'apurement".
+- **Alerte de décharge en doublon (Apurement / Inventaire & Logistique)** : une modale avertit désormais l'agent avant d'écraser l'émargement d'une carte déjà déchargée (statut DELIVRE), en affichant la date, l'agent et le retirant déjà enregistrés.
+- **Portails Vérification et Saisie :** ajout d'un onglet "Travail du jour" paginé, cohérent avec le nouvel onglet Apurement.
+- **Inventaire & Logistique :** ajoute le badge "Cartes disponibles en local", le bouton Actualiser, "Récupérer les cartes depuis le Cloud" et "Envoyer les corrections", au même niveau que le Portail Qualité (jusque-là inopérants pour OPERATEUR_INVENTAIRE/OPERATEUR_LOGISTIQUE).
+- **Mon Profil :** l'ADMINISTRATEUR_SITE peut désormais modifier son propre login (vérification d'unicité, rejet si collision).
+- **Mise à jour automatique — bandeau persistant :** remplace l'ancien toast de mise à jour (qui disparaissait seul après 10 s sans qu'aucune installation ne soit visiblement déclenchée) par un bandeau non bloquant qui n'disparaît que sur clic explicite, expliquant que l'installation se déclenche à la fermeture de l'application.
+- **Mise à jour automatique — installation visible avec relance automatique :** remplace le déclenchement implicite silencieux d'electron-updater par un déclenchement explicite, en aval de la vérification "synchronisation/import en cours" qui protège déjà la fermeture normale de l'application. L'installeur NSIS passe en mode `oneClick` avec relance automatique et un script personnalisé (`build/installer.nsh`) qui grise le bouton de fermeture pendant la copie des fichiers ; un marqueur de version (`pending-update.json`) permet de détecter au démarrage suivant une mise à jour qui ne se serait pas correctement appliquée.
+
+### 🛠️ Corrections & Sécurité
+
+- **Gel derrière "Chargement sécurisé en cours..." sur 9 pages** (Cartes, Recherche, Profil, Tableau des cartes, Agents, Export, File d'attente Admin, Maintenance, Journaux) : ces pages ne levaient jamais le flag de chargement initial, atteintes en premier après connexion elles gelaient l'interface indéfiniment. Ajout d'un filet de sécurité global (timeout 10 s) qui force la levée du flag si aucune page ne l'a fait.
+- **Portail Retraits :** le flag de chargement sécurisé n'était jamais levé sur cache froid (seul un effet de bord fortuit d'une autre page le faisait auparavant).
+- **Durcissement des statistiques Vérification/Apurement/Saisie :** les handlers `stats:getVerification`, `stats:getCardsToday` et les endpoints associés ne vérifiaient pas l'identité de l'appelant, permettant de consulter les statistiques d'un autre agent en forgeant l'appel IPC (identité et site désormais toujours dérivés de la session serveur pour tout rôle non-SUPER ADMIN).
+- **Durcissement `auth:updateSelfProfile` :** l'identité ciblée est désormais dérivée de la session serveur et non plus d'un identifiant client falsifiable.
+- **Faille préexistante sur `cartes:searchCombinedInventaire` :** contrôle de rôle jusque-là totalement absent, ajouté.
+
+### 🧱 Base de Données
+
+- **Migrations `SCHEMA_VERSION` 62 → 65** (`migrateV63`, `migrateV64`, `migrateV65`) : ajout de la colonne `relation_retirant` à `t_cartes` ; élargissement des contraintes `CHECK(role)` de `t_users`/`t_user_roles` pour le nouveau rôle OPERATEUR_APUREMENT (pattern sécurisé avec backup physique, transaction exclusive et vérification d'intégrité, corrige au passage un bug de contrainte FK réel sur `t_user_roles`) ; migration des clés `t_config` `auto_downstream_<login>` vers `auto_downstream_<id_user>` (clés stables qui survivent désormais à un renommage de login). Migrations additives, aucune perte de données.
+
+### 🧪 Infrastructure de Test
+
+- Couverture e2e additionnelle (agent-13 QA terrain) : barre de synchro cloud Inventaire, nouveau rôle/portail OPERATEUR_APUREMENT (17 scénarios), gel de chargement sur 9 pages + filet de sécurité global, cache froid Retraits, modification du login ADMINISTRATEUR_SITE et migration v65 (13 scénarios), Vue d'ensemble Apurement (17 scénarios), bandeau de mise à jour persistant (10 scénarios), marqueur de mise à jour au démarrage.
+
+### ⚠️ Points de vigilance connus
+
+- Le script NSIS personnalisé (`build/installer.nsh`) et le mode `oneClick` de l'installeur n'avaient encore jamais été vérifiés par une compilation réelle avant cette release — validés lors du build de packaging de cette version.
+
+---
+
 ## [2.12.0] - 2026-08-10
 
 ### 🚨 Sécurité (Critique)
