@@ -277,6 +277,21 @@ export function deleteSite(id: number) {
   const site = db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(id) as { sync_id: string | null } | undefined;
   const siteSyncId = site?.sync_id ?? null;
 
+  // ── Comptes SUPER ADMIN rattachés à ce site ────────────────────────────────
+  // deleteSite() exclut volontairement ce rôle du DELETE de t_users (étape 3
+  // ci-dessous) : un SUPER ADMIN n'est jamais supprimé par une purge de site.
+  // Sans neutralisation, ces comptes survivraient avec un site_id/centre_id/
+  // poste_id pointant vers des lignes t_sites/t_centres/t_postes supprimées
+  // plus bas — exactement les orphelins constatés en production, cause racine
+  // de l'échec systématique de foreign_key_check(t_users) rencontré par
+  // migrateV64 (voir schema.ts). On neutralise (jamais on ne supprime le
+  // compte) : SUPER ADMIN n'est pas cloisonné par site/centre dans la logique
+  // métier (cf. ipc/handlers.ts, qui ignore systématiquement site_id/centre_id
+  // pour ce rôle), cette neutralisation est donc sans impact fonctionnel.
+  const affectedSuperAdmins = db.prepare(
+    "SELECT sync_id, login FROM t_users WHERE site_id = ? AND role = 'SUPER ADMIN'"
+  ).all(id) as { sync_id: string | null; login: string }[];
+
   const transaction = db.transaction(() => {
     // 1. Delete Cards
     const cartesCount = db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(id).changes;
@@ -286,8 +301,18 @@ export function deleteSite(id: number) {
     let logsCount2 = 0;
     try { logsCount2 = db.prepare('DELETE FROM t_logs WHERE site_id = ?').run(id).changes; } catch (_e) {}
 
-    // 3. Delete Users
+    // 3. Delete Users (hors SUPER ADMIN)
     const usersCount = db.prepare("DELETE FROM t_users WHERE site_id = ? AND role != 'SUPER ADMIN'").run(id).changes;
+
+    // 3bis. Neutraliser (jamais supprimer) les comptes SUPER ADMIN restants
+    // rattachés à ce site — cf. commentaire détaillé plus haut.
+    if (affectedSuperAdmins.length > 0) {
+      db.prepare(`
+        UPDATE t_users
+        SET site_id = NULL, centre_id = NULL, poste_id = NULL, is_dirty = 1, updated_at = datetime('now')
+        WHERE site_id = ? AND role = 'SUPER ADMIN'
+      `).run(id);
+    }
 
     // 4. Delete Postes
     const postesCount = db.prepare('DELETE FROM t_postes WHERE centre_id IN (SELECT id FROM t_centres WHERE site_id = ?)').run(id).changes;
@@ -300,18 +325,23 @@ export function deleteSite(id: number) {
 
     // 7. Finally Delete Site
     const res = db.prepare('DELETE FROM t_sites WHERE id = ?').run(id);
-    
+
     insertAuditLog(
       'SUPER ADMIN',
       'VALIDATION',
-      `[PURGE SITE] Site ID: ${id} supprimé. Détail : ${cartesCount} cartes, ${usersCount} agents, ${centresCount} centres, ${postesCount} postes, ${logsCount1 + logsCount2} logs, ${tempCount} imports temp.`
+      `[PURGE SITE] Site ID: ${id} supprimé. Détail : ${cartesCount} cartes, ${usersCount} agents, ${centresCount} centres, ${postesCount} postes, ${logsCount1 + logsCount2} logs, ${tempCount} imports temp${affectedSuperAdmins.length > 0 ? `, ${affectedSuperAdmins.length} SUPER ADMIN neutralisé(s)` : ''}.`
     );
-    
+
     return res;
   });
   const result = transaction();
 
+  if (affectedSuperAdmins.length > 0) {
+    log.warn(`[deleteSite] ${affectedSuperAdmins.length} compte(s) SUPER ADMIN neutralisé(s) (site_id/centre_id/poste_id → NULL) suite à la suppression du site ID ${id} : ${affectedSuperAdmins.map(a => a.login).join(', ')}`);
+  }
+
   // ── Enfilage outbox (hors transaction SQLite) ─────────────────────────────
+  let anyEnqueued = false;
   if (siteSyncId) {
     // Si un INSERT était encore PENDING (création non synchronisée), on l'annule.
     // Dans ce cas, aucun DELETE n'est enfié car Supabase ne connaît pas encore l'entité.
@@ -319,10 +349,25 @@ export function deleteSite(id: number) {
     if (!wasLocalOnly) {
       // L'entité était déjà synchronisée → envoyer un DELETE à Supabase
       enqueueOutbox(siteSyncId, 't_sites', 'DELETE', { sync_id: siteSyncId });
-      if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
-      }
+      anyEnqueued = true;
     }
+  }
+
+  // Répercuter la neutralisation des comptes SUPER ADMIN vers Supabase.
+  for (const admin of affectedSuperAdmins) {
+    if (!admin.sync_id) continue;
+    enqueueOutbox(admin.sync_id, 't_users', 'UPDATE', {
+      sync_id: admin.sync_id,
+      site_id: null,
+      centre_id: null,
+      poste_id: null,
+      updated_at: new Date().toISOString()
+    });
+    anyEnqueued = true;
+  }
+
+  if (anyEnqueued && networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
   }
 
   return result;
@@ -590,28 +635,73 @@ export function deleteCentre(id: number) {
   if (!centre) return { changes: 0 };
   const centreSyncId = centre.sync_id;
 
+  // ── Utilisateurs rattachés à ce centre ─────────────────────────────────────
+  // Jusqu'ici, deleteCentre() ne touchait JAMAIS t_users : un compte
+  // ADMIN_CENTRE/opérateur rattaché à ce centre survivait avec un centre_id
+  // (et poste_id) pointant vers une ligne supprimée — même cause racine
+  // d'orphelins que dans deleteSite (cf. migrateV64 dans schema.ts). Choix
+  // volontairement le MOINS destructeur (décision produit ambiguë entre
+  // supprimer les comptes, comme deleteSite le fait pour les non-SUPER-ADMIN
+  // d'un site, ou simplement neutraliser) : on neutralise à NULL sans jamais
+  // supprimer de compte, ce qui préserve l'accès de l'utilisateur au niveau du
+  // site — à valider avec l'utilisateur si le comportement destructeur
+  // (suppression) était en réalité attendu.
+  const affectedUsers = db.prepare(
+    "SELECT sync_id, login FROM t_users WHERE centre_id = ?"
+  ).all(id) as { sync_id: string | null; login: string }[];
+
   // Trace d'audit
   insertAuditLog(
     'ADMIN',
     'VALIDATION',
-    `[SUPPRESSION] Par ADMIN sur t_centres (ID: ${id})`
+    `[SUPPRESSION] Par ADMIN sur t_centres (ID: ${id})${affectedUsers.length > 0 ? `. ${affectedUsers.length} compte(s) utilisateur neutralisé(s) (centre_id/poste_id -> NULL)` : ''}`
   );
 
-  // Suppression physique immédiate locale (l'outbox conserve le sync_id pour Supabase)
-  db.prepare('DELETE FROM t_postes WHERE centre_id = ?').run(id);
-  const result = db.prepare('DELETE FROM t_centres WHERE id = ?').run(id);
+  // Suppression physique immédiate locale (l'outbox conserve le sync_id pour
+  // Supabase) + neutralisation des comptes rattachés, dans une transaction
+  // unique pour garantir l'atomicité (auparavant, ces DELETE n'étaient pas du
+  // tout enveloppés dans une transaction).
+  const transaction = db.transaction(() => {
+    if (affectedUsers.length > 0) {
+      db.prepare(`
+        UPDATE t_users
+        SET centre_id = NULL, poste_id = NULL, is_dirty = 1, updated_at = datetime('now')
+        WHERE centre_id = ?
+      `).run(id);
+    }
+    db.prepare('DELETE FROM t_postes WHERE centre_id = ?').run(id);
+    return db.prepare('DELETE FROM t_centres WHERE id = ?').run(id);
+  });
+  const result = transaction();
+
+  if (affectedUsers.length > 0) {
+    log.warn(`[deleteCentre] ${affectedUsers.length} compte(s) utilisateur neutralisé(s) (centre_id/poste_id → NULL) suite à la suppression du centre ID ${id} : ${affectedUsers.map(u => u.login).join(', ')}`);
+  }
 
   // ── Enfilage outbox (hors transaction SQLite) ─────────────────────────────
+  let anyEnqueued = false;
   if (centreSyncId) {
     const wasLocalOnly = cancelPendingInsert(centreSyncId, 't_centres');
     if (!wasLocalOnly) {
       enqueueOutbox(centreSyncId, 't_centres', 'DELETE', { sync_id: centreSyncId });
-      if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
-      }
-    } else {
-      // Si local uniquement, la suppression physique a déjà été faite ci-dessus.
+      anyEnqueued = true;
     }
+  }
+
+  // Répercuter la neutralisation des comptes vers Supabase.
+  for (const u of affectedUsers) {
+    if (!u.sync_id) continue;
+    enqueueOutbox(u.sync_id, 't_users', 'UPDATE', {
+      sync_id: u.sync_id,
+      centre_id: null,
+      poste_id: null,
+      updated_at: new Date().toISOString()
+    });
+    anyEnqueued = true;
+  }
+
+  if (anyEnqueued && networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
   }
 
   return result;

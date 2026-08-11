@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 65;
+export const SCHEMA_VERSION = 66;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -17,10 +17,108 @@ export function runMigrations(db: Database.Database): void {
       log.info(`New database installation: schema directly set to version ${SCHEMA_VERSION}`);
       // Filet de sÃ©curitÃ© : garantir les colonnes mÃªme pour une install neuve
       migrateV27_safetyNet(db);
+      // Filet d'intÃ©gritÃ© structurelle (V66) : nÃ©gligeable sur une install neuve
+      // (migrateV1 crÃ©e dÃ©jÃ  le schÃ©ma courant), gardÃ© pour la parfaite
+      // cohÃ©rence de tous les chemins de dÃ©marrage.
+      migrateV66_structuralIntegrityNet(db);
       log.info('All migrations complete');
       return;
     }
-  
+
+    // â”€â”€â”€ SÃ‰QUENCE NORMALE DE MIGRATIONS (V2 â†’ V{SCHEMA_VERSION}) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Extraite en fonction rÃ©utilisable runMigrationSequence() plus bas dans ce
+    // fichier, rejouÃ©e Ã  l'identique par ce chemin normal ET par le chemin de
+    // secours (reconstruction d'urgence, catch global ci-dessous) â€” au lieu de
+    // maintenir une liste figÃ©e sÃ©parÃ©e qui devait Ãªtre resynchronisÃ©e
+    // manuellement Ã  chaque nouvelle migration (cause confirmÃ©e du bug : la
+    // liste de secours s'arrÃªtait Ã  migrateV48 tout en tamponnant user_version
+    // au maximum, ce qui mentait sur l'Ã©tat rÃ©el du schÃ©ma).
+    runMigrationSequence(db, currentVersion, false);
+
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+
+    // â”€â”€â”€ FILET DE SÃ‰CURITÃ‰ UNIVERSEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ExÃ©cutÃ© aprÃ¨s TOUTES les migrations pour corriger les bases corrompues
+    migrateV27_safetyNet(db);
+    // â”€â”€â”€ FILET D'INTÃ‰GRITÃ‰ STRUCTURELLE PÃ‰RENNE (V66) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Contrairement Ã  migrateV27_safetyNet (colonnes uniquement via ALTER TABLE
+    // ADD COLUMN), inspecte l'Ã©tat structurel RÃ‰EL (sqlite_master / PRAGMA
+    // table_info) plutÃ´t que de faire confiance Ã  user_version â€” indÃ©pendant de
+    // toute tromperie passÃ©e ou future sur user_version. Toujours APRÃˆS
+    // migrateV27_safetyNet (ordre impÃ©ratif). CoÃ»t nÃ©gligeable : uniquement des
+    // lookups sqlite_master, jamais de scan de lignes de t_cartes/t_users.
+    migrateV66_structuralIntegrityNet(db);
+    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    log.info('[MIGRATION] Toutes les migrations terminÃ©es avec succÃ¨s.');
+
+  } catch (migrationError: any) {
+    // â”€â”€â”€ CATCH GLOBAL : RECONSTRUCTION D'URGENCE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    log.error('[MIGRATION] Ã‰CHEC CRITIQUE du cycle de migration. DÃ©clenchement de la reconstruction d\'urgence.', migrationError);
+
+    try {
+      // Ã‰tape 1 : Sauvegarder la base corrompue
+      const { join } = require('path');
+      const { copyFileSync } = require('fs');
+      const dbPath = (db as any).name as string;
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = join(require('path').dirname(dbPath), `database_backup_emergency_${timestamp}.db`);
+      try {
+        copyFileSync(dbPath, backupPath);
+        log.warn(`[MIGRATION] Sauvegarde d'urgence crÃ©Ã©e : ${backupPath}`);
+      } catch (backupErr) {
+        log.error('[MIGRATION] Impossible de crÃ©er la sauvegarde d\'urgence :', backupErr);
+      }
+
+      // Ã‰tape 2 : RÃ©initialisation forcÃ©e du schÃ©ma en V1, puis rejeu COMPLET de
+      // la sÃ©quence normale (V2 â†’ V{SCHEMA_VERSION}) via runMigrationSequence().
+      // Contrairement Ã  l'ancienne liste figÃ©e ad-hoc (migrateV29..migrateV48
+      // uniquement) qui tamponnait user_version = SCHEMA_VERSION AVANT de rejouer
+      // quoi que ce soit et s'arrÃªtait bien avant V65 : un poste ayant traversÃ©
+      // ce filet se dÃ©clarait faussement "Ã  jour" alors qu'il lui manquait
+      // structurellement les migrations V49-V65 (dont les index de performance
+      // V60/V61/V62 â€” preuve en production : requÃªtes stats:get passÃ©es de <1s
+      // Ã  7-11s sur le poste affectÃ©). Le tamponnage de user_version n'intervient
+      // dÃ©sormais qu'APRÃˆS que runMigrationSequence ait rÃ©ellement terminÃ© avec
+      // succÃ¨s, jamais avant.
+      log.warn(`[MIGRATION] Tentative de rÃ©installation complÃ¨te du schÃ©ma jusqu'en V${SCHEMA_VERSION}...`);
+      db.pragma('user_version = 0');
+      migrateV1(db);
+      // Garde anti-rÃ©cursion explicite (isEmergencyRetry=true) : si cette
+      // deuxiÃ¨me tentative Ã©choue Ã  son tour, runMigrationSequence() ne retente
+      // JAMAIS une nouvelle reconstruction â€” elle logue une erreur critique
+      // distincte et remonte l'exception telle quelle, captÃ©e par le catch
+      // (emergencyError) ci-dessous qui throw sans aucune boucle possible.
+      runMigrationSequence(db, 1, true);
+      db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      migrateV27_safetyNet(db);
+      migrateV66_structuralIntegrityNet(db);
+      log.info(`[MIGRATION] Reconstruction d'urgence terminÃ©e. SchÃ©ma rÃ©ellement rÃ©installÃ© en V${SCHEMA_VERSION}.`);
+
+    } catch (emergencyError: any) {
+      log.error('[MIGRATION] Ã‰CHEC TOTAL de la reconstruction d\'urgence. L\'application peut Ãªtre inutilisable.', emergencyError);
+      throw emergencyError;
+    }
+  }
+}
+
+// =====================================================
+// SÃ‰QUENCE NORMALE DE MIGRATIONS (V2 â†’ V{SCHEMA_VERSION})
+// Extraite en fonction rÃ©utilisable (Volet 1bis) pour Ãªtre rejouÃ©e Ã
+// l'identique par le chemin normal ET par le chemin de secours (reconstruction
+// d'urgence) â€” au lieu de maintenir une liste figÃ©e sÃ©parÃ©e qui devait Ãªtre
+// resynchronisÃ©e manuellement Ã  chaque nouvelle migration.
+//
+// @param currentVersion   Version de schÃ©ma de dÃ©part (la vraie valeur lue
+//                          depuis user_version en chemin normal, ou 1 aprÃ¨s le
+//                          repli d'urgence sur migrateV1).
+// @param isEmergencyRetry  Garde anti-rÃ©cursion explicite : distingue un rejeu
+//                          normal d'un rejeu dÃ©jÃ  en reconstruction d'urgence,
+//                          pour journaliser prÃ©cisÃ©ment un Ã©chec en cascade
+//                          plutÃ´t que de retenter silencieusement.
+// =====================================================
+function runMigrationSequence(db: Database.Database, currentVersion: number, isEmergencyRetry: boolean): void {
+  try {
     if (currentVersion < 2) {
       log.info('Running migration v2: Ensuring tables');
       migrateV2(db);
@@ -341,61 +439,22 @@ export function runMigrations(db: Database.Database): void {
       migrateV65(db);
     }
 
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
-
-    // â”€â”€â”€ FILET DE SÃ‰CURITÃ‰ UNIVERSEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // ExÃ©cutÃ© aprÃ¨s TOUTES les migrations pour corriger les bases corrompues
-    migrateV27_safetyNet(db);
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-    log.info('[MIGRATION] Toutes les migrations terminÃ©es avec succÃ¨s.');
-
-  } catch (migrationError: any) {
-    // â”€â”€â”€ CATCH GLOBAL : RECONSTRUCTION D'URGENCE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    log.error('[MIGRATION] Ã‰CHEC CRITIQUE du cycle de migration. DÃ©clenchement de la reconstruction d\'urgence.', migrationError);
-
-    try {
-      // Ã‰tape 1 : Sauvegarder la base corrompue
-      const { join } = require('path');
-      const { copyFileSync } = require('fs');
-      const dbPath = (db as any).name as string;
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupPath = join(require('path').dirname(dbPath), `database_backup_emergency_${timestamp}.db`);
-      try {
-        copyFileSync(dbPath, backupPath);
-        log.warn(`[MIGRATION] Sauvegarde d'urgence crÃ©Ã©e : ${backupPath}`);
-      } catch (backupErr) {
-        log.error('[MIGRATION] Impossible de crÃ©er la sauvegarde d\'urgence :', backupErr);
-      }
-
-      // Ã‰tape 2 : RÃ©initialisation forcÃ©e du schÃ©ma en V38 complet
-      log.warn('[MIGRATION] Tentative de rÃ©installation complÃ¨te du schÃ©ma V38...');
-      db.pragma('user_version = 0');
-      migrateV1(db);
-      db.pragma(`user_version = ${SCHEMA_VERSION}`);
-      migrateV29(db); // Garantit t_import_anomalies + colonnes t_centres (sans DROP destructeur)
-      migrateV30(db); // Garantit la prÃ©sence de 'numero' avec DEFAULT 1 sur t_centres
-      migrateV31(db); // Garantit la prÃ©sence de 'created_by' sur t_cartes
-      migrateV32(db); // Garantit la prÃ©sence de t_outbox (Outbox Pattern offline-first)
-      migrateV33(db); // Garantit les colonnes d'identitÃ© dans t_import_anomalies
-      migrateV34(db); // Optimisation des requÃªtes stats:get
-      migrateV35(db); // Covering index for DP, KPI index
-      migrateV36(db); // Optimisation de la requÃªte distribParJour
-      migrateV37(db); // Signalement absence et escalade
-      migrateV38(db); // Index de performance pour les doublons stricts
-      migrateV21(db); // Garantit audit_logs (V21)
-      migrateV22(db); // Garantit t_user_roles (V22)
-      migrateV39(db); // Add contact_retirant column to t_cartes
-      migrateV40(db); // Add expiry_date and is_permanent to t_sites
-      migrateV41(db); // has_invalid_date flag + index
-      migrateV48(db); // Add updated_by to t_cartes
-      migrateV27_safetyNet(db);
-      log.info('[MIGRATION] Reconstruction d\'urgence terminÃ©e. SchÃ©ma rÃ©installÃ© en V38.');
-
-    } catch (emergencyError: any) {
-      log.error('[MIGRATION] Ã‰CHEC TOTAL de la reconstruction d\'urgence. L\'application peut Ãªtre inutilisable.', emergencyError);
-      throw emergencyError;
+    if (currentVersion < 66) {
+      log.info('Running migration v66: Structural integrity safety net (self-healing, inspecte sqlite_master/PRAGMA table_info plutÃ´t que de faire confiance Ã  user_version â€” rÃ©pare les postes affectÃ©s par le bug du filet de secours V64/V65)');
+      migrateV66_structuralIntegrityNet(db);
     }
+  } catch (seqError: any) {
+    if (isEmergencyRetry) {
+      // Garde anti-rÃ©cursion explicite : on est dÃ©jÃ  en train de rejouer la
+      // sÃ©quence complÃ¨te depuis V1 suite Ã  une reconstruction d'urgence, et
+      // MÃŠME CE REJEU Ã©choue. On ne tente surtout PAS une deuxiÃ¨me reconstruction
+      // (aucun appel rÃ©cursif Ã  runMigrations ou runMigrationSequence ici) : on
+      // journalise une erreur critique distincte et on remonte l'exception telle
+      // quelle, captÃ©e par le catch (emergencyError) de runMigrations qui la
+      // relance sans aucune nouvelle tentative.
+      log.error('[MIGRATION] Ã‰CHEC CRITIQUE pendant le rejeu de la sÃ©quence de migrations DURANT la reconstruction d\'urgence elle-mÃªme (isEmergencyRetry=true). Abandon dÃ©finitif â€” aucune nouvelle reconstruction ne sera tentÃ©e.', seqError);
+    }
+    throw seqError;
   }
 }
 
@@ -3289,6 +3348,46 @@ export function migrateV64(db: Database.Database): void {
 
     db.exec('BEGIN EXCLUSIVE TRANSACTION');
     try {
+      // ── NEUTRALISATION DES ORPHELINS (Volet 1 — auto-réparation) ────
+      // Cause racine applicative (corrigée par ailleurs dans hierarchy.queries.ts
+      // deleteSite/deleteCentre) : un site/centre/poste supprimé pouvait laisser des
+      // comptes t_users (typiquement SUPER ADMIN, jusqu'ici exclu du DELETE de
+      // deleteSite) avec un site_id/centre_id/poste_id pointant vers une ligne
+      // t_sites/t_centres/t_postes qui n'existe plus. Sans ce nettoyage, le
+      // foreign_key_check(t_users) plus bas échoue systématiquement et déclenche
+      // la reconstruction d'urgence — confirmé sur deux postes de production
+      // distincts, avec des rowid différents à chaque fois. On ne supprime jamais
+      // de compte ici : on neutralise à NULL (SUPER ADMIN n'est pas cloisonné par
+      // site/centre dans la logique métier — cf. secureUser.role === 'SUPER ADMIN'
+      // dans ipc/handlers.ts, qui ignore systématiquement site_id/centre_id pour ce
+      // rôle), et on trace précisément les lignes touchées pour audit (pas de
+      // mutation silencieuse). Effectué AVANT le RENAME pour que la copie vers la
+      // nouvelle t_users soit déjà propre.
+      const orphanSiteRows = db.prepare(
+        "SELECT id_user, login, site_id FROM t_users WHERE site_id IS NOT NULL AND site_id NOT IN (SELECT id FROM t_sites)"
+      ).all() as { id_user: number; login: string; site_id: number }[];
+      if (orphanSiteRows.length > 0) {
+        db.exec("UPDATE t_users SET site_id = NULL WHERE site_id IS NOT NULL AND site_id NOT IN (SELECT id FROM t_sites)");
+        log.warn(`[MIGRATION V64] ${orphanSiteRows.length} ligne(s) t_users avec site_id orphelin neutralisée(s) (→ NULL) : ${orphanSiteRows.map(r => `id_user=${r.id_user} login=${r.login} site_id=${r.site_id}`).join(', ')}`);
+      }
+
+      const orphanCentreRows = db.prepare(
+        "SELECT id_user, login, centre_id FROM t_users WHERE centre_id IS NOT NULL AND centre_id NOT IN (SELECT id FROM t_centres)"
+      ).all() as { id_user: number; login: string; centre_id: number }[];
+      if (orphanCentreRows.length > 0) {
+        db.exec("UPDATE t_users SET centre_id = NULL WHERE centre_id IS NOT NULL AND centre_id NOT IN (SELECT id FROM t_centres)");
+        log.warn(`[MIGRATION V64] ${orphanCentreRows.length} ligne(s) t_users avec centre_id orphelin neutralisée(s) (→ NULL) : ${orphanCentreRows.map(r => `id_user=${r.id_user} login=${r.login} centre_id=${r.centre_id}`).join(', ')}`);
+      }
+
+      const orphanPosteRows = db.prepare(
+        "SELECT id_user, login, poste_id FROM t_users WHERE poste_id IS NOT NULL AND poste_id NOT IN (SELECT id FROM t_postes)"
+      ).all() as { id_user: number; login: string; poste_id: number }[];
+      if (orphanPosteRows.length > 0) {
+        db.exec("UPDATE t_users SET poste_id = NULL WHERE poste_id IS NOT NULL AND poste_id NOT IN (SELECT id FROM t_postes)");
+        log.warn(`[MIGRATION V64] ${orphanPosteRows.length} ligne(s) t_users avec poste_id orphelin neutralisée(s) (→ NULL) : ${orphanPosteRows.map(r => `id_user=${r.id_user} login=${r.login} poste_id=${r.poste_id}`).join(', ')}`);
+      }
+      // ──────────────────────────────────────────────────────────────
+
       // ── Reconstruction de t_users ──────────────────────────────────
       const usersColumnsRaw = db.pragma('table_info(t_users)') as { name: string }[];
       const usersColsToCopy = usersColumnsRaw.map(c => c.name).join(', ');
@@ -3514,4 +3613,100 @@ function migrateV65(db: Database.Database): void {
     log.error('[MIGRATION V65] Échec :', e.message);
     throw e;
   }
+}
+
+// =====================================================
+// MIGRATION V66 — Filet de sécurité d'INTÉGRITÉ STRUCTURELLE (permanent).
+//
+// Contexte (bug de fiabilité confirmé en production, sur deux postes de
+// terrain distincts) : une version antérieure du catch global de
+// reconstruction d'urgence de runMigrations() (voir plus haut) tamponnait
+// user_version = SCHEMA_VERSION après avoir rejoué uniquement une liste
+// figée s'arrêtant à migrateV48 — un poste ayant traversé ce filet
+// défaillant se déclarait alors faussement « à jour » en V65 alors que sa
+// structure réelle était restée bloquée bien avant (index de performance
+// V60/V61/V62 absents, CHECK(role)/CHECK(statut) non élargis). Le Volet 1bis
+// corrige la cause (le filet de secours rejoue désormais la séquence
+// complète via runMigrationSequence()), mais un poste ayant DÉJÀ traversé
+// l'ancien filet défaillant reste, lui, dans cet état incohérent : son
+// user_version ment toujours et ne repassera plus jamais sous 66.
+// migrateV66_structuralIntegrityNet() ne fait donc JAMAIS confiance à
+// user_version — elle inspecte l'état structurel RÉEL (sqlite_master /
+// PRAGMA table_info) à chaque démarrage et rejoue individuellement chaque
+// migration manquante. Exécutée inconditionnellement après
+// migrateV27_safetyNet (ordre impératif, voir runMigrations()), coût
+// négligeable : uniquement des lookups sqlite_master / PRAGMA table_info,
+// JAMAIS de scan de lignes de t_cartes/t_users (conforme à la politique
+// Low-Memory, CLAUDE.md §2). À la différence des migrations normales
+// (V60/V64...), qui remontent leurs erreurs pour déclencher la
+// reconstruction d'urgence, ce filet suit la philosophie de
+// migrateV27_safetyNet : chaque vérification est isolée dans son propre
+// try/catch et ne bloque jamais le démarrage de l'application — un échec
+// ponctuel est journalisé en erreur mais n'empêche pas les autres
+// vérifications de s'exécuter, et ne déclenche jamais, à lui seul, une
+// reconstruction d'urgence à chaque démarrage.
+// =====================================================
+export function migrateV66_structuralIntegrityNet(db: Database.Database): void {
+  // 1) CHECK(role) de t_users doit contenir OPERATEUR_APUREMENT (V64).
+  try {
+    const usersRow = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='t_users'"
+    ).get() as { sql: string } | undefined;
+    if (usersRow?.sql && !usersRow.sql.includes("'OPERATEUR_APUREMENT'")) {
+      log.warn('[MIGRATION V66] t_users.CHECK(role) ne contient pas encore OPERATEUR_APUREMENT — rejeu de migrateV64 (désormais sûre à rejouer, cf. Volet 1 / neutralisation des orphelins).');
+      migrateV64(db);
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V66] Échec de la vérification/réparation CHECK(role) de t_users (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+  }
+
+  // 2) CHECK(statut) de t_cartes doit contenir DOUBLON (V60).
+  try {
+    const cartesRow = db.prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='t_cartes'"
+    ).get() as { sql: string } | undefined;
+    if (cartesRow?.sql && !cartesRow.sql.includes("'DOUBLON'")) {
+      log.warn('[MIGRATION V66] t_cartes.CHECK(statut) ne contient pas encore DOUBLON — rejeu de migrateV60.');
+      migrateV60(db);
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V66] Échec de la vérification/réparation CHECK(statut) de t_cartes (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+  }
+
+  // 3) Index de performance V61/V62 (dashboard stats) — simple lookup sur
+  // sqlite_master, jamais de scan de t_cartes. CREATE INDEX IF NOT EXISTS étant
+  // déjà idempotent côté migrateV61/migrateV62, ce lookup préalable n'est
+  // qu'une optimisation pour éviter un log.warn systique inutile à chaque
+  // démarrage sur les postes déjà sains.
+  try {
+    const existingIndexNames = new Set(
+      (db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='t_cartes'").all() as { name: string }[])
+        .map(r => r.name)
+    );
+    if (!existingIndexNames.has('idx_cartes_created_by_created_at')) {
+      log.warn('[MIGRATION V66] Index idx_cartes_created_by_created_at manquant — rejeu de migrateV61.');
+      migrateV61(db);
+    }
+    if (!existingIndexNames.has('idx_cartes_site_centre_statut')) {
+      log.warn('[MIGRATION V66] Index idx_cartes_site_centre_statut manquant — rejeu de migrateV62.');
+      migrateV62(db);
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V66] Échec de la vérification/création des index de performance V61/V62 (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+  }
+
+  // 4) V65 (migration des préférences t_config auto_downstream_*) est déjà
+  // idempotente et de coût négligeable (au plus quelques lignes t_config) —
+  // rejouée sans condition pour garantir la convergence même sur un poste dont
+  // user_version aurait menti.
+  try {
+    migrateV65(db);
+  } catch (e: any) {
+    log.error('[MIGRATION V66] Échec du rejeu de migrateV65 (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+  }
+
+  // 5) relation_retirant (V63) est déjà couverte par migrateV27_safetyNet
+  // (ALTER TABLE ADD COLUMN via safeAlter, idempotent) — rien à ajouter ici.
+
+  log.info('[MIGRATION V66] Filet d\'intégrité structurelle vérifié (état réel inspecté indépendamment de user_version).');
 }
