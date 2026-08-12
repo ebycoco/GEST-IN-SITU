@@ -405,6 +405,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             finalFilters.centre_id = '';
           }
         }
+        // Sécurité (cloisonnement §3, P0-2) : la validation ci-dessus ne garantissait que
+        // l'appartenance du centre_id fourni au bon SITE, jamais qu'il correspondait au centre
+        // de la session ADMIN_CENTRE — un appel sans filtre centre_id (ou avec un centre_id
+        // d'un autre centre du même site) retournait toutes les cartes du site entier. Forcé
+        // ici sur le centre réel de la session serveur pour ce rôle spécifiquement.
+        // ADMINISTRATEUR_SITE et SUPER ADMIN conservent leur portée actuelle (site entier /
+        // multi-site).
+        if (secureUser.role === 'ADMIN_CENTRE') {
+          finalFilters.centre_id = secureUser.centre_id != null ? String(secureUser.centre_id) : '';
+        }
       }
       // Sécurité (isolation intra-site) : un OPERATEUR_SAISIE ne doit jamais pouvoir lister les
       // brouillons d'un autre agent de saisie via ce handler générique. MesBrouillonsView.tsx
@@ -426,7 +436,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const db = getDatabase();
       let finalFilters = filters || {};
       if (userLogin && db) {
-        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
+        const user = db.prepare('SELECT role, site_id, centre_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null; centre_id: number | null } | undefined;
         if (user && user.role !== 'SUPER ADMIN') {
           finalFilters = {
             ...finalFilters,
@@ -437,6 +447,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             if (!centre || centre.site_id !== user.site_id) {
               finalFilters.centre_id = '';
             }
+          }
+          // Sécurité (cloisonnement §3, P0-5) : fuite PII confirmée en usage 100% normal (pas
+          // de forgeage requis) — une recherche nom+date de naissance depuis
+          // /admin-centre/recherche remontait la fiche complète (téléphone, n° CMU en clair)
+          // d'un bénéficiaire d'un AUTRE centre du même site, faute de filtre centre_id
+          // serveur. Recadré ici sur le centre réel de l'utilisateur (non falsifiable) —
+          // périmètre strict pour ADMIN_CENTRE, sans option d'élargissement (aucun sélecteur
+          // équivalent n'existe pour ce rôle ailleurs dans l'appli, contrairement à
+          // SUPER ADMIN/ADMINISTRATEUR_SITE qui restent scopés site entier).
+          if (user.role === 'ADMIN_CENTRE') {
+            finalFilters.centre_id = user.centre_id != null ? String(user.centre_id) : '';
           }
         }
       }
@@ -1231,7 +1252,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getAbsences', e); throw e; }
   });
   ipcMain.handle('cartes:getAbsencesCentre', async (_, centreId: number) => {
-    try { return queries.getAbsencesCentre(centreId); }
+    try {
+      // Sécurité (cloisonnement §3, P0-3) : centreId dérivé de la session serveur pour tout
+      // rôle non-SUPER ADMIN / non-ADMINISTRATEUR_SITE (ADMIN_CENTRE en particulier) — un
+      // centreId forgé côté renderer permettait auparavant de lire les absences signalées
+      // (avec statut/rangement) d'un centre étranger.
+      const secureUser = getSecureCurrentUser();
+      const effectiveCentreId = (secureUser && secureUser.role !== 'SUPER ADMIN' && secureUser.role !== 'ADMINISTRATEUR_SITE')
+        ? (secureUser.centre_id ?? centreId)
+        : centreId;
+      return queries.getAbsencesCentre(effectiveCentreId);
+    }
     catch (e) { log.error('IPC Error: cartes:getAbsencesCentre', e); throw e; }
   });
   ipcMain.handle('cartes:getAbsencesSite', async (_, siteId?: number) => {
@@ -1566,11 +1597,29 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
   ipcMain.handle('stats:getCentre', async (_, centreId, siteId) => {
-    try { return await queries.getCentreStats(centreId, siteId); }
+    try {
+      // Sécurité (cloisonnement §3, P0-1) : centreId/siteId dérivés de la session serveur pour
+      // tout rôle non-SUPER ADMIN via scopeSiteCentreToSession (même helper que
+      // stats:getSiteSaisieToday etc. plus bas dans ce fichier — fonction hoistée, utilisable
+      // ici malgré sa déclaration plus loin dans registerIpcHandlers). Un centreId/siteId
+      // forgés côté renderer permettaient auparavant à un ADMIN_CENTRE de lire les stats
+      // agrégées (en stock/distribuées/absentes) de n'importe quel autre centre, y compris
+      // d'un site étranger.
+      const scoped = scopeSiteCentreToSession(Number(siteId), centreId !== undefined && centreId !== null ? Number(centreId) : undefined);
+      const effectiveCentreId = scoped.centreId ?? centreId;
+      return await queries.getCentreStats(effectiveCentreId, scoped.siteId);
+    }
     catch (e) { log.error('IPC Error: stats:getCentre', e); throw e; }
   });
   ipcMain.handle('stats:getCentreOperateurs', async (_, centreId) => {
-    try { return queries.getCentreOperateurCadence(centreId); }
+    try {
+      // Sécurité (cloisonnement §3, P0-1) : même correctif que stats:getCentre ci-dessus.
+      const secureUser = getSecureCurrentUser();
+      const effectiveCentreId = (secureUser && secureUser.role === 'ADMIN_CENTRE')
+        ? (secureUser.centre_id ?? centreId)
+        : centreId;
+      return queries.getCentreOperateurCadence(effectiveCentreId);
+    }
     catch (e) { log.error('IPC Error: stats:getCentreOperateurs', e); throw e; }
   });
   ipcMain.handle('stats:getGlobal', async () => {
@@ -1628,7 +1677,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('stats:getDetailedSyncStats', async (_, siteId: number) => {
-    try { return queries.getDetailedSyncStats(siteId); }
+    // Sécurité (cloisonnement §3, P1) : siteId dérivé de la session serveur pour tout rôle
+    // non-SUPER ADMIN (resolveScopedSiteId) — même famille de faiblesse que P0-1/P0-4, gravité
+    // moindre (compteurs de synchro is_dirty, pas de données nominatives).
+    try { return queries.getDetailedSyncStats(resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: stats:getDetailedSyncStats', e); throw e; }
   });
   ipcMain.handle('stats:getUnsyncedUsersCount', async (_, siteId: number) => {
@@ -2749,19 +2801,45 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       logAudit(userLogin, 'SYSTEM_LOG_CONSULTATION', detailsObj);
     }
 
-    const countRow = db.prepare(`SELECT COUNT(*) as count FROM t_audit_log`).get() as any;
+    // Sécurité (cloisonnement §3, P0-6) : t_audit_log (celle réellement peuplée par logAudit(),
+    // utilisée partout dans le code applicatif — à ne pas confondre avec la table `audit_logs`,
+    // quasi vide, lue par le handler audit:getPage) ne stocke pas de colonne site_id/centre_id,
+    // seulement le login (`utilisateur`) de l'auteur de l'action. Le cantonnement est donc
+    // dérivé ici par jointure sur t_users.login — limite acceptée : reflète le site_id/centre_id
+    // ACTUEL de l'auteur (au moment de la consultation), pas nécessairement celui au moment de
+    // l'action historique (ex. si l'auteur a changé de centre depuis). Une vraie colonne
+    // site_id/centre_id sur t_audit_log avec backfill résoudrait cette limite mais constitue une
+    // migration de schéma hors du périmètre de cette intervention (domaine agent-4-db-sync).
+    // Avant ce correctif, cette requête n'avait AUCUNE clause WHERE : tout rôle (y compris
+    // ADMIN_CENTRE) voyait l'historique d'audit complet de TOUS les sites/centres. SUPER ADMIN
+    // conserve la vue globale existante.
+    const secureUser = getSecureCurrentUser();
+    let where = '';
+    const whereParams: any[] = [];
+    if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+      where = 'WHERE utilisateur IN (SELECT login FROM t_users WHERE site_id = ?';
+      whereParams.push(secureUser.site_id);
+      if (secureUser.role === 'ADMIN_CENTRE') {
+        where += ' AND centre_id = ?';
+        whereParams.push(secureUser.centre_id);
+      }
+      where += ')';
+    }
+
+    const countRow = db.prepare(`SELECT COUNT(*) as count FROM t_audit_log ${where}`).get(...whereParams) as any;
     const total = countRow ? countRow.count : 0;
     const rows = db.prepare(`
-      SELECT 
-        id, 
-        utilisateur AS operator_id, 
-        action AS action_type, 
-        details, 
-        date_creation AS timestamp 
-      FROM t_audit_log 
-      ORDER BY date_creation DESC 
+      SELECT
+        id,
+        utilisateur AS operator_id,
+        action AS action_type,
+        details,
+        date_creation AS timestamp
+      FROM t_audit_log
+      ${where}
+      ORDER BY date_creation DESC
       LIMIT ? OFFSET ?
-    `).all(limit, offset);
+    `).all(...whereParams, limit, offset);
 
     return { rows, total };
   });
@@ -4316,7 +4394,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // RETRAITS ANALYTICS HANDLERS
   ipcMain.handle('stats:getRetraits', (_, siteId: number, centreId: number | null, period: string, customDate?: string | null) => {
     try {
-      return queries.getRetraitsByCentre(Number(siteId), centreId ? Number(centreId) : null, period as any, customDate ?? null);
+      // Sécurité (cloisonnement §3, P0-4) : siteId/centreId dérivés de la session serveur pour
+      // tout rôle non-SUPER ADMIN (scopeSiteCentreToSession, même helper que stats:getCentre) —
+      // fuite confirmée cross-centre ET cross-site avant ce correctif.
+      const scoped = scopeSiteCentreToSession(Number(siteId), centreId ? Number(centreId) : undefined);
+      return queries.getRetraitsByCentre(scoped.siteId, scoped.centreId ?? null, period as any, customDate ?? null);
     } catch (e) {
       log.error('IPC Error: stats:getRetraits', e);
       throw e;
@@ -4324,7 +4406,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   ipcMain.handle('stats:getRetraitsTrend', (_, siteId: number, centreId: number | null, period: string, customDate?: string | null) => {
     try {
-      return queries.getRetraitsTrend(siteId, centreId, period as any, customDate ?? null);
+      // Sécurité (cloisonnement §3, P0-4) : même correctif que stats:getRetraits ci-dessus.
+      const scoped = scopeSiteCentreToSession(Number(siteId), centreId ? Number(centreId) : undefined);
+      return queries.getRetraitsTrend(scoped.siteId, scoped.centreId ?? null, period as any, customDate ?? null);
     } catch (e) {
       log.error('IPC Error: stats:getRetraitsTrend', e);
       throw e;

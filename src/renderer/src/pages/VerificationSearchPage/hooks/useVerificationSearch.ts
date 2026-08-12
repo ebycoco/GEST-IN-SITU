@@ -99,6 +99,11 @@ export function useVerificationSearch(
         }
       } else {
         if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+        // Sécurité (cloisonnement §3, P0-5) : le recadrage réel/non-contournable se fait côté
+        // handler serveur (cartes:search, handlers.ts) — ce filtre côté renderer n'est qu'une
+        // cohérence UI (évite d'afficher des résultats hors-périmètre puis de les filtrer côté
+        // serveur silencieusement) et n'a aucune valeur de sécurité en soi.
+        if (user?.role === 'ADMIN_CENTRE' && user?.centre_id) filters.centre_id = user.centre_id.toString();
       }
       if (lieuNaissance.trim()) filters.lieu_de_naissance = lieuNaissance.trim();
       if (contact.trim()) {
@@ -270,6 +275,9 @@ export function useVerificationSearch(
       } else {
         const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
         if (siteIdToUse) filters.site_id = siteIdToUse.toString();
+        // Sécurité (cloisonnement §3, P0-5) : idem handleSearch ci-dessus — recadrage réel côté
+        // handler serveur (cartes:search), ce filtre renderer n'est qu'une cohérence UI.
+        if (user?.role === 'ADMIN_CENTRE' && user?.centre_id) filters.centre_id = user.centre_id.toString();
       }
       
       const res = await window.api.cartes.search('', 100, filters);

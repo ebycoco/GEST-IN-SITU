@@ -199,6 +199,17 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
     hasFilters = true;
   }
 
+  // Sécurité (cloisonnement §3, P0-5) : filtre centre_id — additif, ignoré par tous les appels
+  // existants qui ne le fournissent pas (cmu:searchCarte notamment), n'altère donc aucun
+  // comportement en place. Ajouté pour permettre à cartes:search de restreindre les résultats
+  // au centre réel de la session ADMIN_CENTRE (fuite PII confirmée : téléphone/num CMU d'un
+  // bénéficiaire d'un autre centre remontés en recherche normale sans ce filtre).
+  if (filters?.centre_id) {
+    filtersSql += ' AND t_cartes.centre_id = @centre_id';
+    params.centre_id = Number(filters.centre_id);
+    hasFilters = true;
+  }
+
   if (filters?.exclude_delivered === 'true') {
     filtersSql += " AND t_cartes.statut = 'EN STOCK'";
     hasFilters = true;
@@ -210,6 +221,7 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
     if (filters?.lieu_de_naissance) nonFtsQuery += ' AND t_cartes.lieu_de_naissance LIKE @lieu_de_naissance';
     if (filters?.contact) nonFtsQuery += ' AND t_cartes.contact LIKE @contact';
     if (filters?.site_id) nonFtsQuery += ' AND t_cartes.site_id = @site_id';
+    if (filters?.centre_id) nonFtsQuery += ' AND t_cartes.centre_id = @centre_id';
     if (filters?.exclude_delivered === 'true') nonFtsQuery += " AND t_cartes.statut = 'EN STOCK'";
     nonFtsQuery += ' ORDER BY t_cartes.id_carte DESC LIMIT @limit';
     

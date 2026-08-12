@@ -45,7 +45,11 @@ export function deleteAuditLog(id: number): void {
   const db = getDatabase();
   if (!db) return;
   try {
-    db.prepare('DELETE FROM audit_logs WHERE id = ?').run(id);
+    // Fix (P0-7) : ciblait auparavant `audit_logs` (table quasi vide, jamais alimentée par
+    // logAudit()) au lieu de `t_audit_log` (la table réellement affichée par LogsPage.tsx via
+    // logs:consultation) — l'utilisateur recevait un faux message de succès sans que rien ne
+    // soit supprimé. Corrigé pour cibler la bonne table.
+    db.prepare('DELETE FROM t_audit_log WHERE id = ?').run(id);
   } catch (err) {
     console.error('Failed to delete audit log:', err);
   }
