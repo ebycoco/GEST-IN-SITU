@@ -59,6 +59,7 @@ declare global {
         signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any) => Promise<boolean>;
         getAbsences: (siteId?: number) => Promise<any[]>;
         getAbsencesCentre: (centreId: number) => Promise<any[]>;
+        getEscaladesResoluesCentre: (centreId: number) => Promise<any[]>;
         getAbsencesSite: (siteId?: number) => Promise<any[]>;
         escaladerAuSite: (id: number, currentUser?: any) => Promise<any>;
         getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;

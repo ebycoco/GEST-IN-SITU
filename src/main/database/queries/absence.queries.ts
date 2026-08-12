@@ -217,8 +217,8 @@ export function declarerPerdue(id: number, currentUser?: { role: string; site_id
   const db = getDatabase()!;
   const now = new Date().toISOString();
   let query = `
-    UPDATE t_cartes 
-    SET statut_physique = 'PERDUE', updated_at = @now, is_dirty = 1
+    UPDATE t_cartes
+    SET statut_physique = 'PERDUE', escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
     WHERE id_carte = @id
   `;
   const params: any = { now, id };
@@ -367,6 +367,31 @@ export function getAbsencesCentre(centreId: number): any[] {
       AND c.escalade_niveau = 'CENTRE' 
       AND c.centre_id = ? 
     ORDER BY c.date_signalement_absence DESC
+  `).all(centreId);
+}
+
+// Visibilité ADMIN_CENTRE des signalements que ce centre a escaladés au site puis qui ont été
+// résolus (peu importe l'issue finale : retrouvée ou perdue, voir escalade_niveau='RESOLU'
+// désormais posé par resoudreAbsence()/declarerPerdue()/reactiverCarte()). L'EXISTS sur t_logs
+// (action='CARTE_ABSENTE_ESCALADEE', json_extract sur valeur_apres.id_carte) reprend exactement
+// le pattern déjà utilisé par resoudreAbsence()/declarerPerdue() ci-dessus pour retrouver un log
+// par id_carte.
+export function getEscaladesResoluesCentre(centreId: number): any[] {
+  const db = getDatabase()!;
+  return db.prepare(`
+    SELECT c.*,
+           u.nom_user || ' ' || u.prenom_user as agent_nom_complet,
+           u.role as agent_role
+    FROM t_cartes c
+    LEFT JOIN t_users u ON c.agent_signalement_absence = u.login
+    WHERE c.escalade_niveau = 'RESOLU'
+      AND c.centre_id = ?
+      AND EXISTS (
+        SELECT 1 FROM t_logs l
+        WHERE l.action = 'CARTE_ABSENTE_ESCALADEE'
+          AND json_extract(l.valeur_apres, '$.id_carte') = c.id_carte
+      )
+    ORDER BY c.updated_at DESC
   `).all(centreId);
 }
 

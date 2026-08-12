@@ -1,0 +1,257 @@
+import React, { useState, useEffect } from 'react';
+import { useAuthStore } from '../../../stores/authStore';
+import { Search, ChevronLeft, ChevronRight, CheckCircle, Archive } from 'lucide-react';
+import { toast } from 'react-hot-toast';
+
+// Onglet ADMIN_CENTRE (Correctif 5) : visibilité des signalements que CE centre a escaladés au
+// site (cartes:escaladerAuSite -> log CARTE_ABSENTE_ESCALADEE) et qui ont depuis été résolus,
+// quelle que soit l'issue finale (retrouvée via resoudreAbsence()/reactiverCarte(), ou perdue
+// définitivement via declarerPerdue()) — toutes posent désormais escalade_niveau='RESOLU'
+// (voir absence.queries.ts). Calqué sur ResolusTab.tsx (VerificationSearchPage), mêmes
+// mécanismes d'archivage générique (archiveSignalement/getArchivedSignalements, indexés sur
+// id_carte + login_user, réutilisés tels quels).
+export const EscaladesResoluesTab = () => {
+  const user = useAuthStore((s) => s.user);
+  const [resolus, setResolus] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [archivedIds, setArchivedIds] = useState<number[]>([]);
+  const ITEMS_PER_PAGE = 10;
+
+  useEffect(() => {
+    const loadArchived = async () => {
+      if (user?.login) {
+        try {
+          const stored = await window.api.cartes.getArchivedSignalements(user.login);
+          if (stored) {
+            setArchivedIds(stored);
+          }
+        } catch (err) {
+          console.error("Erreur chargement archives:", err);
+        }
+      }
+    };
+    loadArchived();
+  }, [user]);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      if (user?.centre_id) {
+        const data = await window.api.cartes.getEscaladesResoluesCentre(user.centre_id);
+        setResolus(data || []);
+      }
+    } catch (error) {
+      console.error("Erreur chargement escalades résolues:", error);
+      toast.error("Impossible de charger l'historique des escalades résolues.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, [user]);
+
+  // ─── Rafraîchissement temps réel (sync:updated-data) ──────────────────────
+  // Les 3 issues possibles d'un signalement escaladé (résolue, perdue, retrouvée depuis
+  // l'historique des pertes) doivent toutes déclencher un rechargement de cet onglet.
+  // Abonnement IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2).
+  useEffect(() => {
+    if (window.api && window.api.onDatabaseUpdated) {
+      const unsubscribe = window.api.onDatabaseUpdated((data) => {
+        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'ABSENCE_PERDUE_CONFIRMEE' || data?.type === 'CARTE_RETROUVEE') {
+          loadData();
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [user]);
+
+  const handleArchive = async (id: number) => {
+    if (user?.login) {
+      try {
+        await window.api.cartes.archiveSignalement(id, user.login);
+        setArchivedIds(prev => [...prev, id]);
+        toast.success("Signalement archivé.");
+      } catch (err) {
+        toast.error("Erreur lors de l'archivage.");
+      }
+    }
+  };
+
+  const visibleResolus = resolus.filter(r => !archivedIds.includes(r.id_carte));
+
+  const totalPages = Math.ceil(visibleResolus.length / ITEMS_PER_PAGE) || 1;
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const paginatedData = visibleResolus.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
+        <div className="animate-spin" style={{ display: 'inline-block', marginBottom: 16 }}>
+          <Search size={24} />
+        </div>
+        <p>Chargement des escalades résolues...</p>
+      </div>
+    );
+  }
+
+  if (visibleResolus.length === 0) {
+    return (
+      <div style={{
+        background: 'rgba(255, 255, 255, 0.02)',
+        border: '1px dashed rgba(255, 255, 255, 0.1)',
+        borderRadius: 16,
+        padding: 48,
+        textAlign: 'center'
+      }}>
+        <CheckCircle size={48} style={{ color: '#27ae60', margin: '0 auto 16px auto', opacity: 0.8 }} />
+        <h4 style={{ margin: '0 0 8px 0', fontSize: 16, fontWeight: 700, color: 'white' }}>Aucune escalade résolue en attente</h4>
+        <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 14 }}>
+          Les cartes escaladées à l'Administrateur Site puis résolues (retrouvées ou déclarées perdues) apparaîtront ici.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {paginatedData.map((carte) => {
+        // Badge dynamique (même logique que ResolusTab.tsx) : escalade_niveau='RESOLU' recouvre
+        // deux issues distinctes — statut_physique='PERDUE' = perte définitive confirmée, sinon
+        // = retrouvée.
+        const isPerdue = carte.statut_physique === 'PERDUE';
+        const badgeColor = isPerdue ? '#ef4444' : '#27ae60';
+        return (
+          <div key={carte.id_carte} style={{
+            background: 'var(--bg-secondary)',
+            border: `1px solid ${isPerdue ? 'rgba(239, 68, 68, 0.3)' : 'rgba(39, 174, 96, 0.3)'}`,
+            borderRadius: 16,
+            padding: 24,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 24,
+            transition: 'transform 0.2s ease',
+          }} className="hover-scale">
+            {/* Info Client */}
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{
+                  background: `${badgeColor}1A`,
+                  color: badgeColor,
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  border: `1px solid ${badgeColor}33`
+                }}>
+                  {isPerdue ? '❌ Perdue confirmée' : '✅ Retrouvée'}
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                  Signalée le {carte.date_signalement_absence ? new Date(carte.date_signalement_absence).toLocaleDateString() : 'N/A'}
+                </span>
+              </div>
+              <h4 style={{ margin: 0, fontSize: 16, fontWeight: 800, textTransform: 'uppercase', color: 'white' }}>
+                {carte.noms} {carte.prenoms}
+              </h4>
+              <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+                <span>N° Sécu : {carte.num_secu || 'Non renseigné'}</span>
+                <span>Résolue le : {carte.updated_at ? new Date(carte.updated_at).toLocaleDateString() : 'N/A'}</span>
+              </div>
+            </div>
+
+            {/* Rangement */}
+            <div style={{
+              flex: 1,
+              background: 'rgba(255, 255, 255, 0.02)',
+              border: '1px solid rgba(255, 255, 255, 0.04)',
+              borderRadius: 12,
+              padding: '12px 16px',
+              fontSize: 13
+            }}>
+              <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Rangement</div>
+              <div style={{ fontWeight: 800, color: '#FFD700', fontSize: 18 }}>{carte.rangement || 'Non classé'}</div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                Signalé par : <strong style={{ color: 'var(--text-secondary)' }}>{carte.agent_nom_complet ? `${carte.agent_nom_complet} (${carte.agent_role || 'Agent'})` : (carte.agent_signalement_absence || 'Inconnu')}</strong>
+              </div>
+            </div>
+
+            {/* Action */}
+            <div>
+              <button
+                onClick={() => handleArchive(carte.id_carte)}
+                style={{
+                  padding: '12px 24px',
+                  background: 'transparent',
+                  color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  fontSize: 14,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  transition: 'all 0.15s ease'
+                }}
+                className="hover-scale"
+                onMouseOver={(e) => {
+                  e.currentTarget.style.color = 'white';
+                  e.currentTarget.style.borderColor = 'white';
+                }}
+                onMouseOut={(e) => {
+                  e.currentTarget.style.color = 'var(--text-secondary)';
+                  e.currentTarget.style.borderColor = 'var(--border-color)';
+                }}
+              >
+                <Archive size={16} />
+                Archiver
+              </button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, marginTop: 24 }}>
+          <button
+            onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            disabled={currentPage === 1}
+            style={{
+              padding: '8px 16px',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              cursor: currentPage === 1 ? 'not-allowed' : 'pointer',
+              opacity: currentPage === 1 ? 0.5 : 1
+            }}
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span style={{ fontSize: 14, color: 'var(--text-secondary)' }}>
+            Page <strong style={{ color: 'var(--text-primary)' }}>{currentPage}</strong> sur {totalPages}
+          </span>
+          <button
+            onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            disabled={currentPage === totalPages}
+            style={{
+              padding: '8px 16px',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 8,
+              cursor: currentPage === totalPages ? 'not-allowed' : 'pointer',
+              opacity: currentPage === totalPages ? 0.5 : 1
+            }}
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};

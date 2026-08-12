@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, CheckCircle, AlertTriangle, Search, MapPin, RefreshCw } from 'lucide-react';
+import { Clock, CheckCircle, AlertTriangle, Search, MapPin, RefreshCw, ListChecks } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { EscaladesResoluesTab } from './AdminQueuePage/components/EscaladesResoluesTab';
 
 export default function AdminQueuePage() {
   const { user, activeSiteId } = useAuthStore();
-  
+
   const [absentRecords, setAbsentRecords] = useState<any[]>([]);
   const [lostRecords, setLostRecords] = useState<any[]>([]);
-  const [activeTab, setActiveTab] = useState<'pending' | 'lost'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'lost' | 'escaladesResolues'>('pending');
   const [isLoading, setIsLoading] = useState(true);
   const [isResolving, setIsResolving] = useState<Record<number, boolean>>({});
   const [isReactivating, setIsReactivating] = useState<Record<number, boolean>>({});
@@ -236,6 +237,36 @@ export default function AdminQueuePage() {
             <AlertTriangle size={32} />
           </div>
         </div>
+
+        {/* Tab 3: Escalades résolues (ADMIN_CENTRE uniquement — visibilité du dénouement des
+            signalements que ce centre a escaladés au site, cf. Correctif 5) */}
+        {user?.role === 'ADMIN_CENTRE' && (
+          <div
+            onClick={() => setActiveTab('escaladesResolues')}
+            style={{
+              background: activeTab === 'escaladesResolues' ? 'rgba(39, 174, 96, 0.03)' : 'var(--bg-secondary)',
+              border: activeTab === 'escaladesResolues' ? '2px solid #27ae60' : '1px solid var(--border-color)',
+              borderRadius: 16,
+              padding: 24,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            className="hover-scale"
+          >
+            <div>
+              <span style={{ fontSize: 13, color: activeTab === 'escaladesResolues' ? '#27ae60' : 'var(--text-secondary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Escalades Résolues</span>
+              <h3 style={{ margin: '8px 0 0 0', fontSize: 24, fontWeight: 900, color: activeTab === 'escaladesResolues' ? '#27ae60' : 'var(--text-primary)' }}>
+                Suivi
+              </h3>
+            </div>
+            <div style={{ color: activeTab === 'escaladesResolues' ? '#27ae60' : 'var(--text-secondary)', background: 'rgba(39, 174, 96, 0.05)', padding: 16, borderRadius: 12 }}>
+              <ListChecks size={32} />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* FILTER & SEARCH ZONE */}
@@ -275,8 +306,10 @@ export default function AdminQueuePage() {
         )}
       </div>
 
-      {/* LIST OF ABSENCES / LOST */}
-      {isLoading ? (
+      {/* LIST OF ABSENCES / LOST / ESCALADES RÉSOLUES */}
+      {activeTab === 'escaladesResolues' ? (
+        <EscaladesResoluesTab />
+      ) : isLoading ? (
         <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
           <RefreshCw size={24} className="animate-spin" style={{ margin: '0 auto 16px auto' }} />
           Chargement des données...

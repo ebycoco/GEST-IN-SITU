@@ -1265,6 +1265,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:getAbsencesCentre', e); throw e; }
   });
+  ipcMain.handle('cartes:getEscaladesResoluesCentre', async (_, centreId: number) => {
+    try {
+      // Sécurité (cloisonnement §3) : même pattern exact que cartes:getAbsencesCentre
+      // ci-dessus — centreId dérivé de la session serveur pour tout rôle non-SUPER ADMIN /
+      // non-ADMINISTRATEUR_SITE (ADMIN_CENTRE en particulier), jamais du paramètre client.
+      const secureUser = getSecureCurrentUser();
+      const effectiveCentreId = (secureUser && secureUser.role !== 'SUPER ADMIN' && secureUser.role !== 'ADMINISTRATEUR_SITE')
+        ? (secureUser.centre_id ?? centreId)
+        : centreId;
+      return queries.getEscaladesResoluesCentre(effectiveCentreId);
+    }
+    catch (e) { log.error('IPC Error: cartes:getEscaladesResoluesCentre', e); throw e; }
+  });
   ipcMain.handle('cartes:getAbsencesSite', async (_, siteId?: number) => {
     // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
     try { return queries.getAbsencesSite(resolveScopedSiteId(siteId)); }
@@ -1350,7 +1363,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         `DÃ©claration de perte validÃ©e pour la carte ID ${id}.`
       );
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_RESOLUE' });
+        // Type distinct de ABSENCE_RESOLUE (retrouvée) : declarerPerdue() est une issue
+        // définitive de perte, pas une résolution positive — TopBar.tsx affichait auparavant
+        // "retrouvée et relocalisée" à tort sur cet événement (bug source, voir plan d'impact
+        // agent-1). ResolusTab.tsx/EscaladesResoluesTab.tsx écoutent ce nouveau type pour leur
+        // rafraîchissement temps réel.
+        mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_PERDUE_CONFIRMEE' });
       }
       return res;
     }

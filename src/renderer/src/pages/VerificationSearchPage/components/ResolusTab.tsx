@@ -55,7 +55,7 @@ export const ResolusTab = () => {
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
-        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'CARTE_RETROUVEE') {
+        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'CARTE_RETROUVEE' || data?.type === 'ABSENCE_PERDUE_CONFIRMEE') {
           loadData();
         }
       });
@@ -112,10 +112,17 @@ export const ResolusTab = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {paginatedData.map((carte) => (
+      {paginatedData.map((carte) => {
+        // Badge dynamique (Correctif 3) : escalade_niveau='RESOLU' recouvre désormais deux
+        // issues distinctes (voir declarerPerdue()/resoudreAbsence() dans absence.queries.ts) —
+        // statut_physique='PERDUE' = perte définitive confirmée, sinon = retrouvée (comportement
+        // historique conservé pour 'OK').
+        const isPerdue = carte.statut_physique === 'PERDUE';
+        const badgeColor = isPerdue ? '#ef4444' : '#27ae60';
+        return (
         <div key={carte.id_carte} style={{
           background: 'var(--bg-secondary)',
-          border: '1px solid rgba(39, 174, 96, 0.3)',
+          border: `1px solid ${isPerdue ? 'rgba(239, 68, 68, 0.3)' : 'rgba(39, 174, 96, 0.3)'}`,
           borderRadius: 16,
           padding: 24,
           display: 'flex',
@@ -127,16 +134,16 @@ export const ResolusTab = () => {
           {/* Info Client */}
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <span style={{ 
-                background: 'rgba(39, 174, 96, 0.1)', 
-                color: '#27ae60', 
-                padding: '4px 8px', 
-                borderRadius: 6, 
-                fontSize: 11, 
+              <span style={{
+                background: `${badgeColor}1A`,
+                color: badgeColor,
+                padding: '4px 8px',
+                borderRadius: 6,
+                fontSize: 11,
                 fontWeight: 700,
-                border: '1px solid rgba(39, 174, 96, 0.2)'
+                border: `1px solid ${badgeColor}33`
               }}>
-                ✅ RETROUVÉE
+                {isPerdue ? '❌ Perdue confirmée' : '✅ Retrouvée'}
               </span>
               <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                 Signalée le {carte.date_signalement_absence ? new Date(carte.date_signalement_absence).toLocaleDateString() : 'N/A'}
@@ -197,7 +204,8 @@ export const ResolusTab = () => {
             </button>
           </div>
         </div>
-      ))}
+        );
+      })}
 
       {/* Pagination */}
       {totalPages > 1 && (

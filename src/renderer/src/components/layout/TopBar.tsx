@@ -188,6 +188,18 @@ export default function TopBar() {
               border: '1px solid #FFD700'
             }
           });
+        } else if (data && data.type === 'ABSENCE_PERDUE_CONFIRMEE') {
+          // Correctif 4 : distinct de ABSENCE_RESOLUE — declarerPerdue() émet désormais son
+          // propre type d'événement (voir handlers.ts, cartes:declarerPerdue) pour ne plus
+          // annoncer à tort une carte "retrouvée" alors qu'elle est déclarée perdue.
+          toast.error("📕 Une carte a été déclarée définitivement perdue.", {
+            duration: 6000,
+            style: {
+              background: '#000',
+              color: '#FFD700',
+              border: '1px solid #FFD700'
+            }
+          });
         } else if (data && data.type === 'ABSENCE_ESCALADEE') {
           if (user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN') {
             toast.error("⚠️ Un centre a escaladé une carte absente non résolue !", {

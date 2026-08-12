@@ -87,8 +87,10 @@ const api = {
       ipcRenderer.invoke('cartes:signalerAbsence', id, agentLogin, agentInfo, commentaire, currentUser),
     getAbsences: (siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAbsences', siteId),
-    getAbsencesCentre: (centreId: number): Promise<ICarte[]> => 
+    getAbsencesCentre: (centreId: number): Promise<ICarte[]> =>
       ipcRenderer.invoke('cartes:getAbsencesCentre', centreId),
+    getEscaladesResoluesCentre: (centreId: number): Promise<ICarte[]> =>
+      ipcRenderer.invoke('cartes:getEscaladesResoluesCentre', centreId),
     getAbsencesSite: (siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAbsencesSite', siteId),
     escaladerAuSite: (id: number, currentUser?: Partial<IUser>): Promise<any> => 
