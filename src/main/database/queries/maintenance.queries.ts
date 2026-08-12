@@ -24,33 +24,174 @@ export function clearDatabaseCartes(siteId?: number): void {
 
 export async function purgeLocalDatabase(siteId: number, progressCallback?: (percent: number) => void): Promise<{ success: boolean, count: number }> {
   const db = getDatabase()!;
-  db.pragma('foreign_keys = OFF');
+
+  if (!siteId) {
+    throw new Error("siteId obligatoire pour la purge locale.");
+  }
+
   try {
     let deletedCartes = 0;
-    
-    // Début à 10%
-    if (progressCallback) progressCallback(10);
-    
-    db.transaction(() => {
-      // 1. Purge des anomalies pour ce site
-      db.prepare(`DELETE FROM t_import_anomalies WHERE site_id = ?`).run(siteId);
-      
-      // 2. Compter le nombre de cartes à purger pour le log
-      const countRow = db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?').get(siteId) as { count: number } | undefined;
-      deletedCartes = countRow ? countRow.count : 0;
-      
-      // 3. Purger la file de synchronisation (pour ce site)
-      db.prepare(`
-        DELETE FROM t_sync_queue 
-        WHERE table_name = 't_cartes' 
-        AND record_id IN (SELECT id_carte FROM t_cartes WHERE site_id = ?)
-      `).run(siteId);
 
-      // 4. Purger la table principale t_cartes
-      db.prepare(`DELETE FROM t_cartes WHERE site_id = ?`).run(siteId);
-    })();
+    // ─── CORRECTIF ANTI-FREEZE (réplique du pattern déjà validé par emergencyPurge) ───
+    // Étape 1 : Désactivation des clés & suppression des TRIGGERS UNIQUEMENT.
+    // Même correctif anti-corruption SQLITE_CORRUPT_VTAB que emergencyPurge (voir sa
+    // documentation détaillée plus bas dans ce fichier) : on ne DROP/CREATE JAMAIS
+    // t_cartes_fts elle-même (uniquement les 3 triggers), pour permettre un DELETE brut
+    // rapide sur t_cartes sans le coût par-ligne du trigger AFTER DELETE, puis on rejoue
+    // manuellement — par lots, avec yield — les commandes 'delete' que ce trigger aurait
+    // émises lui-même.
+    if (progressCallback) progressCallback(5);
+    db.pragma('foreign_keys = OFF');
 
-    if (progressCallback) progressCallback(100);
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_ai;');
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_ad;');
+    db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+
+    // Capture de l'ancien contenu FTS5 du site à purger AVANT suppression — nécessaire pour
+    // reproduire ensuite manuellement les commandes 'delete' que le trigger AFTER DELETE
+    // aurait émises (old.* n'est plus disponible une fois les lignes supprimées).
+    type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
+    const oldFtsCards = db.prepare(`
+      SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
+      FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
+    `).all(siteId) as FtsCard[];
+
+    if (progressCallback) progressCallback(15);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // ─── ÉTAPE 2 (CHUNKÉE) : purge par lots de 500 + yield setImmediate ───
+    // Comportement métier STRICTEMENT IDENTIQUE à l'ancienne implémentation synchrone
+    // (mêmes tables, mêmes filtres site_id, même ordre logique : anomalies → sync_queue →
+    // cartes). Contrairement à emergencyPurge, t_logs n'est volontairement PAS touché ici :
+    // différence de règle métier intentionnelle entre purge normale et purge d'urgence
+    // (à ne pas répliquer).
+    //
+    // CORRECTIF ANTI-FREEZE (confirmé par agent-13-qa-terrain-tester, sonde IPC concurrente) :
+    // l'ancien DELETE brut, enveloppé dans UNE SEULE transaction non chunkée, bloquait le
+    // Main Thread Electron 7 à 18s sur 60 000 cartes (des appels IPC totalement indépendants
+    // restaient sans réponse pendant tout cet intervalle) — un gel qui aurait scalé
+    // proportionnellement sur le volume réel de production (218 332 cartes). On applique ici
+    // exactement le même principe déjà validé pour la boucle FTS5 plus bas dans ce fichier :
+    // une transaction better-sqlite3 est 100% synchrone du début à la fin (impossible de
+    // yield au milieu), donc on ne peut yield qu'ENTRE deux petites transactions successives.
+    //
+    // Hypothèses de volumétrie documentées (à la demande explicite, plutôt que supposées) :
+    // - t_sync_queue N'EST JAMAIS purgée après synchro réussie : markRecordsAsSynced()
+    //   (sync.queries.ts) se contente de passer synced=1, sans jamais DELETE la ligne. Son
+    //   volume peut donc, avec le temps, atteindre voire dépasser celui de t_cartes lui-même
+    //   — elle est donc chunkée au même titre que t_cartes, par précaution.
+    // - t_import_anomalies reçoit une ligne par ligne anormale détectée lors d'un import
+    //   massif (import-worker.js, INSERT INTO t_import_anomalies) : dans un scénario d'import
+    //   pathologique (fichier source majoritairement dupliqué/invalide), son volume peut
+    //   atteindre un ordre de grandeur comparable à t_cartes. Elle est donc chunkée elle aussi
+    //   — aucune des trois tables n'est considérée comme structurellement bornée à un petit
+    //   volume, contrairement à une hypothèse par défaut qui aurait pu sembler raisonnable.
+    const DELETE_BATCH_SIZE = 500;
+
+    // 1. Purge chunkée des anomalies d'import pour ce site (colonne site_id native).
+    {
+      const selectAnomalyIds = db.prepare(`SELECT id FROM t_import_anomalies WHERE site_id = ? LIMIT ?`);
+      let batch: { id: number }[];
+      // On ré-exécute le même SELECT (sans OFFSET) à chaque tour : puisque les lignes
+      // retournées sont supprimées avant le tour suivant, le lot suivant "remonte"
+      // naturellement — identique au pattern utilisé ailleurs dans le code (upload-worker.js).
+      while ((batch = selectAnomalyIds.all(siteId, DELETE_BATCH_SIZE) as { id: number }[]).length > 0) {
+        const ids = batch.map(r => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        db.transaction(() => {
+          db.prepare(`DELETE FROM t_import_anomalies WHERE id IN (${placeholders})`).run(...ids);
+        })();
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
+    if (progressCallback) progressCallback(25);
+
+    // 2. Nombre de cartes à purger pour le log (calculé une fois, avant toute suppression).
+    deletedCartes = oldFtsCards.length;
+    const allCarteIds = oldFtsCards.map(c => c.id_carte);
+
+    // 3. Purge chunkée, lot par lot, de la file de synchro PUIS des cartes elles-mêmes
+    // (même lot d'id_carte pour les deux, dans la même petite transaction, pour préserver
+    // l'ordre logique file de synchro → cartes sans multiplier les yields inutilement).
+    // On s'appuie sur la liste d'id_carte capturée AVANT toute suppression (oldFtsCards),
+    // t_sync_queue n'ayant pas de colonne site_id propre.
+    for (let i = 0; i < allCarteIds.length; i += DELETE_BATCH_SIZE) {
+      const idsBatch = allCarteIds.slice(i, i + DELETE_BATCH_SIZE);
+      const placeholders = idsBatch.map(() => '?').join(',');
+      db.transaction(() => {
+        db.prepare(`DELETE FROM t_sync_queue WHERE table_name = 't_cartes' AND record_id IN (${placeholders})`).run(...idsBatch);
+        db.prepare(`DELETE FROM t_cartes WHERE id_carte IN (${placeholders})`).run(...idsBatch);
+      })();
+
+      if (progressCallback) {
+        const step3Progress = 25 + Math.round(((i + idsBatch.length) / Math.max(allCarteIds.length, 1)) * 15);
+        progressCallback(Math.min(step3Progress, 40));
+      }
+      await new Promise(resolve => setImmediate(resolve));
+    }
+
+    if (progressCallback) progressCallback(40);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // Étape 3 : Recréation des TRIGGERS uniquement (copie exacte de emergencyPurge) —
+    // t_cartes_fts elle-même n'est JAMAIS droppée/recréée (voir justification ci-dessus).
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
+        INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
+        INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES(new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+      END;
+    `);
+    if (progressCallback) progressCallback(60);
+    await new Promise(resolve => setImmediate(resolve));
+
+    // ─── PURGE FTS5 INCRÉMENTALE NON-BLOQUANTE (lots de 500 + yield setImmediate) ───
+    // Identique au pattern emergencyPurge : pour chaque carte réellement supprimée, on
+    // rejoue la commande 'delete' que le trigger AFTER DELETE aurait émise — mais par lots,
+    // avec yield setImmediate entre chaque lot pour ne pas geler l'UI (CORRECTIF ANTI-FREEZE,
+    // cf. historique : le DELETE en masse avec triggers actifs gelait le Main Thread Electron
+    // pendant ~30s sur 218 332 cartes).
+    const FTS_BATCH_SIZE = 500;
+    const totalFts = oldFtsCards.length;
+    if (totalFts > 0) {
+      const ftsDeleteStmt = db.prepare(`
+        INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+        VALUES('delete', ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      for (let i = 0; i < totalFts; i += FTS_BATCH_SIZE) {
+        const batch = oldFtsCards.slice(i, i + FTS_BATCH_SIZE);
+        db.transaction(() => {
+          for (const c of batch) {
+            ftsDeleteStmt.run(c.id_carte, c.noms || '', c.prenoms || '', c.num_secu || '', c.contact || '', c.lieu_de_naissance || '', c.rangement || '');
+          }
+        })();
+
+        // Progression granulaire : 60% → 90% pendant la purge FTS5
+        if (progressCallback) {
+          const ftsProgress = 60 + Math.round(((i + batch.length) / totalFts) * 30);
+          progressCallback(Math.min(ftsProgress, 90));
+        }
+
+        // Yield de la boucle d'événements — libère le thread UI d'Electron
+        await new Promise(resolve => setImmediate(resolve));
+      }
+      log.info(`[PURGE LOCALE] Purge FTS5 incrémentale terminée : ${totalFts} cartes retirées de l'index par lots de ${FTS_BATCH_SIZE}.`);
+    }
+
+    if (progressCallback) progressCallback(90);
+    await new Promise(resolve => setImmediate(resolve));
 
     db.pragma('foreign_keys = ON');
 

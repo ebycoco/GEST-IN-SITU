@@ -3356,6 +3356,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // etablie via un vrai login ROOT (mot de passe verifie cote serveur, voir
     // auth:login) -- le bypass reste alors legitime.
     const secureUser = getSecureCurrentUser();
+    // Suspendre temporairement le sync engine pour Ã©viter des Ã©critures concurrentes
+    // (SyncEngine) pendant la fenÃªtre oÃ¹ les triggers FTS5 sont absents (DROP/DELETE brut/
+    // recrÃ©ation) -- mÃªme correctif et mÃªme justification que db:emergency-purge ci-dessous.
+    syncEngine.pause();
     try {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
@@ -3426,6 +3430,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) {
       log.error(`[PURGE LOCALE] Ã‰CHEC CRITIQUE de la purge locale pour le site ID ${siteId} :`, e);
       throw e;
+    } finally {
+      // Reprise garantie du sync engine (symÃ©trique Ã  db:emergency-purge ci-dessous).
+      syncEngine.resume();
+      log.info(`[PURGE LOCALE] Purge locale exÃ©cutÃ©e, synchronisation rÃ©activÃ©e pour le site ID ${siteId}.`);
     }
   });
 
