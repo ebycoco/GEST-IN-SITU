@@ -37,7 +37,10 @@ export function mapCardPayload(c: any): any {
     date_signalement_absence: c.date_signalement_absence || null,
     date_resolution_absence: c.date_resolution_absence || null,
     agent_resolution_absence: c.agent_resolution_absence || null,
-    note_resolution: c.note_resolution || null, notif_lue: c.notif_lue ?? 1,
+    note_resolution: c.note_resolution || null,
+    note_signalement_absence: c.note_signalement_absence || null,
+    escalade_niveau: c.escalade_niveau || 'CENTRE', has_invalid_date: c.has_invalid_date ?? 0,
+    notif_lue: c.notif_lue ?? 1,
     id_site: c.site_id, id_centre: c.centre_id || null, id_poste: c.poste_id || null,
     qr_code_data: c.qr_code_data || null, is_exported: c.is_exported || 0,
     created_by: c.created_by || null, updated_at: c.updated_at || new Date().toISOString()

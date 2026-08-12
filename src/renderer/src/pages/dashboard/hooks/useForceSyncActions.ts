@@ -233,26 +233,33 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
   };
 
   const handlePullSiteCards = async (isAutomatic = false) => {
+    // Garde-fou : certains appelants (ex. onClick={handlePullSiteCards} sur un bouton)
+    // passent involontairement l'événement DOM du clic comme premier argument au lieu
+    // d'un booléen. Un objet event est "truthy", ce qui désactivait silencieusement le
+    // toast de confirmation pour un clic manuel réel. On ne traite donc comme "silencieux"
+    // (pas de toast) QUE le cas explicite isAutomatic === true (véritable pull automatique
+    // en tâche de fond), jamais une valeur truthy quelconque.
+    const auto = isAutomatic === true;
     return cloudGuard(async () => {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (!siteIdToUse) {
-      if (!isAutomatic) toast.error("Aucun site actif sélectionné pour la récupération.");
+      if (!auto) toast.error("Aucun site actif sélectionné pour la récupération.");
       return;
     }
 
-    if (isAutomatic && !window.navigator.onLine) {
+    if (auto && !window.navigator.onLine) {
       return;
     }
 
     if (isPullingCards) {
-      if (!isAutomatic) toast.error("Une récupération de cartes est déjà en cours.");
+      if (!auto) toast.error("Une récupération de cartes est déjà en cours.");
       return;
     }
 
     setIsPullingCardsLocal(true);
     setStorePulling(true);
     let toastId: string | undefined;
-    if (!isAutomatic) {
+    if (!auto) {
       toastId = toast.loading('☁️ Récupération des cartes depuis le cloud en cours...');
     }
 

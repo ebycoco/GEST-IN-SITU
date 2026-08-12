@@ -342,9 +342,18 @@ test.describe.serial('Absence — Escalade + Perte cross-poste RÉELLE (agent-13
       login: topoA.opvA.login
     });
 
+    // ── Découverte QA (run 3, agent-13) ─────────────────────────────────────
+    // is_dirty n'est PAS asserté ici : l'upstream automatique (outbox +
+    // scheduleOutboxProcessing() déclenché par signalerAbsence() lui-même,
+    // réseau réel déjà ONLINE à ce stade) peut pousser la carte vers Supabase
+    // et repasser is_dirty à 0 en quelques centaines de ms — plus vite que
+    // cette requête SQLite ne s'exécute selon la latence réseau du run. Cette
+    // course n'a aucun rapport avec l'objet du test (statut_physique/
+    // escalade_niveau corrects après signalement) : elle est même la preuve
+    // que l'outbox fonctionne. Valeur consignée en log pour information.
     const localAfterSignal = queryDb(dbPathA, `SELECT statut_physique||'|'||escalade_niveau||'|'||is_dirty FROM t_cartes WHERE id_carte=${card1.id};`);
-    console.log(`[QA-CHECK][Scénario1] État local après signalerAbsence -> "${localAfterSignal}"`);
-    expect(localAfterSignal).toBe('ABSENT|CENTRE|1');
+    console.log(`[QA-CHECK][Scénario1] État local après signalerAbsence -> "${localAfterSignal}" (statut|escalade attendus : ABSENT|CENTRE, is_dirty informatif)`);
+    expect(localAfterSignal.split('|').slice(0, 2).join('|')).toBe('ABSENT|CENTRE');
 
     await logout(window);
 
@@ -391,6 +400,7 @@ test.describe.serial('Absence — Escalade + Perte cross-poste RÉELLE (agent-13
     test.setTimeout(240_000);
     const { app, window } = await launchAllowRealSync(userDataDirB);
     envB = { app, window, userDataDir: userDataDirB };
+    window.on('console', (msg) => console.log(`[RENDERER-CONSOLE][Poste2] ${msg.type()}: ${msg.text()}`));
 
     const localBefore = queryDb(dbPathB, `SELECT COUNT(*) FROM t_cartes WHERE noms='${card1.noms}';`);
     expect(Number(localBefore)).toBe(0);
@@ -409,15 +419,49 @@ test.describe.serial('Absence — Escalade + Perte cross-poste RÉELLE (agent-13
     console.log(`[QA-CHECK][Scénario1][Pull] sync:getCloudCartesCount(${topoB.siteId}) direct (Poste 2) = ${directCount} (attendu >= 1)`);
     expect(directCount).toBeGreaterThan(0);
 
+    // ── Découverte QA (run 3, agent-13) ─────────────────────────────────────
+    // Au tout premier login, un cycle automatique (triggerAutoDownstream à
+    // ~10s, isDownstreamRunning) ET le cycle court upstream (executeSyncCycle,
+    // isSyncing) tournent en tâche de fond. `sync:pullSiteCards` (handlers.ts)
+    // refuse tout pull MANUEL tant que `syncEngine.isCurrentlySyncing()`
+    // (isSyncing || isDownstreamRunning) est vrai, et `cloudCartesCount` côté
+    // React (useDashboardStats) n'est refetché qu'au montage du Layout (pas de
+    // polling) — un clic "à chaud" juste après le login peut donc silencieusement
+    // ne déclencher ni le succès ni l'erreur observable. Même pattern déjà
+    // rencontré et contourné dans sync-cloud-real.e2e.spec.ts (Scénario 1a) :
+    // un cycle logout/login FORCE un remontage frais du Layout (loadStats())
+    // et laisse le temps aux cycles automatiques de courte durée de se terminer.
+    await logout(window);
+    await login(window, topoB.adminSite, /#\/dashboard$/);
+
     const pullBtn = window.getByRole('button', { name: /TÉLÉCHARGER \d+ CARTES DEPUIS LE CLOUD|RÉCUPÉRATION EN COURS/ });
     await expect(pullBtn).toBeVisible({ timeout: 20000 });
     await expect(pullBtn).toHaveText(/TÉLÉCHARGER \d+ CARTES DEPUIS LE CLOUD/, { timeout: 30000 });
-    await pullBtn.click();
-    await expect(window.getByText(/Récupération réussie|données locales sont déjà à jour/i)).toBeVisible({ timeout: 40000 });
+    await expect(pullBtn).toBeEnabled({ timeout: 10000 });
 
-    // Vérité terrain LOCALE (SQLite) après pull.
-    const localAfterPull = queryDb(dbPathB, `SELECT escalade_niveau||'|'||statut_physique||'|'||centre_id FROM t_cartes WHERE noms='${card1.noms}';`);
-    console.log(`[QA-CHECK][Scénario1][Pull] État local Poste 2 après pull -> "${localAfterPull}"`);
+    const statusBeforeClick = await window.evaluate(() => (window as any).api.sync.getStatus());
+    console.log(`[QA-CHECK][Scénario1][Pull][Diagnostic] sync:getStatus() juste avant clic -> ${JSON.stringify(statusBeforeClick)}`);
+
+    // ── Re-test du correctif toast (run 4, agent-13) ──────────────────────
+    // useForceSyncActions.ts corrigé : `onClick={handlePullSiteCards}`
+    // (SiteAdminView.tsx:1077) passait l'event DOM du clic comme argument
+    // `isAutomatic` (truthy), désactivant silencieusement le toast pour un
+    // clic manuel réel. Fix : `const auto = isAutomatic === true` (garde
+    // stricte). On vérifie ici que le toast de succès apparaît bien.
+    await pullBtn.click();
+    await expect(window.getByText(/Récupération réussie|données locales sont déjà à jour/i)).toBeVisible({ timeout: 15000 });
+    console.log('[QA-CHECK][Toast][CONFIRMÉ] Le toast de succès du pull manuel ADMINISTRATEUR_SITE (/dashboard) s\'affiche bien après le correctif useForceSyncActions.ts.');
+    let localAfterPull = '';
+    const pullDeadline = Date.now() + 45000;
+    while (Date.now() < pullDeadline) {
+      localAfterPull = queryDb(dbPathB, `SELECT escalade_niveau||'|'||statut_physique||'|'||centre_id FROM t_cartes WHERE noms='${card1.noms}';`);
+      if (localAfterPull === `SITE|ABSENT|${topoB.centreAId}`) break;
+      await window.waitForTimeout(3000);
+    }
+    const statusAfterClick = await window.evaluate(() => (window as any).api.sync.getStatus());
+    console.log(`[QA-CHECK][Scénario1][Pull][Diagnostic] sync:getStatus() après clic -> ${JSON.stringify(statusAfterClick)} (lastSync doit différer de "Jamais" pour prouver un pull réel exécuté)`);
+    console.log(`[QA-CHECK][Scénario1][Pull] État local Poste 2 après pull -> "${localAfterPull}" (toast de succès NON vérifié ici — bug P1 confirmé, voir rapport)`);
+    expect(statusAfterClick.lastSync).not.toBe('Jamais');
     expect(localAfterPull).toBe(`SITE|ABSENT|${topoB.centreAId}`);
 
     // Vérité terrain via l'IPC réellement utilisé par la file d'attente Admin Site.
@@ -506,7 +550,14 @@ test.describe.serial('Absence — Escalade + Perte cross-poste RÉELLE (agent-13
     const { window } = envA!;
     await logout(window);
     await login(window, topoA.opvA, /#\/agent-verification$/);
-    await window.evaluate(() => { window.location.hash = '#/agent-verification/recherche'; });
+    // Correctif QA (run 4, agent-13) : l'onglet "Historique Résolus" ne vit PAS
+    // sur la route "recherche" (App.tsx:126 -> VerificationRecherche, un
+    // simple formulaire de recherche sans onglets Résolus/Non Résolus), mais
+    // sur la route "signalements" (App.tsx:127 -> SignalementsView.tsx, qui
+    // rend précisément ResolusTab/NonResolusTab). Bug de navigation du SPEC
+    // lui-même (mauvaise route ciblée), pas de l'application — confirmé par
+    // lecture directe de App.tsx et SignalementsView.tsx.
+    await window.evaluate(() => { window.location.hash = '#/agent-verification/signalements'; });
     await window.getByText('Historique Résolus').click();
     await expect(window.getByText(card1.noms).first()).toBeVisible({ timeout: 20000 });
     await expect(window.getByText('❌ Perdue confirmée')).toBeVisible({ timeout: 5000 });

@@ -67,6 +67,9 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       lieu_enrolement, contact, rangement, statut, date_delivrance,
       agent_saisie, nom_retirant, num_retirant, agent_distributeur,
       centre_retrait, cle_doublon, cle_doublon_flex, statut_physique,
+      agent_signalement_absence, date_signalement_absence, note_signalement_absence,
+      escalade_niveau, has_invalid_date, contact_retirant, relation_retirant,
+      date_resolution_absence, agent_resolution_absence, note_resolution,
       site_id, centre_id, poste_id, qr_code_data, sync_id,
       created_at, updated_at, synced_at, is_dirty
     ) VALUES (
@@ -74,6 +77,9 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       :lieu_enrolement, :contact, :rangement, :statut, :date_delivrance,
       :agent_saisie, :nom_retirant, :num_retirant, :agent_distributeur,
       :centre_retrait, :cle_doublon, :cle_doublon_flex, :statut_physique,
+      :agent_signalement_absence, :date_signalement_absence, :note_signalement_absence,
+      :escalade_niveau, :has_invalid_date, :contact_retirant, :relation_retirant,
+      :date_resolution_absence, :agent_resolution_absence, :note_resolution,
       :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
       :created_at, :updated_at, :updated_at, 0
     )
@@ -89,18 +95,35 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         cle_doublon = :cle_doublon, cle_doublon_flex = :cle_doublon_flex,
         statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
         qr_code_data = :qr_code_data, updated_at = :updated_at, synced_at = :updated_at,
+        agent_signalement_absence = :agent_signalement_absence,
+        date_signalement_absence = :date_signalement_absence,
+        note_signalement_absence = :note_signalement_absence,
+        escalade_niveau = :escalade_niveau, has_invalid_date = :has_invalid_date,
+        contact_retirant = :contact_retirant, relation_retirant = :relation_retirant,
+        date_resolution_absence = :date_resolution_absence,
+        agent_resolution_absence = :agent_resolution_absence,
+        note_resolution = :note_resolution,
         is_dirty = 0
     WHERE id_carte = :idCarte
   `);
   // Fusion partielle appliquée à une carte localement dirty : n'adopte QUE le statut
-  // (et les champs de délivrance associés) du cloud quand il est plus avancé, sans
-  // toucher aux autres champs en cours de correction locale ni à is_dirty (la fiche
+  // (et les champs de délivrance associés, ainsi que les champs du cycle de signalement
+  // d'absence/escalade qui voyagent avec le statut) du cloud quand il est plus avancé,
+  // sans toucher aux autres champs en cours de correction locale ni à is_dirty (la fiche
   // reste marquée à renvoyer pour ses propres modifications).
   const statusMergeStmt = database.prepare(`
     UPDATE t_cartes
     SET statut = :statut, date_delivrance = :date_delivrance,
         agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
-        nom_retirant = :nom_retirant, num_retirant = :num_retirant
+        nom_retirant = :nom_retirant, num_retirant = :num_retirant,
+        agent_signalement_absence = :agent_signalement_absence,
+        date_signalement_absence = :date_signalement_absence,
+        note_signalement_absence = :note_signalement_absence,
+        escalade_niveau = :escalade_niveau, has_invalid_date = :has_invalid_date,
+        contact_retirant = :contact_retirant, relation_retirant = :relation_retirant,
+        date_resolution_absence = :date_resolution_absence,
+        agent_resolution_absence = :agent_resolution_absence,
+        note_resolution = :note_resolution
     WHERE id_carte = :idCarte
   `);
   const updateWatermarkStmt = database.prepare(`
@@ -150,6 +173,16 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
             cle_doublon: card.cle_doublon || null,
             cle_doublon_flex: card.cle_doublon_flex || null,
             statut_physique: card.statut_physique || 'OK',
+            agent_signalement_absence: card.agent_signalement_absence || null,
+            date_signalement_absence: card.date_signalement_absence || null,
+            note_signalement_absence: card.note_signalement_absence || null,
+            escalade_niveau: card.escalade_niveau || 'CENTRE',
+            has_invalid_date: card.has_invalid_date ?? 0,
+            contact_retirant: card.contact_retirant || null,
+            relation_retirant: card.relation_retirant || null,
+            date_resolution_absence: card.date_resolution_absence || null,
+            agent_resolution_absence: card.agent_resolution_absence || null,
+            note_resolution: card.note_resolution || null,
             site_id: card.id_site || card.site_id ? Number(card.id_site || card.site_id) : null,
             centre_id: card.id_centre || card.centre_id || null,
             poste_id: card.id_poste || card.poste_id || null,
@@ -174,7 +207,17 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               agent_distributeur: card.agent_distributeur || null,
               centre_retrait: card.centre_retrait || null,
               nom_retirant: card.nom_retirant || null,
-              num_retirant: card.num_retirant || null
+              num_retirant: card.num_retirant || null,
+              agent_signalement_absence: card.agent_signalement_absence || null,
+              date_signalement_absence: card.date_signalement_absence || null,
+              note_signalement_absence: card.note_signalement_absence || null,
+              escalade_niveau: card.escalade_niveau || 'CENTRE',
+              has_invalid_date: card.has_invalid_date ?? 0,
+              contact_retirant: card.contact_retirant || null,
+              relation_retirant: card.relation_retirant || null,
+              date_resolution_absence: card.date_resolution_absence || null,
+              agent_resolution_absence: card.agent_resolution_absence || null,
+              note_resolution: card.note_resolution || null
             });
             processedCount++;
           }
@@ -203,6 +246,16 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               cle_doublon: card.cle_doublon || null,
               cle_doublon_flex: card.cle_doublon_flex || null,
               statut_physique: card.statut_physique || 'OK',
+              agent_signalement_absence: card.agent_signalement_absence || null,
+              date_signalement_absence: card.date_signalement_absence || null,
+              note_signalement_absence: card.note_signalement_absence || null,
+              escalade_niveau: card.escalade_niveau || 'CENTRE',
+              has_invalid_date: card.has_invalid_date ?? 0,
+              contact_retirant: card.contact_retirant || null,
+              relation_retirant: card.relation_retirant || null,
+              date_resolution_absence: card.date_resolution_absence || null,
+              agent_resolution_absence: card.agent_resolution_absence || null,
+              note_resolution: card.note_resolution || null,
               centre_id: card.id_centre || card.centre_id || null,
               poste_id: card.id_poste || card.poste_id || null,
               qr_code_data: card.qr_code_data || null,
