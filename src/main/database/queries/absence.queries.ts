@@ -231,7 +231,7 @@ export function declarerPerdue(id: number, currentUser?: { role: string; site_id
     throw new Error("Accès non autorisé aux données de ce site");
   }
 
-  const card = db.prepare('SELECT site_id, noms, prenoms, contact, agent_signalement_absence FROM t_cartes WHERE id_carte = ?').get(id) as any;
+  const card = db.prepare('SELECT site_id, noms, prenoms, contact, agent_signalement_absence, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
   if (card) {
     const siteId = card.site_id;
     const message = `La carte de ${card.noms} ${card.prenoms} a été confirmée PERDUE par l'administration.`;
@@ -267,6 +267,16 @@ export function declarerPerdue(id: number, currentUser?: { role: string; site_id
       `).run(message, JSON.stringify(payload), uuidv4(), siteId);
     } catch (err) {
       log.error('Failed to log or update on declarerPerdue:', err);
+    }
+
+    // Propagation vers Supabase : même défaut confirmé que resoudreAbsence()/escaladerAuSite()
+    // ci-dessus — sans cet enqueue, la confirmation de perte reste locale tant qu'aucun envoi
+    // manuel en masse n'est déclenché. Payload complet requis (site_id manquant sinon -> rejet
+    // systématique par mapCardPayload() dans outbox.service.ts).
+    if (card.sync_id) {
+      const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+      scheduleOutboxProcessing();
     }
   }
 
@@ -435,7 +445,7 @@ export function escaladerAuSite(id: number, currentUser?: { id_user?: number; lo
   const result = db.prepare(query).run(params);
   
   if (result.changes > 0) {
-    const card = db.prepare('SELECT site_id, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    const card = db.prepare('SELECT site_id, noms, prenoms, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
     if (card) {
       const siteId = card.site_id;
       const agent = currentUser?.login || 'ADMIN_CENTRE';
@@ -447,6 +457,17 @@ export function escaladerAuSite(id: number, currentUser?: { id_user?: number; lo
         `).run(currentUser?.id_user || null, agent, message, JSON.stringify({ read: false, id_carte: id }), uuidv4(), siteId);
       } catch (err) {
         log.error('Failed to log CARTE_ABSENTE_ESCALADEE:', err);
+      }
+
+      // Propagation vers Supabase : sans cet enqueue, l'escalade reste locale et un
+      // ADMINISTRATEUR_SITE sur un autre poste ne voit jamais la carte dans sa file
+      // d'attente (défaut confirmé, même pattern que signalerAbsence/resoudreAbsence
+      // ci-dessus). Payload complet requis (site_id manquant sinon -> rejet systématique
+      // par mapCardPayload() dans outbox.service.ts).
+      if (card.sync_id) {
+        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+        scheduleOutboxProcessing();
       }
     }
   }

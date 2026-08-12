@@ -50,12 +50,16 @@ export const ResolusTab = () => {
   // Si l'onglet "Résolus" est déjà monté quand une résolution de signalement
   // survient (côté main process, cf. src/main/ipc/handlers.ts:1149/1164/1178),
   // on recharge la liste sans attendre un démontage/remontage du composant.
+  // Un pull automatique descendant (sync-engine.ts, downstream) émet aussi cet événement
+  // mais sans champ `type` reconnu (source: 'auto-downstream') — on le traite prudemment
+  // comme un signal générique "des données sont peut-être arrivées du cloud, recharge",
+  // plutôt que de tenter de déterminer précisément ce qui a changé pendant ce pull.
   // Abonnement IPC nettoyé au démontage (return unsubscribe) pour éviter toute
   // fuite de listener (politique low-memory, CLAUDE.md §2).
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
-        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'CARTE_RETROUVEE' || data?.type === 'ABSENCE_PERDUE_CONFIRMEE') {
+        if (!data?.type || data.type === 'ABSENCE_RESOLUE' || data.type === 'CARTE_RETROUVEE' || data.type === 'ABSENCE_PERDUE_CONFIRMEE') {
           loadData();
         }
       });

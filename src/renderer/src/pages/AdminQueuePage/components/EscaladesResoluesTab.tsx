@@ -56,11 +56,15 @@ export const EscaladesResoluesTab = () => {
   // ─── Rafraîchissement temps réel (sync:updated-data) ──────────────────────
   // Les 3 issues possibles d'un signalement escaladé (résolue, perdue, retrouvée depuis
   // l'historique des pertes) doivent toutes déclencher un rechargement de cet onglet.
+  // Un pull automatique descendant (sync-engine.ts, downstream) émet aussi cet événement
+  // mais sans champ `type` reconnu (source: 'auto-downstream') — on le traite prudemment
+  // comme un signal générique "des données sont peut-être arrivées du cloud, recharge",
+  // plutôt que de tenter de déterminer précisément ce qui a changé pendant ce pull.
   // Abonnement IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2).
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
-        if (data?.type === 'ABSENCE_RESOLUE' || data?.type === 'ABSENCE_PERDUE_CONFIRMEE' || data?.type === 'CARTE_RETROUVEE') {
+        if (!data?.type || data.type === 'ABSENCE_RESOLUE' || data.type === 'ABSENCE_PERDUE_CONFIRMEE' || data.type === 'CARTE_RETROUVEE') {
           loadData();
         }
       });
