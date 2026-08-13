@@ -4,6 +4,31 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.14.0] - 2026-08-13
+
+### 🚨 Sécurité (Critique)
+
+- **7 fuites P0 de cloisonnement centre sur le portail ADMIN_CENTRE (jusque-là jamais audité)** : un ADMIN_CENTRE pouvait consulter les données d'autres centres — y compris des informations personnelles (téléphone, numéro CMU) — via une recherche 100% normale, sans forgeage d'appel IPC. Corrigé sur les 7 points d'entrée concernés. Corrige au passage un bug de suppression de log qui ciblait la mauvaise table.
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Portail ADMIN_CENTRE : nouvel onglet "Escalades Résolues"** : quand un ADMIN_CENTRE escalade un signalement d'absence au site, il peut désormais suivre ce qu'il en advient au lieu de perdre toute visibilité après l'escalade. Corrige au passage un bug où une carte déclarée définitivement perdue restait invisible pour l'opérateur d'origine.
+
+### 🛠️ Corrections & Sécurité
+
+- **Cycle signalement/escalade/résolution d'absence de carte ne se propageant en réalité jamais correctement entre plusieurs postes physiques distincts (chantier le plus important de ce cycle)** : plusieurs colonnes manquantes sur le schéma Supabase (production ET test) et trois couches de code (mappers d'envoi ET de réception) omettaient silencieusement des champs métier clés (`escalade_niveau`, `has_invalid_date`, `note_signalement_absence`, `contact_retirant`, `relation_retirant`, champs de résolution). Corrigé et validé de bout en bout entre deux vraies instances Electron via un vrai projet Supabase.
+- **Compteur "Télécharger N cartes depuis le Cloud" ne redescendant jamais à 0 après un téléchargement complet :** confusion entre le curseur de sécurité anti-décalage d'horloge et le repère d'affichage. Corrigé, avec rafraîchissement automatique léger toutes les 3 minutes pour refléter les nouvelles cartes ajoutées par un autre poste.
+
+### ⚡ Performances & Optimisations
+
+- **Bouton "Purger les cartes locales de ce PC" figeant l'application ~30 secondes** sur un volume réel (218k+ cartes) : ramené à quelques centaines de ms pour l'essentiel de l'opération (découpage par lots au lieu d'une transaction massive).
+
+### ⚠️ Points de vigilance connus
+
+- Ce cycle s'appuie sur une intervention manuelle déjà effectuée par l'utilisateur sur le schéma Supabase de **PRODUCTION** (ajout des colonnes `escalade_niveau`, `has_invalid_date`, `note_signalement_absence` à `t_cartes` via `ALTER TABLE`) — prérequis déjà satisfait avant ce cycle de développement, aucune action supplémentaire requise.
+
+---
+
 ## [2.13.1] - 2026-08-11
 
 ### 🛠️ Corrections & Sécurité
