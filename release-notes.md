@@ -1,23 +1,35 @@
-# GEST-IN-SITU — Release v2.13.1
+# GEST-IN-SITU — Release v2.14.0
 
-> **Date de publication :** 11 août 2026
+> **Date de publication :** 13 août 2026
 > **Statut :** Production — Postes opérationnels en Côte d'Ivoire
-> **SCHEMA_VERSION :** 66 (migration additive v66, aucune perte de données)
+> **SCHEMA_VERSION :** 66 (inchangé, aucune migration ce cycle)
 
-## 🛠️ Correctif critique
+## 🚨 Sécurité (Critique)
 
-- **Migrations SQLite non fiables en cas de données orphelines, avec faux positif "à jour"** (incident production réel constaté sur 2 postes de terrain) : la migration d'élargissement du rôle OPERATEUR_APUREMENT pouvait échouer sur des comptes utilisateurs orphelins (site/centre/poste déjà supprimé), déclenchant un filet de secours de reconstruction d'urgence qui se déclarait à tort "à jour" sans avoir réellement terminé. Sur les postes touchés : schéma durablement incomplet (perte des index de performance, retour du bug de lenteur du tableau de bord déjà corrigé en v2.11.0), avec blocage de toute réparation automatique future.
-  - Les comptes orphelins sont désormais neutralisés (journalisés) avant toute vérification, au lieu de faire échouer la migration.
-  - Le filet de secours de reconstruction d'urgence rejoue désormais la vraie séquence de migrations et ne se déclare "à jour" qu'après succès réel.
-  - Nouvelle vérification structurelle systématique au démarrage (`SCHEMA_VERSION` 65 → 66) : contrôle l'état réel de la base (pas seulement son numéro de version) et répare automatiquement ce qui manque — les postes déjà touchés par l'incident se corrigent d'eux-mêmes à cette mise à jour, sans intervention manuelle poste par poste.
-- **Comptes utilisateurs orphelins lors de la suppression d'un site ou d'un centre :** les comptes restants pointant vers un site/centre supprimé sont désormais nettoyés systématiquement (au lieu d'être laissés dans un état incohérent).
+- **7 fuites P0 de cloisonnement centre sur le portail ADMIN_CENTRE** (jusque-là jamais audité) : un ADMIN_CENTRE pouvait consulter les données d'autres centres — y compris des informations personnelles (téléphone, numéro CMU) — via une recherche 100% normale, sans forgeage d'appel technique. Les 7 points d'entrée concernés sont corrigés. Corrige au passage un bug de suppression de journal qui ciblait la mauvaise table.
+
+## 🚀 Nouveautés & Ergonomie
+
+- **Portail ADMIN_CENTRE : nouvel onglet "Escalades Résolues"** : quand un ADMIN_CENTRE escalade un signalement d'absence de carte au site, il peut désormais suivre ce qu'il en advient, au lieu de perdre toute visibilité une fois l'escalade envoyée.
+- Correctif associé : une carte déclarée définitivement perdue restait invisible pour l'opérateur d'origine — corrigé.
+
+## 🛠️ Corrections & Fiabilité
+
+- **Propagation cloud du cycle signalement/escalade/résolution d'absence entre postes distincts** (chantier le plus important de ce cycle) : le cycle ne se propageait en réalité jamais correctement d'un poste à un autre. Plusieurs colonnes manquantes sur le schéma Supabase et plusieurs couches de code (envoi et réception) omettaient silencieusement des champs métier clés. Corrigé et validé de bout en bout entre deux postes réels.
+- **Compteur "Télécharger N cartes depuis le Cloud"** ne redescendait jamais à 0 après un téléchargement complet — corrigé, avec rafraîchissement automatique toutes les 3 minutes pour refléter les nouvelles cartes ajoutées par un autre poste.
+
+## ⚡ Performances
+
+- **Bouton "Purger les cartes locales de ce PC"** figeait l'application pendant environ 30 secondes sur un volume réel de cartes — ramené à quelques centaines de millisecondes pour l'essentiel de l'opération.
 
 ## 🧪 Validation
 
-- Couverture de test fonctionnel dédiée (poste sain, simulation exacte de l'incident de production, orphelins injectés, suppression de site/centre via l'interface réelle) : verdict GO, aucune anomalie bloquante ou majeure.
+- Validation QA GO sur Technique/Typage, Sécurité/Accès et Bases de données/Purge. `npx tsc --noEmit` : 0 erreur.
+
+## ℹ️ Prérequis Supabase (déjà satisfait)
+
+Ce cycle s'appuie sur une intervention manuelle déjà effectuée par l'utilisateur sur le schéma Supabase de **production** (ajout des colonnes `escalade_niveau`, `has_invalid_date`, `note_signalement_absence` à `t_cartes`). Ce prérequis a été confirmé satisfait avant le début de ce cycle de développement — **aucune action supplémentaire n'est requise sur les centres en production.**
 
 ## ℹ️ Mise à jour automatique
 
-Cette release est distribuée via le système d'auto-update Electron.
-Les postes connectés recevront la notification de mise à jour automatiquement (bandeau persistant, installation à la fermeture de l'application). Les postes déjà affectés par l'incident décrit ci-dessus se répareront automatiquement à l'application de cette mise à jour.
-**Aucune action manuelle n'est requise sur les centres en production.**
+Cette release est distribuée via le système d'auto-update Electron. Les postes connectés recevront la notification de mise à jour automatiquement (bandeau persistant, installation à la fermeture de l'application). **Aucune action manuelle n'est requise sur les centres en production.**
