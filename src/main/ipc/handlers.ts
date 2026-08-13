@@ -3884,12 +3884,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const db = getDatabase();
       let watermark = '1970-01-01T00:00:00Z';
       let lastSyncId = '00000000-0000-0000-0000-000000000000';
-      
+
       if (db) {
-        const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
-        if (configRow && configRow.value) watermark = configRow.value;
-        const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
-        if (configRowId && configRowId.value) lastSyncId = configRowId.value;
+        // ── Repère d'affichage "vrai point atteint" (last_downstream_sync_true[_id]) ──
+        // Contrairement au curseur de sécurité 'last_downstream_sync'/'_id' (reculé de
+        // 2 min après chaque pull réussi pour protéger le PROCHAIN vrai pull d'un
+        // décalage d'horloge — voir downstream.ts), ce couple de clés reflète la
+        // position EXACTE non tamponnée où le dernier pull s'est arrêté. L'utiliser ici
+        // évite de recompter comme "à télécharger" des cartes déjà rapatriées à
+        // l'instant (bug historique : le compteur ne redescendait jamais à 0).
+        const trueRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_true'").get() as { value: string } | undefined;
+        const trueIdRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_true_id'").get() as { value: string } | undefined;
+
+        if (trueRow && trueRow.value) {
+          watermark = trueRow.value;
+        } else {
+          // Compat rétroactive : aucun pull n'a encore écrit le repère "true" sur ce
+          // poste (première exécution après mise à jour, ou site jamais synchronisé).
+          // Retombe sur le curseur de sécurité existant — au pire un léger sur-comptage
+          // transitoire, résolu dès le prochain pull réel qui alimentera les clés "true".
+          const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+          if (configRow && configRow.value) watermark = configRow.value;
+        }
+
+        if (trueIdRow && trueIdRow.value) {
+          lastSyncId = trueIdRow.value;
+        } else {
+          const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
+          if (configRowId && configRowId.value) lastSyncId = configRowId.value;
+        }
       }
 
       const supabase = getSupabaseClient();

@@ -233,9 +233,23 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     const WATERMARK_SAFETY_BUFFER_MS = 2 * 60 * 1000;
     try {
       const finalWatermarkRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+      const finalSyncIdRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
       if (finalWatermarkRow?.value) {
         const rewound = new Date(new Date(finalWatermarkRow.value).getTime() - WATERMARK_SAFETY_BUFFER_MS).toISOString();
         db.transaction(() => {
+          // ── Repère d'affichage "vrai point atteint" (NON reculé) ────────────────
+          // Distinct du curseur de sécurité ci-dessous : ce couple de clés capture la
+          // position EXACTE (non tamponnée) où ce pull s'est arrêté, avant d'appliquer
+          // le recul anti-décalage d'horloge. Consommé exclusivement par
+          // sync:getCloudCartesCount (handlers.ts) pour afficher un compteur "reste à
+          // télécharger" qui ne recompte jamais du contenu déjà rapatrié à l'instant.
+          // Ne JAMAIS lire ces clés pour piloter un vrai pull (runDownstream/
+          // runDownstreamChunk) — seul le curseur de sécurité 'last_downstream_sync'/
+          // '_id' ci-dessous doit servir de base au prochain pull réel.
+          db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_true', ?)`).run(finalWatermarkRow.value);
+          db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_true_id', ?)`).run(finalSyncIdRow?.value || '00000000-0000-0000-0000-000000000000');
+
+          // ── Curseur de sécurité (pull) — comportement inchangé ──────────────────
           db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync', ?)`).run(rewound);
           db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_id', '00000000-0000-0000-0000-000000000000')`).run();
         })();

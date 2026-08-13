@@ -198,6 +198,45 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
   }, [user?.role, user?.site_id, user?.centre_id, user?.id_user, activeSiteId]);
 
+  // ── Rafraîchissement périodique léger du compteur cloud ──────────────────────
+  // Le compteur "N cartes à télécharger" n'est jusqu'ici recalculé qu'au montage
+  // de la page ou après une action explicite (pull réussi). Si un AUTRE poste
+  // ajoute des cartes sur Supabase pendant que cette page reste ouverte, le
+  // compteur reste figé jusqu'au prochain remontage. On le rafraîchit donc seul
+  // (PAS tout loadStats, qui recalculerait aussi tous les autres KPI) toutes les
+  // 3 minutes tant qu'un site actif est déterminé — intervalle volontairement
+  // large et appel réseau léger (COUNT Supabase), conforme à la politique
+  // Low-Memory (CLAUDE.md §2) : pas de polling agressif.
+  useEffect(() => {
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) return undefined;
+
+    const CLOUD_COUNT_ROLES = [
+      'OPERATEUR_SAISIE', 'ADMINISTRATEUR_SITE', 'SUPER ADMIN', 'ADMIN_CENTRE',
+      'OPERATEUR_QUALITE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_INVENTAIRE',
+      'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT'
+    ];
+    if (!user?.role || !CLOUD_COUNT_ROLES.includes(user.role)) return undefined;
+
+    const CLOUD_COUNT_REFRESH_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+    const interval = setInterval(() => {
+      fetchCloudCountWithRetry(siteIdToUse).then(count => {
+        setCloudCartesCount(count);
+        useCacheStore.getState().setDashboardCache({
+          ...useCacheStore.getState().dashboardCache,
+          cloudCartesCount: count
+        });
+      }).catch(err => {
+        // Échec silencieux : on conserve la dernière valeur connue plutôt que de
+        // basculer à -1 sur un simple aléa réseau transitoire (le prochain tick
+        // ou la prochaine action explicite corrigera la valeur).
+        console.error('Failed to refresh cloud count periodically:', err);
+      });
+    }, CLOUD_COUNT_REFRESH_INTERVAL_MS);
+
+    return () => clearInterval(interval);
+  }, [user?.role, user?.site_id, activeSiteId]);
+
   useEffect(() => {
     const cache = useCacheStore.getState().dashboardCache;
     let hasCache = false;
