@@ -403,3 +403,22 @@ Les vérifications fonctionnelles vivantes reposent aujourd'hui uniquement sur `
 4. **Périmètre UI touché** (hors fixtures) : `AgentVerificationLayout.tsx` + `views/{Overview,RechercheView,SignalementsView}.tsx` (spécifiques au rôle, risque faible) pour ajout de `data-testid`. `LoginPage.tsx` est **partagé par tous les rôles en production** → ajout de `data-testid` signalé en STOP & WARN (changement additif, non structurant, mais périmètre partagé).
 5. **Ordre incrémental** : Login (tous rôles) → OPERATEUR_VERIFICATION (recherche, vérification physique, délivrance, preuve de retrait, signalement d'absence) → extension progressive aux autres rôles.
 - **Dette technique consignée** : L'absence de composant partagé (`<SyncButton />`) a été documentée dans `GEMINI.md` (§13.10) en vue d'un refactoring ultérieur. Aucun changement de logique ou de structure n'a été appliqué.
+
+---
+
+### 2026-08-15 — Plan d'Implémentation Étanche : Correctifs P0 du cycle comptes/rôles (fail-open + comptes désactivés invisibles)
+
+**Problématique :** L'audit `agent-9-senior-auditor` du chantier "cycle comptes/rôles 3 min" (commits `6c5df9f`→`c3ff2ad`) a trouvé 2 P0 : (1) `revoked`/`disabled` détecté par `refreshSecureCurrentUser()` ne déclenche rien côté main process — seul un event renderer best-effort part, fenêtre ouverte tant que le round-trip renderer→`auth:logout` n'a pas eu lieu ; (2) `syncUsersFromCloud()` filtre `.eq('statut_actif', 1)`, donc un compte désactivé côté Cloud n'est jamais réécrit en local et `refreshSecureCurrentUser()` ne peut jamais le détecter pour ce cas.
+
+**Statut :** Plan uniquement (agent-1). Aucun code livré.
+
+**Découvertes clés :**
+- `stopSessionHeartbeat()` (`session-heartbeat.ts:63`) est déjà l'exacte primitive d'invalidation fail-closed voulue (nulle `secureCurrentUser`/`currentUserLogin`/`currentSessionToken`/`secureCurrentGrantedRoles`, aucun effet de bord DB) — pas besoin d'une variante allégée, la réutiliser telle quelle depuis `triggerUserAccountsSync` (`sync-engine.ts:320`).
+- Les ~120 handlers `handlers.ts` gardent tous soit un `!gateUser` explicite (throw), soit un ternaire conditionné par `secureUser &&` — nuler `secureCurrentUser` suffit à les faire fail-closed. **Aucune modification de `handlers.ts` n'est nécessaire pour P0-1.**
+- Exception hors-périmètre repérée en vérifiant les lignes citées par l'audit : `cartes:getAbsencesCentre`/`cartes:getEscaladesResoluesCentre` (`handlers.ts:1395-1419`) n'ont AUCUNE garde de rôle et retombent sur le `centreId` fourni par le renderer si `secureUser` est absent — bug préexistant, indépendant de ce chantier, à signaler séparément (pas de régression introduite par le correctif P0-1).
+- Option retenue pour P0-2 : requête ciblée additive sur le login de la session courante uniquement (nouvelle fonction dans `downstream.ts`, UPDATE mono-colonne `statut_actif`), PAS de retrait du filtre `.eq('statut_actif', 1)` dans `syncUsersFromCloud` (qui reste partagée par le cycle 2h) — écarte tout STOP & WARN sur cette fonction partagée.
+- Outbox : les deux correctifs (invalidation mémoire + UPDATE mono-colonne `statut_actif`) ne touchent jamais `t_outbox`/`is_dirty` → aucune perte d'écriture locale en attente.
+
+**Découpage :** `agent-4-db-sync` (nouvelle fonction ciblée dans `downstream.ts`) → validation utilisateur → `agent-3-coder` (`sync-engine.ts` + `session-heartbeat.ts` pour l'invalidation synchrone + payload `{reason}` optionnel P1) → validation utilisateur → `agent-6-qa-syntax` (`tsc --noEmit`) → `agent-13-qa-terrain-tester` (scénario révocation/désactivation en session active).
+
+**Plan complet restitué intégralement à l'utilisateur/orchestrateur dans la réponse de cette session** (périmètre fichiers exact, conception P0-1/P0-2, cas limites Outbox, message P1, risques de régression, découpage par agent).
