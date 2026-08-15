@@ -41,8 +41,9 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
-const SHOT_DIR =
-  'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\0ecf52dd-3c68-446e-99c9-2a28cf4e9dcc\\scratchpad';
+// test-results/ est déjà ignoré par git (.gitignore) : emplacement portable pour les
+// captures de ce test, indépendant de toute session/machine.
+const SHOT_DIR = join(__dirname, '..', '..', 'test-results', 'agent13-screenshots');
 
 const VERDICTS: string[] = [];
 function verdict(id: string, ok: boolean, detail: string): void {

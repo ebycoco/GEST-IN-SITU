@@ -68,8 +68,9 @@ import {
 } from '../fixtures/electron-app';
 import { getTestUser } from '../fixtures/test-users';
 
-const SHOT_DIR =
-  'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\0ecf52dd-3c68-446e-99c9-2a28cf4e9dcc\\scratchpad';
+// test-results/ est déjà ignoré par git (.gitignore) : emplacement portable pour les
+// captures de ce test, indépendant de toute session/machine.
+const SHOT_DIR = join(__dirname, '..', '..', 'test-results', 'agent13-screenshots');
 
 const OVERLAY_TEXT = 'Chargement sécurisé en cours...';
 const FAILSAFE_WARNING_MARKER = '[MainLayout] Filet de sécurité déclenché';
