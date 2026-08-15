@@ -11,8 +11,11 @@
 - **`cartes:searchQuickLogistique` (portail Logistique) sans contrôle de rôle** : même défaut, corrigé (SUPER ADMIN, ADMINISTRATEUR_SITE, OPERATEUR_INVENTAIRE, OPERATEUR_LOGISTIQUE).
 - **Identité utilisateur falsifiable sur 5 handlers d'écriture/lecture sensibles** : `cartes:create`, `cartes:countDrafts`/`publishDrafts`, `cartes:signalerAbsence`, `cartes:archiveSignalement`/`getArchivedSignalements` dérivaient l'identité (rôle, site, login) d'un objet fourni par l'interface plutôt que de la session serveur — falsifiable via un appel direct, permettant par exemple de forger un rôle SUPER ADMIN pour contourner le cloisonnement site, ou d'agir sous l'identité d'un autre agent. Identité et site désormais dérivés exclusivement de la session serveur non falsifiable sur les 5 handlers. `cartes:getRangements` recevait aussi un site_id non vérifié (fuite de nomenclature inter-sites) — corrigé.
 - **`cartes:getPage` (listing cartes/brouillons, 3 écrans) sans contrôle de rôle** : même défaut que les lots précédents, corrigé (SUPER ADMIN, ADMINISTRATEUR_SITE, ADMIN_CENTRE, OPERATEUR_SAISIE), sans toucher au cloisonnement site/centre et au scoping des brouillons déjà en place.
+- **`cartes:search` sans contrôle de rôle, et route `/search` totalement non protégée** : contrairement à toutes les autres routes de l'application, `/search` n'avait aucune restriction de rôle. Handler et route désormais alignés (SUPER ADMIN, ADMINISTRATEUR_SITE, ADMIN_CENTRE, OPERATEUR_VERIFICATION), cohérent avec le lien "Recherche Rapide" du menu latéral déjà réservé à OPERATEUR_VERIFICATION.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
+
+*Ce chantier de durcissement RBAC (recherche, listings, écritures sensibles) est désormais complet sur la famille de handlers `cartes:*` identifiée par l'audit initial. Un pattern similaire (identité fournie par le renderer) a été repéré sans audit approfondi sur les familles `sync:*`/`database:*`/`cmu:*` — à traiter dans un chantier séparé si souhaité.*
 
 ## 🛠️ Corrections & Fiabilité
 

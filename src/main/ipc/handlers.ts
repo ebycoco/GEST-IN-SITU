@@ -440,8 +440,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
 
   ipcMain.handle('cartes:search', async (_, query, limit, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre = union des
+    // 3 écrans appelants (VerificationSearchPage /admin-centre/recherche, RechercheView.tsx
+    // /agent-verification/recherche, SearchPage.tsx /search), tel que défini par leurs
+    // ProtectedRoute respectives dans App.tsx.
+    const gateUser = getSecureCurrentUser();
+    if (!gateUser || !verifyUserRole(gateUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:search : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    try { 
+    try {
       const db = getDatabase();
       let finalFilters = filters || {};
       if (userLogin && db) {

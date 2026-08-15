@@ -153,7 +153,7 @@ export default function App() {
 
             {/* Routes Transversales */}
             <Route path="cartes" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_SAISIE']}><CartesPage /></ProtectedRoute>} />
-            <Route path="search" element={<SearchPage />} />
+            <Route path="search" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION']}><SearchPage /></ProtectedRoute>} />
             <Route path="profile" element={<ProfilePage />} />
             
             {/* Routes Admin */}
