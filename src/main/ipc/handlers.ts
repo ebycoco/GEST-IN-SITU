@@ -1494,8 +1494,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle de rôle (seul le
     // site était filtré). Même périmètre de rôles que cartes:updateApurementHistorique
     // (InventaireApurement.tsx, route "inventaire"), puisque cette recherche alimente cet écran.
+    // OPERATEUR_QUALITE ajouté : ce même handler est aussi appelé par IdentificationGuidee.tsx
+    // (portail Qualité, montée par AgentQualiteLayout.tsx) — sans ce rôle dans la liste, la
+    // recherche globale d'identification y échouait systématiquement par "Accès refusé".
     const secureUser = getSecureCurrentUser();
-    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT'])) {
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT', 'OPERATEUR_QUALITE'])) {
       log.warn('[SECURITY] Acces refuse a cartes:searchCombinedInventaire : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette recherche.");
     }

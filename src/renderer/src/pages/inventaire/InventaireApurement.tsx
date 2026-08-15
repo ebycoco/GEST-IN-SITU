@@ -56,6 +56,12 @@ export default function InventaireApurement() {
       setResults(res || []);
       if (!res || res.length === 0) {
         toast.error('Aucune carte trouvée pour ces critères.');
+      } else if (res.length === 20) {
+        // Signal "trop de résultats" (décision produit) : la requête est plafonnée à LIMIT 20
+        // côté backend (searchCombinedInventaire) sans info de comptage total supplémentaire
+        // (politique low-memory §2 CLAUDE.md, pas de requête COUNT additionnelle) — le nombre
+        // exact de résultats atteignant la limite sert donc de signal suffisant côté renderer.
+        toast('20 résultats maximum affichés : affinez votre recherche si la carte recherchée n\'apparaît pas.', { icon: 'ℹ️' });
       }
     } catch (err) {
       console.error('Failed inventaire search:', err);

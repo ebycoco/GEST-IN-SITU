@@ -1350,8 +1350,20 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
 
   const cleanedQuery = queryNomsPrenoms.trim();
   if (cleanedQuery) {
-    where += " AND (noms || ' ' || prenoms LIKE ? OR prenoms || ' ' || noms LIKE ?)";
-    params.push(`%${cleanedQuery}%`, `%${cleanedQuery}%`);
+    // Migration LIKE binaire -> FTS5 (bug confirmé : LIKE sur noms||' '||prenoms échouait sur
+    // prénoms composés saisis partiellement/dans un autre ordre et sur les écarts d'accentuation,
+    // cf. diagnostic). Réutilise exactement le motif de tokenisation/échappement déjà en
+    // production dans searchAllRecords (plus bas dans ce fichier) : tokens nettoyés des guillemets
+    // internes, wildcard préfixe par token, jointure AND explicite — aucun nouveau motif inventé.
+    // Le tokenizer unicode61 de t_cartes_fts normalise les diacritiques, ce qui résout aussi
+    // l'écart d'accentuation entre saisie et donnée stockée. site_id, tri alphabétique et LIMIT 20
+    // restent inchangés (décision produit : pas de tri par pertinence FTS).
+    const tokens = cleanedQuery.split(/\s+/).filter(t => t.length > 0);
+    if (tokens.length > 0) {
+      const ftsQuery = tokens.map(t => `"${t.replace(/"/g, '')}"*`).join(' AND ');
+      where += ' AND id_carte IN (SELECT rowid FROM t_cartes_fts WHERE t_cartes_fts MATCH ?)';
+      params.push(ftsQuery);
+    }
   }
 
   if (dateNaissance && dateNaissance.trim()) {

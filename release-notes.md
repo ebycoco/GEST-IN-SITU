@@ -11,3 +11,8 @@
   - **ADMIN_CENTRE** : une délivrance déclenche désormais un rafraîchissement immédiat du compteur, au lieu d'attendre le cycle automatique de 30 secondes.
 
 Validé par un test e2e dédié (délivrance réelle en conditions applicatives, vérification du bouton actif sans remontage d'écran) et `npx tsc --noEmit` : 0 erreur.
+
+- **Recherche de carte introuvable en apurement alors que trouvée en vérification, sur le même site** : l'écran "Travail d'apurement" (OPERATEUR_APUREMENT et onglet apurement de OPERATEUR_INVENTAIRE/OPERATEUR_LOGISTIQUE/ADMINISTRATEUR_SITE/SUPER ADMIN) comparait noms/prénoms avec une correspondance texte stricte (sensible à l'ordre des mots et aux accents), contrairement à la recherche de vérification déjà indexée FTS5. Un prénom composé saisi partiellement ou dans un ordre différent (cas très fréquent, ~54 % des cartes) ou un accent manquant à la saisie faisait échouer la recherche à tort. La fonction de recherche apurement utilise désormais le même index FTS5, avec tri alphabétique conservé et message d'avertissement si la limite de résultats est atteinte.
+- **Accès refusé sur "Identification Guidée" pour OPERATEUR_QUALITE** : ce rôle appelait la même recherche que l'apurement mais n'était pas autorisé côté handler — corrigé.
+
+Validé par test fonctionnel vivant (rôles OPERATEUR_APUREMENT, OPERATEUR_QUALITE, OPERATEUR_VERIFICATION, contrôle négatif OPERATEUR_SAISIE) et `npx tsc --noEmit` : 0 erreur.

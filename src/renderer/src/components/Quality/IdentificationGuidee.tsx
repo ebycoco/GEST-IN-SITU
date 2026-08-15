@@ -31,6 +31,13 @@ export function IdentificationGuidee({ isOpen, onClose, siteId, initialName, onS
       const res = await window.api.cartes.searchCombinedInventaire(siteId, queryNoms, queryDdn || undefined, queryLieu || undefined);
       setResults(res || []);
       setStep(2);
+      if (res && res.length === 20) {
+        // Signal "trop de résultats" (décision produit) : même pattern que InventaireApurement.tsx —
+        // la requête est plafonnée à LIMIT 20 côté backend (searchCombinedInventaire) sans requête
+        // de comptage additionnelle (politique low-memory §2 CLAUDE.md) ; atteindre exactement 20
+        // sert de signal suffisant.
+        toast('20 résultats maximum affichés : affinez votre recherche si la carte recherchée n\'apparaît pas.', { icon: 'ℹ️' });
+      }
     } catch (e: any) {
       toast.error('Erreur de recherche: ' + e.message);
     } finally {
