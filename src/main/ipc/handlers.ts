@@ -728,28 +728,41 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getById', e); throw e; }
   });
   ipcMain.handle('cartes:create', async (_, data, currentUser) => {
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
-    try { 
-      const siteId = Number(data.site_id);
-      if (!siteId) throw new Error("site_id manquant ou invalide.");
-      
-      const db = getDatabase();
-      if (userLogin && db) {
-        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        if (user && user.role !== 'SUPER ADMIN') {
-          // Sécurité anti-contournement : forcer le site_id de l'utilisateur connecté,
-          // quel que soit son rôle (pas uniquement ADMINISTRATEUR_SITE), pour empêcher
-          // tout appel IPC forgé d'écrire une carte dans un site étranger.
-          data.site_id = user.site_id;
+    // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur (non
+    // falsifiable via IPC) — currentUser (renderer) n'est plus utilisé, ni pour le contrôle de
+    // rôle ni pour l'audit. Le lookup DB par login (potentiellement forgé ou inexistant côté
+    // renderer) est supprimé : il pouvait soit correspondre à un vrai SUPER ADMIN (contrôle de
+    // site jamais appliqué), soit à une chaîne inexistante (bloc if silencieusement jamais
+    // exécuté, `user` undefined). Handler auparavant dépourvu de tout verifyUserRole. Périmètre
+    // aligné sur l'unique appelant réel : SaisiePage.tsx en mode 'create' (sans
+    // onSubmitOverride), monté par AgentSaisie/views/NouvelleSaisieView.tsx, route
+    // /agent-saisie/nouvelle (App.tsx ligne ~131) — OPERATEUR_SAISIE, SUPER ADMIN,
+    // ADMINISTRATEUR_SITE. ADMIN_CENTRE n'est PAS membre de cette route (vérifié), donc
+    // volontairement exclu ici malgré sa présence dans le périmètre d'autres handlers cartes:*.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_SAISIE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:create : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour créer une carte.");
+    }
+    const userLogin = secureUser.login || 'SYSTEM';
+    try {
+      if (secureUser.role !== 'SUPER ADMIN') {
+        // Sécurité anti-contournement : forcer le site_id de la session serveur, quel que soit
+        // le rôle (pas uniquement ADMINISTRATEUR_SITE), pour empêcher tout appel IPC forgé
+        // d'écrire une carte dans un site étranger.
+        data.site_id = secureUser.site_id;
 
-          if (data.centre_id) {
-            const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(data.centre_id)) as { site_id: number } | undefined;
-            if (!centre || centre.site_id !== user.site_id) {
-              throw new Error("Opération non autorisée : Le centre de travail n'appartient pas à votre périmètre.");
-            }
+        if (data.centre_id) {
+          const db = getDatabase();
+          const centre = db?.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(data.centre_id)) as { site_id: number } | undefined;
+          if (!centre || centre.site_id !== secureUser.site_id) {
+            throw new Error("Opération non autorisée : Le centre de travail n'appartient pas à votre périmètre.");
           }
         }
       }
+
+      const siteId = Number(data.site_id);
+      if (!siteId) throw new Error("site_id manquant ou invalide.");
 
       // Normalisation des dates reçues avant validation
       if (data && typeof data === 'object') {
@@ -762,7 +775,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       log.info(`[User Action] CrÃ©ation d'une nouvelle carte CMU pour ${data.noms} ${data.prenoms} par ${userLogin}`);
-      const res = await queries.createCarte(data, data.site_id ? Number(data.site_id) : siteId); 
+      const res = await queries.createCarte(data, siteId);
       logAudit(
         userLogin,
         'CARTE_SAISIE',
@@ -841,25 +854,39 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   
   ipcMain.handle('cartes:countDrafts', async (_, siteId, currentUser) => {
+    // Sécurité (P0) : identité et site dérivés exclusivement de la session serveur (non
+    // falsifiable via IPC) — currentUser (renderer) n'est plus utilisé. Périmètre aligné sur
+    // la route /agent-saisie (App.tsx, ligne ~131) : OPERATEUR_SAISIE, SUPER ADMIN,
+    // ADMINISTRATEUR_SITE (ADMIN_CENTRE n'est PAS membre de cette route, exclu volontairement).
+    // site_id forcé via resolveScopedSiteId (même pattern que cartes:getAbsences) pour empêcher
+    // un siteId forgé de compter les brouillons d'un site étranger.
     try {
-      const userId = currentUser?.id_user;
-      if (!userId) return 0;
-      return queries.countDrafts(siteId, userId);
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_SAISIE'])) {
+        return 0;
+      }
+      return queries.countDrafts(resolveScopedSiteId(siteId), secureUser.id_user);
     } catch (e) {
       log.error('IPC Error: cartes:countDrafts', e); throw e;
     }
   });
 
   ipcMain.handle('cartes:publishDrafts', async (_, siteId, currentUser) => {
+    // Sécurité (P0) : identité, site et login d'audit dérivés exclusivement de la session
+    // serveur — currentUser (renderer) n'est plus utilisé, ni pour le contrôle de rôle ni pour
+    // logAudit. Même périmètre de rôles que cartes:countDrafts ci-dessus.
     try {
-      const userId = currentUser?.id_user;
-      if (!userId) throw new Error("Utilisateur non authentifié.");
-      const res = queries.publishDrafts(siteId, userId);
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_SAISIE'])) {
+        throw new Error("Accès refusé. Privilèges insuffisants pour publier ces brouillons.");
+      }
+      const scopedSiteId = resolveScopedSiteId(siteId);
+      const res = queries.publishDrafts(scopedSiteId, secureUser.id_user);
       logAudit(
-        currentUser.login || 'SYSTEM',
+        secureUser.login || 'SYSTEM',
         'CARTE_PUBLICATION_BROUILLONS',
         JSON.stringify({
-          site_id: siteId,
+          site_id: scopedSiteId,
           published_count: res.publishedCount,
           skipped_count: res.skippedInvalidDateCount
         })
@@ -1257,8 +1284,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:transferer', e); throw e; }
   });
   ipcMain.handle('cartes:signalerAbsence', async (_, id, agentLogin, agentInfo, commentaire = '', currentUser?: any) => {
+    // Sécurité (P0) : le cloisonnement site appliqué par queries.signalerAbsence() reposait
+    // sur currentUser.role fourni par le renderer (falsifiable via appel IPC direct — un
+    // role: 'SUPER ADMIN' forgé faisait sauter le filtre site_id). Identité et rôle désormais
+    // dérivés exclusivement de la session serveur. Périmètre aligné sur l'unique appelant
+    // réel (useVerificationSearch.ts, consommé par VerificationSearchPage/index.tsx route
+    // /admin-centre/recherche [ADMIN_CENTRE] et AgentVerification/views/RechercheView.tsx route
+    // /agent-verification/recherche [OPERATEUR_VERIFICATION, SUPER ADMIN, ADMINISTRATEUR_SITE,
+    // ADMIN_CENTRE] — App.tsx). agentLogin (identité utilisée pour l'audit/le filtrage de
+    // scope) est désormais forcé depuis la session serveur ; agentInfo reste tel quel car il
+    // ne sert qu'au libellé d'affichage de la notification, jamais à une décision de sécurité.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:signalerAbsence : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour signaler cette absence.");
+    }
+    const secureAgentLogin = secureUser.login || agentLogin;
     try {
-      const res: any = await queries.signalerAbsence(id, agentLogin, agentInfo, commentaire, currentUser);
+      const res: any = await queries.signalerAbsence(id, secureAgentLogin, agentInfo, commentaire, secureUser);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_SIGNALEE', centre_id: res?.centre_id ?? null });
       }
@@ -1337,12 +1380,34 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   
   ipcMain.handle('cartes:archiveSignalement', async (_, id: number, agentLogin: string) => {
-    try { return queries.archiveSignalement(id, agentLogin); }
+    // Sécurité (P1) : login_user dérivé exclusivement de la session serveur — agentLogin
+    // (paramètre renderer, état React non signé) n'est plus utilisé pour la logique serveur.
+    // Handler auparavant dépourvu de tout verifyUserRole. Périmètre aligné sur les deux
+    // appelants réels (mêmes composants, même pattern que cartes:signalerAbsence ci-dessus) :
+    // VerificationSearchPage/components/ResolusTab.tsx, monté par VerificationSearchPage/index.tsx
+    // (route /admin-centre/recherche, ADMIN_CENTRE) et AgentVerification/views/SignalementsView.tsx
+    // (route /agent-verification/signalements — OPERATEUR_VERIFICATION, SUPER ADMIN,
+    // ADMINISTRATEUR_SITE, ADMIN_CENTRE) ; et AdminQueuePage/components/EscaladesResoluesTab.tsx,
+    // monté par AdminQueuePage.tsx (routes /admin-centre/queue et /admin/queue — SUPER ADMIN,
+    // ADMINISTRATEUR_SITE, ADMIN_CENTRE).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:archiveSignalement : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour archiver ce signalement.");
+    }
+    try { return queries.archiveSignalement(id, secureUser.login || agentLogin); }
     catch (e) { log.error('IPC Error: cartes:archiveSignalement', e); throw e; }
   });
 
   ipcMain.handle('cartes:getArchivedSignalements', async (_, agentLogin: string) => {
-    try { return queries.getArchivedSignalements(agentLogin); }
+    // Sécurité (P1) : même correctif que cartes:archiveSignalement ci-dessus — login_user
+    // dérivé exclusivement de la session serveur, même périmètre de rôles.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getArchivedSignalements : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour consulter ces signalements archivés.");
+    }
+    try { return queries.getArchivedSignalements(secureUser.login || agentLogin); }
     catch (e) { log.error('IPC Error: cartes:getArchivedSignalements', e); throw e; }
   });
   ipcMain.handle('cartes:resoudreAbsence', async (_, id, data) => {
@@ -2684,7 +2749,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   // EXPORT - RANGEMENTS
-  ipcMain.handle('cartes:getRangements', (_, siteId?: number) => queries.getDistinctRangements(siteId));
+  // Sécurité (P1, cloisonnement §3) : siteId dérivé de la session serveur — même pattern que
+  // cartes:getAbsences/cartes:getAgentAbsences ci-dessus. Un siteId omis ou forgé à 0/null
+  // renvoyait auparavant la nomenclature des rangements de tous les sites.
+  ipcMain.handle('cartes:getRangements', (_, siteId?: number) => queries.getDistinctRangements(resolveScopedSiteId(siteId)));
   ipcMain.handle('export:marquerExporte', (_, ids: number[]) => queries.marquerCartesExporte(ids));
   ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(filters));
 
