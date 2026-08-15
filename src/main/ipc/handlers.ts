@@ -506,21 +506,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('cartes:searchCloudEmergency', async (_, query: string, filters: any = {}) => {
+    // Sécurité (P0) : handler auparavant dépourvu de tout contrôle de rôle (ni
+    // getSecureCurrentUser(), ni verifyUserRole()), contrairement à ses handlers voisins
+    // (cartes:pullSingleCard juste en dessous, action de rapatriement consécutive logique à
+    // cette recherche). Même périmètre de rôles ici.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:searchCloudEmergency : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette recherche.");
+    }
     try {
       const supabase = getSupabaseClient();
       if (!supabase) throw new Error("Supabase non configuré.");
-      
-      const userLogin = getCurrentUserLogin() || 'SYSTEM';
-      const db = getDatabase();
-      let targetSiteId = filters.site_id;
 
-      if (db) {
-        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as any;
-        if (user && user.role !== 'SUPER ADMIN') {
-          targetSiteId = user.site_id; 
-        }
+      const userLogin = getCurrentUserLogin() || 'SYSTEM';
+      let targetSiteId = filters.site_id;
+      let targetCentreId: number | null = null;
+
+      if (secureUser.role !== 'SUPER ADMIN') {
+        targetSiteId = secureUser.site_id;
       }
-      
+
       if (!targetSiteId) {
         log.warn(`[SECURITY] Tentative de recherche cloud sans site_id par ${userLogin}`);
         throw new Error("REJETÉ : site_id obligatoire pour la recherche cloud.");
@@ -529,21 +535,30 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const queryTokens = query.trim().split(/\s+/).filter(Boolean);
       const nomToken = queryTokens[0] || '';
       const prenomToken = queryTokens.slice(1).join(' ') || '';
-      
+
       let req = supabase.from('t_cartes').select('*');
-      
+
       if (nomToken) req = req.ilike('noms', nomToken);
       if (prenomToken) req = req.ilike('prenoms', `%${prenomToken}%`);
       if (filters.date_de_naissance) req = req.eq('date_naissance', filters.date_de_naissance);
-      
+
       if (filters.contact) {
         const cleanContact = filters.contact.replace(/%/g, '');
         if (cleanContact) req = req.ilike('contact', `%${cleanContact}%`);
       }
 
       req = req.eq('id_site', Number(targetSiteId));
-      
-      const { data, error } = await req.limit(5); 
+
+      // Sécurité (cloisonnement §3, P0) : même logique que cartes:search (ci-dessus) — pour
+      // ADMIN_CENTRE, recadrage strict sur le centre réel de la session serveur (non
+      // falsifiable, jamais depuis filters.centre_id fourni par le client), afin d'éviter la
+      // même fuite PII (téléphone, n° CMU en clair) via ce fallback cloud d'urgence.
+      if (secureUser.role === 'ADMIN_CENTRE') {
+        targetCentreId = secureUser.centre_id != null ? Number(secureUser.centre_id) : null;
+        req = req.eq('id_centre', targetCentreId);
+      }
+
+      const { data, error } = await req.limit(5);
       if (error) {
         log.error('Supabase error in searchCloudEmergency:', error);
         return [];
@@ -1406,7 +1421,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:getDatesVidesPage', e); throw e; }
   });
   ipcMain.handle('cartes:updateDate', async (_, id, newDate) => {
-    try { return queries.updateDateDeNaissance(id, newDate); }
+    // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site) —
+    // écriture libre sur une donnée d'identité sensible (date de naissance) par simple id.
+    // Périmètre aligné sur cartes:searchCombinedInventaire (ci-dessous), updateDate étant très
+    // probablement l'action d'édition consécutive à cette même recherche/anomalie de date invalide.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['OPERATEUR_APUREMENT', 'OPERATEUR_INVENTAIRE', 'ADMINISTRATEUR_SITE', 'SUPER ADMIN'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:updateDate : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour modifier cette fiche.");
+    }
+    try {
+      if (secureUser.role !== 'SUPER ADMIN') {
+        const db = getDatabase();
+        // queries.updateDateDeNaissance() cible soit une anomalie DLQ (t_import_anomalies),
+        // soit directement une fiche déjà importée (t_cartes.id_carte), selon l'origine de
+        // l'id fourni — le contrôle de site doit donc couvrir les deux tables, à l'identique
+        // de la fonction elle-même (voir cartes.queries.ts, non modifiée ici).
+        const anomaly = db?.prepare('SELECT site_id FROM t_import_anomalies WHERE id = ?').get(id) as { site_id: number } | undefined;
+        const carte = anomaly ? undefined : (db?.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number } | undefined);
+        const targetSiteId = anomaly ? anomaly.site_id : carte?.site_id;
+        if (targetSiteId == null || targetSiteId !== secureUser.site_id) {
+          log.warn(`[SECURITY] Tentative de cartes:updateDate refusée pour l'utilisateur ID ${secureUser.id_user} (fiche hors site).`);
+          throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
+        }
+      }
+      return queries.updateDateDeNaissance(id, newDate);
+    }
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
   ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query, filters) => {
