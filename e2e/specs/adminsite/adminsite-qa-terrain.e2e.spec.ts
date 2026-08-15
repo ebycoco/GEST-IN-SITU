@@ -30,6 +30,11 @@ import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
 
+// Alphabet exact de generateTemporaryPassword() (src/main/database/queries/users.queries.ts) :
+// 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789'
+// → exclut I, L, O (majuscules), i, l, o (minuscules), 0 et 1 (chiffres).
+const TEMP_PASSWORD_RE = /^[A-HJ-KM-NP-Za-hj-km-np-z2-9]{8}$/;
+
 test.describe.serial('QA Terrain — ADMINISTRATEUR_SITE (agent-13)', () => {
   let env: E2EEnvironment;
   let anyTestFailed = false;
@@ -551,7 +556,7 @@ test.describe.serial('QA Terrain — ADMINISTRATEUR_SITE (agent-13)', () => {
     }, { timeout: 10000 }).toBe(1);
   });
 
-  test('AG-6. Réinitialisation de mot de passe : aucun mot de passe en clair renvoyé, hash bcrypt changé en DB', async () => {
+  test('AG-6. Réinitialisation de mot de passe : un mot de passe temporaire valide est affiché en clair, hash bcrypt changé en DB', async () => {
     const before = await dbQuery('SELECT password_hash FROM t_users WHERE login = ?', [createdAgentLogin]);
     const { window } = env;
     const row = window.locator('.table-row-hover', { hasText: createdAgentLogin });
@@ -560,13 +565,21 @@ test.describe.serial('QA Terrain — ADMINISTRATEUR_SITE (agent-13)', () => {
     await window.getByRole('button', { name: 'Confirmer' }).click();
 
     await expect(window.getByText('Mot de passe réinitialisé !')).toBeVisible({ timeout: 10000 });
-    // Le toast ne doit contenir aucun mot de passe en clair (uniquement le message générique)
+    // SEC fix (agent-13) : le toast affiche désormais délibérément un mot de passe
+    // temporaire aléatoire en clair (contrat volontairement inversé par rapport à
+    // l'ancien comportement) — on vérifie qu'il respecte le format exact généré par
+    // generateTemporaryPassword() (users.queries.ts) : 8 caractères, alphabet sans
+    // caractères ambigus (I/L/O/i/l/o/0/1).
     const toastText = await window.getByText('Mot de passe réinitialisé !').locator('..').innerText();
-    expect(toastText).not.toMatch(/[a-z0-9]{6,}!?["']?\s*$/m); // heuristique : pas de token qui ressemble à un mdp
+    const lines = toastText.split('\n').map((l) => l.trim()).filter(Boolean);
+    const pwdLine = lines[1];
+    expect(pwdLine, `toast complet observé: ${JSON.stringify(toastText)}`).toMatch(TEMP_PASSWORD_RE);
 
     const after = await dbQuery('SELECT password_hash FROM t_users WHERE login = ?', [createdAgentLogin]);
     expect(after[0].password_hash).not.toBe(before[0].password_hash);
     expect(after[0].password_hash.startsWith('$2')).toBe(true); // toujours un hash bcrypt
+    expect(after[0].password_hash).not.toBe(pwdLine);
+    expect(after[0].password_hash).not.toContain(pwdLine);
   });
 
   test('AG-7. Cross-site : un ADMINISTRATEUR_SITE ne peut PAS gérer un utilisateur d\'un autre site (appel IPC direct forcé)', async () => {

@@ -4,6 +4,7 @@ import { getSupabaseClient } from '../../sync/supabase-client';
 import { networkMonitor } from '../../sync/network-monitor';
 import { logAction } from './logs.queries';
 import { v4 as uuidv4 } from 'uuid';
+import { randomInt } from 'crypto';
 import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { insertAuditLog } from './audit.queries';
@@ -592,7 +593,20 @@ export function hardDeleteUser(id: number, creator?: { role: string; site_id?: n
   return result;
 }
 
-export function resetAgentPassword(targetUserId: number, callerUserId: number): { success: boolean } {
+// SEC fix : génère un mot de passe temporaire aléatoire, unique par appel, communicable
+// à l'oral (8 caractères, alphabet restreint sans caractères ambigus 0/O, 1/l/I).
+// Utilise crypto.randomInt (CSPRNG Node natif) plutôt qu'un ad-hoc Math.random()
+// afin de garantir l'imprévisibilité du mot de passe temporaire.
+function generateTemporaryPassword(): string {
+  const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let pwd = '';
+  for (let i = 0; i < 8; i++) {
+    pwd += alphabet[randomInt(alphabet.length)];
+  }
+  return pwd;
+}
+
+export function resetAgentPassword(targetUserId: number, callerUserId: number): { success: boolean; temporaryPassword: string } {
   const db = getDatabase()!;
   
   const caller = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number } | undefined;
@@ -609,9 +623,14 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }
 
-  // C-4a fix : VITE_* n'est pas accessible dans le Main Process (Electron).
-  // Utiliser DEFAULT_TEMP_PASSWORD (variable .env sans préfixe VITE_).
-  const newPasswordPlain = process.env.DEFAULT_TEMP_PASSWORD || 'cnam2026!';
+  // SEC fix : l'ancienne implémentation réutilisait une valeur FIXE (DEFAULT_TEMP_PASSWORD
+  // ou 'cnam2026!'), identique à chaque réinitialisation pour tout agent — un attaquant
+  // connaissant cette constante pouvait se connecter à la place de n'importe quel agent
+  // fraîchement réinitialisé. Générer un mot de passe aléatoire unique par appel.
+  // Le mot de passe en clair n'est JAMAIS persisté ni loggé : seul son hash (ci-dessous)
+  // est écrit en base/outbox, et le clair n'est retourné qu'une fois à l'appelant IPC
+  // pour affichage immédiat côté renderer (cf. handlers.ts / AgentsPage.tsx).
+  const newPasswordPlain = generateTemporaryPassword();
   const hash = hashPassword(newPasswordPlain);
   
   // ── 1. Mise à jour locale immédiate ─────────────────────────────────────────
@@ -637,7 +656,7 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     }
   }
 
-  return { success: true };
+  return { success: true, temporaryPassword: newPasswordPlain };
 }
 
 export function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string; login?: string }): { success: boolean } {

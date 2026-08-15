@@ -68,7 +68,7 @@ export default function AgentsPage() {
     if (!userContext) return;
     const isConfirmed = await confirmService.confirm({
       title: "Réinitialisation du mot de passe",
-      message: `Voulez-vous réinitialiser le mot de passe de l'agent @${user.login} ? Un mot de passe temporaire par défaut lui sera attribué. Communiquez-le ensuite à l'agent de vive voix.`,
+      message: `Voulez-vous réinitialiser le mot de passe de l'agent @${user.login} ? Un nouveau mot de passe temporaire aléatoire lui sera attribué et vous sera affiché une seule fois. Communiquez-le ensuite à l'agent de vive voix.`,
       isDanger: true,
       requirePassword: true,
       actionName: `Réinitialisation du mot de passe de l'agent ${user.login}`
@@ -76,23 +76,50 @@ export default function AgentsPage() {
     if (!isConfirmed) return;
 
     try {
-      await window.api.users.resetAgentPassword(user.id_user);
-      
+      // SEC fix : le backend génère désormais un mot de passe temporaire aléatoire et
+      // unique par appel (cf. users.queries.ts::resetAgentPassword) et le retourne une
+      // seule fois dans cette réponse IPC. `tempPassword` est une variable locale à cette
+      // fonction : elle n'est stockée dans aucun state React (useState/Zustand) et devient
+      // donc inaccessible dès la fermeture du toast — aucune rétention en mémoire renderer.
+      const { temporaryPassword: tempPassword } = await window.api.users.resetAgentPassword(user.id_user);
+
       toast.success(
         (t) => (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Key size={20} color="#fbbf24" style={{ flexShrink: 0 }} />
             <div>
               <div style={{ fontWeight: 800, color: '#ffffff' }}>Mot de passe réinitialisé !</div>
-              <div style={{ fontSize: 11, color: '#fbbf24', marginTop: 2 }}>
-                {/* C-4b fix : ne jamais afficher le mot de passe en clair dans l’UI */}
-                Communiquez le nouveau mot de passe temporaire à l’agent de vive voix.
+              <div style={{ fontSize: 13, color: '#fbbf24', marginTop: 4, fontWeight: 700, letterSpacing: 1, fontFamily: 'monospace' }}>
+                {tempPassword}
+              </div>
+              <div style={{ fontSize: 11, color: '#c7c9d9', marginTop: 4 }}>
+                Communiquez ce mot de passe à l’agent de vive voix — il ne sera plus jamais affiché.
               </div>
             </div>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(tempPassword);
+                toast.dismiss(t.id);
+                toast.success('Mot de passe copié dans le presse-papiers.');
+              }}
+              style={{
+                background: 'rgba(251, 191, 36, 0.15)',
+                color: '#fbbf24',
+                border: '1px solid rgba(251, 191, 36, 0.3)',
+                borderRadius: 8,
+                padding: '4px 8px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              Copier
+            </button>
           </div>
         ),
         {
-          duration: 6000,
+          duration: 15000,
           style: {
             background: '#12131e',
             color: '#fff',

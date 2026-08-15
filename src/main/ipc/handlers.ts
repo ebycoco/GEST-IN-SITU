@@ -2791,6 +2791,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
       throw new Error("Accès non autorisé : rôle insuffisant pour réinitialiser un mot de passe.");
     }
+    // Le mot de passe temporaire en clair transite une seule fois, dans cette réponse
+    // IPC ponctuelle, pour affichage immédiat côté renderer. Il n'est ni loggé ni persisté.
     return queries.resetAgentPassword(targetUserId, secureUser.id_user);
   });
 

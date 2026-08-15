@@ -294,7 +294,7 @@ const api = {
       ipcRenderer.invoke('users:delete', id),
     hardDelete: (id: number): Promise<any> => 
       ipcRenderer.invoke('users:hardDelete', id),
-    resetAgentPassword: (targetUserId: number): Promise<{ success: boolean }> =>
+    resetAgentPassword: (targetUserId: number): Promise<{ success: boolean; temporaryPassword: string }> =>
       ipcRenderer.invoke('auth:resetAgentPassword', targetUserId),
   },
   // Logs
