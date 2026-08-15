@@ -17,6 +17,7 @@
 
 - **Propagation cloud du cycle signalement/escalade/résolution d'absence entre postes distincts** (chantier le plus important de ce cycle) : le cycle ne se propageait en réalité jamais correctement d'un poste à un autre. Plusieurs colonnes manquantes sur le schéma Supabase et plusieurs couches de code (envoi et réception) omettaient silencieusement des champs métier clés. Corrigé et validé de bout en bout entre deux postes réels.
 - **Compteur "Télécharger N cartes depuis le Cloud"** ne redescendait jamais à 0 après un téléchargement complet — corrigé, avec rafraîchissement automatique toutes les 3 minutes pour refléter les nouvelles cartes ajoutées par un autre poste.
+- **Réinitialisation du mot de passe d'un agent** : un mot de passe fixe, identique pour tout le monde, était appliqué sans jamais être affiché — alors que le message invitait l'administrateur à "communiquer le nouveau mot de passe temporaire". Un vrai mot de passe aléatoire et unique est désormais généré à chaque réinitialisation, affiché une seule fois à l'administrateur (avec bouton "Copier"), jamais journalisé ni conservé en clair.
 
 ## ⚡ Performances
 
