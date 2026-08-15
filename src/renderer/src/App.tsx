@@ -79,9 +79,18 @@ export default function App() {
 
 
 
-    const unsubSessionExpired = window.api?.auth?.onSessionExpired?.(() => {
+    const unsubSessionExpired = window.api?.auth?.onSessionExpired?.((payload) => {
       useAuthStore.getState().logout();
-      alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
+      // Message différencié selon la cause réelle de la fermeture de session (cf. payload.reason
+      // émis par sync-engine.ts). Repli sur le message historique (legacy/tests, cas où l'event
+      // est émis sans payload) pour ne pas casser le test e2e existant qui vérifie ce sous-texte.
+      if (payload?.reason === 'revoked') {
+        alert('Votre rôle a été modifié par un administrateur. Veuillez vous reconnecter.');
+      } else if (payload?.reason === 'disabled') {
+        alert('Votre compte a été désactivé par un administrateur.');
+      } else {
+        alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
+      }
     });
 
     // Mise à jour silencieuse des rôles disponibles (compte modifié par un admin pendant que

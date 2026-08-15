@@ -9,7 +9,7 @@ declare global {
         setActiveRole: (role: string) => Promise<{ success: boolean; activeRole?: string; message?: string }>;
         updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean; message?: string }>;
         registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
-        onSessionExpired: (callback: () => void) => () => void;
+        onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' }) => void) => () => void;
         onSessionUpdated: (callback: (payload: { roles: string[] }) => void) => () => void;
         getSessionSnapshot: () => Promise<any>;
         onAuthWarning: (callback: (warningMessage: string) => void) => () => void;

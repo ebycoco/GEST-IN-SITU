@@ -3,11 +3,11 @@ import { EventEmitter } from 'events';
 import { networkMonitor, NetworkState } from './network-monitor';
 
 import { runUpstream } from './upstream';
-import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream } from './downstream';
+import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
-import { refreshSecureCurrentUser, getCurrentGrantedRoles } from '../auth/session-heartbeat';
+import { refreshSecureCurrentUser, getCurrentGrantedRoles, getCurrentUserLogin, stopSessionHeartbeat } from '../auth/session-heartbeat';
 
 // ─── INTERVALLE DU CYCLE DOWNSTREAM AUTOMATIQUE (POST-LOGIN) ────────────────
 // 2 heures — déclenché après authentification de l'utilisateur.
@@ -345,8 +345,20 @@ class SyncEngine extends EventEmitter {
     try {
       await syncUsersFromCloud(siteId);
 
+      // Vérification ciblée du statut_actif Cloud pour le login de la session courante
+      // UNIQUEMENT (pas un pull de masse) : syncUsersFromCloud ci-dessus filtre
+      // `.eq('statut_actif', 1)` côté Cloud et ne peut donc jamais rapatrier localement
+      // une désactivation — sans cet appel, un compte désactivé côté Cloud resterait
+      // indéfiniment actif en local tant que l'app n'est pas fermée/rouverte.
+      // Skip silencieux si aucune session n'est active sur ce poste (getCurrentUserLogin
+      // retourne null après logout/avant login).
+      const currentLogin = getCurrentUserLogin();
+      if (currentLogin) {
+        await syncCurrentUserActiveStatus(currentLogin, siteId);
+      }
+
       // Rafraîchit l'instantané en mémoire de la session serveur (secureCurrentUser) à partir
-      // de t_users/t_user_roles, désormais à jour localement grâce au pull ci-dessus. Appelé
+      // de t_users/t_user_roles, désormais à jour localement grâce aux pulls ci-dessus. Appelé
       // UNIQUEMENT après un pull réussi (jamais dans le catch) : si le pull a échoué, la
       // donnée locale n'a pas bougé, un rafraîchissement n'apporterait rien de nouveau.
       // Purement synchrone (cf. session-heartbeat.ts) — ne bloque pas ce cycle async.
@@ -356,14 +368,24 @@ class SyncEngine extends EventEmitter {
         `revoked=${refreshResult.revoked}, disabled=${refreshResult.disabled} (site ${siteId}).`
       );
 
-      // ── Notification renderer (sécurité / confort) ────────────────────────
-      // Cas bloquant (revoked/disabled) : réutilise le canal 'auth:session-expired' déjà
-      // câblé bout-en-bout côté preload/App.tsx (déconnexion forcée + message natif), jusque-là
-      // émis uniquement par les tests e2e. Aucun payload attendu par le listener existant.
-      // Cas non bloquant (changed) : nouveau canal léger 'auth:session-updated', consommé à une
-      // étape ultérieure (hors périmètre ici) — le canal est seulement rendu disponible.
+      // ── Invalidation fail-closed AVANT notification (sécurité) ────────────
+      // Cas bloquant (revoked/disabled) : la session en mémoire du process main
+      // (secureCurrentUser, currentUserLogin, currentSessionToken, rôles) est invalidée
+      // ICI, de façon SYNCHRONE côté main process, AVANT même que le renderer ne soit
+      // informé. Les timers dépendants (cycle comptes/rôles 3 min, cycle cartes 2h) sont
+      // arrêtés dans la foulée. Ainsi, même si l'event IPC 'auth:session-expired' est perdu
+      // (fenêtre minimisée/gelée) ou si le renderer ne coopère pas, le cantonnement
+      // site/centre ne peut plus s'appuyer sur un secureCurrentUser obsolète : c'est un
+      // fail-closed réel, plus un fail-open reposant sur le seul aller-retour renderer.
+      // La notification renderer ci-dessous reste best-effort (UX : afficher le message et
+      // rediriger vers /login) mais n'est plus le SEUL rempart de sécurité.
       if (refreshResult.revoked || refreshResult.disabled) {
-        this.notifyRenderer('auth:session-expired', undefined);
+        await stopSessionHeartbeat();
+        this.stopUserAccountsSyncTimer();
+        this.stopAutoDownstreamTimer();
+        this.notifyRenderer('auth:session-expired', {
+          reason: refreshResult.revoked ? 'revoked' : 'disabled'
+        });
       } else if (refreshResult.changed) {
         this.notifyRenderer('auth:session-updated', { roles: getCurrentGrantedRoles() ?? [] });
       }
