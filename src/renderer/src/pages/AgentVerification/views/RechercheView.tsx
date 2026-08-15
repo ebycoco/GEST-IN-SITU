@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useOutletContext } from 'react-router-dom';
 import { useAuthStore } from '../../../stores/authStore';
 import { AlertTriangle } from 'lucide-react';
 
@@ -26,8 +27,15 @@ export default function RechercheView() {
   const [totalCards, setTotalCards] = useState<number | null>(null);
   const nomInputRef = useRef<HTMLInputElement>(null);
 
-  // Pour la vue Agent, on ne charge pas les stats ici
-  const loadStatsMock = async () => {};
+  // Pour la vue Agent, on ne recharge pas ici le panneau de stats local (StatsPanel de
+  // VerificationSearchPage, non affiché dans ce module) : loadCardsTodayMock reste un no-op.
+  // En revanche, `refreshStats` (fourni par AgentVerificationLayout via le contexte de l'Outlet,
+  // cf. AgentVerificationLayout.tsx) DOIT être appelé après une délivrance : c'est lui qui
+  // recalcule `detailedSyncStats` et donc l'état actif/inactif du bouton "Synchroniser mes
+  // actions" du layout parent. Avant ce correctif, un `loadStats` factice était utilisé ici,
+  // ce qui laissait ce bouton bloqué (grisé) après chaque délivrance de carte tant que l'écran
+  // n'était pas remonté manuellement.
+  const { refreshStats } = useOutletContext<{ refreshStats: () => Promise<void> }>();
   const loadCardsTodayMock = async () => {};
 
   const isCentrePrincipal = (c: any): boolean => {
@@ -111,7 +119,7 @@ export default function RechercheView() {
     isFinalizing, resetModal, handleDeliver, isUnclassifiedCard
   } = useDeliveryFlow(
     user, selectedCentreId, activeSiteId, selectedCarte, setSelectedCarte,
-    () => resetSearchFields(), loadStatsMock, loadCardsTodayMock, nomInputRef
+    () => resetSearchFields(), refreshStats, loadCardsTodayMock, nomInputRef
   );
 
   const {

@@ -43,3 +43,10 @@ Pour toute migration Supabase/PostgreSQL, rappelez-vous que le fichier `supabase
 > 2. Exécution asynchrone déportée (`setTimeout`, workers) des opérations SQLite lourdes (Indexation FTS5, maintenance) pour éviter les freezes d'interface.
 > 3. Nettoyage proactif des caches de données locaux non visibles à l'écran.
 > 4. Appels ciblés au déchargement mémoire et gestion économe des curseurs de base de données.
+
+---
+
+## 5. Documentation à jour via Context7 MCP
+- Avant toute modification touchant à l'API d'une bibliothèque externe versionnée dans `package.json` (`better-sqlite3`, `@supabase/supabase-js`, drivers/migrations, etc.), interrogez le serveur MCP **Context7** (`resolve-library-id` puis `get-library-docs`) pour confirmer le comportement réel de la version installée — en particulier pour les pragmas SQLite, les options de transaction, ou les endpoints/méthodes du client Supabase susceptibles d'avoir changé entre versions majeures.
+- Utile en particulier avant une migration de schéma ou une modification du SyncEngine/Outbox, pour éviter de fonder un correctif sur une API obsolète ou mal mémorisée.
+- Ce réflexe est un complément de vérification, pas une étape bloquante : s'il est indisponible ou ne retourne rien d'exploitable, poursuivez normalement sur la base de votre connaissance et du code existant du dépôt.

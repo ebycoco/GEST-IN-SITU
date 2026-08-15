@@ -58,7 +58,22 @@ export default function AdminCentreLayout() {
     };
     fetchBaseData();
     const interval = setInterval(fetchBaseData, 30000);
-    return () => clearInterval(interval);
+
+    // Bug identique à celui corrigé sur AgentSaisieLayout.tsx/AgentQualiteLayout.tsx (délivrance
+    // de carte sans recalcul du compteur qui pilote le bouton "Synchroniser") : la route enfant
+    // /admin-centre/recherche (VerificationSearchPage, autonome, sans props ni
+    // useOutletContext) dispatch désormais 'app:data-updated' après une délivrance réussie (cf.
+    // useDeliveryFlow.ts) mais ce layout ne l'écoutait pas — cloudCartesCount/detailedSyncStats
+    // (qui pilotent RÉCUPÉRER/"Synchroniser mes saisies") ne se recalculaient donc plus jamais
+    // avant le prochain tick de l'intervalle (30s). fetchBaseData() est déjà idempotent et sans
+    // effet de bord (simple re-fetch), donc rappelable ici sans garde supplémentaire.
+    const handleDataUpdated = () => { fetchBaseData(); };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('app:data-updated', handleDataUpdated);
+    };
   }, [user]);
 
   // Actions

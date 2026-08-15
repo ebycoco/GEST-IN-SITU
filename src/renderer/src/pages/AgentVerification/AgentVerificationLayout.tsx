@@ -242,8 +242,17 @@ export default function AgentVerificationLayout() {
       </div>
 
       {/* Contenu Principal (Outlet) */}
+      {/*
+        Correctif bouton "Synchroniser mes actions" bloqué après une délivrance (OPERATEUR_VERIFICATION) :
+        `loadStats` (issu de useDashboardStats ci-dessus) recalcule `detailedSyncStats`, dont dépend
+        `conformeCount`/`pushDisabled` du bouton. RechercheView.tsx (route enfant "recherche") ne le
+        recevait pas et appelait un `loadStats` factice après `handleDeliver`, donc `detailedSyncStats`
+        ne se rafraîchissait jamais après une délivrance et le bouton restait grisé. On l'expose ici via
+        le contexte de l'Outlet pour que la route enfant puisse déclencher le même recalcul que celui
+        déjà utilisé par les boutons de cette barre d'actions.
+      */}
       <div style={{ flex: 1, overflow: 'auto', padding: '24px 32px' }}>
-        <Outlet />
+        <Outlet context={{ refreshStats: loadStats }} />
       </div>
     </div>
   );

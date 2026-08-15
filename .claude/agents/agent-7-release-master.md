@@ -35,7 +35,7 @@ Lorsqu'une instruction de release est émise par l'utilisateur, la séquence com
 - Si cette confirmation écrite (*"Version incrémentée à [X.Y.Z] et CHANGELOG mis à jour."*) ne vous a pas été transmise, signalez-le dans votre rapport final au lieu de supposer un numéro de version.
 
 ### Étape 3 : Préparation de la Release (Auto-gestion)
-- **Release Notes :** Générez ou mettez à jour le fichier `release-notes.md` à la racine de l'application, basé sur le `CHANGELOG.md` fourni par agent-11-release-manager.
+- **Release Notes :** Depuis `CLAUDE.md` §8, `release-notes.md` n'est plus généré à cette étape — il est déjà tenu à jour en continu (brouillon cumulatif alimenté à chaque commit courant) et déjà finalisé par agent-11-release-manager (en-tête `# GEST-IN-SITU — Release vX.Y.Z`) en amont de votre invocation. Votre rôle ici est uniquement de **vérifier** que son en-tête correspond bien au numéro de version confirmé à l'Étape 2 (pas à `# ... (non publiée)`) et que son contenu est cohérent avec l'entrée `CHANGELOG.md` fournie — jamais de le réécrire ni de le régénérer depuis `CHANGELOG.md`. En cas d'incohérence ou de brouillon non finalisé, signalez-le dans votre rapport final au lieu de le corriger vous-même (hors de votre périmètre).
 - **Vérification Configuration :** Assurez-vous que `electron-builder.yml` est configuré pour pointer vers `release-notes.md` (`releaseInfo: releaseNotesFile: release-notes.md`) et que le canal de publication est correctement renseigné.
 
 ### Étape 4 : Exécution & Self-Healing (Sécurisée)

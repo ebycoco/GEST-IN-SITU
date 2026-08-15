@@ -86,6 +86,11 @@ export default function InvalidFormatView() {
       toast.success('Date de naissance corrigée !');
       setEditingId(null);
       loadTabData();
+      // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,
+      // qui pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même bug
+      // que celui corrigé sur AgentVerificationLayout.tsx. Le layout écoute déjà cet
+      // événement (cf. onSave de CorrectionSidePanel, même convention).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err) {
       window.api.log.error(`[QUALITÉ] ERREUR fatale lors de la correction de date pour ID=${card.id_carte} : ${err}`);
       console.error(err);
@@ -137,6 +142,11 @@ export default function InvalidFormatView() {
       toast.success(`${label} corrigé avec succès !`);
 
       loadTabData();
+      // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,
+      // qui pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même bug
+      // que celui corrigé sur AgentVerificationLayout.tsx. Le layout écoute déjà cet
+      // événement (cf. onSave de CorrectionSidePanel, même convention).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
       return true;
     } catch (err: any) {
       window.api.log.error(`[QUALITÉ] ERREUR correction '${champ}' pour ID=${card.id_carte} : ${err}`);

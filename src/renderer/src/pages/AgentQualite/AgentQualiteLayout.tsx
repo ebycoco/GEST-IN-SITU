@@ -30,6 +30,20 @@ export default function AgentQualiteLayout() {
   }, []);
 
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loadStats } = useDashboardStats(user, activeSiteId, false);
+
+  // Bug identique à celui corrigé sur AgentVerificationLayout.tsx/RechercheView.tsx (délivrance
+  // de carte sans recalcul du compteur qui pilote le bouton "Synchroniser") : chaque correction
+  // qualité (CorrectionSidePanel.onSave, DoublonsView, MissingDataView, InvalidFormatView)
+  // dispatch déjà 'app:data-updated' (cf. onSave ci-dessous) mais ce layout ne l'écoutait pas —
+  // dirtyCartesCount/cloudCartesCount/detailedSyncStats (qui pilotent pullDisabled/pushDisabled
+  // des boutons "Récupérer"/"Envoyer les corrections") ne se recalculaient donc plus jamais
+  // après le montage initial. Silent=true : pas d'overlay de chargement pour un événement de
+  // fond déclenché par une action métier ponctuelle (même pattern qu'AgentSaisieLayout.tsx).
+  useEffect(() => {
+    const handleDataUpdated = () => { loadStats(true); };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [loadStats]);
   const {
     isPullingCards,
     isBackgroundPulling,
@@ -63,12 +77,18 @@ export default function AgentQualiteLayout() {
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
-  // triggerRefresh() est un simple incrément synchrone de compteur (cf. qualityUIStore.ts) :
-  // pas de promesse à attendre. isRefreshing ne sert ici qu'à donner un retour visuel bref
-  // (icône qui tourne ~600ms) au clic, sans jamais bloquer le bouton plus longtemps.
+  // triggerRefresh() est un simple incrément synchrone de compteur (cf. qualityUIStore.ts) qui ne
+  // rafraîchit que les listes des vues enfants (Doublons, Données Manquantes, etc.) — il ne
+  // recalculait jamais dirtyCartesCount/cloudCartesCount/detailedSyncStats, qui pilotent
+  // l'état enabled/disabled des boutons "Récupérer les cartes"/"Envoyer les corrections"
+  // ci-dessous (même bug que le mock loadStats corrigé sur AgentVerificationLayout.tsx). On
+  // appelle donc aussi loadStats (forceRefresh: true, comme le bouton "Actualiser" d'
+  // InventaireLayout.tsx/ApurementLayout.tsx) en plus de triggerRefresh(). isRefreshing ne sert
+  // qu'à donner un retour visuel bref (icône qui tourne ~600ms) au clic, sans bloquer le bouton.
   const handleRefreshClick = () => {
     setIsRefreshing(true);
     triggerRefresh();
+    loadStats(false, undefined, true);
     setTimeout(() => setIsRefreshing(false), 600);
   };
 

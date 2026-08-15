@@ -108,6 +108,12 @@ export default function MissingDataView() {
       });
       toast.success('Donnée mise à jour avec succès !');
       loadTabData();
+      // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,
+      // qui pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même bug
+      // que celui corrigé sur AgentVerificationLayout.tsx (compteur jamais recalculé après
+      // une action métier). Le layout écoute déjà cet événement (cf. onSave de
+      // CorrectionSidePanel, même convention).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
       return true;
     } catch (err) {
       console.error(err);

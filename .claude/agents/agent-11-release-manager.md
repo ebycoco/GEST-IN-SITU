@@ -21,7 +21,9 @@ Vous êtes le Release & Versioning Manager officiel de la Factory GEST-IN-SITU. 
 ---
 
 ## 2. Directives d'Analyse SemVer (Incrémentation Rigoureuse)
-À chaque cycle d'évolution ou de correctif, analysez l'historique des modifications (`git log`) pour appliquer la règle d'incrémentation appropriée :
+Vous êtes déclenché **uniquement** quand l'utilisateur décide explicitement de lancer `npm run build:win` (voir `CLAUDE.md` §8) — jamais à chaque commit intermédiaire. Votre **source de vérité prioritaire** pour le contenu du cycle est le brouillon déjà accumulé en tête de `release-notes.md` (en-tête `# GEST-IN-SITU — Prochaine version (non publiée)`, alimenté à chaque commit courant depuis la dernière release) : ne repartez pas de zéro sur `git log` seul, mais croisez les deux pour vérifier qu'aucune entrée n'a été oubliée dans le brouillon.
+
+À chaque cycle d'évolution ou de correctif, analysez ce contenu (et l'historique `git log` en complément) pour appliquer la règle d'incrémentation appropriée :
 
 1. **PATCH (+0.0.1) — Correctifs & Ajustements Météo Terrain :**
    Pour tout bug fix, ajustement d'IHM, mise en page React, style CSS, textes, modaux d'information (ex: preuve de retrait) ou optimisation n'impactant pas la structure de données.
@@ -37,10 +39,11 @@ Dès que la nouvelle version est validée, mettez à jour les fichiers cibles :
 
 - **`package.json` :** Incrémenter la clé `"version": "X.Y.Z"`.
 - **`src/main/database/schema.ts` :** S'assurer que la constante `SCHEMA_VERSION` ou la variable cible est strictement alignée avec le numéro des migrations de la version.
-- **`CHANGELOG.md` :** Insérer en tête du fichier une nouvelle section structurée selon la norme [Keep a Changelog], rédigée en français :
+- **`CHANGELOG.md` :** Insérer en tête du fichier une nouvelle section structurée selon la norme [Keep a Changelog], rédigée en français, en reprenant le contenu déjà rédigé dans le brouillon `release-notes.md` (pas une réécriture depuis zéro) :
   - **🚀 Nouveautés & Ergonomie** (`feat`)
   - **🛠️ Corrections & Sécurité** (`fix`)
   - **⚡ Performances & Optimisations** (`perf` / `refactor`)
+- **`release-notes.md` :** Renommer l'en-tête `# GEST-IN-SITU — Prochaine version (non publiée)` en `# GEST-IN-SITU — Release vX.Y.Z` avec la date réelle, en conservant le contenu déjà rédigé (légères retouches de forme uniquement). **Après confirmation de la version par l'utilisateur**, réinitialiser le fichier à un nouveau brouillon vide (`# GEST-IN-SITU — Prochaine version (non publiée)`) pour amorcer le cycle suivant — ne jamais laisser `release-notes.md` dans l'état "Release vX.Y.Z" une fois le cycle suivant entamé par de nouveaux commits.
 
 ---
 

@@ -25,6 +25,7 @@ Rappel structurel : un sous-agent ne peut ni invoquer un autre sous-agent, ni at
 - Ne créer de commit que si l'utilisateur le demande explicitement.
 - Toujours vérifier `git diff`/`git status` avant un commit pour confirmer que seules les lignes nécessaires ont été modifiées.
 - Validation statique obligatoire avant de clore une tâche de code : `npx tsc --noEmit` (0 erreur tolérée).
+- **Autorisation permanente (cycle de commit courant) :** l'utilisateur a donné une autorisation durable — à ne plus redemander à chaque fois — pour qu'à chaque changement de code validé (`tsc` 0 erreur), la session principale (ou l'agent ayant fait le changement) enchaîne directement : commit → mise à jour de `release-notes.md` (brouillon cumulatif, voir §8) → push. Cette autorisation ne couvre que cette séquence précise ; elle ne dispense pas des protocoles STOP & WARN (§4) ni de la proposition de délégation (§7) pour le changement de code lui-même.
 
 ## 6. Table de routage (rôle → agent)
 Quand une demande touche un des domaines suivants, invoquer l'agent correspondant via l'outil Agent (`subagent_type` = nom du fichier sans `.md`) :
@@ -53,3 +54,17 @@ Avant de traiter toi-même (session principale) une demande non triviale de l'ut
 2. Si l'utilisateur refuse, décline, ou ne répond pas clairement en ce sens, traite la demande toi-même sans agent.
 3. Ne saute cette proposition que si l'utilisateur a déjà nommé explicitement un agent dans son message, ou si la demande est triviale (question ponctuelle, lecture simple, pas de modification de code).
 4. Ne jamais prétendre qu'une réponse vient d'un agent si elle a été produite directement par la session principale — être toujours transparent sur qui a réellement traité la tâche.
+
+## 8. Cycle de release différé (`release-notes.md` brouillon → versioning au build)
+Le versioning formel (SemVer, `CHANGELOG.md`, `SCHEMA_VERSION`) est **découplé** du rythme des commits : il ne se déclenche que lorsque l'utilisateur décide explicitement de lancer `npm run build:win` (ou `release`/`make`), jamais à chaque commit intermédiaire.
+
+**Entre deux releases — `release-notes.md` sert de brouillon cumulatif non versionné :**
+- Son en-tête est `# GEST-IN-SITU — Prochaine version (non publiée)`.
+- Chaque commit (cycle courant, §5) y ajoute une entrée courte sous la section thématique adaptée (🚨 Sécurité, 🚀 Nouveautés & Ergonomie, 🛠️ Corrections & Fiabilité, ⚡ Performances), dans le même style que les entrées historiques de `CHANGELOG.md`.
+- `package.json` et `CHANGELOG.md` ne sont **jamais** touchés à ce stade — seul `release-notes.md` évolue.
+
+**Au déclenchement du versioning formel (uniquement sur demande explicite de lancer `npm run build:win`) :**
+1. `agent-11-release-manager` est invoqué : il prend le brouillon déjà accumulé dans `release-notes.md` comme **source de vérité du contenu** du cycle (pas seulement `git log` à froid) pour déterminer le bump SemVer (règles PATCH/MINOR/MAJOR déjà définies dans son fichier), aligner `SCHEMA_VERSION` si besoin, et insérer la section correspondante en tête de `CHANGELOG.md`.
+2. Il renomme l'en-tête de `release-notes.md` en `# GEST-IN-SITU — Release vX.Y.Z` avec la date réelle, en conservant le contenu déjà rédigé (légères retouches de forme autorisées, pas de réécriture du fond).
+3. Une fois la nouvelle version confirmée par l'utilisateur, `release-notes.md` est réinitialisé à un nouveau brouillon vide (`# GEST-IN-SITU — Prochaine version (non publiée)`) pour le cycle suivant.
+4. `npm run build:win` n'est lancé qu'ensuite, toujours sur instruction écrite et explicite (§1 inchangé).

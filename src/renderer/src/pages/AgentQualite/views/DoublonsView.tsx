@@ -101,6 +101,11 @@ export default function DoublonsView() {
       toast.success('Doublon supprimé !');
       setDeleteModal(null);
       loadTabData();
+      // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,
+      // qui pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même bug
+      // que celui corrigé sur AgentVerificationLayout.tsx. Le layout écoute déjà cet
+      // événement (cf. onSave de CorrectionSidePanel, même convention).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err) {
       toast.error('Impossible de supprimer la carte.');
     } finally {
@@ -125,6 +130,11 @@ export default function DoublonsView() {
       toast.success('Cartes fusionnées avec succès !');
       setMergeModal(null);
       loadTabData();
+      // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,
+      // qui pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même bug
+      // que celui corrigé sur AgentVerificationLayout.tsx. Le layout écoute déjà cet
+      // événement (cf. onSave de CorrectionSidePanel, même convention).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err) {
       toast.error('Erreur lors de la fusion.');
     } finally {

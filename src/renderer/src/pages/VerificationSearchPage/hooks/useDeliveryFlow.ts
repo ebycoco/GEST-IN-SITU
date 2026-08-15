@@ -96,6 +96,17 @@ export function useDeliveryFlow(
       });
 
       toast.success('Carte délivrée avec succès !');
+      // Signal global de mise à jour de données (même convention que AgentSaisieLayout.tsx /
+      // CorrectionSidePanel.onSave / DoublonsView.tsx etc.) : ce hook est partagé par
+      // RechercheView.tsx (portail AgentVerification, qui reçoit déjà son propre callback de
+      // rafraîchissement `refreshStats` via useOutletContext dans `loadStats` ci-dessus — ce
+      // portail n'écoute pas 'app:data-updated', ce dispatch y est donc un no-op inoffensif) et
+      // VerificationSearchPage/index.tsx (route /admin-centre/recherche, autonome, sans props ni
+      // useOutletContext). C'est ce second usage qui manquait de notifier AdminCentreLayout.tsx :
+      // son compteur cloudCartesCount/detailedSyncStats (qui pilote le bouton "Synchroniser mes
+      // saisies") restait figé jusqu'à 30s après une délivrance faute d'écouteur. Voir le nouveau
+      // listener ajouté dans AdminCentreLayout.tsx.
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
       resetModal();
       await loadStats();
       await loadCardsToday();
