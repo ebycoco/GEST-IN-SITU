@@ -30,6 +30,17 @@ const api = {
       ipcRenderer.on('auth:session-expired', listener);
       return () => ipcRenderer.removeListener('auth:session-expired', listener);
     },
+    // Canal léger (non bloquant) : émis par le cycle comptes/rôles (3 min) quand un rôle a été
+    // ajouté ou un nom/prénom modifié côté Cloud, sans que la session ne soit révoquée/désactivée
+    // (ce cas passe par 'auth:session-expired' ci-dessus). Non consommé côté renderer pour
+    // l'instant (étape ultérieure) — le canal est seulement exposé, prêt à être écouté.
+    onSessionUpdated: (callback: (payload: { roles: string[] }) => void) => {
+      const listener = (_: any, payload: { roles: string[] }) => callback(payload);
+      ipcRenderer.on('auth:session-updated', listener);
+      return () => ipcRenderer.removeListener('auth:session-updated', listener);
+    },
+    getSessionSnapshot: (): Promise<any> =>
+      ipcRenderer.invoke('auth:getSessionSnapshot'),
     onAuthWarning: (callback: (warningMessage: string) => void) => {
       const listener = (_: any, warningMessage: string) => callback(warningMessage);
       ipcRenderer.on('auth:warning', listener);

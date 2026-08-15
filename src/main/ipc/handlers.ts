@@ -13,7 +13,7 @@ import { syncEngine } from '../sync/sync-engine';
 import { runBulkUpload, cancelBulkUpload } from '../sync/bulk-uploader';
 import { runDownstream, runLogsDownstream } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
-import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser, setActiveRole } from '../auth/session-heartbeat';
+import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser, setActiveRole, getCurrentGrantedRoles } from '../auth/session-heartbeat';
 import { logAudit, CRUD_SYNC_WHITELIST } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
@@ -291,6 +291,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e: any) {
       log.error('IPC Error: auth:setActiveRole', e);
       return { success: false, message: e.message || 'Erreur lors du changement de rôle.' };
+    }
+  });
+
+  // Instantané en lecture seule de la session serveur courante (getSecureCurrentUser()), à
+  // la demande — destiné à checkAuth() (étape ultérieure, hors périmètre ici) pour permettre
+  // au renderer de rafraîchir son état local (nom/prénom/rôles) sans attendre une fermeture/
+  // réouverture de l'app. Forme alignée sur l'objet `user` déjà retourné par auth:login
+  // (mêmes noms de champs) pour rester cohérent côté consommateur. Ne mute rien, ne
+  // déclenche aucun rafraîchissement DB — se contente de refléter l'état déjà en mémoire.
+  ipcMain.handle('auth:getSessionSnapshot', async () => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return null;
+
+      const roles = getCurrentGrantedRoles() ?? secureUser.roles ?? [secureUser.role];
+
+      return {
+        id_user: secureUser.id_user,
+        login: secureUser.login,
+        role: secureUser.role,
+        roles,
+        nom_user: secureUser.nom_user,
+        prenom_user: secureUser.prenom_user,
+        site_id: secureUser.site_id,
+        centre_id: secureUser.centre_id
+      };
+    } catch (e) {
+      log.error('IPC Error: auth:getSessionSnapshot', e);
+      return null;
     }
   });
 

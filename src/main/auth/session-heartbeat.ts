@@ -82,6 +82,19 @@ export function getSecureCurrentUser(): any | null {
 }
 
 /**
+ * Expose le dernier snapshot connu des rôles accordés (t_user_roles résolus), alimenté
+ * exclusivement par refreshSecureCurrentUser() (cf. commentaire de `secureCurrentGrantedRoles`
+ * ci-dessus). Ajout STRICTEMENT ADDITIF : ne modifie ni la signature ni le comportement de
+ * refreshSecureCurrentUser(). Retourne `null` tant qu'aucun rafraîchissement post-login n'a
+ * encore eu lieu (avant le premier tick du cycle comptes/rôles de 3 min) — l'appelant (canal
+ * IPC `auth:session-updated` / handler `auth:getSessionSnapshot`) doit prévoir un repli sur
+ * les rôles connus au login dans ce cas.
+ */
+export function getCurrentGrantedRoles(): string[] | null {
+  return secureCurrentGrantedRoles;
+}
+
+/**
  * Met à jour le rôle ACTIF de la session serveur en cours (post-sélection via
  * RoleSelectorPage, pour un compte multi-rôles). Ne touche jamais à `site_id`/`centre_id` :
  * ils sont invariants par rôle pour un même compte (attachés au compte, pas au rôle — cf.

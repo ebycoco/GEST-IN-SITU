@@ -7,7 +7,7 @@ import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream }
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
-import { refreshSecureCurrentUser } from '../auth/session-heartbeat';
+import { refreshSecureCurrentUser, getCurrentGrantedRoles } from '../auth/session-heartbeat';
 
 // ─── INTERVALLE DU CYCLE DOWNSTREAM AUTOMATIQUE (POST-LOGIN) ────────────────
 // 2 heures — déclenché après authentification de l'utilisateur.
@@ -350,13 +350,23 @@ class SyncEngine extends EventEmitter {
       // UNIQUEMENT après un pull réussi (jamais dans le catch) : si le pull a échoué, la
       // donnée locale n'a pas bougé, un rafraîchissement n'apporterait rien de nouveau.
       // Purement synchrone (cf. session-heartbeat.ts) — ne bloque pas ce cycle async.
-      // Pour cette étape : simple traçabilité. La notification renderer / déconnexion
-      // forcée en cas de `revoked`/`disabled` est hors périmètre ici (étape IPC ultérieure).
       const refreshResult = refreshSecureCurrentUser();
       log.info(
         `[SyncEngine][UserSync] refreshSecureCurrentUser — changed=${refreshResult.changed}, ` +
         `revoked=${refreshResult.revoked}, disabled=${refreshResult.disabled} (site ${siteId}).`
       );
+
+      // ── Notification renderer (sécurité / confort) ────────────────────────
+      // Cas bloquant (revoked/disabled) : réutilise le canal 'auth:session-expired' déjà
+      // câblé bout-en-bout côté preload/App.tsx (déconnexion forcée + message natif), jusque-là
+      // émis uniquement par les tests e2e. Aucun payload attendu par le listener existant.
+      // Cas non bloquant (changed) : nouveau canal léger 'auth:session-updated', consommé à une
+      // étape ultérieure (hors périmètre ici) — le canal est seulement rendu disponible.
+      if (refreshResult.revoked || refreshResult.disabled) {
+        this.notifyRenderer('auth:session-expired', undefined);
+      } else if (refreshResult.changed) {
+        this.notifyRenderer('auth:session-updated', { roles: getCurrentGrantedRoles() ?? [] });
+      }
     } catch (err) {
       log.warn(`[SyncEngine][UserSync] Erreur lors de la synchronisation comptes/rôles pour le site ${siteId} :`, err);
     } finally {

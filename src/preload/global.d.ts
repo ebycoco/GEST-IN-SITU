@@ -10,6 +10,8 @@ declare global {
         updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean; message?: string }>;
         registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
         onSessionExpired: (callback: () => void) => () => void;
+        onSessionUpdated: (callback: (payload: { roles: string[] }) => void) => () => void;
+        getSessionSnapshot: () => Promise<any>;
         onAuthWarning: (callback: (warningMessage: string) => void) => () => void;
         isPreloadingUsers: () => Promise<boolean>;
         onPreloadStatus: (callback: (isPreloading: boolean) => void) => () => void;
