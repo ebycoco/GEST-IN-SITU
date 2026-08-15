@@ -10,6 +10,11 @@ interface AuditLog {
   action_type: string;
   details: string;
   timestamp: string;
+  // 'local' = t_audit_log (poste courant uniquement) ; 'sync' = t_logs (action CRUD
+  // cross-poste, synchronisée Supabase — voir handlers.ts logs:consultation). Les lignes
+  // 'sync' ne sont pas supprimables individuellement ici (audit:delete ne cible que
+  // t_audit_log) : le bouton Supprimer est désactivé pour elles.
+  source?: 'local' | 'sync';
 }
 
 export default function LogsPage() {
@@ -200,12 +205,14 @@ export default function LogsPage() {
                     {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'ADMIN_CENTRE') && (
                       <td style={{ textAlign: 'center' }}>
                         <button
-                          onClick={(e) => handleDeleteLog(l.id, e)}
+                          onClick={(e) => { if (l.source !== 'sync') handleDeleteLog(l.id, e); else e.stopPropagation(); }}
+                          disabled={l.source === 'sync'}
                           style={{
                             background: 'transparent',
                             border: 'none',
-                            color: '#ef4444',
-                            cursor: 'pointer',
+                            color: l.source === 'sync' ? 'var(--text-muted)' : '#ef4444',
+                            cursor: l.source === 'sync' ? 'not-allowed' : 'pointer',
+                            opacity: l.source === 'sync' ? 0.4 : 1,
                             padding: '4px 8px',
                             borderRadius: 4,
                             display: 'inline-flex',
@@ -213,7 +220,7 @@ export default function LogsPage() {
                             justifyContent: 'center'
                           }}
                           className="btn-delete-hover"
-                          title="Supprimer ce log"
+                          title={l.source === 'sync' ? 'Action CRUD synchronisée cross-poste : suppression individuelle non disponible ici' : 'Supprimer ce log'}
                         >
                           <Trash2 size={16} />
                         </button>
@@ -380,15 +387,15 @@ export default function LogsPage() {
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 10 }}>
-              {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'ADMIN_CENTRE') && (
-                <button 
-                  className="btn" 
-                  style={{ 
-                    background: '#ef4444', 
-                    color: 'white', 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 6 
+              {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'ADMIN_CENTRE') && selectedLog?.source !== 'sync' && (
+                <button
+                  className="btn"
+                  style={{
+                    background: '#ef4444',
+                    color: 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6
                   }}
                   onClick={() => selectedLog && handleDeleteLog(selectedLog.id)}
                 >

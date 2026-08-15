@@ -11,10 +11,10 @@ import { Worker } from 'worker_threads';
 import { networkMonitor } from '../sync/network-monitor';
 import { syncEngine } from '../sync/sync-engine';
 import { runBulkUpload, cancelBulkUpload } from '../sync/bulk-uploader';
-import { runDownstream } from '../sync/downstream';
+import { runDownstream, runLogsDownstream } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
 import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser, setActiveRole } from '../auth/session-heartbeat';
-import { logAudit } from '../utils/audit';
+import { logAudit, CRUD_SYNC_WHITELIST } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
@@ -1277,6 +1277,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'RETRAIT',
         `Retrait de la carte ID ${id} par le retirant ${data.nom_retirant} (N° pièce: ${data.num_retirant}). Agent distributeur: ${data.agent_distributeur}. Montant: N/A (service gratuit).`
       );
+      // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : en plus de
+      // insertAuditLog() ci-dessus (t_audit_log local, inchangé), la délivrance devient
+      // visible cross-poste via t_logs/logAudit(). Action distincte de 'RETRAIT' pour ne pas
+      // altérer le libellé déjà utilisé par insertAuditLog.
+      logAudit(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_DELIVREE',
+        JSON.stringify({
+          id_carte: id,
+          nom_retirant: data.nom_retirant,
+          num_retirant: data.num_retirant,
+          agent_distributeur: data.agent_distributeur
+        })
+      );
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
@@ -1297,6 +1311,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const res = await queries.transfererCarte(id, data, secureUser);
       BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       queries.insertAuditLog(secureUser.login || 'SYSTEM', 'CARTE_TRANSFEREE', `Transfert carte ${id} vers le centre ${data.centre_id}`);
+      // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : en plus de
+      // insertAuditLog() ci-dessus (t_audit_log local, inchangé), le transfert devient visible
+      // cross-poste via t_logs/logAudit().
+      logAudit(
+        secureUser.login || 'SYSTEM',
+        'CARTE_TRANSFEREE',
+        JSON.stringify({ id_carte: id, centre_id_destination: data.centre_id })
+      );
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:transferer', e); throw e; }
@@ -2978,6 +3000,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       'VALIDATION',
       `Désactivation du compte utilisateur ID ${id}.`
     );
+    // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : la désactivation d'un
+    // compte utilisateur devient visible cross-poste via t_logs/logAudit(), en plus de
+    // insertAuditLog() ci-dessus (t_audit_log local, inchangé).
+    logAudit(
+      secureUser.login || 'ADMIN',
+      'UTILISATEUR_SUPPRIME',
+      JSON.stringify({ id_user: id, type: 'desactivation' })
+    );
     return res;
   });
   ipcMain.handle('users:hardDelete', async (_, id) => {
@@ -2994,6 +3024,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       secureUser.login || 'ADMIN',
       'VALIDATION',
       `Suppression physique définitive de l'utilisateur ID ${id}.`
+    );
+    // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : la suppression physique
+    // définitive d'un compte utilisateur devient visible cross-poste via t_logs/logAudit(), en
+    // plus de insertAuditLog() ci-dessus (t_audit_log local, inchangé).
+    logAudit(
+      secureUser.login || 'ADMIN',
+      'UTILISATEUR_SUPPRIME',
+      JSON.stringify({ id_user: id, type: 'suppression_definitive' })
     );
     return res;
   });
@@ -3047,32 +3085,84 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // ADMIN_CENTRE) voyait l'historique d'audit complet de TOUS les sites/centres. SUPER ADMIN
     // conserve la vue globale existante.
     const secureUser = getSecureCurrentUser();
-    let where = '';
-    const whereParams: any[] = [];
+
+    // ── Union t_audit_log (local) + t_logs (CRUD synchronisé cross-poste) ──────────────────
+    // Les actions de CRUD_SYNC_WHITELIST (src/main/utils/audit.ts) sont désormais écrites EN
+    // DOUBLE par logAudit() : t_audit_log (comme avant) ET t_logs (nouveau, synchronisé
+    // Supabase). Pour éviter d'afficher deux fois la même action réalisée sur CE poste, la
+    // branche t_audit_log EXCLUT ces actions ; t_logs devient la source unique pour elles —
+    // locales ET rapatriées des autres postes via runLogsDownstream (downstream.ts). t_logs
+    // utilise ses vraies colonnes site_id/centre_id (plus précises que la jointure ci-dessus).
+    const crudActions = Array.from(CRUD_SYNC_WHITELIST);
+    const crudPlaceholders = crudActions.map(() => '?').join(',');
+
+    let whereAudit = '';
+    const paramsAudit: any[] = [];
     if (secureUser && secureUser.role !== 'SUPER ADMIN') {
-      where = 'WHERE utilisateur IN (SELECT login FROM t_users WHERE site_id = ?';
-      whereParams.push(secureUser.site_id);
+      whereAudit = 'WHERE utilisateur IN (SELECT login FROM t_users WHERE site_id = ?';
+      paramsAudit.push(secureUser.site_id);
       if (secureUser.role === 'ADMIN_CENTRE') {
-        where += ' AND centre_id = ?';
-        whereParams.push(secureUser.centre_id);
+        whereAudit += ' AND centre_id = ?';
+        paramsAudit.push(secureUser.centre_id);
       }
-      where += ')';
+      whereAudit += ')';
+    }
+    whereAudit += (whereAudit ? ' AND ' : 'WHERE ') + `action NOT IN (${crudPlaceholders})`;
+    paramsAudit.push(...crudActions);
+
+    let whereLogs = `WHERE action IN (${crudPlaceholders})`;
+    const paramsLogs: any[] = [...crudActions];
+    if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+      whereLogs += ' AND site_id = ?';
+      paramsLogs.push(secureUser.site_id);
+      if (secureUser.role === 'ADMIN_CENTRE') {
+        whereLogs += ' AND centre_id = ?';
+        paramsLogs.push(secureUser.centre_id);
+      }
     }
 
-    const countRow = db.prepare(`SELECT COUNT(*) as count FROM t_audit_log ${where}`).get(...whereParams) as any;
-    const total = countRow ? countRow.count : 0;
+    const countAuditRow = db.prepare(`SELECT COUNT(*) as count FROM t_audit_log ${whereAudit}`).get(...paramsAudit) as any;
+    const countLogsRow = db.prepare(`SELECT COUNT(*) as count FROM t_logs ${whereLogs}`).get(...paramsLogs) as any;
+    const total = (countAuditRow ? countAuditRow.count : 0) + (countLogsRow ? countLogsRow.count : 0);
+
+    // id_log décalé de +1 000 000 000 dans la vue unifiée : évite toute collision avec les id
+    // (compteur AUTOINCREMENT indépendant) de t_audit_log. Sécurité : le bouton "Supprimer"
+    // (audit:delete → queries.deleteAuditLog, hors périmètre de cette intervention) cible
+    // exclusivement `DELETE FROM t_audit_log WHERE id = ?` — avec cet id décalé (jamais atteint
+    // par le compteur réel de t_audit_log), un clic sur une ligne issue de t_logs reste un
+    // no-op sûr plutôt que de risquer de supprimer par erreur une ligne t_audit_log différente
+    // dont l'id coïnciderait. `source` permet au renderer de désactiver ce bouton pour ces lignes.
+    // datetime(...) normalise l'horodatage pour un ORDER BY correct malgré les deux formats
+    // distincts en présence : "YYYY-MM-DD HH:MM:SS" (date_creation/date_heure écrits localement
+    // via datetime('now')) vs ISO8601 à séparateur "T" (date_heure rapatrié de Supabase
+    // TIMESTAMPTZ) — sans cette normalisation, un tri purement lexical sur la chaîne brute
+    // intercalerait incorrectement les entrées cross-poste par rapport aux entrées locales du
+    // même jour.
     const rows = db.prepare(`
-      SELECT
-        id,
-        utilisateur AS operator_id,
-        action AS action_type,
-        details,
-        date_creation AS timestamp
-      FROM t_audit_log
-      ${where}
-      ORDER BY date_creation DESC
+      SELECT id, operator_id, action_type, details, timestamp, source FROM (
+        SELECT
+          id AS id,
+          utilisateur AS operator_id,
+          action AS action_type,
+          details AS details,
+          datetime(date_creation) AS timestamp,
+          'local' AS source
+        FROM t_audit_log
+        ${whereAudit}
+        UNION ALL
+        SELECT
+          id_log + 1000000000 AS id,
+          login_user AS operator_id,
+          action AS action_type,
+          detail AS details,
+          datetime(date_heure) AS timestamp,
+          'sync' AS source
+        FROM t_logs
+        ${whereLogs}
+      )
+      ORDER BY timestamp DESC
       LIMIT ? OFFSET ?
-    `).all(...whereParams, limit, offset);
+    `).all(...paramsAudit, ...paramsLogs, limit, offset);
 
     return { rows, total };
   });
@@ -4762,6 +4852,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         throw new Error("siteId obligatoire et valide requis pour la récupération.");
       }
       const pulledCount = await runDownstream(Number(siteId));
+
+      // Rapatriement des entrées t_logs CRUD cross-poste (liste blanche CRUD_SYNC_WHITELIST,
+      // voir src/main/utils/audit.ts). Isolé dans son propre try/catch : un échec ici ne doit
+      // jamais faire échouer le pull manuel des cartes ci-dessus (déjà réussi à ce stade).
+      try {
+        await runLogsDownstream(Number(siteId));
+      } catch (logsSyncErr) {
+        log.warn(`[sync:pullSiteCards] runLogsDownstream échoué (non-bloquant) pour le site ${siteId} :`, logsSyncErr);
+      }
+
       logAudit(
         userLogin,
         'SYNC_DOWN_SUCCESS',
@@ -4891,6 +4991,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       );
 
       const pulledCount = await runDownstream(Number(siteId), true);
+
+      // Rapatriement des entrées t_logs CRUD cross-poste — mêmes garanties d'isolation que
+      // pour sync:pullSiteCards ci-dessus (échec non-bloquant, cloisonnement site_id interne).
+      try {
+        await runLogsDownstream(Number(siteId));
+      } catch (logsSyncErr) {
+        log.warn(`[sync:forceFullPull] runLogsDownstream échoué (non-bloquant) pour le site ${siteId} :`, logsSyncErr);
+      }
 
       logAudit(
         currentUser?.login || 'ADMIN',

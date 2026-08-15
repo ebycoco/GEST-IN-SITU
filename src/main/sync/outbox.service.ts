@@ -442,7 +442,7 @@ function _markOutboxError(
  * fait pour son propre chemin (bulk upload manuel "Envoyer les corrections").
  *
  * Portée volontairement limitée aux tables qui possèdent réellement is_dirty
- * ET transitent par enqueueOutbox() : t_cartes et t_users (is_dirty +
+ * ET transitent par enqueueOutbox() : t_cartes, t_users et t_logs (is_dirty +
  * synced_at, voir schema.ts), t_sites et t_centres (is_dirty seul, pas de
  * colonne synced_at sur ces deux tables). t_user_roles/t_postes n'ont pas de
  * notion is_dirty équivalente sur ce chemin → ignorés (défaut absent).
@@ -464,6 +464,12 @@ function _clearLocalDirtyFlag(
       case 't_sites':
       case 't_centres':
         db.prepare(`UPDATE ${tableName} SET is_dirty = 0 WHERE sync_id = ?`).run(syncIdValue);
+        break;
+      case 't_logs':
+        // Journal d'audit CRUD synchronisable (voir src/main/utils/audit.ts, aiguillage
+        // CRUD_SYNC_WHITELIST). t_logs possède is_dirty + synced_at (mêmes colonnes que
+        // t_cartes/t_users) — même traitement de remise à zéro après upsert Supabase confirmé.
+        db.prepare(`UPDATE t_logs SET is_dirty = 0, synced_at = datetime('now') WHERE sync_id = ?`).run(syncIdValue);
         break;
       default:
         // Table sans notion is_dirty équivalente sur ce chemin (t_postes,

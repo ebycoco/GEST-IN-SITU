@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { networkMonitor, NetworkState } from './network-monitor';
 
 import { runUpstream } from './upstream';
-import { runDownstream, syncUsersFromCloud, runSyncInitiale } from './downstream';
+import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
@@ -527,6 +527,18 @@ class SyncEngine extends EventEmitter {
 
       // Rapatriement des cartes du cloud
       const pulledCount = await runDownstream(siteId);
+
+      // Rapatriement des entrées t_logs CRUD cross-poste (liste blanche CRUD_SYNC_WHITELIST,
+      // voir src/main/utils/audit.ts). Isolée dans son propre try/catch : un échec ici ne doit
+      // jamais faire échouer le cycle downstream automatique des cartes ci-dessus (déjà terminé
+      // avec succès à ce stade). Watermark et cloisonnement site_id dédiés, gérés en interne par
+      // runLogsDownstream (src/main/sync/downstream.ts).
+      try {
+        await runLogsDownstream(siteId);
+      } catch (logsSyncErr) {
+        log.warn('[SyncEngine][AutoDownstream] runLogsDownstream échoué (non-bloquant) :', logsSyncErr);
+      }
+
       const durationMs = Math.round(performance.now() - startTs);
 
       log.info(

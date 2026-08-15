@@ -17,6 +17,12 @@ Validé par `npx tsc --noEmit` : 0 erreur.
 
 *Ce chantier de durcissement RBAC (recherche, listings, écritures sensibles) est désormais complet sur la famille de handlers `cartes:*` identifiée par l'audit initial. Un pattern similaire (identité fournie par le renderer) a été repéré sans audit approfondi sur les familles `sync:*`/`database:*`/`cmu:*` — à traiter dans un chantier séparé si souhaité.*
 
+## 🚀 Nouveautés & Ergonomie
+
+- **Journal d'Audit Système visible entre postes d'un même site** : jusqu'ici, un ADMINISTRATEUR_SITE ne voyait sur `/logs` que les actions journalisées sur son propre poste — les actions de ses opérateurs et ADMIN_CENTRE effectuées sur d'autres postes du site restaient invisibles, faute de synchronisation. Les actions CRUD métier significatives (délivrance et transfert de carte, création/modification/suppression d'utilisateur) sont désormais répliquées cross-poste via la table `t_logs` (déjà cloisonnée par `site_id`/`centre_id`), avec un pull dédié câblé sur le cycle de synchro automatique (2 h) et sur "Récupérer les cartes". Les connexions, déconnexions, consultations et exports restent volontairement en trace locale uniquement, pour ne pas alourdir la synchro sur les postes terrain 8 Go. Le RBAC déjà en place (ADMINISTRATEUR_SITE voit tout son site, ADMIN_CENTRE seulement son centre, SUPER ADMIN voit tout) est conservé à l'identique ; la purge d'un log reste locale au poste qui l'exécute (n'efface pas la copie distante déjà synchronisée) et est désactivée sur les entrées provenant d'un autre poste.
+
+Validé par `npx tsc --noEmit` : 0 erreur.
+
 ## 🛠️ Corrections & Fiabilité
 
 - **Bouton de synchro ("Synchroniser mes actions" / "mes saisies") restant inactif après une action métier, sur 3 portails** : après une délivrance de carte (OPERATEUR_VERIFICATION, ADMIN_CENTRE) ou une correction qualité (OPERATEUR_QUALITE), le compteur qui pilote l'état actif/inactif du bouton n'était jamais recalculé — l'agent devait quitter puis revenir sur l'écran (ou attendre jusqu'à 30 s pour ADMIN_CENTRE) avant de pouvoir synchroniser. Corrigé sur les 3 portails :

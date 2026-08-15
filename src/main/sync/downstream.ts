@@ -875,6 +875,176 @@ export async function preloadUsersFromCloud(): Promise<void> {
 }
 
 /**
+ * Pull chunké (par lots de 500) des entrées `t_logs` synchronisables — actions CRUD métier de
+ * la liste blanche CRUD_SYNC_WHITELIST (voir src/main/utils/audit.ts) — depuis Supabase.
+ *
+ * Fonction NOUVELLE et volontairement ISOLÉE : elle ne modifie ni ne partage d'état avec
+ * runDownstream/runDownstreamChunk (dédiées à t_cartes) ci-dessus. Watermark dédié dans
+ * t_config ('last_downstream_sync_logs' / '_id'), jamais les clés watermark des cartes.
+ *
+ * Cloisonnement P0 : filtrage `.eq('site_id', siteId)` appliqué CÔTÉ SERVEUR (obligatoire),
+ * plus une double vérification défensive côté client dans runLogsDownstreamChunk.
+ *
+ * Politique low-memory (§2) : chunks ≤ 500, pause asynchrone de 300ms entre chunks pour
+ * libérer le thread principal (mêmes constantes que runDownstream ci-dessus).
+ *
+ * Câblage (décision utilisateur validée) : appelée depuis
+ *  - sync-engine.ts (triggerAutoDownstream, cycle automatique de 2h), juste après
+ *    runDownstream(siteId) — échec non-bloquant, isolé dans son propre try/catch.
+ *  - handlers.ts, sync:pullSiteCards (pull manuel des cartes par l'admin de site) et
+ *    sync:forceFullPull (pull complet sans cache, maintenance), mêmes garanties.
+ * Dans les trois cas, un échec de runLogsDownstream ne remet jamais en cause le pull des
+ * cartes déjà effectué avec succès juste avant.
+ */
+export async function runLogsDownstream(siteId: number): Promise<number> {
+  if (!siteId || isNaN(Number(siteId))) {
+    log.warn('[SYNC][t_logs] runLogsDownstream appelé sans siteId valide. Pull ignoré.');
+    return 0;
+  }
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[SYNC][t_logs] Client Supabase non disponible — pull t_logs ignoré.');
+    return 0;
+  }
+  const db = getDatabase();
+  if (!db) return 0;
+
+  let totalMerged = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const { fetched, processed } = await runLogsDownstreamChunk(siteId);
+    totalMerged += processed;
+
+    if (fetched < 500) {
+      hasMore = false;
+    } else {
+      log.info('[SYNC][t_logs] Chunk de 500 traité. Pause asynchrone (low-memory)...');
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  }
+
+  if (totalMerged > 0) {
+    log.info(`[SYNC][t_logs] ${totalMerged} entrée(s) CRUD cross-poste synchronisée(s) localement pour le site ${siteId}.`);
+  }
+
+  return totalMerged;
+}
+
+/**
+ * Traite un unique lot (chunk) de 500 entrées `t_logs` maximum depuis Supabase.
+ * Idempotence assurée par une vérification manuelle "SELECT ... WHERE sync_id = ?" avant
+ * insertion (t_logs.sync_id n'a PAS de contrainte UNIQUE côté SQLite local — contrairement à
+ * Supabase — donc pas d'`ON CONFLICT` possible sans migration de schéma ; ce pattern
+ * manuel reproduit exactement celui déjà utilisé pour t_cartes dans download-worker.js).
+ */
+async function runLogsDownstreamChunk(siteId: number): Promise<{ fetched: number; processed: number }> {
+  const db = getDatabase();
+  if (!db) return { fetched: 0, processed: 0 };
+  const supabase = getSupabaseClient();
+  if (!supabase) return { fetched: 0, processed: 0 };
+
+  let watermark = '1970-01-01T00:00:00Z';
+  let lastSyncId = '00000000-0000-0000-0000-000000000000';
+  const wmRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_logs'").get() as { value: string } | undefined;
+  if (wmRow?.value) watermark = wmRow.value;
+  const wmIdRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_logs_id'").get() as { value: string } | undefined;
+  if (wmIdRow?.value) lastSyncId = wmIdRow.value;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => { controller.abort(); }, 10000);
+
+  let cloudLogs: any[] | null = null;
+  try {
+    const { data, error } = await supabase
+      .from('t_logs')
+      .select('id_user, login_user, action, detail, valeur_avant, valeur_apres, date_heure, centre_id, site_id, sync_id')
+      // Cloisonnement P0 : filtrage obligatoire côté serveur sur le site de l'appelant.
+      .eq('site_id', siteId)
+      .or(`date_heure.gt.${watermark},and(date_heure.eq.${watermark},sync_id.gt.${lastSyncId})`)
+      .order('date_heure', { ascending: true })
+      .order('sync_id', { ascending: true })
+      .limit(500)
+      .abortSignal(controller.signal);
+
+    clearTimeout(timeoutId);
+
+    if (error) {
+      log.error(`[SYNC][t_logs] Échec du pull t_logs pour le site ${siteId} : ${error.message}`);
+      return { fetched: 0, processed: 0 };
+    }
+    cloudLogs = data;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
+      log.warn(`[SYNC][t_logs] Requête pull t_logs interrompue (timeout) pour le site ${siteId}. Mode dégradé.`);
+      return { fetched: 0, processed: 0 };
+    }
+    log.error(`[SYNC][t_logs] Exception lors du pull t_logs pour le site ${siteId} :`, err.message || err);
+    return { fetched: 0, processed: 0 };
+  }
+
+  if (!cloudLogs || cloudLogs.length === 0) {
+    return { fetched: 0, processed: 0 };
+  }
+
+  let processed = 0;
+  let latestDateHeure = watermark;
+  let latestSyncId = lastSyncId;
+
+  // Filet de sécurité FK (id_user référence t_users(id_user) localement) — même justification
+  // que pour t_cartes/t_users plus haut dans ce fichier : un id_user peut ne pas (encore)
+  // exister localement sur ce poste au moment du pull.
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    db.transaction(() => {
+      const existsStmt = db.prepare('SELECT id_log FROM t_logs WHERE sync_id = ?');
+      const insertStmt = db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_avant, valeur_apres, date_heure, centre_id, site_id, sync_id, is_dirty)
+        VALUES (@id_user, @login_user, @action, @detail, @valeur_avant, @valeur_apres, @date_heure, @centre_id, @site_id, @sync_id, 0)
+      `);
+
+      for (const row of cloudLogs!) {
+        if (!row.sync_id || !row.date_heure) continue;
+
+        // Double sécurité cloisonnement (P0) : la clause .eq('site_id', siteId) côté serveur
+        // garantit déjà le périmètre ; ce filtre local est une défense en profondeur.
+        if (Number(row.site_id) !== Number(siteId)) continue;
+
+        if (row.date_heure > latestDateHeure || (row.date_heure === latestDateHeure && row.sync_id > latestSyncId)) {
+          latestDateHeure = row.date_heure;
+          latestSyncId = row.sync_id;
+        }
+
+        const existing = existsStmt.get(row.sync_id);
+        if (existing) continue; // Déjà rapatrié localement (idempotence, pas d'UPDATE — entrées de journal immuables)
+
+        insertStmt.run({
+          id_user: row.id_user ?? null,
+          login_user: row.login_user ?? null,
+          action: row.action,
+          detail: row.detail ?? null,
+          valeur_avant: row.valeur_avant ?? null,
+          valeur_apres: row.valeur_apres ?? null,
+          date_heure: row.date_heure,
+          centre_id: row.centre_id ?? null,
+          site_id: row.site_id,
+          sync_id: row.sync_id
+        });
+        processed++;
+      }
+
+      db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_logs', ?)`).run(latestDateHeure);
+      db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_logs_id', ?)`).run(latestSyncId);
+    })();
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
+  return { fetched: cloudLogs.length, processed };
+}
+
+/**
  * Exécute le bootstrap initial global (SyncInitiale) uniquement si t_users est vide.
  */
 export async function runSyncInitiale(): Promise<boolean> {

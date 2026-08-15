@@ -8,6 +8,7 @@ import { randomInt } from 'crypto';
 import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { insertAuditLog } from './audit.queries';
+import { logAudit } from '../../utils/audit';
 
 // Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
 // Reflète côté serveur la restriction déjà appliquée côté UI (AgentsPage.visibleRoles) :
@@ -358,6 +359,17 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
     callerLogin || creator?.role || 'SYSTEM',
     'AGENT',
     `[CREATION] Agent ${data.login} créé avec succès.`
+  );
+
+  // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : la création (ou
+  // réactivation) d'un compte utilisateur devient visible cross-poste via t_logs/logAudit(),
+  // en plus de insertAuditLog() ci-dessus (t_audit_log local, inchangé). logAudit() résout
+  // elle-même site_id/centre_id via la session serveur active (getSecureCurrentUser) —
+  // cohérent avec le cloisonnement P0 déjà appliqué au reste de t_logs.
+  logAudit(
+    callerLogin || creator?.role || 'SYSTEM',
+    'UTILISATEUR_CREE',
+    JSON.stringify({ login: data.login, role: primaryRole, site_id: targetSiteId, centre_id: targetCentreId })
   );
 
   return txResult.result;
