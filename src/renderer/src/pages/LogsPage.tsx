@@ -1,8 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { FileText, ChevronLeft, ChevronRight, Trash2, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { confirmService } from '../components/confirmService';
+import { getActionMeta, getActionBadgeStyle, formatAuditDetails } from '../utils/auditLogCatalog';
+
+// Durée de fraîcheur du cache d'agents (voir agentsCache dans cacheStore) avant de forcer un
+// rechargement : évite un appel IPC users:getAll à chaque montage de LogsPage si la page
+// Agents a déjà peuplé le cache récemment.
+const AGENTS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface AuditLog {
   id: number;
@@ -23,6 +29,12 @@ export default function LogsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Index login -> agent (nom_user, prenom_user, centre_nom, roles...) pour l'enrichissement
+  // de l'identité de l'opérateur dans le tableau et la modal (voir l'effet plus bas qui le
+  // peuple via window.api.users.getAll()). Variable d'état locale (et non lue directement
+  // depuis useCacheStore.getState() à chaque rendu) pour que l'arrivée des données déclenche
+  // bien un re-rendu de la page.
+  const [agentsIndex, setAgentsIndex] = useState<Record<string, any>>({});
   const { user } = useAuthStore();
   const limit = 15; // Pagination stricte demandée
 
@@ -101,6 +113,39 @@ export default function LogsPage() {
     loadLogs();
   }, [currentPage]);
 
+  // Enrichissement identité opérateur (nom, prénom, centre) : réutilise le cache déjà rempli
+  // par AgentsPage (canal IPC users:getAll, déjà autorisé aux 3 rôles qui accèdent à /logs —
+  // voir ProtectedRoute dans App.tsx) s'il est encore frais, sinon le recharge directement
+  // depuis cette page. Aucun changement côté handler IPC : la requête SQL de users:getAll
+  // (queries.getUsers) joint déjà t_centres pour renvoyer nom_user/prenom_user/centre_nom.
+  useEffect(() => {
+    const buildIndex = (list: any[]) => {
+      const index: Record<string, any> = {};
+      for (const u of list || []) {
+        if (u && u.login) index[u.login] = u;
+      }
+      return index;
+    };
+
+    const cache = useCacheStore.getState().agentsCache;
+    const isFresh = !!cache.cachedAt && (Date.now() - cache.cachedAt) < AGENTS_CACHE_TTL_MS && cache.list.length > 0;
+    if (isFresh) {
+      setAgentsIndex(buildIndex(cache.list));
+      return;
+    }
+
+    window.api.users.getAll().then((list: any[]) => {
+      if (Array.isArray(list) && list.length > 0) {
+        useCacheStore.getState().setAgentsCache(list);
+        setAgentsIndex(buildIndex(list));
+      }
+    }).catch((err: any) => {
+      // Non bloquant : en cas d'échec, le tableau retombe simplement sur l'affichage du seul
+      // login (comportement précédent), sans casser la page.
+      console.error('[LogsPage] Erreur lors du chargement des agents pour enrichissement identité:', err);
+    });
+  }, []);
+
   const totalPages = Math.ceil(total / limit) || 1;
 
   return (
@@ -172,9 +217,15 @@ export default function LogsPage() {
                   </td>
                 </tr>
               ) : (
-                logs.map((l) => (
-                  <tr 
-                    key={l.id} 
+                logs.map((l) => {
+                  const agent = agentsIndex[l.operator_id];
+                  const fullName = agent ? `${agent.prenom_user || ''} ${agent.nom_user || ''}`.trim() : '';
+                  const actionMeta = getActionMeta(l.action_type);
+                  const actionStyle = getActionBadgeStyle(l.action_type);
+                  const detailsFormatted = formatAuditDetails(l.action_type, l.details);
+                  return (
+                  <tr
+                    key={l.id}
                     onClick={() => setSelectedLog(l)}
                     style={{ cursor: 'pointer' }}
                     className="table-row-hover"
@@ -182,25 +233,32 @@ export default function LogsPage() {
                     <td style={{ color: 'var(--text-muted)', fontSize: 13 }}>
                       {new Date(l.timestamp).toLocaleString('fr-FR')}
                     </td>
-                    <td style={{ fontWeight: 600 }}>{l.operator_id}</td>
+                    <td>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <span style={{ fontWeight: 700, fontSize: 13 }}>{fullName || l.operator_id}</span>
+                        {fullName && (
+                          <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                            {l.operator_id}{agent?.centre_nom ? ` — ${agent.centre_nom}` : ''}
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td>
                       <span className="badge" style={{
-                        background: l.action_type === 'CONNEXION' ? 'rgba(34, 197, 94, 0.15)' : 
-                                     l.action_type === 'DECONNEXION' ? 'rgba(239, 68, 68, 0.15)' : 
-                                     l.action_type === 'RETRAIT' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                        color: l.action_type === 'CONNEXION' ? '#22c55e' : 
-                               l.action_type === 'DECONNEXION' ? '#ef4444' : 
-                               l.action_type === 'RETRAIT' ? '#eab308' : '#3b82f6',
+                        background: actionStyle.bg,
+                        color: actionStyle.color,
                         border: '1px solid currentColor',
                         fontSize: 11,
+                        fontWeight: 600,
                         padding: '2px 8px',
-                        borderRadius: 4
+                        borderRadius: 4,
+                        whiteSpace: 'nowrap'
                       }}>
-                        {l.action_type}
+                        {actionMeta.label}
                       </span>
                     </td>
-                    <td className="log-detail-cell" title={l.details} style={{ fontSize: 13, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {l.details}
+                    <td className="log-detail-cell" title={detailsFormatted.summary} style={{ fontSize: 13, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {detailsFormatted.summary}
                     </td>
                     {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'ADMIN_CENTRE') && (
                       <td style={{ textAlign: 'center' }}>
@@ -227,7 +285,8 @@ export default function LogsPage() {
                       </td>
                     )}
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -301,6 +360,8 @@ export default function LogsPage() {
           <div className="card animate-scale-up" style={{
             width: '100%',
             maxWidth: 550,
+            maxHeight: '90vh',
+            overflowY: 'auto',
             padding: 24,
             display: 'flex',
             flexDirection: 'column',
@@ -333,57 +394,85 @@ export default function LogsPage() {
                 <span style={{ color: 'var(--text-muted)' }}>Date & Heure :</span>
                 <span style={{ fontWeight: 500 }}>{selectedLog?.timestamp ? new Date(selectedLog.timestamp).toLocaleString('fr-FR') : ''}</span>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Opérateur / Agent :</span>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                  <span style={{ fontWeight: 600 }}>{selectedLog?.operator_id}</span>
-                  {(() => {
-                    const agent = useCacheStore.getState().agentsCache.list.find(u => u.login === selectedLog?.operator_id);
-                    if (agent) {
-                      return (
-                        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
-                          {(agent.roles || [agent.role]).map((r: string) => (
-                            <span key={r} className="badge badge-outline" style={{ fontSize: 9, fontWeight: 700, borderColor: 'rgba(255,255,255,0.15)', color: '#fbbf24', background: 'rgba(251, 191, 36, 0.05)', padding: '1px 4px', borderRadius: 4 }}>
-                              {r}
-                            </span>
+              {(() => {
+                if (!selectedLog) return null;
+                const agent = agentsIndex[selectedLog.operator_id];
+                const fullName = agent ? `${agent.prenom_user || ''} ${agent.nom_user || ''}`.trim() : '';
+                const actionMeta = getActionMeta(selectedLog.action_type);
+                const actionStyle = getActionBadgeStyle(selectedLog.action_type);
+                const detailsFormatted = formatAuditDetails(selectedLog.action_type, selectedLog.details);
+                return (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Opérateur / Agent :</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                        <span style={{ fontWeight: 700, fontSize: 15 }}>{fullName || selectedLog.operator_id}</span>
+                        {(fullName || agent?.centre_nom) && (
+                          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                            {[fullName ? selectedLog.operator_id : null, agent?.centre_nom || null].filter(Boolean).join(' — ')}
+                          </span>
+                        )}
+                        {agent && (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2, justifyContent: 'flex-end' }}>
+                            {(agent.roles || [agent.role]).map((r: string) => (
+                              <span key={r} className="badge badge-outline" style={{ fontSize: 9, fontWeight: 700, borderColor: 'rgba(255,255,255,0.15)', color: '#fbbf24', background: 'rgba(251, 191, 36, 0.05)', padding: '1px 4px', borderRadius: 4 }}>
+                                {r}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Type d'Action :</span>
+                      <span className="badge" style={{
+                        background: actionStyle.bg,
+                        color: actionStyle.color,
+                        border: '1px solid currentColor',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        padding: '3px 10px',
+                        borderRadius: 4
+                      }}>
+                        {actionMeta.label}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-color)', paddingTop: 16 }}>
+                      <span style={{ color: 'var(--text-muted)' }}>Description détaillée :</span>
+                      <div style={{
+                        background: 'var(--bg-card-hover)',
+                        padding: 12,
+                        borderRadius: 6,
+                        fontSize: 14,
+                        lineHeight: '1.5',
+                        fontWeight: 500,
+                        border: '1px solid var(--border-color)'
+                      }}>
+                        {detailsFormatted.summary}
+                      </div>
+                      {detailsFormatted.entries.length > 0 && (
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: 'auto 1fr',
+                          rowGap: 6,
+                          columnGap: 12,
+                          padding: '10px 12px',
+                          borderRadius: 6,
+                          fontSize: 12,
+                          border: '1px dashed var(--border-color)'
+                        }}>
+                          {detailsFormatted.entries.map((entry, idx) => (
+                            <Fragment key={idx}>
+                              <span style={{ color: 'var(--text-muted)' }}>{entry.label}</span>
+                              <span style={{ fontWeight: 500, wordBreak: 'break-word' }}>{entry.value}</span>
+                            </Fragment>
                           ))}
                         </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-muted)' }}>Type d'Action :</span>
-                <span className="badge" style={{
-                  background: selectedLog?.action_type === 'CONNEXION' ? 'rgba(34, 197, 94, 0.15)' : 
-                               selectedLog?.action_type === 'DECONNEXION' ? 'rgba(239, 68, 68, 0.15)' : 
-                               selectedLog?.action_type === 'RETRAIT' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                  color: selectedLog?.action_type === 'CONNEXION' ? '#22c55e' : 
-                         selectedLog?.action_type === 'DECONNEXION' ? '#ef4444' : 
-                         selectedLog?.action_type === 'RETRAIT' ? '#eab308' : '#3b82f6',
-                  border: '1px solid currentColor',
-                  fontSize: 11,
-                  padding: '2px 8px',
-                  borderRadius: 4
-                }}>
-                  {selectedLog?.action_type}
-                </span>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--border-color)', paddingTop: 16 }}>
-                <span style={{ color: 'var(--text-muted)' }}>Description détaillée :</span>
-                <div style={{ 
-                  background: 'var(--bg-card-hover)', 
-                  padding: 12, 
-                  borderRadius: 6, 
-                  fontSize: 13, 
-                  lineHeight: '1.5',
-                  border: '1px solid var(--border-color)' 
-                }}>
-                  {selectedLog?.details}
-                </div>
-              </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 10 }}>
