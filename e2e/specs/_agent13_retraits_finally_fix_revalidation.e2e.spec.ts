@@ -60,6 +60,7 @@
  * pertinente ici est l'absence de toute anomalie/crash — pas un diff de
  * lignes.
  */
+import { join } from 'path';
 import { test, expect } from '@playwright/test';
 import {
   launchSeededApp,
