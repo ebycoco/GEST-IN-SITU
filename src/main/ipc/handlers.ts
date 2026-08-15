@@ -486,6 +486,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('cartes:searchAllRecords', async (_, siteId, filters, limit) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (GlobalSearchView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:searchAllRecords : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try {
       const effectiveSiteId = resolveScopedSiteId(siteId);
       const userLogin = getCurrentUserLogin() || 'SYSTEM';
@@ -1413,10 +1420,24 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:reactiverCarte', e); throw e; }
   });
   ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number, offset = 0, limit = 50) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (InvalidFormatView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getInvalidDates : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getInvalidDateRecords(resolveScopedSiteId(siteId), offset, limit); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
   });
   ipcMain.handle('cartes:getDatesVidesPage', async (_, siteId?: number, offset = 0, limit = 50, query?: string) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (InvalidFormatView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getDatesVidesPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getDatesVidesPage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getDatesVidesPage', e); throw e; }
   });
@@ -1450,34 +1471,90 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
   ipcMain.handle('cartes:getDoublonsPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (DoublonsView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getDoublonsPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getDoublonsStrictsPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsPage', e); throw e; }
   });
   ipcMain.handle('cartes:getDoublonsProbablesPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (DoublonsView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getDoublonsProbablesPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getDoublonsProbablesPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getDoublonsProbablesPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansNumSecuPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansNumSecuPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansNumSecuPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNumSecuPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansRangementPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansRangementPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansNomPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansNomPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNomPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansPrenomPage', async (_, siteId, offset, limit, query, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansPrenomPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansPrenomPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansPrenomPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansContactPage', async (_, siteId, offset, limit, query) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansContactPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansContactPage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansContactPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansLieuNaissancePage', async (_, siteId, offset, limit, query) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
+    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansLieuNaissancePage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try { return queries.getSansLieuNaissancePage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansLieuNaissancePage', e); throw e; }
   });

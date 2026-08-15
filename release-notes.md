@@ -7,6 +7,7 @@
 
 - **Recherche cloud d'urgence (`searchCloudEmergency`) sans contrôle de rôle ni cloisonnement centre** : ce handler, déclenché en repli quand la recherche locale ne trouve rien, n'imposait aucune vérification de rôle (contrairement aux handlers voisins) et ne recadrait pas le rôle ADMIN_CENTRE sur son propre centre — un ADMIN_CENTRE pouvait ainsi obtenir téléphone et n° CMU en clair de bénéficiaires d'un autre centre du même site. Corrigé : contrôle de rôle ajouté (SUPER ADMIN, ADMINISTRATEUR_SITE, ADMIN_CENTRE, OPERATEUR_VERIFICATION) et filtre centre appliqué pour ADMIN_CENTRE, basé sur la session serveur.
 - **Modification de date de naissance (`updateDate`) sans aucune vérification** : ce handler d'écriture ne vérifiait ni la session, ni le rôle, ni le site de la fiche ciblée — une donnée d'identité sensible pouvait être modifiée sans contrôle. Corrigé : contrôle de rôle (OPERATEUR_APUREMENT, OPERATEUR_INVENTAIRE, ADMINISTRATEUR_SITE, SUPER ADMIN) et vérification que la fiche appartient au site de l'utilisateur avant toute écriture.
+- **11 handlers du portail Qualité (doublons, données manquantes, dates invalides, recherche universelle) sans contrôle de rôle** : le cloisonnement par site était correct mais n'importe quel rôle authentifié pouvait, via un appel IPC direct, accéder à ces listings de cartes. Contrôle de rôle ajouté (SUPER ADMIN, ADMINISTRATEUR_SITE, OPERATEUR_QUALITE) sur les 11 handlers concernés.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
 
