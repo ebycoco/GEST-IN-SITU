@@ -608,6 +608,87 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
 }
 
 /**
+ * Correctif P0-2 : `syncUsersFromCloud()` ci-dessus filtre sa requête Supabase
+ * avec `.eq('statut_actif', 1)` — un compte désactivé côté Cloud n'apparaît donc
+ * JAMAIS dans ses résultats et n'est jamais réécrit en local, ce qui empêche
+ * `refreshSecureCurrentUser()` (session-heartbeat.ts) de détecter la désactivation
+ * pendant une session active.
+ *
+ * Cette fonction est un ajout indépendant et ciblé : elle interroge Supabase
+ * uniquement pour l'utilisateur de la session courante (login + site_id) et,
+ * si le compte est désactivé ou introuvable côté Cloud, met à jour EN LOCAL
+ * uniquement la colonne `statut_actif` — jamais aucune autre colonne, jamais
+ * `is_dirty`, jamais l'Outbox/t_sync_queue (cette écriture ne doit pas être
+ * remontée vers le Cloud, c'est une simple réplique descendante d'un état déjà
+ * décidé côté serveur).
+ *
+ * Comportement fail-open volontaire : toute erreur réseau/Supabase est
+ * capturée silencieusement (log `warn`) sans toucher à l'état local — un
+ * problème réseau ponctuel ne doit jamais éjecter un utilisateur légitime.
+ *
+ * Remarque : cette fonction n'est PAS appelée depuis ce fichier. Le câblage
+ * dans le cycle de synchro (sync-engine.ts) est délibérément hors périmètre
+ * de cet ajout et sera réalisé séparément.
+ */
+export async function syncCurrentUserActiveStatus(login: string, siteId: number): Promise<void> {
+  if (!login || !siteId || isNaN(Number(siteId))) {
+    return;
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    log.warn('[syncCurrentUserActiveStatus] Client Supabase non disponible — vérification ignorée.');
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 10000);
+
+  let cloudRow: { login: string; statut_actif: number } | null = null;
+  try {
+    const { data, error } = await supabase
+      .from('t_users')
+      .select('login, statut_actif')
+      .eq('login', login)
+      .eq('site_id', siteId)
+      .abortSignal(controller.signal);
+
+    clearTimeout(timeoutId);
+
+    if (error) {
+      log.warn(`[syncCurrentUserActiveStatus] Erreur Supabase pour "${login}" : ${error.message}`);
+      return;
+    }
+    cloudRow = data && data.length > 0 ? data[0] : null;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
+      log.warn(`[SUPABASE] syncCurrentUserActiveStatus timeout pour "${login}". Aborted. Passing in degraded mode.`);
+    } else {
+      log.warn(`[syncCurrentUserActiveStatus] Exception pour "${login}" : ${err.message || err}`);
+    }
+    return;
+  }
+
+  // Compte présent côté Cloud et actif : rien à faire.
+  if (cloudRow && cloudRow.statut_actif === 1) {
+    return;
+  }
+
+  // Compte absent côté Cloud (supprimé) OU désactivé : réplique locale ciblée,
+  // strictement mono-colonne, sans toucher is_dirty ni aucune autre colonne.
+  try {
+    const db = getDatabase()!;
+    db.prepare(`UPDATE t_users SET statut_actif = 0 WHERE login = ?`).run(login);
+    log.warn(`[syncCurrentUserActiveStatus] Compte "${login}" désactivé/supprimé côté Cloud — statut_actif réaligné localement à 0.`);
+  } catch (err: any) {
+    log.warn(`[syncCurrentUserActiveStatus] Exception lors de la mise à jour locale de "${login}" : ${err.message || err}`);
+  }
+}
+
+/**
  * Pré-charge tous les utilisateurs depuis Supabase et les insère/met à jour
  * localement via un INSERT OR REPLACE.
  */
