@@ -15,6 +15,10 @@
 
 Validé par `npx tsc --noEmit` : 0 erreur.
 
+- **Session déjà ouverte non rafraîchie après création/modification d'un compte (chantier en cours)** : quand un administrateur crée ou modifie un compte OPERATEUR/ADMIN_CENTRE puis synchronise vers le Cloud, un poste déjà connecté sur un autre ordinateur ne voyait la mise à jour (nouveau compte, rôle ajouté ou retiré) qu'après un cycle passif de ~2h ou une fermeture/réouverture complète de l'application — un rôle retiré restait donc actif sur la session déjà ouverte pendant tout ce délai. Premier volet corrigé : un cycle de synchronisation dédié aux comptes/rôles (3 minutes, toujours actif, indépendant de la préférence de confort du cycle cartes) rapproche désormais rapidement la base locale de l'état Cloud. *Le rafraîchissement de la session déjà ouverte elle-même, pour appliquer le changement sans redémarrer l'application, fait l'objet d'un second volet à venir.*
+
+Validé par `npx tsc --noEmit` : 0 erreur.
+
 *Ce chantier de durcissement RBAC (recherche, listings, écritures sensibles) est désormais complet sur la famille de handlers `cartes:*` identifiée par l'audit initial. Un pattern similaire (identité fournie par le renderer) a été repéré sans audit approfondi sur les familles `sync:*`/`database:*`/`cmu:*` — à traiter dans un chantier séparé si souhaité.*
 
 ## 🚀 Nouveautés & Ergonomie

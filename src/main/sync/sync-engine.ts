@@ -17,6 +17,19 @@ const AUTO_DOWNSTREAM_INTERVAL_MS = 2 * 60 * 60 * 1000; // 2 heures
 // On attend 10s pour laisser l'UI s'installer complètement.
 const AUTO_DOWNSTREAM_INITIAL_DELAY_MS = 10 * 1000; // 10 secondes
 
+// ─── INTERVALLE DU CYCLE DOWNSTREAM COMPTES/RÔLES (SÉCURITÉ) ────────────────
+// 3 minutes — dédié EXCLUSIVEMENT à syncUsersFromCloud (comptes/rôles), TOUJOURS
+// actif après authentification, quelle que soit la préférence de confort
+// `auto_downstream_<id_user>` (celle-ci ne pilote QUE le cycle cartes de 2h
+// ci-dessus). Un rôle retiré ou modifié côté Cloud est un enjeu de sécurité :
+// il doit se répercuter rapidement sur tous les postes ouverts d'un même site,
+// sans attendre le cycle long de 2h ni une fermeture/réouverture de l'application.
+const USER_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+
+// Délai avant le PREMIER cycle comptes/rôles après login — même logique que
+// AUTO_DOWNSTREAM_INITIAL_DELAY_MS : laisser l'UI s'installer avant tout appel réseau.
+const USER_SYNC_INITIAL_DELAY_MS = 10 * 1000; // 10 secondes
+
 // ─── TYPES EXPORTÉS ─────────────────────────────────────────────────────────
 export type AutoDownstreamEvent =
   | { phase: 'start'; siteId: number }
@@ -85,6 +98,26 @@ class SyncEngine extends EventEmitter {
    */
   private pendingDownstreamDue: number | null = null;
 
+  // ── Cycle dédié comptes/rôles (3 minutes, TOUJOURS actif) ──────────────────
+  /**
+   * Timer récurrent du cycle de 3 minutes (syncUsersFromCloud uniquement).
+   * Initialisé par startUserAccountsSyncTimer() après login.
+   * Détruit par stopUserAccountsSyncTimer() après logout ou fermeture.
+   */
+  private userSyncTimer: NodeJS.Timeout | null = null;
+
+  /** Timer du délai initial avant le premier cycle comptes/rôles. */
+  private userSyncInitialDelay: NodeJS.Timeout | null = null;
+
+  /** Site ID pour lequel le cycle comptes/rôles est actif. null = inactif. */
+  private activeUserSyncSiteId: number | null = null;
+
+  /**
+   * Verrou anti-concurrence dédié au cycle comptes/rôles.
+   * Distinct de isDownstreamRunning : ce cycle est indépendant du cycle cartes de 2h.
+   */
+  private isUserSyncRunning = false;
+
   /**
    * Référence vers le BrowserWindow principal pour envoyer des notifications
    * discrètes vers le Renderer (footer de l'UI). Injectée via setMainWindow().
@@ -131,6 +164,7 @@ class SyncEngine extends EventEmitter {
   public destroy(): void {
     this.stopSyncCycle();
     this.stopAutoDownstreamTimer();
+    this.stopUserAccountsSyncTimer();
     networkMonitor.stop();
   }
 
@@ -203,6 +237,117 @@ class SyncEngine extends EventEmitter {
     }
     this.activeSiteId = null;
     this.pendingDownstreamDue = null;
+  }
+
+  // ── Cycle dédié comptes/rôles (3 minutes, TOUJOURS actif) ──────────────────
+
+  /**
+   * A appeler immédiatement après une authentification réussie, à côté de
+   * startAutoDownstreamTimer().
+   *
+   * @param siteId - L'identifiant de site de l'utilisateur connecté.
+   *
+   * Contrairement au cycle cartes de 2h (startAutoDownstreamTimer), ce cycle
+   * n'est PAS conditionné par la préférence de confort `auto_downstream_<id_user>` :
+   * un rôle retiré ou modifié côté Cloud doit se répercuter rapidement sur tous
+   * les postes ouverts, sans dépendre d'une préférence utilisateur. C'est un
+   * enjeu de sécurité, pas de confort.
+   *
+   * Comportement (même pattern que startAutoDownstreamTimer) :
+   *  - Un premier cycle est déclenché après USER_SYNC_INITIAL_DELAY_MS (10s).
+   *  - Puis un cycle récurrent de 3 minutes s'installe.
+   *  - Si le réseau est offline, ou qu'un autre cycle (upstream/verrou global)
+   *    est en cours au moment du tick, ce tick est simplement sauté ; le
+   *    suivant réessaiera automatiquement 3 minutes plus tard.
+   */
+  public startUserAccountsSyncTimer(siteId: number): void {
+    // Idempotence : si un timer (récurrent ou initial) est déjà actif pour le même site, on l'ignore.
+    if ((this.userSyncTimer !== null || this.userSyncInitialDelay !== null) && this.activeUserSyncSiteId === siteId) {
+      log.info(`[SyncEngine][UserSync] Timer (récurrent ou initial) déjà actif pour le site ${siteId}. Ignoré.`);
+      return;
+    }
+
+    // Si un autre site était actif (changement d'utilisateur), on nettoie d'abord.
+    this.stopUserAccountsSyncTimer();
+
+    this.activeUserSyncSiteId = siteId;
+    log.info(`[SyncEngine][UserSync] Démarrage du cycle de synchronisation comptes/rôles (3 min) pour le site ${siteId}.`);
+
+    this.userSyncInitialDelay = setTimeout(() => {
+      this.userSyncInitialDelay = null;
+      setImmediate(() => this.triggerUserAccountsSync(siteId));
+    }, USER_SYNC_INITIAL_DELAY_MS);
+
+    this.userSyncTimer = setInterval(() => {
+      setImmediate(() => this.triggerUserAccountsSync(siteId));
+    }, USER_SYNC_INTERVAL_MS);
+
+    // .unref() : le timer n'empêche pas Electron de quitter proprement.
+    this.userSyncTimer.unref();
+  }
+
+  /**
+   * A appeler lors d'un logout ou d'une fermeture de session.
+   * Stoppe proprement tous les timers du cycle comptes/rôles.
+   */
+  public stopUserAccountsSyncTimer(): void {
+    if (this.userSyncInitialDelay !== null) {
+      clearTimeout(this.userSyncInitialDelay);
+      this.userSyncInitialDelay = null;
+    }
+    if (this.userSyncTimer !== null) {
+      clearInterval(this.userSyncTimer);
+      this.userSyncTimer = null;
+    }
+    if (this.activeUserSyncSiteId !== null) {
+      log.info(`[SyncEngine][UserSync] Cycle comptes/rôles arrêté pour le site ${this.activeUserSyncSiteId}.`);
+    }
+    this.activeUserSyncSiteId = null;
+  }
+
+  /**
+   * Point d'entrée du cycle comptes/rôles (3 minutes).
+   * Réutilise telle quelle syncUsersFromCloud (src/main/sync/downstream.ts) —
+   * aucune autre opération de synchronisation n'est déclenchée ici.
+   *
+   * Gardes appliquées (même esprit que triggerAutoDownstream) :
+   *  - isUserSyncRunning : anti-chevauchement propre à ce cycle.
+   *  - globalSyncLocked : aucun cycle automatique pendant une opération destructrice.
+   *  - Réseau ONLINE requis.
+   *  - isSyncing (upstream) en cours -> tick sauté, reprise au tick suivant.
+   */
+  private async triggerUserAccountsSync(siteId: number): Promise<void> {
+    if (this.isUserSyncRunning) {
+      log.info('[SyncEngine][UserSync] Ignoré : un cycle comptes/rôles précédent est encore en cours.');
+      return;
+    }
+
+    if (this.globalSyncLocked) {
+      log.info('[SyncEngine][UserSync] Ignoré : verrou global actif (opération destructrice en cours).');
+      return;
+    }
+
+    const networkState = networkMonitor.getState();
+    if (networkState !== 'ONLINE') {
+      log.info(`[SyncEngine][UserSync] Réseau ${networkState} — cycle sauté (prochain essai dans ${USER_SYNC_INTERVAL_MS / 60000} min).`);
+      return;
+    }
+
+    // Si un cycle upstream est en cours, on attend le prochain tick (3 min plus tard)
+    // pour éviter des conflits de transaction sur SQLite.
+    if (this.isSyncing) {
+      log.info('[SyncEngine][UserSync] Ignoré : cycle upstream en cours. Reprise au prochain tick.');
+      return;
+    }
+
+    this.isUserSyncRunning = true;
+    try {
+      await syncUsersFromCloud(siteId);
+    } catch (err) {
+      log.warn(`[SyncEngine][UserSync] Erreur lors de la synchronisation comptes/rôles pour le site ${siteId} :`, err);
+    } finally {
+      this.isUserSyncRunning = false;
+    }
   }
 
   // ── Cycle Court : Upstream (30s) ──────────────────────────────────────────

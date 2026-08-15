@@ -231,6 +231,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           } catch (prefErr) {
             log.warn('Failed to read auto_downstream preference:', prefErr);
           }
+
+          // Cycle dédié comptes/rôles (3 min, sécurité) — TOUJOURS actif, indépendant
+          // de la préférence de confort `auto_downstream_<id_user>` ci-dessus (celle-ci
+          // ne pilote que le cycle cartes de 2h). Un rôle retiré/modifié côté Cloud doit
+          // se répercuter rapidement sur ce poste, même sans opt-in de l'utilisateur.
+          syncEngine.startUserAccountsSyncTimer(user.site_id);
         }
       }
       return user;
@@ -247,6 +253,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('auth:logout', async (_, login: string) => {
     try {
       syncEngine.stopAutoDownstreamTimer();
+      syncEngine.stopUserAccountsSyncTimer();
       await stopSessionHeartbeat();
       if (login) {
         queries.insertAuditLog(login, 'DECONNEXION', `DÃ©connexion volontaire de l'utilisateur ${login}.`);
