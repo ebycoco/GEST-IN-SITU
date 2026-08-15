@@ -385,6 +385,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // CARTES
   ipcMain.handle('cartes:getPage', async (_, offset, limit, filters) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre = union des
+    // 3 écrans appelants (TableCartesPage.tsx /table-cartes, CartesPage.tsx /cartes et
+    // /admin-centre/cartes, MesBrouillonsView.tsx /agent-saisie/brouillons), tel que défini par
+    // leurs ProtectedRoute respectives dans App.tsx.
+    const gateUser = getSecureCurrentUser();
+    if (!gateUser || !verifyUserRole(gateUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_SAISIE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
     try {
       // Sécurité (cloisonnement §3) : le recadrage site_id doit s'appliquer à TOUT rôle
       // non-SUPER-ADMIN (ADMIN_CENTRE, OPERATEUR_*, etc.), pas seulement ADMINISTRATEUR_SITE.
