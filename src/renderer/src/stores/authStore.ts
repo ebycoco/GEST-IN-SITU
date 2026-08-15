@@ -28,6 +28,7 @@ interface AuthState {
   setInitialDataProgress: (progress: number, stepText?: string) => void;
   setActiveRole: (role: string) => Promise<void>;
   checkAuth: () => Promise<void>;
+  applySessionUpdate: (payload: { roles: string[] }) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -126,7 +127,44 @@ export const useAuthStore = create<AuthState>((set) => ({
     });
   },
   checkAuth: async () => {
-    // Vérification de session locale (actuellement non implémentée/vide)
+    // Rafraîchit l'état local (nom/prénom/rôles) depuis l'instantané de session serveur
+    // (getSecureCurrentUser(), en mémoire côté main process) — utile au montage de l'app
+    // pour refléter une modification de compte (rôles) synchronisée par un admin pendant
+    // que ce poste était déjà ouvert, sans attendre une fermeture/réouverture. Comportement
+    // dégradé strict : en l'absence de session (utilisateur non connecté) ou en cas d'échec
+    // IPC, on ne touche PAS à l'état existant — jamais de reset ici (cf. onSessionExpired
+    // pour la déconnexion forcée, gérée ailleurs).
+    try {
+      const snapshot = await window.api?.auth?.getSessionSnapshot?.();
+      if (!snapshot || !snapshot.id_user) {
+        return;
+      }
+      set((state) => ({
+        user: {
+          ...state.user,
+          id_user: snapshot.id_user,
+          login: snapshot.login,
+          role: snapshot.role,
+          roles: snapshot.roles,
+          nom_user: snapshot.nom_user,
+          prenom_user: snapshot.prenom_user,
+          site_id: snapshot.site_id,
+          centre_id: snapshot.centre_id,
+        }
+      }));
+    } catch (e) {
+      console.error('Erreur lors de la vérification de session locale (checkAuth):', e);
+      // Ne pas réinitialiser la session en cas d'échec — comportement dégradé
+    }
+  },
+  applySessionUpdate: (payload) => {
+    // Mise à jour silencieuse et non destructive : uniquement la liste des rôles
+    // disponibles (déclenchée par le canal léger auth:session-updated après un pull de
+    // synchro ayant modifié t_user_roles pour l'utilisateur courant). Ne touche jamais
+    // site_id/centre_id ni le rôle actif sélectionné (state.user.role) — cf. consigne.
+    set((state) => ({
+      user: state.user ? { ...state.user, roles: payload.roles } : state.user
+    }));
   }
 }));
 

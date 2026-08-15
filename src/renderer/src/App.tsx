@@ -84,6 +84,12 @@ export default function App() {
       alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
     });
 
+    // Mise à jour silencieuse des rôles disponibles (compte modifié par un admin pendant que
+    // ce poste est déjà ouvert) — pas de toast/interruption UX, cf. consigne périmètre.
+    const unsubSessionUpdated = window.api?.auth?.onSessionUpdated?.((payload) => {
+      useAuthStore.getState().applySessionUpdate(payload);
+    });
+
     const unsubUpdateDownloaded = window.api?.updater?.onUpdateDownloaded?.(() => {
       setUpdateReady(true);
     });
@@ -91,6 +97,7 @@ export default function App() {
     return () => {
       if (unsubWarning) unsubWarning();
       if (unsubSessionExpired) unsubSessionExpired();
+      if (unsubSessionUpdated) unsubSessionUpdated();
       if (unsubUpdateDownloaded) unsubUpdateDownloaded();
     };
   }, [checkAuth]);
