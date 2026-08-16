@@ -44,6 +44,13 @@ Validé par `npx tsc --noEmit` : 0 erreur.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
 
+- **Pilotage des Activités de Terrain — 3 évolutions de l'onglet supervision** :
+  - L'onglet "Contrôle & Conformité" (renommé "Contrôles & Délivrances") compte désormais aussi les délivrances effectuées par OPERATEUR_VERIFICATION, en plus des actions d'OPERATEUR_QUALITE — jusqu'ici ces délivrances n'apparaissaient dans aucun onglet du tableau de bord.
+  - Le bouton "Actualiser" déclenche maintenant une récupération cloud avant de recharger les indicateurs (au lieu de ne relire que les données déjà en local), avec un nouvel indicateur "Dernière synchro : il y a X min" à proximité du bouton.
+  - Nouvel onglet "Mon équipe" dans le portail ADMIN_CENTRE : consultation en lecture seule de l'activité du jour (saisie, contrôles & délivrances, distribution & logistique) des agents de son propre centre, verrouillée sur ce centre, sans action destructive.
+
+Validé par `npx tsc --noEmit` : 0 erreur.
+
 ## 🛠️ Corrections & Fiabilité
 
 - **Bouton de synchro ("Synchroniser mes actions" / "mes saisies") restant inactif après une action métier, sur 3 portails** : après une délivrance de carte (OPERATEUR_VERIFICATION, ADMIN_CENTRE) ou une correction qualité (OPERATEUR_QUALITE), le compteur qui pilote l'état actif/inactif du bouton n'était jamais recalculé — l'agent devait quitter puis revenir sur l'écran (ou attendre jusqu'à 30 s pour ADMIN_CENTRE) avant de pouvoir synchroniser. Corrigé sur les 3 portails :

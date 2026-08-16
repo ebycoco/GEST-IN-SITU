@@ -108,6 +108,29 @@ export function SiteAdminView({
   );
   const [siteAgents, setSiteAgents] = React.useState<any[]>([]);
 
+  // Indicateur de fraîcheur du bouton "Actualiser" (Point 3) : horodatage local du
+  // dernier pull cloud réussi, distinct du watermark serveur t_config['last_downstream_sync_true']
+  // (qui reflète la position des données rapatriées, pas l'heure d'exécution du pull).
+  const [lastSyncAt, setLastSyncAt] = React.useState<Date | null>(null);
+  // Simple "tick" pour forcer le recalcul du libellé relatif ("il y a X min") sans
+  // dépendre d'un re-render déclenché par autre chose. Nettoyage systématique du
+  // timer au démontage pour éviter toute fuite mémoire/IPC.
+  const [freshnessTick, setFreshnessTick] = React.useState(0);
+  React.useEffect(() => {
+    const interval = setInterval(() => setFreshnessTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const syncFreshnessLabel = React.useMemo(() => {
+    if (!lastSyncAt) return null;
+    const diffMin = Math.floor((Date.now() - lastSyncAt.getTime()) / 60000);
+    if (diffMin < 1) return "Dernière synchro : à l'instant";
+    if (diffMin === 1) return "Dernière synchro : il y a 1 min";
+    return `Dernière synchro : il y a ${diffMin} min`;
+    // freshnessTick force le recalcul périodique du libellé relatif ; sa valeur n'est
+    // pas utilisée directement, seul son incrément (toutes les 60s) importe.
+  }, [lastSyncAt, freshnessTick]);
+
   React.useEffect(() => {
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (siteIdToUse) {
@@ -176,9 +199,9 @@ export function SiteAdminView({
     {
       key: 'qualite' as const,
       roleName: 'OPERATEUR_QUALITE',
-      label: '🛡️ Contrôle & Conformité',
+      label: '🛡️ Contrôles & Délivrances',
       data: filteredQualite,
-      description: "Nombre d'actions enregistrées aujourd'hui par chaque opérateur de contrôle & conformité.",
+      description: "Nombre d'actions enregistrées aujourd'hui par les opérateurs de contrôle qualité et de vérification (délivrances).",
       colHeader: "ACTIONS DU JOUR",
       noDataText: "Aucun opérateur de contrôle & conformité pour ce périmètre.",
       colorAccent: '#a78bfa',
@@ -521,32 +544,44 @@ export function SiteAdminView({
           </button>
         </div>
 
-        <button
-          onClick={() => {
-            const centreId = selectedCentreId ? Number(selectedCentreId) : undefined;
-            const agentId = selectedAgentId ? Number(selectedAgentId) : undefined;
-            const dateStr = selectedDate || undefined;
-            // Clic explicite utilisateur sur "Actualiser" : forceRefresh: true contourne
-            // le cache mémoire TTL 15s de stats:get (bug P1 agent-13 : KPI périmé jusqu'à
-            // 15s après un clic). Les autres appels à loadStats (chargement initial,
-            // rafraîchissements silencieux) restent inchangés et bénéficient toujours
-            // normalement de la mémoïsation.
-            loadStats(false, activeTab === 'supervision' ? { centreId, agentId, dateStr } : undefined, true);
-            toast.success("Tableau de bord actualisé");
-          }}
-          disabled={isStatsLoading}
-          className="btn"
-          style={{ 
-            display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
-            background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white', 
-            cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
-          }}
-          onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
-          onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
-        >
-          <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
-          {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {syncFreshnessLabel && (
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{syncFreshnessLabel}</span>
+          )}
+          <button
+            onClick={async () => {
+              const centreId = selectedCentreId ? Number(selectedCentreId) : undefined;
+              const agentId = selectedAgentId ? Number(selectedAgentId) : undefined;
+              const dateStr = selectedDate || undefined;
+              // Synchro forcée avant rechargement des stats (Point 3) : handlePullSiteCards()
+              // est appelé SANS ARGUMENT — passer l'event DOM du clic serait "truthy" et
+              // casserait la détection isAutomatic (garde-fou documenté dans
+              // useForceSyncActions.ts lignes 236-241). Son propre toast ("☁️ Récupération...")
+              // sert de confirmation ; on n'affiche donc plus de second toast ici pour éviter
+              // la double notification.
+              await handlePullSiteCards();
+              setLastSyncAt(new Date());
+              // Clic explicite utilisateur sur "Actualiser" : forceRefresh: true contourne
+              // le cache mémoire TTL 15s de stats:get (bug P1 agent-13 : KPI périmé jusqu'à
+              // 15s après un clic). Les autres appels à loadStats (chargement initial,
+              // rafraîchissements silencieux) restent inchangés et bénéficient toujours
+              // normalement de la mémoïsation.
+              await loadStats(false, activeTab === 'supervision' ? { centreId, agentId, dateStr } : undefined, true);
+            }}
+            disabled={isStatsLoading}
+            className="btn"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+              background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+              cursor: isStatsLoading ? 'not-allowed' : 'pointer', opacity: isStatsLoading ? 0.6 : 1, transition: 'all 0.2s'
+            }}
+            onMouseOver={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+            onMouseOut={(e) => { if (!isStatsLoading) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+          >
+            <RefreshCw size={16} style={{ animation: isStatsLoading ? 'spin 1.5s linear infinite' : 'none' }} />
+            {isStatsLoading ? 'Actualisation...' : 'Actualiser'}
+          </button>
+        </div>
       </div>
 
       {isStatsLoading && (!stats || stats.total === undefined) ? (

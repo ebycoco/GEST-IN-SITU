@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { 
-  Building2, Database, Globe, RefreshCw, 
-  LayoutDashboard, CreditCard, Search, BarChart2, Clock, FileText 
+import {
+  Building2, Database, Globe, RefreshCw,
+  LayoutDashboard, CreditCard, Search, BarChart2, Clock, FileText, Users
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
@@ -234,6 +234,9 @@ export default function AdminCentreLayout() {
           </NavLink>
           <NavLink to="/admin-centre/logs" className="tab-link" style={getNavLinkStyle}>
             <FileText size={16} /> Journaux
+          </NavLink>
+          <NavLink to="/admin-centre/equipe" className="tab-link" style={getNavLinkStyle}>
+            <Users size={16} /> Mon équipe
           </NavLink>
         </div>
       </div>

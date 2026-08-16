@@ -31,6 +31,7 @@ import RoleSelectorPage from './pages/RoleSelectorPage';
 // Portail Admin Centre
 import AdminCentreLayout from './pages/AdminCentre/AdminCentreLayout';
 import DashboardView from './pages/AdminCentre/views/DashboardView';
+import TeamActivityView from './pages/AdminCentre/views/TeamActivityView';
 
 // Imports Portail Vérification
 import AgentVerificationLayout from './pages/AgentVerification/AgentVerificationLayout';
@@ -134,6 +135,7 @@ export default function App() {
               <Route path="retraits" element={<RetraitsPage />} />
               <Route path="queue" element={<AdminQueuePage />} />
               <Route path="logs" element={<LogsPage />} />
+              <Route path="equipe" element={<TeamActivityView />} />
             </Route>
 
             {/* Routes Opérateur de Vérification & Admin */}

@@ -788,7 +788,7 @@ export function getSiteQualiteStatsToday(siteId: number, centreId?: number, agen
   const startOfDay = targetDate + ' 00:00:00';
   const endOfDay = targetDate + ' 23:59:59';
   
-  let whereClause = `WHERE u.site_id = ? AND (u.role = 'OPERATEUR_QUALITE' OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role = 'OPERATEUR_QUALITE'))`;
+  let whereClause = `WHERE u.site_id = ? AND (u.role IN ('OPERATEUR_QUALITE', 'OPERATEUR_VERIFICATION') OR EXISTS (SELECT 1 FROM t_user_roles ur WHERE ur.id_user = u.id_user AND ur.role IN ('OPERATEUR_QUALITE', 'OPERATEUR_VERIFICATION')))`;
   const params: unknown[] = [siteId];
 
   if (centreId) {
