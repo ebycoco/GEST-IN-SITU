@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 66;
+export const SCHEMA_VERSION = 67;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -443,6 +443,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number, isE
       log.info('Running migration v66: Structural integrity safety net (self-healing, inspecte sqlite_master/PRAGMA table_info plutÃ´t que de faire confiance Ã  user_version â€” rÃ©pare les postes affectÃ©s par le bug du filet de secours V64/V65)');
       migrateV66_structuralIntegrityNet(db);
     }
+
+    if (currentVersion < 67) {
+      log.info('Running migration v67: Adding doublon declaration/cancellation tracking columns to t_cartes (declarerDoublon/annulerDeclarationDoublon)');
+      migrateV67(db);
+    }
   } catch (seqError: any) {
     if (isEmergencyRetry) {
       // Garde anti-rÃ©cursion explicite : on est dÃ©jÃ  en train de rejouer la
@@ -790,6 +795,14 @@ function migrateV1(db: Database.Database): void {
       updated_by INTEGER DEFAULT NULL,
       contact_retirant TEXT,
       has_invalid_date INTEGER DEFAULT 0,
+      -- Déclaration manuelle de doublon (V67) — Vérification + Apurement
+      doublon_declare_par TEXT,
+      doublon_declare_le TEXT,
+      doublon_motif TEXT,
+      statut_avant_doublon TEXT,
+      doublon_annule_par TEXT,
+      doublon_annule_le TEXT,
+      doublon_motif_annulation TEXT,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
@@ -1978,6 +1991,18 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_cartes', 'agent_distributeur', 'TEXT');
   safeAlter('t_cartes', 'centre_retrait', 'TEXT');
   safeAlter('t_cartes', 'date_delivrance', 'TEXT');
+  // Déclaration manuelle de doublon (V67) — Vérification + Apurement des cahiers historiques.
+  // Garanti ici en plus de migrateV67 (ALTER TABLE guardé, séquence normale) car ce filet de
+  // sécurité universel s'exécute aussi sur le chemin d'installation fraîche (migrateV1 seul,
+  // sans runMigrationSequence) et sur la reconstruction d'urgence : sans ces safeAlter, une
+  // base neuve resterait dépourvue de ces colonnes si jamais migrateV1 divergeait un jour.
+  safeAlter('t_cartes', 'doublon_declare_par', 'TEXT');
+  safeAlter('t_cartes', 'doublon_declare_le', 'TEXT');
+  safeAlter('t_cartes', 'doublon_motif', 'TEXT');
+  safeAlter('t_cartes', 'statut_avant_doublon', 'TEXT');
+  safeAlter('t_cartes', 'doublon_annule_par', 'TEXT');
+  safeAlter('t_cartes', 'doublon_annule_le', 'TEXT');
+  safeAlter('t_cartes', 'doublon_motif_annulation', 'TEXT');
   try {
     db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
   } catch (indexErr: any) {
@@ -3709,4 +3734,52 @@ export function migrateV66_structuralIntegrityNet(db: Database.Database): void {
   // (ALTER TABLE ADD COLUMN via safeAlter, idempotent) — rien à ajouter ici.
 
   log.info('[MIGRATION V66] Filet d\'intégrité structurelle vérifié (état réel inspecté indépendamment de user_version).');
+}
+
+// =====================================================
+// MIGRATION V67 — Déclaration manuelle de doublon sur t_cartes
+//
+// Rend opérant le statut DOUBLON (déjà autorisé dans le CHECK(statut) depuis V59/V60, mais
+// jusqu'ici uniquement posé passivement par l'import CSV littéral, sans blocage ni
+// traçabilité). Ajoute 7 colonnes TEXT nullables pour tracer la déclaration/l'annulation
+// manuelle du statut DOUBLON par l'Opérateur Vérification (délivrance) et l'Opérateur
+// Apurement (émargement rétroactif du cahier historique) : auteur, date, motif — jamais
+// écrasés silencieusement même après annulation — et statut_avant_doublon, copie exacte du
+// statut antérieur pour restauration fidèle à l'annulation.
+//
+// Pattern ALTER TABLE ADD COLUMN gardé par PRAGMA table_info, identique à migrateV39
+// (contact_retirant) / migrateV63 (relation_retirant) / migrateV53 (liste de colonnes) :
+// purement additif, aucune donnée existante modifiée, aucune contrainte CHECK supplémentaire
+// (idempotent, sûr à rejouer).
+// =====================================================
+function migrateV67(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V67] Ajout des colonnes de traçabilité de la déclaration manuelle de doublon à t_cartes...');
+    const tableInfo = db.pragma('table_info(t_cartes)') as { name: string }[];
+    const existingCols = new Set(tableInfo.map(c => c.name));
+
+    const columnsToAdd = [
+      { name: 'doublon_declare_par', type: 'TEXT' },
+      { name: 'doublon_declare_le', type: 'TEXT' },
+      { name: 'doublon_motif', type: 'TEXT' },
+      { name: 'statut_avant_doublon', type: 'TEXT' },
+      { name: 'doublon_annule_par', type: 'TEXT' },
+      { name: 'doublon_annule_le', type: 'TEXT' },
+      { name: 'doublon_motif_annulation', type: 'TEXT' }
+    ];
+
+    for (const col of columnsToAdd) {
+      if (!existingCols.has(col.name)) {
+        db.exec(`ALTER TABLE t_cartes ADD COLUMN ${col.name} ${col.type};`);
+        log.info(`[MIGRATION V67] Colonne '${col.name}' ajoutee a t_cartes.`);
+      } else {
+        log.info(`[MIGRATION V67] Colonne '${col.name}' deja presente, migration ignoree.`);
+      }
+    }
+
+    log.info('[MIGRATION V67] Migration V67 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V67] Erreur :', e.message);
+    throw e;
+  }
 }

@@ -131,7 +131,10 @@ export function useVerificationSearch(
       if (directMatches.length > 0) {
         setResults(directMatches);
         setHasSearched(true);
-        if (directMatches.length === 1 && directMatches[0].statut_physique !== 'ABSENT' && directMatches[0].statut_physique !== 'PERDUE') {
+        // isDoublon exclu de l'auto-ouverture (comme DELIVRE) : la carte reste visible dans la
+        // liste de résultats, où SearchResults.tsx affiche le bandeau/bouton désactivé dédié —
+        // elle ne doit jamais atteindre directement le flux de délivrance (DeliveryModal).
+        if (directMatches.length === 1 && directMatches[0].statut_physique !== 'ABSENT' && directMatches[0].statut_physique !== 'PERDUE' && directMatches[0].statut !== 'DOUBLON') {
           setSelectedCarte(directMatches[0]);
           if (directMatches[0].statut === 'DELIVRE') {
             setShowProofModal(true);
@@ -209,7 +212,7 @@ export function useVerificationSearch(
     const carte = carteTrouveeParInversion!;
     setResults([carte]);
     setHasSearched(true);
-    if (carte.statut_physique !== 'ABSENT' && carte.statut_physique !== 'PERDUE') {
+    if (carte.statut_physique !== 'ABSENT' && carte.statut_physique !== 'PERDUE' && carte.statut !== 'DOUBLON') {
       setSelectedCarte(carte);
       if (carte.statut === 'DELIVRE') {
         setShowProofModal(true);
@@ -286,7 +289,7 @@ export function useVerificationSearch(
       setResults(searchResults);
       setHasSearched(true);
       
-      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT' && searchResults[0].statut_physique !== 'PERDUE') {
+      if (searchResults.length === 1 && searchResults[0].statut_physique !== 'ABSENT' && searchResults[0].statut_physique !== 'PERDUE' && searchResults[0].statut !== 'DOUBLON') {
         setSelectedCarte(searchResults[0]);
         if (searchResults[0].statut === 'DELIVRE') {
           setShowProofModal(true);
@@ -369,6 +372,38 @@ export function useVerificationSearch(
     }
   };
 
+  // Déclaration manuelle de doublon (plan validé) : le requérant affirme déjà détenir la carte
+  // (faite ailleurs). Blocage immédiat côté serveur (declarerDoublon(), cartes.queries.ts) —
+  // motif obligatoire, revalidé côté serveur même si déjà vérifié côté UI (DeliveryModal.tsx).
+  const handleDeclarerDoublon = async (selectedCarte: any, motif: string) => {
+    if (!selectedCarte) return;
+    if (!motif.trim()) {
+      toast.error('Le motif de la déclaration de doublon est obligatoire.');
+      return;
+    }
+    try {
+      await window.api.cartes.declarerDoublon(selectedCarte.id_carte, motif.trim());
+      toast.success('Carte déclarée en doublon. Elle ne pourra plus être délivrée.');
+
+      setShowReportModal(false);
+      setSelectedCarte(null);
+      setModalStep(1);
+
+      setNomComplet('');
+      setDdn('');
+      setSearchContactQuery('+225 ');
+      setResults([]);
+      setHasSearched(false);
+      setLieuNaissance('');
+      setContact('');
+
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
+    } catch (err: any) {
+      console.error('Failed to declare doublon:', err);
+      toast.error(`Erreur lors de la déclaration du doublon : ${err.message || err}`);
+    }
+  };
+
   const resetSearchFields = () => {
     setNomComplet('');
     setDdn('');
@@ -415,6 +450,7 @@ export function useVerificationSearch(
     handleSearch,
     handleContactSearch,
     handleSignalerAbsence,
+    handleDeclarerDoublon,
     resetSearchFields,
     formatPhoneString
   };

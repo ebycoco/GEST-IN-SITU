@@ -234,6 +234,7 @@ export function SearchResults({
           const isAuthorised = isAgentAuthorisedForCard(carte);
           const isAbsent = carte.statut_physique === 'ABSENT';
           const isPerdue = carte.statut_physique === 'PERDUE';
+          const isDoublon = carte.statut === 'DOUBLON';
 
           return (
             <div
@@ -287,6 +288,23 @@ export function SearchResults({
                     </span>
                   )}
                 </div>
+
+                {/* Bandeau DOUBLON : motif/auteur/date de la déclaration (traçabilité obligatoire) */}
+                {isDoublon && (
+                  <div style={{
+                    display: 'flex', flexDirection: 'column', gap: 4,
+                    padding: '10px 14px', borderRadius: 12,
+                    background: 'rgba(127, 29, 29, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)'
+                  }}>
+                    <span style={{ fontSize: 12, fontWeight: 800, color: '#f87171', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                      🚫 Déclarée en doublon
+                    </span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      Par {carte.doublon_declare_par || 'agent inconnu'} le {carte.doublon_declare_le ? new Date(carte.doublon_declare_le).toLocaleString('fr-FR') : 'date inconnue'}
+                      {carte.doublon_motif ? ` — Motif : ${carte.doublon_motif}` : ''}
+                    </span>
+                  </div>
+                )}
 
                 {/* Identity Info */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -354,6 +372,15 @@ export function SearchResults({
                     style={{ opacity: 0.6, cursor: 'not-allowed', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.3)', padding: '12px 24px' }}
                   >
                     ⏳ En cours de traitement par l'administration
+                  </button>
+                ) : isDoublon ? (
+                  <button
+                    disabled
+                    className="btn btn-secondary"
+                    style={{ opacity: 0.6, cursor: 'not-allowed', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.3)', padding: '12px 24px' }}
+                    title="Cette carte est déclarée en doublon et ne peut plus être délivrée. Contactez un administrateur pour vérifier ou annuler cette déclaration."
+                  >
+                    🚫 Doublon — non délivrable
                   </button>
                 ) : carte.statut === 'DELIVRE' ? (
                   <button

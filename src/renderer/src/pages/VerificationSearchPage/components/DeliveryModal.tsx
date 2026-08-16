@@ -20,6 +20,7 @@ interface DeliveryModalProps {
   resetModal: () => void;
   handleDeliver: () => Promise<void>;
   handleSignalerAbsence: (c: any, commentaire: string) => Promise<void>;
+  handleDeclarerDoublon: (c: any, motif: string) => Promise<void>;
   isUnclassifiedCard: (c: any) => boolean;
 }
 
@@ -40,9 +41,12 @@ export function DeliveryModal({
   resetModal,
   handleDeliver,
   handleSignalerAbsence,
+  handleDeclarerDoublon,
   isUnclassifiedCard
 }: DeliveryModalProps) {
   const [absenceComment, setAbsenceComment] = useState('');
+  const [doublonMotif, setDoublonMotif] = useState('');
+  const [isDeclaringDoublon, setIsDeclaringDoublon] = useState(false);
   const [fullCarte, setFullCarte] = useState<any>(null);
 
   const user = useAuthStore(s => s.user);
@@ -58,6 +62,10 @@ export function DeliveryModal({
     } else {
       setFullCarte(null);
     }
+    // Réinitialisation du motif de doublon à chaque changement de carte sélectionnée (nouvelle
+    // fonctionnalité additive) — n'affecte pas absenceComment, dont le cycle de vie existant
+    // (géré uniquement par resetModal()) est laissé inchangé.
+    setDoublonMotif('');
   }, [selectedCarte]);
 
   if (!showReportModal || !selectedCarte) return null;
@@ -84,7 +92,7 @@ export function DeliveryModal({
         <div style={{ padding: '20px 24px', borderBottom: '1px solid rgba(255, 255, 255, 0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
           <div>
             <h3 style={{ fontSize: 20, fontWeight: 900, color: 'white', margin: 0 }}>
-              {modalStep === 1 ? 'Vérification Physique' : modalStep === 2 ? 'Validation du Retrait' : 'Signalement d\'Absence'}
+              {modalStep === 1 ? 'Vérification Physique' : modalStep === 2 ? 'Validation du Retrait' : modalStep === 3 ? 'Signalement d\'Absence' : 'Déclaration de Doublon'}
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
               Carte CMU n° {displayCarte.num_secu || 'non spécifié'}
@@ -175,6 +183,16 @@ export function DeliveryModal({
                 >
                   <AlertTriangle size={18} />
                   Non, absente
+                </button>
+                <button
+                  onClick={() => setModalStep(4)}
+                  disabled={!canDeliver}
+                  className="btn btn-secondary"
+                  style={{ flex: 1, minWidth: 200, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, borderColor: 'rgba(127, 29, 29, 0.4)', color: '#f87171', background: 'rgba(127, 29, 29, 0.08)', opacity: !canDeliver ? 0.5 : 1, cursor: !canDeliver ? 'not-allowed' : 'pointer' }}
+                  title={!canDeliver ? "Vous n'avez pas l'autorisation de déclarer cette carte en doublon." : ""}
+                >
+                  <AlertTriangle size={18} />
+                  C'est un doublon (le requérant l'a déjà)
                 </button>
               </div>
             </div>
@@ -342,6 +360,60 @@ export function DeliveryModal({
                 <button
                   onClick={() => setModalStep(1)}
                   disabled={isFinalizing}
+                  className="btn btn-secondary"
+                  style={{ padding: '16px 20px' }}
+                >
+                  Retour
+                </button>
+              </div>
+            </div>
+          ) : modalStep === 4 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ margin: '0 auto 16px', background: 'rgba(127, 29, 29, 0.15)', width: 64, height: 64, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f87171' }}>
+                  <AlertTriangle size={32} />
+                </div>
+                <p style={{ fontSize: 16, fontWeight: 700, color: 'white', margin: '0 0 8px 0' }}>
+                  Déclarer cette carte comme doublon
+                </p>
+                <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+                  Le requérant affirme détenir déjà cette carte (délivrée ailleurs). Cette action bloque immédiatement toute délivrance ultérieure de cette fiche. Le motif est obligatoire et restera consultable même après une éventuelle annulation par un administrateur.
+                </p>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>Motif de la déclaration *</label>
+                <textarea
+                  value={doublonMotif}
+                  onChange={(e) => setDoublonMotif(e.target.value)}
+                  placeholder="Ex: Le requérant présente déjà sa carte CMU physique, délivrée au centre X le..."
+                  className="form-input"
+                  style={{ minHeight: 100, resize: 'vertical' }}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: 16, marginTop: 8 }}>
+                <button
+                  onClick={async () => {
+                    if (!doublonMotif.trim()) return;
+                    setIsDeclaringDoublon(true);
+                    try {
+                      await handleDeclarerDoublon(selectedCarte, doublonMotif);
+                    } finally {
+                      setIsDeclaringDoublon(false);
+                    }
+                  }}
+                  disabled={isDeclaringDoublon || !doublonMotif.trim()}
+                  className="btn btn-primary"
+                  style={{ flex: 1, padding: '16px 28px', height: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, background: '#7f1d1d', borderColor: '#7f1d1d', color: 'white', opacity: (isDeclaringDoublon || !doublonMotif.trim()) ? 0.6 : 1, cursor: (isDeclaringDoublon || !doublonMotif.trim()) ? 'not-allowed' : 'pointer' }}
+                >
+                  {isDeclaringDoublon ? <Loader className="animate-spin" size={18} /> : <AlertTriangle size={18} />}
+                  {isDeclaringDoublon ? 'Déclaration...' : 'Confirmer le doublon'}
+                </button>
+                <button
+                  onClick={() => setModalStep(1)}
+                  disabled={isDeclaringDoublon}
                   className="btn btn-secondary"
                   style={{ padding: '16px 20px' }}
                 >

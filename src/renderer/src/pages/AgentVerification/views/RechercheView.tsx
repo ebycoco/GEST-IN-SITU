@@ -127,7 +127,7 @@ export default function RechercheView() {
     contact, setContact, results, hasSearched, isSearching, searchMode, setSearchMode,
     searchContactQuery, setSearchContactQuery, showInversionModal, handleConfirmInversion,
     handleRejectInversion, nomSaisiInfo, prenomSaisiInfo, handleClear, handleSearch,
-    handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString,
+    handleContactSearch, handleSignalerAbsence, handleDeclarerDoublon, resetSearchFields, formatPhoneString,
     cloudResults, setCloudResults, isCloudSearching, cloudSearchDone
   } = useVerificationSearch(
     user, activeSiteId, false, adminSiteFilter, setAdminSiteFilter,
@@ -260,6 +260,7 @@ export default function RechercheView() {
         resetModal={resetModal}
         handleDeliver={handleDeliver}
         handleSignalerAbsence={handleSignalerAbsence}
+        handleDeclarerDoublon={handleDeclarerDoublon}
         isUnclassifiedCard={isUnclassifiedCard}
       />
 

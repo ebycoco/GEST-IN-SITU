@@ -578,7 +578,7 @@ export function delivrerCarte(
 
   const runTx = db.transaction(() => {
     // Vérifier l'existence et l'accès à la carte
-    const carte = db.prepare('SELECT contact, sync_id, site_id, centre_id FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { contact: string | null; sync_id: string | null; site_id: number; centre_id: number | null } | undefined;
+    const carte = db.prepare('SELECT contact, sync_id, site_id, centre_id, statut FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { contact: string | null; sync_id: string | null; site_id: number; centre_id: number | null; statut: string } | undefined;
 
     if (!carte) {
       throw new Error("Carte introuvable, déjà distribuée, ou accès non autorisé pour votre site.");
@@ -588,6 +588,14 @@ export function delivrerCarte(
       if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
         throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
       }
+    }
+
+    // Double verrou DOUBLON (plan validé) : une carte déclarée DOUBLON (déclaration manuelle,
+    // cf. declarerDoublon() ci-dessous) ne doit plus jamais être délivrable, quel que soit le
+    // circuit emprunté — celui-ci (délivrance classique) ou updateApurementHistorique()
+    // (cahier historique). Blocage immédiat, avant toute écriture.
+    if (carte.statut === 'DOUBLON') {
+      throw new Error("Action refusée : cette carte est déclarée en doublon et ne peut plus être délivrée. Contactez un administrateur pour vérifier ou annuler cette déclaration.");
     }
 
     let contactToUpdate = null;
@@ -681,6 +689,201 @@ export function delivrerCarte(
       db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
       const result = runTx();
       log.info('[delivrerCarte] Délivrance exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Déclare manuellement une carte comme DOUBLON — blocage immédiat de la délivrance, sur les
+ * deux circuits existants (délivrance classique via delivrerCarte() ET émargement rétroactif
+ * du cahier historique via updateApurementHistorique(), voir les verrous ajoutés dans ces deux
+ * fonctions ci-dessus/ci-dessous). Traçabilité obligatoire (auteur + date + motif), jamais
+ * écrasée silencieusement, même après une annulation ultérieure (cf.
+ * annulerDeclarationDoublon()). Utilisée par l'Opérateur Vérification (le requérant affirme
+ * déjà détenir la carte, faite ailleurs) et l'Opérateur Apurement (cahier d'émargement
+ * rétroactif) — le RBAC exact (rôles autorisés) est appliqué côté IPC handler
+ * (cartes:declarerDoublon), jamais ici.
+ */
+export function declarerDoublon(
+  id: number,
+  motif: string,
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
+) {
+  const db = getDatabase()!;
+
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    // Vérifier l'existence et l'accès à la carte — même modèle de cloisonnement que delivrerCarte()
+    const carte = db.prepare('SELECT sync_id, site_id, centre_id, statut, doublon_declare_par, doublon_declare_le FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { sync_id: string | null; site_id: number; centre_id: number | null; statut: string; doublon_declare_par: string | null; doublon_declare_le: string | null } | undefined;
+
+    if (!carte) {
+      throw new Error("Carte introuvable, ou accès non autorisé pour votre site.");
+    }
+
+    if (currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
+      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
+    if (carte.statut === 'DELIVRE') {
+      throw new Error("Cette carte a déjà été délivrée — utilisez la preuve de retrait existante, contactez un administrateur en cas de suspicion de fraude.");
+    }
+
+    if (carte.statut === 'DOUBLON') {
+      throw new Error(`Cette carte est déjà déclarée en doublon depuis le ${carte.doublon_declare_le || 'date inconnue'} par ${carte.doublon_declare_par || 'un agent inconnu'}.`);
+    }
+
+    const now = new Date().toISOString();
+
+    const query = `
+      UPDATE t_cartes SET
+        statut = 'DOUBLON',
+        statut_avant_doublon = @statut_avant_doublon,
+        doublon_declare_par = @declare_par,
+        doublon_declare_le = @now,
+        doublon_motif = @motif,
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `;
+
+    const params: any = {
+      id,
+      statut_avant_doublon: carte.statut,
+      declare_par: currentUser?.login || 'ADMIN',
+      motif,
+      now,
+      updated_by: currentUser?.id_user || null
+    };
+
+    const result = db.prepare(query).run(params);
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de la déclaration du doublon.");
+    }
+
+    // Synchroniser vers Supabase — même mécanisme (payload complet relu) que delivrerCarte(),
+    // pour les mêmes raisons (un payload minimal { sync_id } fait échouer mapCardPayload()).
+    if (carte.sync_id) {
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return result;
+  });
+
+  // Filet de rattrapage FTS5 repris de delivrerCarte() par cohérence avec le mécanisme déjà
+  // éprouvé sur ce trigger. Coût nul en pratique : cette UPDATE ne touche pas les colonnes
+  // surveillées par trg_cartes_au (noms/prenoms/num_secu/contact/lieu_de_naissance/rangement),
+  // le trigger ne se déclenchant donc pas ici — filet purement défensif si sa définition venait
+  // à évoluer.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[declarerDoublon] FTS5 shadow tables corrompues. Suppression du trigger pour déclaration sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[declarerDoublon] Déclaration exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Annule une déclaration de doublon — restaure le statut antérieur exact
+ * (statut_avant_doublon, ou 'EN STOCK' par défaut si absent faute d'historique) et journalise
+ * l'annulation (auteur + date + motif). Les colonnes de la déclaration d'origine
+ * (doublon_declare_par/le/motif) ne sont JAMAIS effacées ni réécrites ici : l'historique de la
+ * déclaration initiale reste consultable même après annulation. Réservé aux rôles SUPER ADMIN /
+ * ADMINISTRATEUR_SITE / ADMIN_CENTRE (jamais l'opérateur qui a déclaré) — le RBAC exact est
+ * appliqué côté IPC handler (cartes:annulerDoublon), jamais ici.
+ */
+export function annulerDeclarationDoublon(
+  id: number,
+  motifAnnulation: string,
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
+) {
+  const db = getDatabase()!;
+
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    const carte = db.prepare('SELECT sync_id, site_id, centre_id, statut FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { sync_id: string | null; site_id: number; centre_id: number | null; statut: string } | undefined;
+
+    if (!carte) {
+      throw new Error("Carte introuvable, ou accès non autorisé pour votre site.");
+    }
+
+    if (currentUser && currentUser.role === 'ADMIN_CENTRE') {
+      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
+    if (carte.statut !== 'DOUBLON') {
+      throw new Error("Cette carte n'est pas déclarée en doublon — aucune annulation à effectuer.");
+    }
+
+    const now = new Date().toISOString();
+
+    const query = `
+      UPDATE t_cartes SET
+        statut = COALESCE(statut_avant_doublon, 'EN STOCK'),
+        doublon_annule_par = @annule_par,
+        doublon_annule_le = @now,
+        doublon_motif_annulation = @motif_annulation,
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `;
+
+    const params: any = {
+      id,
+      annule_par: currentUser?.login || 'ADMIN',
+      motif_annulation: motifAnnulation,
+      now,
+      updated_by: currentUser?.id_user || null
+    };
+
+    const result = db.prepare(query).run(params);
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de l'annulation de la déclaration de doublon.");
+    }
+
+    if (carte.sync_id) {
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return result;
+  });
+
+  // Filet de rattrapage FTS5 — voir commentaire équivalent dans declarerDoublon() ci-dessus.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[annulerDeclarationDoublon] FTS5 shadow tables corrompues. Suppression du trigger pour annulation sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[annulerDeclarationDoublon] Annulation exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
       nuclearResetFts5();
       return result;
     }
@@ -1392,7 +1595,15 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
 export function updateApurementHistorique(id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  
+
+  // Double verrou DOUBLON (plan validé) : même verrou que delivrerCarte() — une carte déclarée
+  // DOUBLON ne doit plus jamais être délivrable, y compris via l'émargement rétroactif du
+  // cahier historique (Apurement). Vérifié avant toute écriture.
+  const carte = db.prepare('SELECT statut FROM t_cartes WHERE id_carte = ?').get(id) as { statut: string } | undefined;
+  if (carte?.statut === 'DOUBLON') {
+    throw new Error("Action refusée : cette carte est déclarée en doublon et ne peut plus être émargée. Contactez un administrateur pour vérifier ou annuler cette déclaration.");
+  }
+
   return db.prepare(`
     UPDATE t_cartes 
     SET statut = 'DELIVRE',

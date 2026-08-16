@@ -94,8 +94,12 @@ const api = {
       ipcRenderer.invoke('cartes:delivrer', id, data, currentUser),
     transferer: (id: number, data: { centre_id: number; rangement?: string; agent_transfert: string }, currentUser?: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('cartes:transferer', id, data, currentUser),
-    signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any): Promise<any> => 
+    signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any): Promise<any> =>
       ipcRenderer.invoke('cartes:signalerAbsence', id, agentLogin, agentInfo, commentaire, currentUser),
+    declarerDoublon: (id: number, motif: string): Promise<any> =>
+      ipcRenderer.invoke('cartes:declarerDoublon', id, motif),
+    annulerDoublon: (id: number, motifAnnulation: string): Promise<any> =>
+      ipcRenderer.invoke('cartes:annulerDoublon', id, motifAnnulation),
     getAbsences: (siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAbsences', siteId),
     getAbsencesCentre: (centreId: number): Promise<ICarte[]> =>

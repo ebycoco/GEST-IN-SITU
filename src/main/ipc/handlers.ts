@@ -1332,6 +1332,97 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:delivrer', e); throw e; }
   });
 
+  ipcMain.handle('cartes:declarerDoublon', async (_, id, motif) => {
+    // Sécurité : identité et périmètre dérivés exclusivement de la session serveur (non
+    // falsifiable via IPC), calqué sur cartes:delivrer — currentUser (renderer) n'est jamais
+    // utilisé. Deux usages légitimes : Opérateur Vérification (le requérant affirme déjà
+    // détenir la carte, faite ailleurs — SearchResults.tsx/DeliveryModal.tsx) et Opérateur
+    // Apurement (cahier d'émargement rétroactif — InventaireApurement.tsx, bouton gaté par rôle
+    // côté UI). Rôles admin inclus pour permettre une déclaration directe sans détour opérateur.
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_APUREMENT'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:declarerDoublon : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour déclarer cette carte en doublon.");
+    }
+
+    const motifTrimmed = typeof motif === 'string' ? motif.trim() : '';
+    if (!motifTrimmed) {
+      throw new Error("Le motif de la déclaration de doublon est obligatoire.");
+    }
+
+    try {
+      const res = await queries.declarerDoublon(id, motifTrimmed, resolvedUser as any);
+      queries.insertAuditLog(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_DOUBLON_DECLAREE',
+        `Carte ID ${id} déclarée en doublon par ${resolvedUser?.login || 'SYSTEM'}. Motif : ${motifTrimmed}`
+      );
+      // Couverture CRUD_SYNC_WHITELIST (même pattern que cartes:delivrer ci-dessus) : en plus de
+      // insertAuditLog() ci-dessus (t_audit_log local), la déclaration devient visible
+      // cross-poste via t_logs/logAudit().
+      logAudit(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_DOUBLON_DECLAREE',
+        JSON.stringify({ id_carte: id, motif: motifTrimmed })
+      );
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      return res;
+    }
+    catch (e) { log.error('IPC Error: cartes:declarerDoublon', e); throw e; }
+  });
+
+  ipcMain.handle('cartes:annulerDoublon', async (_, id, motifAnnulation) => {
+    // Sécurité : identité et périmètre dérivés exclusivement de la session serveur. Annulation
+    // volontairement réservée aux rôles d'administration (plan validé) : jamais l'opérateur qui
+    // a déclaré le doublon, pour garder une séparation des responsabilités sur une action à
+    // fort impact (redonne une carte délivrable).
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:annulerDoublon : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour annuler cette déclaration de doublon.");
+    }
+
+    const motifAnnulationTrimmed = typeof motifAnnulation === 'string' ? motifAnnulation.trim() : '';
+    if (!motifAnnulationTrimmed) {
+      throw new Error("Le motif de l'annulation est obligatoire.");
+    }
+
+    try {
+      const res = await queries.annulerDeclarationDoublon(id, motifAnnulationTrimmed, resolvedUser as any);
+      queries.insertAuditLog(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_DOUBLON_ANNULEE',
+        `Déclaration de doublon annulée pour la carte ID ${id} par ${resolvedUser?.login || 'SYSTEM'}. Motif : ${motifAnnulationTrimmed}`
+      );
+      logAudit(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_DOUBLON_ANNULEE',
+        JSON.stringify({ id_carte: id, motif_annulation: motifAnnulationTrimmed })
+      );
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      return res;
+    }
+    catch (e) { log.error('IPC Error: cartes:annulerDoublon', e); throw e; }
+  });
+
   ipcMain.handle('cartes:transferer', async (_, id, data) => {
     // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur (non
     // falsifiable via IPC) — currentUser (renderer) n'est plus utilisé. Ce handler n'avait

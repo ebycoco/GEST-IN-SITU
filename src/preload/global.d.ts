@@ -59,6 +59,8 @@ declare global {
         delivrer: (id: number, data: any, currentUser?: any) => Promise<boolean>;
         transferer: (id: number, data: { centre_id: number; rangement?: string; agent_transfert: string }, currentUser?: any) => Promise<any>;
         signalerAbsence: (id: number, agentLogin: string, agentInfo: string, commentaire?: string, currentUser?: any) => Promise<boolean>;
+        declarerDoublon: (id: number, motif: string) => Promise<any>;
+        annulerDoublon: (id: number, motifAnnulation: string) => Promise<any>;
         getAbsences: (siteId?: number) => Promise<any[]>;
         getAbsencesCentre: (centreId: number) => Promise<any[]>;
         getEscaladesResoluesCentre: (centreId: number) => Promise<any[]>;

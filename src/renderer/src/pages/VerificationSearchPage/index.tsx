@@ -224,7 +224,7 @@ export default function VerificationSearchPage() {
     searchContactQuery, setSearchContactQuery, showInversionModal, handleConfirmInversion,
     handleRejectInversion, nomSaisiInfo, prenomSaisiInfo, handleClear, handleSearch,
     cloudResults, setCloudResults, isCloudSearching, cloudSearchDone,
-    handleContactSearch, handleSignalerAbsence, resetSearchFields, formatPhoneString
+    handleContactSearch, handleSignalerAbsence, handleDeclarerDoublon, resetSearchFields, formatPhoneString
   } = useVerificationSearch(
     user, activeSiteId, isAdmin, adminSiteFilter, setAdminSiteFilter,
     setSelectedCarte, setShowReportModal, setModalStep, setShowProofModal
@@ -550,6 +550,7 @@ export default function VerificationSearchPage() {
         resetModal={resetModal}
         handleDeliver={handleDeliver}
         handleSignalerAbsence={handleSignalerAbsence}
+        handleDeclarerDoublon={handleDeclarerDoublon}
         isUnclassifiedCard={isUnclassifiedCard}
       />
 

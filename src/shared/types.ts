@@ -28,7 +28,7 @@ export interface ICarte {
   contact: string;
   lieu_enrolement: string;
   rangement: string;
-  statut: 'EN STOCK' | 'DELIVRE' | 'ANNULE';
+  statut: 'EN STOCK' | 'DELIVRE' | 'DISTRIBUEE' | 'RETIRE' | 'ANNULE' | 'BROUILLON' | 'DOUBLON';
   date_delivrance: string | null;
   agent_saisie: string;
   nom_retirant: string | null;
@@ -46,6 +46,14 @@ export interface ICarte {
   created_by?: number | null;
   created_at?: string;
   updated_at?: string;
+  // Déclaration manuelle de doublon (V67) — Vérification + Apurement des cahiers historiques
+  doublon_declare_par?: string | null;
+  doublon_declare_le?: string | null;
+  doublon_motif?: string | null;
+  statut_avant_doublon?: string | null;
+  doublon_annule_par?: string | null;
+  doublon_annule_le?: string | null;
+  doublon_motif_annulation?: string | null;
 }
 
 export interface ISite {

@@ -25,6 +25,14 @@ export default function InventaireApurement() {
   const [relationRetirant, setRelationRetirant] = useState('SOI-MEME');
   const [loading, setLoading] = useState(false);
 
+  // Déclaration manuelle de doublon (plan validé) — depuis le cahier d'émargement rétroactif.
+  // Bouton strictement gaté par rôle OPERATEUR_APUREMENT plus bas (composant partagé avec le
+  // module Inventaire, monté aussi par OPERATEUR_INVENTAIRE/OPERATEUR_LOGISTIQUE qui ne doivent
+  // pas voir cette action).
+  const [showDoublonForm, setShowDoublonForm] = useState(false);
+  const [doublonMotif, setDoublonMotif] = useState('');
+  const [isDeclaringDoublon, setIsDeclaringDoublon] = useState(false);
+
   // Focus Refs
   const searchInputRef = useRef<HTMLInputElement>(null);
   const dateDelivranceRef = useRef<HTMLInputElement>(null);
@@ -173,11 +181,34 @@ export default function InventaireApurement() {
     setNumRetirant('');
     setRelationRetirant('SOI-MEME');
     setDateDelivrance(new Date().toISOString().split('T')[0]);
+    setShowDoublonForm(false);
+    setDoublonMotif('');
     setTimeout(() => {
       if (searchInputRef.current) {
         searchInputRef.current.focus();
       }
     }, 50);
+  };
+
+  // Déclaration manuelle de doublon (plan validé) : blocage immédiat côté serveur
+  // (declarerDoublon(), cartes.queries.ts) — motif obligatoire, revalidé côté serveur même si
+  // déjà vérifié ici.
+  const handleDeclarerDoublon = async () => {
+    if (!selectedCarte) return;
+    if (!doublonMotif.trim()) {
+      toast.error('Le motif de la déclaration de doublon est obligatoire.');
+      return;
+    }
+    try {
+      setIsDeclaringDoublon(true);
+      await window.api.cartes.declarerDoublon(selectedCarte.id_carte, doublonMotif.trim());
+      toast.success('Carte déclarée en doublon. Elle ne pourra plus être émargée.');
+      resetState();
+    } catch (err: any) {
+      toast.error(`Erreur lors de la déclaration du doublon : ${err.message || err}`);
+    } finally {
+      setIsDeclaringDoublon(false);
+    }
   };
 
   return (
@@ -422,6 +453,58 @@ export default function InventaireApurement() {
                 Valider l'Apurement (Entrée) <ArrowRight size={18} />
               </button>
             </div>
+
+            {/* Déclaration manuelle de doublon (plan validé) — gatée strictement par rôle
+                OPERATEUR_APUREMENT : ce composant est aussi monté par le module Inventaire
+                (OPERATEUR_INVENTAIRE, OPERATEUR_LOGISTIQUE via /inventaire), qui ne doit pas
+                voir cette action. */}
+            {user?.role === 'OPERATEUR_APUREMENT' && (
+              <div style={{ marginTop: 8, padding: 16, background: 'rgba(127, 29, 29, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {!showDoublonForm ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowDoublonForm(true)}
+                    style={{ alignSelf: 'flex-start', padding: '10px 16px', background: 'transparent', border: '1px solid rgba(239, 68, 68, 0.4)', borderRadius: 10, color: '#f87171', fontWeight: 700, fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                  >
+                    <AlertTriangle size={16} />
+                    Marquer comme doublon
+                  </button>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12, fontWeight: 800, color: '#f87171', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <AlertTriangle size={14} />
+                      Le requérant détient déjà cette carte (faite ailleurs)
+                    </div>
+                    <textarea
+                      className="form-input"
+                      style={{ width: '100%', minHeight: 80, borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', padding: 12, outline: 'none', resize: 'vertical' }}
+                      placeholder="Motif obligatoire — Ex : Le requérant présente déjà sa carte CMU physique, délivrée au centre X le..."
+                      value={doublonMotif}
+                      onChange={e => setDoublonMotif(e.target.value)}
+                      required
+                    />
+                    <div style={{ display: 'flex', gap: 12 }}>
+                      <button
+                        type="button"
+                        onClick={() => { setShowDoublonForm(false); setDoublonMotif(''); }}
+                        disabled={isDeclaringDoublon}
+                        style={{ flex: 1, padding: 12, background: '#1e2235', border: 'none', borderRadius: 10, color: 'white', fontWeight: 600, cursor: 'pointer' }}
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeclarerDoublon}
+                        disabled={isDeclaringDoublon || !doublonMotif.trim()}
+                        style={{ flex: 1.5, padding: 12, background: '#7f1d1d', border: 'none', borderRadius: 10, color: 'white', fontWeight: 800, cursor: (isDeclaringDoublon || !doublonMotif.trim()) ? 'not-allowed' : 'pointer', opacity: (isDeclaringDoublon || !doublonMotif.trim()) ? 0.6 : 1 }}
+                      >
+                        {isDeclaringDoublon ? 'Déclaration...' : 'Confirmer le doublon'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </form>
         )}
       </div>
