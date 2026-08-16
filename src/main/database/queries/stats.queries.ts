@@ -802,14 +802,28 @@ export function getSiteQualiteStatsToday(siteId: number, centreId?: number, agen
 
   params.unshift(startOfDay, endOfDay);
 
+  // Filtre sur la nature de l'action (P2 QA terrain, agent-13, suite au commit 07d476a) : sans
+  // ce filtre, le LEFT JOIN t_logs comptait TOUTE action journalière de l'utilisateur (LOGIN
+  // inclus), pas seulement les actions de contrôle qualité/délivrance attendues par ce
+  // compteur "ACTIONS DU JOUR". Actions retenues (vérifiées dans le code réel, cf. rapport) :
+  // - CARTE_DELIVREE : délivrance de carte (cartes:delivrer), chemin réel d'OPERATEUR_VERIFICATION.
+  // - CMU_MODIFICATION : correction qualité (cmu:updateCarte), chemin réel emprunté par
+  //   CorrectionSidePanel.onSave dans le portail Qualité (DoublonsView, InvalidFormatView,
+  //   MissingDataView) pour OPERATEUR_QUALITE. Les actions QUALITE_FUSION/QUALITE_CORRECTION/
+  //   QUALITE_NETTOYAGE/QUALITE_MASSE (handlers qualite:*) ne sont volontairement PAS incluses
+  //   ici : elles ne figurent pas dans CRUD_SYNC_WHITELIST (audit.ts) et ne transitent donc
+  //   jamais par t_logs (uniquement t_audit_log, local, non synchronisé cross-poste).
+  const relevantActions = ['CARTE_DELIVREE', 'CMU_MODIFICATION'];
+  const actionPlaceholders = relevantActions.map(() => '?').join(', ');
+
   return db.prepare(`
     SELECT u.id_user, u.login, u.nom_user, u.prenom_user, u.centre_id, COUNT(l.id_log) as total_actions
     FROM t_users u
-    LEFT JOIN t_logs l ON u.id_user = l.id_user AND l.date_heure >= ? AND l.date_heure <= ?
+    LEFT JOIN t_logs l ON u.id_user = l.id_user AND l.date_heure >= ? AND l.date_heure <= ? AND l.action IN (${actionPlaceholders})
     ${whereClause}
     GROUP BY u.id_user
     ORDER BY total_actions DESC
-  `).all(...params);
+  `).all(...params.slice(0, 2), ...relevantActions, ...params.slice(2));
 }
 
 export function getSiteLogistiqueStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {
