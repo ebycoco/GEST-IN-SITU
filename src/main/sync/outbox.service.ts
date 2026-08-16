@@ -223,8 +223,22 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false): 
 
       const newAttempts = entry.attempts + 1;
 
-      // Vérification du seuil de tentatives avant tout appel réseau
-      if (newAttempts > MAX_OUTBOX_ATTEMPTS) {
+      // Vérification du seuil de tentatives avant tout appel réseau — UNIQUEMENT sur le
+      // chemin rapide/immédiat (post-mutation, fromPeriodicCycle=false) : on parque vite en
+      // ERROR pour ne pas marteler Supabase en boucle serrée juste après une action
+      // utilisateur qui échoue pour une raison structurelle.
+      // Sur le chemin cycle périodique (fromPeriodicCycle=true), ce plafond est
+      // volontairement désactivé : c'est justement là qu'atterrissent les entrées promues
+      // par _promoteEligibleErrorsToPending (attempts déjà > MAX_OUTBOX_ATTEMPTS, jamais
+      // réinitialisé) — sans cette exception, une entrée déjà en ERROR ne recevrait plus
+      // jamais de vraie tentative réseau après promotion, seulement une comptabilité de
+      // timestamp/backoff. L'espacement croissant (jusqu'à 24h) est déjà garanti par ce
+      // backoff, et la visibilité admin par le badge outboxErrorCount (dashboard) — donc
+      // plus besoin d'un couperet définitif ici : l'entrée retente indéfiniment jusqu'à
+      // réussite ou intervention humaine. Un nouvel échec repasse par _markOutboxError
+      // plus bas (branche supabaseError), qui met à jour last_attempt_at et fait croître
+      // attempts pour le calcul du prochain backoff.
+      if (!fromPeriodicCycle && newAttempts > MAX_OUTBOX_ATTEMPTS) {
         _markOutboxError(db, entry.id, newAttempts, `Nombre maximum de tentatives (${MAX_OUTBOX_ATTEMPTS}) atteint.`);
         log.error(`[OutboxService] Entrée ${entry.id} (${entry.table_name}) basculée en ERROR après ${MAX_OUTBOX_ATTEMPTS} tentatives.`);
         errors++;
