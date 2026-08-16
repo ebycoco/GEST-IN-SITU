@@ -347,7 +347,79 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
 
   log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud. Sending to Worker...`);
 
-  // 3. Délégation au Worker pour l'insertion SQLite (zéro gel UI)
+  // 3. Délégation au Worker pour l'insertion SQLite (zéro gel UI), avec retry borné sur
+  // erreur transitoire de verrouillage (voir writeChunkViaWorker ci-dessous).
+  return writeChunkViaWorkerWithRetry(cloudCards, watermark, lastSyncId, siteId);
+}
+
+/**
+ * Nombre de tentatives SUPPLÉMENTAIRES (en plus de la première) en cas d'échec du
+ * DownloadWorker pour une erreur SQLite transitoire de verrouillage (SQLITE_BUSY,
+ * message "database is locked"). Ce type d'erreur peut survenir lors d'une collision
+ * de courte durée avec un autre écrivain SQLite (ex: cycle comptes/rôles 3 min) malgré
+ * les verrous anti-concurrence du SyncEngine (cf. sync-engine.ts, beginManualDownstream /
+ * triggerUserAccountsSync) — ce retry est une deuxième ligne de défense, pas un
+ * remplacement des verrous.
+ * Politique low-memory (§2 CLAUDE.md) : nombre de tentatives et délai bornés, pas de
+ * boucle serrée ni de retry infini.
+ */
+const CHUNK_WRITE_MAX_RETRIES = 2;
+const CHUNK_WRITE_RETRY_DELAY_MS = 1500;
+
+function isTransientSqliteLockError(err: any): boolean {
+  const msg = String(err?.message || err || '');
+  return msg.includes('database is locked') || msg.includes('SQLITE_BUSY');
+}
+
+/**
+ * Correctif (cf. diagnostic production site 4, 2026-08-16) : avant ce retry, un chunk
+ * en échec (ex: SQLITE_BUSY transitoire) faisait rejeter `runDownstreamChunk`, ce qui
+ * propageait l'exception hors de la boucle `while (hasMore)` de `runDownstream` — le pull
+ * s'arrêtait alors SILENCIEUSEMENT au milieu de sa progression, sans aucune reprise
+ * automatique avant le prochain déclenchement manuel/automatique (observé : ~9 minutes
+ * d'écart avant reprise). Cette fonction retente le SEUL chunk en échec (pas tout le
+ * pull) un nombre borné de fois, uniquement pour les erreurs de verrouillage transitoires
+ * identifiées ci-dessus — toute autre erreur (réseau, données invalides, etc.) échoue
+ * immédiatement sans retry, pour ne pas masquer un vrai problème.
+ */
+async function writeChunkViaWorkerWithRetry(
+  cloudCards: any[],
+  watermark: string,
+  lastSyncId: string,
+  siteId: number
+): Promise<{ fetched: number; processed: number }> {
+  let lastErr: any = null;
+  for (let attempt = 0; attempt <= CHUNK_WRITE_MAX_RETRIES; attempt++) {
+    try {
+      return await writeChunkViaWorker(cloudCards, watermark, lastSyncId, siteId);
+    } catch (err: any) {
+      lastErr = err;
+      const isLastAttempt = attempt >= CHUNK_WRITE_MAX_RETRIES;
+      if (!isLastAttempt && isTransientSqliteLockError(err)) {
+        log.warn(
+          `[SYNC] Chunk downstream échoué (tentative ${attempt + 1}/${CHUNK_WRITE_MAX_RETRIES + 1}) — ` +
+          `${err.message}. Nouvelle tentative dans ${CHUNK_WRITE_RETRY_DELAY_MS} ms...`
+        );
+        // Pause asynchrone (non-bloquante pour le thread principal) avant de retenter.
+        await new Promise(resolve => setTimeout(resolve, CHUNK_WRITE_RETRY_DELAY_MS));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+/**
+ * Envoie un unique lot au DownloadWorker et attend le résultat. Une seule tentative —
+ * voir writeChunkViaWorkerWithRetry() pour la logique de retry.
+ */
+function writeChunkViaWorker(
+  cloudCards: any[],
+  watermark: string,
+  lastSyncId: string,
+  siteId: number
+): Promise<{ fetched: number; processed: number }> {
   return new Promise((resolve, reject) => {
     let sqlitePath: string;
     try {
@@ -369,11 +441,11 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
         if (msg.level === 'error') log.error(msg.message);
         else log.info(msg.message);
       } else if (msg.type === 'chunk-done') {
-        log.info(`✅ [SYNC SUCCESS] ${cloudCards!.length} cartes reçues (fusionnées: ${msg.processed}) par le worker.`);
+        log.info(`✅ [SYNC SUCCESS] ${cloudCards.length} cartes reçues (fusionnées: ${msg.processed}) par le worker.`);
         // fetched = pagination réelle (pour savoir s'il reste des pages sur Supabase) ;
         // processed = nombre de cartes réellement insérées/mises à jour localement
         // (certaines cartes reçues peuvent être déjà à jour et donc ignorées par le worker).
-        chunkResult = { fetched: cloudCards!.length, processed: msg.processed || 0 };
+        chunkResult = { fetched: cloudCards.length, processed: msg.processed || 0 };
         worker.postMessage({ type: 'close' });
       } else if (msg.type === 'error') {
         log.error(`[DownloadWorker] Erreur: ${msg.message}`);

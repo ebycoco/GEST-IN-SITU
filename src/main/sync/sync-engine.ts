@@ -341,6 +341,18 @@ class SyncEngine extends EventEmitter {
       return;
     }
 
+    // Si un downstream (automatique 2h OU un pull manuel via beginManualDownstream)
+    // est en cours, on attend le prochain tick. Corrige la collision SQLITE_BUSY
+    // observée en production (site 4, 2026-08-16) : ce garde manquait auparavant,
+    // alors que triggerAutoDownstream et triggerSync le vérifient déjà tous les deux —
+    // le cycle comptes/rôles était le seul écrivain périodique à pouvoir se glisser en
+    // parallèle d'un DownloadWorker pendant toute la durée d'un pull (jusqu'à 20+ minutes
+    // pour un pull complet).
+    if (this.isDownstreamRunning) {
+      log.info('[SyncEngine][UserSync] Ignoré : un downstream (automatique ou pull manuel) est en cours. Reprise au prochain tick.');
+      return;
+    }
+
     this.isUserSyncRunning = true;
     try {
       await syncUsersFromCloud(siteId);
@@ -455,6 +467,44 @@ class SyncEngine extends EventEmitter {
 
   public isCurrentlySyncing(): boolean {
     return this.isSyncing || this.isDownstreamRunning;
+  }
+
+  // ── Verrou downstream manuel (pulls déclenchés depuis l'UI) ───────────────
+
+  /**
+   * A appeler par tout pull downstream DÉCLENCHÉ MANUELLEMENT depuis l'UI
+   * (ex: IPC 'sync:pullSiteCards', 'sync:forceFullPull') AVANT d'exécuter
+   * runDownstream(), pour que sa durée complète (potentiellement de longues
+   * minutes lors d'un pull complet) soit visible des autres gardes de
+   * concurrence — exactement comme le downstream automatique de 2h
+   * (triggerAutoDownstream) qui pose déjà isDownstreamRunning pour toute sa
+   * durée.
+   *
+   * Correctif : avant ce verrou, un pull manuel ne posait AUCUN état partagé
+   * pendant son exécution — isDownstreamRunning restait `false` du début à
+   * la fin. Résultat observé en production (site 4, cf. diagnostic du
+   * 2026-08-16) : le cycle comptes/rôles (3 min, triggerUserAccountsSync) a pu
+   * démarrer SON PROPRE write SQLite pendant qu'un DownloadWorker du pull
+   * manuel écrivait déjà — collision SQLITE_BUSY ("database is locked").
+   *
+   * @returns false si un downstream (automatique ou manuel) est déjà en
+   *   cours — l'appelant doit alors refuser l'opération plutôt que de
+   *   démarrer un second DownloadWorker concurrent.
+   */
+  public beginManualDownstream(): boolean {
+    if (this.isDownstreamRunning) {
+      return false;
+    }
+    this.isDownstreamRunning = true;
+    return true;
+  }
+
+  /**
+   * A appeler dans un bloc `finally`, systématiquement après tout pull
+   * démarré via beginManualDownstream() — succès ou échec.
+   */
+  public endManualDownstream(): void {
+    this.isDownstreamRunning = false;
   }
 
   // ── Verrou Global (Global Sync Lock) ──────────────────────────────────────

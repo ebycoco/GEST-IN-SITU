@@ -4954,10 +4954,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
 
     // ── Verrou anti-concurrence ──────────────────────────────────────────────
-    // Si le SyncEngine est déjà en train de faire un downstream automatique (cycle 2h),
-    // on refuse le pull manuel pour éviter deux DownloadWorkers simultanés → database is locked.
+    // Si le SyncEngine est déjà en train de faire un downstream automatique (cycle 2h)
+    // ou un autre pull manuel, on refuse pour éviter deux DownloadWorkers simultanés →
+    // database is locked.
     if (syncEngine.isCurrentlySyncing()) {
       log.warn(`[sync:pullSiteCards] Refusé : un downstream automatique est déjà en cours pour le site ${siteId}.`);
+      return {
+        success: false,
+        count: 0,
+        message: 'Une synchronisation automatique est déjà en cours. Veuillez patienter.'
+      };
+    }
+
+    // Pose effective du verrou (atomique, aucun `await` entre la vérification ci-dessus et
+    // ici) : rend ce pull manuel visible de TOUTE la durée de son exécution — potentiellement
+    // plusieurs minutes pour un pull complet — aux autres gardes de concurrence du SyncEngine
+    // (cycle upstream 30s, cycle comptes/rôles 3 min, cycle downstream automatique 2h).
+    // Correctif (cf. diagnostic production site 4, 2026-08-16) : avant ce verrou, un pull
+    // manuel ne posait AUCUN état partagé pendant son exécution, ce qui permettait au cycle
+    // comptes/rôles de démarrer un write SQLite concurrent au DownloadWorker → SQLITE_BUSY
+    // ("database is locked").
+    if (!syncEngine.beginManualDownstream()) {
+      log.warn(`[sync:pullSiteCards] Refusé : un downstream est déjà en cours pour le site ${siteId} (course évitée).`);
       return {
         success: false,
         count: 0,
@@ -5003,6 +5021,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         JSON.stringify({ site_id: siteId, error: error.message || String(error) })
       );
       return { success: false, message: error.message || String(error) };
+    } finally {
+      syncEngine.endManualDownstream();
     }
   });
 
@@ -5099,6 +5119,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   // DB MAINTENANCE - Synchronisation forcée (Full Downstream Pull)
   ipcMain.handle('sync:forceFullPull', async (_, siteId: number, currentUser) => {
+    // ── Verrou anti-concurrence ──────────────────────────────────────────────
+    // Correctif : ce handler ne posait auparavant AUCUN verrou (ni vérification, ni
+    // acquisition), alors qu'il déclenche le pull le plus coûteux de tous (watermark
+    // remis à l'époque Unix par runDownstream(..., true) => potentiellement des dizaines
+    // de minutes de chunks). Sans verrou, tout autre cycle d'écriture (upstream 30s, cycle
+    // comptes/rôles 3 min, downstream automatique 2h, ou un autre pull manuel) pouvait
+    // écrire en parallèle du DownloadWorker → SQLITE_BUSY ("database is locked"), exactement
+    // le scénario observé en production (site 4, 2026-08-16).
+    if (syncEngine.isCurrentlySyncing()) {
+      log.warn(`[sync:forceFullPull] Refusé : une synchronisation est déjà en cours pour le site ${siteId}.`);
+      return { success: false, message: 'Une synchronisation est déjà en cours. Veuillez patienter.' };
+    }
+    if (!syncEngine.beginManualDownstream()) {
+      log.warn(`[sync:forceFullPull] Refusé : un downstream est déjà en cours pour le site ${siteId} (course évitée).`);
+      return { success: false, message: 'Une synchronisation est déjà en cours. Veuillez patienter.' };
+    }
+
     try {
       const secureUser = getSecureCurrentUser();
       if (!secureUser) throw new Error("Session invalide.");
@@ -5137,6 +5174,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (error: any) {
       log.error(`[MAINTENANCE] Erreur lors de la synchronisation forcée du site ${siteId}:`, error);
       return { success: false, message: error.message || String(error) };
+    } finally {
+      syncEngine.endManualDownstream();
     }
   });
 
