@@ -906,7 +906,7 @@ export function transfererCarte(
   const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
 
   if (siteIdToUse !== null) {
-    const carte = db.prepare('SELECT site_id FROM t_cartes WHERE id_carte = ? AND statut = ?').get(id, 'EN STOCK') as { site_id: number } | undefined;
+    const carte = db.prepare('SELECT site_id, sync_id FROM t_cartes WHERE id_carte = ? AND statut = ?').get(id, 'EN STOCK') as { site_id: number; sync_id: string | null } | undefined;
     if (!carte || carte.site_id !== siteIdToUse) {
       throw new Error("Carte introuvable, déjà distribuée, ou accès non autorisé pour votre site.");
     }
@@ -954,6 +954,20 @@ export function transfererCarte(
   if (result.changes === 0) {
     throw new Error("Carte introuvable ou n'est plus EN STOCK.");
   }
+
+  // Synchronisation Supabase (même modèle que delivrerCarte() ci-dessus) — placé après
+  // confirmation du succès de l'UPDATE (guard FTS5 + vérification result.changes ci-dessus).
+  // Relecture complète du sync_id ici (plutôt que de dépendre de la variable `carte` du bloc
+  // de garde ci-dessus, qui n'existe que pour les rôles non-SUPER-ADMIN) pour couvrir tous les
+  // appelants, y compris SUPER ADMIN.
+  const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+  if (updatedCarte?.sync_id) {
+    enqueueOutbox(updatedCarte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  }
+
   return result;
 }
 
@@ -1599,13 +1613,13 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
   // Double verrou DOUBLON (plan validé) : même verrou que delivrerCarte() — une carte déclarée
   // DOUBLON ne doit plus jamais être délivrable, y compris via l'émargement rétroactif du
   // cahier historique (Apurement). Vérifié avant toute écriture.
-  const carte = db.prepare('SELECT statut FROM t_cartes WHERE id_carte = ?').get(id) as { statut: string } | undefined;
+  const carte = db.prepare('SELECT statut, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as { statut: string; sync_id: string | null } | undefined;
   if (carte?.statut === 'DOUBLON') {
     throw new Error("Action refusée : cette carte est déclarée en doublon et ne peut plus être émargée. Contactez un administrateur pour vérifier ou annuler cette déclaration.");
   }
 
-  return db.prepare(`
-    UPDATE t_cartes 
+  const result = db.prepare(`
+    UPDATE t_cartes
     SET statut = 'DELIVRE',
         date_delivrance = ?,
         nom_retirant = ?,
@@ -1624,6 +1638,19 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
     now,
     id
   );
+
+  // Synchronisation Supabase (même modèle que delivrerCarte()/transfererCarte() ci-dessus) :
+  // l'émargement rétroactif du cahier historique (Apurement) modifiait t_cartes localement
+  // sans jamais enfiler l'UPDATE vers Supabase — carte durablement désynchronisée entre postes.
+  if (carte?.sync_id) {
+    const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
+    }
+  }
+
+  return result;
 }
 
 export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string, currentUser?: { role: string; site_id?: number }) {
@@ -1637,8 +1664,8 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // cartes:inventairePhysiqueScan, aucun autre consommateur trouvé dans le code).
   const scoped = currentUser && currentUser.role !== 'SUPER ADMIN';
   const carte = scoped
-    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
-    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
+    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
+    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
 
   if (!carte) {
     return { success: false, message: "Carte introuvable avec cet identifiant." };
@@ -1668,6 +1695,17 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
       nuclearResetFts5();
     } else {
       throw err;
+    }
+  }
+
+  // Synchronisation Supabase (même modèle que delivrerCarte()/transfererCarte() ci-dessus) —
+  // placé après confirmation du succès de l'UPDATE (guard FTS5 ci-dessus) pour ne jamais
+  // enfiler un payload correspondant à une écriture qui aurait échoué.
+  if (carte.sync_id) {
+    const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(carte.id_carte) as any;
+    enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+    if (networkMonitor.getState() === 'ONLINE') {
+      scheduleOutboxProcessing();
     }
   }
 

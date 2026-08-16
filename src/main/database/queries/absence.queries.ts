@@ -321,7 +321,7 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
       throw new Error("Accès non autorisé aux données de ce site");
     }
 
-    const card = db.prepare('SELECT site_id, noms, prenoms, rangement, contact FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    const card = db.prepare('SELECT site_id, noms, prenoms, rangement, contact, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
     if (card) {
       const siteId = card.site_id;
       const message = `La carte de ${card.noms} ${card.prenoms} a été confirmée RETROUVÉE (Rangement: ${card.rangement || 'non spécifié'}) par l'administration.`;
@@ -338,6 +338,17 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
         INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
         VALUES (NULL, 'SYSTEM', 'CARTE_PERDUE_RETROUVEE', ?, ?, ?, 1, ?)
       `).run(message, JSON.stringify(payload), uuidv4(), siteId);
+
+      // Propagation vers Supabase (même modèle que signalerAbsence() ci-dessus) : sans cet
+      // enqueue, la réactivation (retour en stock) restait locale, désynchronisant durablement
+      // la carte entre postes. Payload complet requis par mapCardPayload() (site_id).
+      if (card.sync_id) {
+        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+        if (networkMonitor.getState() === 'ONLINE') {
+          scheduleOutboxProcessing();
+        }
+      }
     }
 
     return result;
