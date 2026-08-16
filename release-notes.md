@@ -64,3 +64,7 @@ Validé par un test e2e dédié (délivrance réelle en conditions applicatives,
 - **Accès refusé sur "Identification Guidée" pour OPERATEUR_QUALITE** : ce rôle appelait la même recherche que l'apurement mais n'était pas autorisé côté handler — corrigé.
 
 Validé par test fonctionnel vivant (rôles OPERATEUR_APUREMENT, OPERATEUR_QUALITE, OPERATEUR_VERIFICATION, contrôle négatif OPERATEUR_SAISIE) et `npx tsc --noEmit` : 0 erreur.
+
+- **Compteur "ACTIONS DU JOUR" de l'onglet "Contrôles & Délivrances" (Pilotage de Terrain / Mon équipe) comptant toute action journalière, pas seulement le contrôle qualité/la délivrance** : le compteur additionnait sans distinction toute entrée `t_logs` du jour pour un agent OPERATEUR_QUALITE/OPERATEUR_VERIFICATION (y compris une simple connexion), rendant le chiffre trompeur — signalé par un test fonctionnel vivant après l'ajout d'OPERATEUR_VERIFICATION à ce même onglet. Corrigé : seules `CARTE_DELIVREE` (délivrance) et `CMU_MODIFICATION` (correction qualité) sont désormais comptées, les deux seules actions réellement générées par ces rôles et synchronisées cross-poste.
+
+Validé par `npx tsc --noEmit` : 0 erreur.
