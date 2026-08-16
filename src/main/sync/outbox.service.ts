@@ -12,6 +12,17 @@ const MAX_OUTBOX_ATTEMPTS = 5;
 /** Taille du lot traité à chaque appel de processOutboxPending. */
 const OUTBOX_BATCH_SIZE = 50;
 
+/**
+ * Backoff progressif appliqué aux entrées ERROR avant nouvelle tentative
+ * automatique (voir _promoteEligibleErrorsToPending). Doublement à chaque
+ * tentative au-delà du seuil MAX_OUTBOX_ATTEMPTS, plafonné à 24h — évite
+ * le martèlement de Supabase par des entrées en échec persistant tout en
+ * garantissant qu'une résolution externe (ex: correction de donnée côté
+ * Supabase) finisse par être retentée dans un délai borné.
+ */
+const OUTBOX_ERROR_BACKOFF_BASE_MINUTES = 15;
+const OUTBOX_ERROR_BACKOFF_MAX_MINUTES = 24 * 60;
+
 // ─── Types internes ──────────────────────────────────────────────────────────
 interface OutboxEntry {
   id: string;
@@ -24,6 +35,7 @@ interface OutboxEntry {
   error_msg: string | null;
   attempts: number;
   depends_on: string | null;
+  last_attempt_at?: string | null;
 }
 
 // ─── API publique ────────────────────────────────────────────────────────────
@@ -40,6 +52,13 @@ interface OutboxEntry {
  * @param tableName - Table cible Supabase (ex: 't_sites', 't_centres', 't_users').
  * @param operation - Type d'opération : 'INSERT' | 'UPDATE' | 'DELETE'.
  * @param payload   - Pour INSERT/UPDATE : objet complet. Pour DELETE : { sync_id }.
+ *
+ * Invariant t_users : tout payload 't_users' enfilé doit systématiquement inclure
+ * `login`, `password_hash`, `role` (colonnes NOT NULL côté Supabase), quelle que soit
+ * l'ampleur réelle du changement métier porté par cet appel — car enqueueOutbox fait un
+ * remplacement intégral du payload en attente (`ON CONFLICT(id) DO UPDATE SET payload =
+ * excluded.payload`), jamais une fusion. Un payload partiel omettant l'une de ces 3
+ * colonnes écrase silencieusement (ou fait rejeter par PostgREST) l'entrée existante.
  */
 export function enqueueOutbox(
   id: string,
@@ -134,9 +153,14 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  *    pour ne jamais bloquer le thread UI d'Electron.
  *  - Un verrou interne `_isProcessing` prévient les exécutions concurrentes.
  *
+ * @param fromPeriodicCycle - `true` uniquement lorsque l'appel provient du cycle
+ *   périodique de synchronisation (startSyncCycle) ou du retour réseau — jamais des
+ *   appels post-mutation immédiats via scheduleOutboxProcessing(), pour éviter tout
+ *   effet de rafale de la promotion ERROR→PENDING sur des mutations rapprochées.
+ *   Par défaut `false` (comportement inchangé pour tous les appelants existants).
  * @returns Objet { processed, errors } indiquant les résultats du traitement.
  */
-export async function processOutboxPending(): Promise<{ processed: number; errors: number }> {
+export async function processOutboxPending(fromPeriodicCycle: boolean = false): Promise<{ processed: number; errors: number }> {
   // Verrou anti-concurrence léger (flag module-level)
   if (_isProcessing) {
     log.info('[OutboxService] processOutboxPending ignoré : traitement déjà en cours.');
@@ -156,6 +180,12 @@ export async function processOutboxPending(): Promise<{ processed: number; error
     if (networkState !== 'ONLINE') {
       log.info(`[OutboxService] Réseau ${networkState} — traitement de l'outbox différé.`);
       return { processed: 0, errors: 0 };
+    }
+
+    // Retry automatique : promeut les entrées ERROR dont le backoff est écoulé en
+    // PENDING, uniquement depuis le cycle périodique (voir doc du paramètre ci-dessus).
+    if (fromPeriodicCycle) {
+      _promoteEligibleErrorsToPending(db);
     }
 
     // Lire le prochain lot d'entrées PENDING
@@ -423,10 +453,83 @@ function _markOutboxError(
 ): void {
   try {
     db.prepare(`
-      UPDATE t_outbox SET status = 'ERROR', error_msg = ?, attempts = ? WHERE id = ?
+      UPDATE t_outbox SET status = 'ERROR', error_msg = ?, attempts = ?, last_attempt_at = datetime('now') WHERE id = ?
     `).run(errorMsg, attempts, id);
   } catch (err: any) {
     log.error(`[OutboxService] Impossible de marquer l'entrée ${id} en ERROR :`, err.message);
+  }
+}
+
+/**
+ * Calcule le délai de backoff (en minutes) avant qu'une entrée ERROR ayant
+ * cumulé `attempts` tentatives redevienne éligible à une nouvelle promotion
+ * PENDING. Doublement à chaque tentative au-delà de MAX_OUTBOX_ATTEMPTS,
+ * plafonné à OUTBOX_ERROR_BACKOFF_MAX_MINUTES (24h).
+ */
+function _computeErrorBackoffMinutes(attempts: number): number {
+  const exponent = Math.max(0, attempts - MAX_OUTBOX_ATTEMPTS);
+  const delay = OUTBOX_ERROR_BACKOFF_BASE_MINUTES * Math.pow(2, exponent);
+  return Math.min(delay, OUTBOX_ERROR_BACKOFF_MAX_MINUTES);
+}
+
+/**
+ * Retry automatique des entrées `t_outbox` en échec définitif (ERROR).
+ *
+ * Sélectionne les entrées ERROR dont le backoff (voir _computeErrorBackoffMinutes)
+ * est écoulé depuis `last_attempt_at`, et les repasse en PENDING pour qu'elles
+ * soient reprises par la boucle de traitement de processOutboxPending juste après.
+ *
+ * IMPORTANT : `attempts` n'est JAMAIS réinitialisé ici. Le compteur doit continuer
+ * de croître à chaque nouvel échec pour alimenter le calcul de backoff au tour
+ * suivant — le réinitialiser provoquerait une boucle de tentatives rapprochées à
+ * l'infini sur une entrée durablement en échec (ex: payload invalide).
+ *
+ * N'est appelée que depuis le cycle périodique (voir paramètre `fromPeriodicCycle`
+ * de processOutboxPending) — jamais depuis les appels post-mutation immédiats.
+ */
+function _promoteEligibleErrorsToPending(db: NonNullable<ReturnType<typeof getDatabase>>): void {
+  try {
+    const errorEntries = db.prepare(
+      `SELECT id, attempts, last_attempt_at FROM t_outbox WHERE status = 'ERROR'`
+    ).all() as { id: string; attempts: number; last_attempt_at: string | null }[];
+
+    if (errorEntries.length === 0) return;
+
+    const now = Date.now();
+    const eligibleIds: string[] = [];
+
+    for (const entry of errorEntries) {
+      if (!entry.last_attempt_at) {
+        // Entrée historique sans last_attempt_at (créée avant migration V68) :
+        // éligible immédiatement, pas de date de référence pour un backoff.
+        eligibleIds.push(entry.id);
+        continue;
+      }
+      // Format SQLite datetime('now') : "YYYY-MM-DD HH:MM:SS" (UTC, sans suffixe).
+      const lastAttemptMs = new Date(entry.last_attempt_at.replace(' ', 'T') + 'Z').getTime();
+      if (Number.isNaN(lastAttemptMs)) {
+        eligibleIds.push(entry.id);
+        continue;
+      }
+      const backoffMinutes = _computeErrorBackoffMinutes(entry.attempts);
+      const elapsedMinutes = (now - lastAttemptMs) / 60000;
+      if (elapsedMinutes >= backoffMinutes) {
+        eligibleIds.push(entry.id);
+      }
+    }
+
+    if (eligibleIds.length === 0) return;
+
+    const promote = db.prepare(`UPDATE t_outbox SET status = 'PENDING' WHERE id = ? AND status = 'ERROR'`);
+    db.transaction(() => {
+      for (const id of eligibleIds) {
+        promote.run(id);
+      }
+    })();
+
+    log.info(`[OutboxService] ${eligibleIds.length} entrée(s) ERROR promue(s) en PENDING (backoff écoulé, nouvelle tentative automatique).`);
+  } catch (err: any) {
+    log.error('[OutboxService] Erreur lors de la promotion des entrées ERROR éligibles :', err.message || err);
   }
 }
 

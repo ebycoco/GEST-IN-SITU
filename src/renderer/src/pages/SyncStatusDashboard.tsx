@@ -24,12 +24,14 @@ export default function SyncStatusDashboard() {
     lastSync: string;
     queueCount: number;
     outboxCount: number;
+    outboxErrorCount: number;
     errors: SyncError[];
   }>({
     state: 'OFFLINE',
     lastSync: 'Jamais',
     queueCount: 0,
     outboxCount: 0,
+    outboxErrorCount: 0,
     errors: []
   });
 
@@ -43,6 +45,7 @@ export default function SyncStatusDashboard() {
           lastSync: res.lastSync || 'Jamais',
           queueCount: res.queueCount !== undefined ? res.queueCount : 0,
           outboxCount: res.outboxCount !== undefined ? res.outboxCount : 0,
+          outboxErrorCount: res.outboxErrorCount !== undefined ? res.outboxErrorCount : 0,
           errors: res.errors || []
         });
         if (showToast) {
@@ -82,6 +85,7 @@ export default function SyncStatusDashboard() {
           lastSync: newStatus.lastSync || prev.lastSync,
           queueCount: newStatus.queueCount !== undefined ? newStatus.queueCount : prev.queueCount,
           outboxCount: newStatus.outboxCount !== undefined ? newStatus.outboxCount : prev.outboxCount,
+          outboxErrorCount: newStatus.outboxErrorCount !== undefined ? newStatus.outboxErrorCount : prev.outboxErrorCount,
           errors: newStatus.errors || prev.errors
         }));
       });
@@ -479,9 +483,24 @@ export default function SyncStatusDashboard() {
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Outbox Locale (File Montante)</span>
-            <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>
-              {status.outboxCount} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>opérations</span>
-            </span>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 18, fontWeight: 800, color: 'var(--text-primary)' }}>
+                {status.outboxCount} <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)' }}>en attente</span>
+              </span>
+              {status.outboxErrorCount > 0 && (
+                <span style={{
+                  fontSize: 11,
+                  fontWeight: 800,
+                  color: '#f87171',
+                  background: 'rgba(248, 113, 113, 0.1)',
+                  border: '1px solid rgba(248, 113, 113, 0.25)',
+                  borderRadius: 20,
+                  padding: '2px 8px'
+                }}>
+                  {status.outboxErrorCount} en échec
+                </span>
+              )}
+            </div>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Mises à jour prêtes à l'envoi cloud</span>
           </div>
         </div>

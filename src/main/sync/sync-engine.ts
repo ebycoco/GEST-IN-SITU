@@ -592,7 +592,7 @@ class SyncEngine extends EventEmitter {
             `Déclenchement du traitement outbox différé.`
           );
         }
-        processOutboxPending().catch((err: any) => {
+        processOutboxPending(true).catch((err: any) => {
           log.warn('[SyncEngine][Outbox] Erreur lors du traitement outbox au retour réseau :', err);
         });
       });
@@ -864,7 +864,7 @@ class SyncEngine extends EventEmitter {
       if (outboxPending > 0) {
         log.info(`[SyncEngine][Outbox] ${outboxPending} entrée(s) PENDING — traitement prioritaire avant l'upstream cartes.`);
         try {
-          const outboxResult = await processOutboxPending();
+          const outboxResult = await processOutboxPending(true);
           log.info(
             `[SyncEngine][Outbox] Traitement terminé : ${outboxResult.processed} synchronisé(s), ` +
             `${outboxResult.errors} en erreur.`

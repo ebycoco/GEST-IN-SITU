@@ -4535,6 +4535,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const db = getDatabase();
     let queueCount = 0;
     let outboxCount = 0;
+    let outboxErrorCount = 0;
     let errors: any[] = [];
 
     if (db) {
@@ -4550,6 +4551,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         outboxCount = row ? row.count : 0;
       } catch (e) {
         log.error('sync:getStatus - outboxCount error:', e);
+      }
+
+      try {
+        // t_outbox est une file locale au poste (jamais de mélange multi-site) : pas
+        // de filtre site_id, cohérent avec outboxCount ci-dessus.
+        const row = db.prepare("SELECT COUNT(*) as count FROM t_outbox WHERE status = 'ERROR'").get() as { count: number } | undefined;
+        outboxErrorCount = row ? row.count : 0;
+      } catch (e) {
+        log.error('sync:getStatus - outboxErrorCount error:', e);
       }
 
       try {
@@ -4599,6 +4609,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       lastSync,
       queueCount,
       outboxCount,
+      outboxErrorCount,
       errors
     };
   });

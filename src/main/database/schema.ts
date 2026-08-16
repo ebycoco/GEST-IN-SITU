@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 67;
+export const SCHEMA_VERSION = 68;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -447,6 +447,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number, isE
     if (currentVersion < 67) {
       log.info('Running migration v67: Adding doublon declaration/cancellation tracking columns to t_cartes (declarerDoublon/annulerDeclarationDoublon)');
       migrateV67(db);
+    }
+
+    if (currentVersion < 68) {
+      log.info('Running migration v68: Adding last_attempt_at column to t_outbox (retry backoff progressif des entrees en echec definitif)');
+      migrateV68(db);
     }
   } catch (seqError: any) {
     if (isEmergencyRetry) {
@@ -916,7 +921,8 @@ function migrateV1(db: Database.Database): void {
                           CHECK(status IN ('PENDING','SYNCED','ERROR')),
       error_msg   TEXT,
       attempts    INTEGER DEFAULT 0,
-      depends_on  TEXT    NULL
+      depends_on  TEXT    NULL,
+      last_attempt_at TEXT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_outbox_status ON t_outbox(status, created_at);
@@ -3780,6 +3786,23 @@ function migrateV67(db: Database.Database): void {
     log.info('[MIGRATION V67] Migration V67 terminée avec succès.');
   } catch (e: any) {
     log.error('[MIGRATION V67] Erreur :', e.message);
+    throw e;
+  }
+}
+
+function migrateV68(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V68] Ajout de la colonne last_attempt_at à t_outbox (backoff progressif des entrées ERROR)...');
+    const tableInfo = db.pragma('table_info(t_outbox)') as { name: string }[];
+    if (!tableInfo.some(c => c.name === 'last_attempt_at')) {
+      db.exec("ALTER TABLE t_outbox ADD COLUMN last_attempt_at TEXT NULL;");
+      log.info("[MIGRATION V68] Colonne last_attempt_at ajoutée a t_outbox.");
+    } else {
+      log.info('[MIGRATION V68] Colonne last_attempt_at déjà présente, migration ignorée.');
+    }
+    log.info('[MIGRATION V68] Migration V68 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V68] Erreur :', e.message);
     throw e;
   }
 }

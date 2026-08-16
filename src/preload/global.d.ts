@@ -209,7 +209,7 @@ declare global {
         onPurgeProgress: (callback: (p: number) => void) => () => void;
       };
       sync: {
-        getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number; isSyncing: boolean; isGlobalLocked: boolean; outboxCount?: number; errors?: any[] }>;
+        getStatus: () => Promise<{ state: string; lastSync: string; queueCount: number; isSyncing: boolean; isGlobalLocked: boolean; outboxCount?: number; outboxErrorCount?: number; errors?: any[] }>;
         getCloudCartesCount: (siteId: number) => Promise<number>;
         getTotalCloudCartesCount: (siteId: number) => Promise<number>;
         force: () => Promise<{ success: boolean; message: string }>;
