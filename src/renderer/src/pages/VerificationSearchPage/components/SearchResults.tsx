@@ -1,5 +1,6 @@
 import React from 'react';
-import { Package, User, Calendar, MapPin, Phone, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Cloud, CloudDownload, X } from 'lucide-react';
+import { Package, User, Calendar, MapPin, Phone, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Cloud, CloudDownload, X, Loader } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 interface SearchResultsProps {
   results: any[];
@@ -37,6 +38,49 @@ export function SearchResults({
   onCloseNotFound
 }: SearchResultsProps) {
   const [pullingCard, setPullingCard] = React.useState<number | null>(null);
+
+  // Annulation de déclaration de doublon (finding P1 QA terrain, eccdbf9) — RBAC calqué
+  // strictement sur cartes:annulerDoublon côté serveur (handlers.ts) : réservé à SUPER ADMIN /
+  // ADMINISTRATEUR_SITE / ADMIN_CENTRE, jamais OPERATEUR_VERIFICATION (qui peut avoir déclaré le
+  // doublon lui-même — séparation des responsabilités voulue).
+  const canAnnulerDoublon = user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'ADMIN_CENTRE';
+  const [cancelDoublonTarget, setCancelDoublonTarget] = React.useState<any | null>(null);
+  const [cancelDoublonMotif, setCancelDoublonMotif] = React.useState('');
+  const [isCancellingDoublon, setIsCancellingDoublon] = React.useState(false);
+  // Reflet local optimiste par carte après annulation réussie : `results` est une prop en
+  // lecture seule (état possédé par useVerificationSearch, hors périmètre de cette correction),
+  // et aucun mécanisme de re-fetch ciblé n'est exposé à ce composant. Plutôt que de dupliquer la
+  // logique de recherche (interdit par le plan de correction) ou de relancer une requête
+  // supplémentaire (politique low-memory §2 / cloisonnement §3 CLAUDE.md), on retient ici
+  // uniquement le nouveau statut d'affichage — dérivé du même champ statut_avant_doublon déjà
+  // présent dans la ligne chargée par la recherche (SELECT * FROM t_cartes côté serveur), avec le
+  // même fallback 'EN STOCK' que la formule serveur (COALESCE(statut_avant_doublon, 'EN STOCK'),
+  // cf. annulerDeclarationDoublon(), cartes.queries.ts). Aucune écriture, aucune nouvelle requête.
+  const [doublonOverrides, setDoublonOverrides] = React.useState<Record<number, { statut: string }>>({});
+
+  const handleCancelDoublon = async () => {
+    if (!cancelDoublonTarget) return;
+    const motif = cancelDoublonMotif.trim();
+    if (!motif) {
+      toast.error("Le motif de l'annulation est obligatoire.");
+      return;
+    }
+    try {
+      setIsCancellingDoublon(true);
+      await window.api.cartes.annulerDoublon(cancelDoublonTarget.id_carte, motif);
+      toast.success('Déclaration de doublon annulée. La carte redevient normalement disponible.');
+      setDoublonOverrides((prev) => ({
+        ...prev,
+        [cancelDoublonTarget.id_carte]: { statut: cancelDoublonTarget.statut_avant_doublon || 'EN STOCK' }
+      }));
+      setCancelDoublonTarget(null);
+      setCancelDoublonMotif('');
+    } catch (err: any) {
+      toast.error(`Erreur lors de l'annulation : ${err?.message || err}`);
+    } finally {
+      setIsCancellingDoublon(false);
+    }
+  };
 
   if (!hasSearched) return null;
 
@@ -230,7 +274,12 @@ export function SearchResults({
       </h3>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {results.map((carte) => {
+        {results.map((rawCarte) => {
+          // Applique le reflet local optimiste post-annulation (cf. doublonOverrides ci-dessus)
+          // si cette carte vient d'être traitée — sinon la ligne brute est utilisée telle quelle.
+          const carte = doublonOverrides[rawCarte.id_carte]
+            ? { ...rawCarte, statut: doublonOverrides[rawCarte.id_carte].statut }
+            : rawCarte;
           const isAuthorised = isAgentAuthorisedForCard(carte);
           const isAbsent = carte.statut_physique === 'ABSENT';
           const isPerdue = carte.statut_physique === 'PERDUE';
@@ -303,6 +352,20 @@ export function SearchResults({
                       Par {carte.doublon_declare_par || 'agent inconnu'} le {carte.doublon_declare_le ? new Date(carte.doublon_declare_le).toLocaleString('fr-FR') : 'date inconnue'}
                       {carte.doublon_motif ? ` — Motif : ${carte.doublon_motif}` : ''}
                     </span>
+                    {canAnnulerDoublon && (
+                      <button
+                        type="button"
+                        onClick={() => { setCancelDoublonTarget(rawCarte); setCancelDoublonMotif(''); }}
+                        style={{
+                          alignSelf: 'flex-start', marginTop: 6,
+                          padding: '6px 12px', borderRadius: 8,
+                          background: 'rgba(16, 185, 129, 0.12)', border: '1px solid rgba(16, 185, 129, 0.3)',
+                          color: '#10b981', fontSize: 12, fontWeight: 700, cursor: 'pointer'
+                        }}
+                      >
+                        Annuler la déclaration de doublon
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -430,6 +493,75 @@ export function SearchResults({
           );
         })}
       </div>
+
+      {/* Modale d'annulation de déclaration de doublon (finding P1 QA terrain, eccdbf9) */}
+      {cancelDoublonTarget && (
+        <div className="animate-fade-in" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          padding: 24
+        }}>
+          <div className="card" style={{
+            maxWidth: 480,
+            width: '100%',
+            padding: '32px 28px',
+            background: 'linear-gradient(145deg, rgba(45, 50, 85, 0.95) 0%, rgba(20, 22, 40, 0.98) 100%)',
+            border: '1px solid rgba(16, 185, 129, 0.25)',
+            borderRadius: 24,
+            boxShadow: '0 40px 80px rgba(0, 0, 0, 0.8), 0 0 40px rgba(0, 0, 0, 0.2)'
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ margin: '0 auto 16px', background: 'rgba(16, 185, 129, 0.12)', width: 56, height: 56, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
+                <CheckCircle size={28} />
+              </div>
+              <p style={{ fontSize: 16, fontWeight: 800, color: 'white', margin: '0 0 8px 0' }}>
+                Annuler la déclaration de doublon
+              </p>
+              <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: 0 }}>
+                {cancelDoublonTarget.noms} {cancelDoublonTarget.prenoms} — cette action restaure le statut antérieur de la carte et la rend à nouveau délivrable. Le motif est obligatoire et restera consultable dans l'historique.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+              <label style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-secondary)' }}>Motif de l'annulation *</label>
+              <textarea
+                value={cancelDoublonMotif}
+                onChange={(e) => setCancelDoublonMotif(e.target.value)}
+                placeholder="Ex: Déclaration faite par erreur, il ne s'agit pas d'un doublon..."
+                className="form-input"
+                style={{ minHeight: 90, resize: 'vertical' }}
+                required
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 16 }}>
+              <button
+                onClick={handleCancelDoublon}
+                disabled={isCancellingDoublon || !cancelDoublonMotif.trim()}
+                className="btn btn-primary"
+                style={{
+                  flex: 1, padding: '14px 24px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                  background: '#10b981', borderColor: '#10b981', color: '#000',
+                  opacity: (isCancellingDoublon || !cancelDoublonMotif.trim()) ? 0.6 : 1,
+                  cursor: (isCancellingDoublon || !cancelDoublonMotif.trim()) ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {isCancellingDoublon ? <Loader className="animate-spin" size={18} /> : <CheckCircle size={18} />}
+                {isCancellingDoublon ? 'Annulation...' : "Confirmer l'annulation"}
+              </button>
+              <button
+                onClick={() => { setCancelDoublonTarget(null); setCancelDoublonMotif(''); }}
+                disabled={isCancellingDoublon}
+                className="btn btn-secondary"
+                style={{ padding: '14px 20px' }}
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

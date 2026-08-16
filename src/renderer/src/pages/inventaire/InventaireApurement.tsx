@@ -128,6 +128,21 @@ export default function InventaireApurement() {
       });
       if (!confirmed) return;
     }
+    // Même logique d'avertissement précoce que ci-dessus pour DELIVRE (P1 QA terrain) : sans ce
+    // blocage, l'agent découvrait le rejet serveur (updateApurementHistorique, déjà correct)
+    // seulement après avoir rempli tout le formulaire d'émargement. Le blocage réel reste
+    // côté serveur — ceci n'est qu'une information précoce, cohérente avec le choix déjà fait
+    // pour le cas DELIVRE (ne bloque pas la sélection elle-même, juste avertit).
+    if (carte.statut === 'DOUBLON') {
+      const confirmed = await confirmService.confirm({
+        title: 'Carte déclarée en doublon',
+        message: `Cette carte a été déclarée en doublon par ${carte.doublon_declare_par || 'un agent inconnu'} le ${carte.doublon_declare_le ? new Date(carte.doublon_declare_le).toLocaleString('fr-FR') : 'date inconnue'}${carte.doublon_motif ? ` — Motif : ${carte.doublon_motif}` : ''}. Elle ne peut plus être émargée tant que la déclaration n'est pas annulée par un administrateur. Voulez-vous quand même continuer ?`,
+        isDanger: true,
+        confirmText: 'Continuer quand même',
+        cancelText: 'Annuler'
+      });
+      if (!confirmed) return;
+    }
     applyCardSelection(carte);
   };
 
