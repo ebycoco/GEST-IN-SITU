@@ -68,3 +68,12 @@ Le versioning formel (SemVer, `CHANGELOG.md`, `SCHEMA_VERSION`) est **découplé
 2. Il renomme l'en-tête de `release-notes.md` en `# GEST-IN-SITU — Release vX.Y.Z` avec la date réelle, en conservant le contenu déjà rédigé (légères retouches de forme autorisées, pas de réécriture du fond).
 3. Une fois la nouvelle version confirmée par l'utilisateur, `release-notes.md` est réinitialisé à un nouveau brouillon vide (`# GEST-IN-SITU — Prochaine version (non publiée)`) pour le cycle suivant.
 4. `npm run build:win` n'est lancé qu'ensuite, toujours sur instruction écrite et explicite (§1 inchangé).
+
+## 9. Réflexes de vigilance post-implémentation (non-régression & UX)
+En complément du réflexe de délégation (§7, qui s'applique *avant* de traiter une demande), deux réflexes s'appliquent *après* une implémentation, avant de considérer une tâche de code close. Les deux suivent le même mécanisme que §7 : proposer explicitement en une phrase courte, attendre une confirmation courte ("oui"/"vas-y"/équivalent) avant d'invoquer l'agent — jamais d'audit automatique sans validation.
+
+### 9.1 Vigilance non-régression
+Si le changement effectué (par la session principale ou un agent) touche à une fonctionnalité déjà en production — pas un ajout isolé sans point de contact avec l'existant — propose explicitement : *"Ce changement touche à [fonctionnalité/fichier partagé], je lance un audit de non-régression avec `agent-9-senior-auditor` ?"* Ne saute cette proposition que si le changement est trivial, strictement isolé (nouveau fichier/nouvelle fonctionnalité sans surface partagée), ou si l'utilisateur a déjà explicitement refusé/reporté ce type de vérification dans l'échange en cours.
+
+### 9.2 Vérification UX après ajout d'interface
+Si le changement ajoute un élément d'interface visible (bouton, page, onglet, modal, nouveau champ de formulaire), propose explicitement : *"Nouvel élément d'interface ajouté, je lance une vérification UX terrain avec `agent-13-qa-terrain-tester` ?"* Ne saute cette proposition que si l'ajout est purement cosmétique sans nouvelle interaction (ex. reformulation de texte), ou si l'utilisateur a déjà explicitement refusé/reporté ce type de vérification dans l'échange en cours.
