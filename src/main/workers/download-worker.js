@@ -70,6 +70,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       agent_signalement_absence, date_signalement_absence, note_signalement_absence,
       escalade_niveau, has_invalid_date, contact_retirant, relation_retirant,
       date_resolution_absence, agent_resolution_absence, note_resolution,
+      doublon_declare_par, doublon_declare_le, doublon_motif, statut_avant_doublon,
+      doublon_annule_par, doublon_annule_le, doublon_motif_annulation,
       site_id, centre_id, poste_id, qr_code_data, sync_id,
       created_at, updated_at, synced_at, is_dirty
     ) VALUES (
@@ -80,6 +82,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       :agent_signalement_absence, :date_signalement_absence, :note_signalement_absence,
       :escalade_niveau, :has_invalid_date, :contact_retirant, :relation_retirant,
       :date_resolution_absence, :agent_resolution_absence, :note_resolution,
+      :doublon_declare_par, :doublon_declare_le, :doublon_motif, :statut_avant_doublon,
+      :doublon_annule_par, :doublon_annule_le, :doublon_motif_annulation,
       :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
       :created_at, :updated_at, :updated_at, 0
     )
@@ -103,6 +107,10 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         date_resolution_absence = :date_resolution_absence,
         agent_resolution_absence = :agent_resolution_absence,
         note_resolution = :note_resolution,
+        doublon_declare_par = :doublon_declare_par, doublon_declare_le = :doublon_declare_le,
+        doublon_motif = :doublon_motif, statut_avant_doublon = :statut_avant_doublon,
+        doublon_annule_par = :doublon_annule_par, doublon_annule_le = :doublon_annule_le,
+        doublon_motif_annulation = :doublon_motif_annulation,
         is_dirty = 0
     WHERE id_carte = :idCarte
   `);
@@ -123,7 +131,11 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         contact_retirant = :contact_retirant, relation_retirant = :relation_retirant,
         date_resolution_absence = :date_resolution_absence,
         agent_resolution_absence = :agent_resolution_absence,
-        note_resolution = :note_resolution
+        note_resolution = :note_resolution,
+        doublon_declare_par = :doublon_declare_par, doublon_declare_le = :doublon_declare_le,
+        doublon_motif = :doublon_motif, statut_avant_doublon = :statut_avant_doublon,
+        doublon_annule_par = :doublon_annule_par, doublon_annule_le = :doublon_annule_le,
+        doublon_motif_annulation = :doublon_motif_annulation
     WHERE id_carte = :idCarte
   `);
   const updateWatermarkStmt = database.prepare(`
@@ -183,6 +195,13 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
             date_resolution_absence: card.date_resolution_absence || null,
             agent_resolution_absence: card.agent_resolution_absence || null,
             note_resolution: card.note_resolution || null,
+            doublon_declare_par: card.doublon_declare_par || null,
+            doublon_declare_le: card.doublon_declare_le || null,
+            doublon_motif: card.doublon_motif || null,
+            statut_avant_doublon: card.statut_avant_doublon || null,
+            doublon_annule_par: card.doublon_annule_par || null,
+            doublon_annule_le: card.doublon_annule_le || null,
+            doublon_motif_annulation: card.doublon_motif_annulation || null,
             site_id: card.id_site || card.site_id ? Number(card.id_site || card.site_id) : null,
             centre_id: card.id_centre || card.centre_id || null,
             poste_id: card.id_poste || card.poste_id || null,
@@ -217,7 +236,14 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               relation_retirant: card.relation_retirant || null,
               date_resolution_absence: card.date_resolution_absence || null,
               agent_resolution_absence: card.agent_resolution_absence || null,
-              note_resolution: card.note_resolution || null
+              note_resolution: card.note_resolution || null,
+              doublon_declare_par: card.doublon_declare_par || null,
+              doublon_declare_le: card.doublon_declare_le || null,
+              doublon_motif: card.doublon_motif || null,
+              statut_avant_doublon: card.statut_avant_doublon || null,
+              doublon_annule_par: card.doublon_annule_par || null,
+              doublon_annule_le: card.doublon_annule_le || null,
+              doublon_motif_annulation: card.doublon_motif_annulation || null
             });
             processedCount++;
           }
@@ -256,6 +282,13 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               date_resolution_absence: card.date_resolution_absence || null,
               agent_resolution_absence: card.agent_resolution_absence || null,
               note_resolution: card.note_resolution || null,
+              doublon_declare_par: card.doublon_declare_par || null,
+              doublon_declare_le: card.doublon_declare_le || null,
+              doublon_motif: card.doublon_motif || null,
+              statut_avant_doublon: card.statut_avant_doublon || null,
+              doublon_annule_par: card.doublon_annule_par || null,
+              doublon_annule_le: card.doublon_annule_le || null,
+              doublon_motif_annulation: card.doublon_motif_annulation || null,
               centre_id: card.id_centre || card.centre_id || null,
               poste_id: card.id_poste || card.poste_id || null,
               qr_code_data: card.qr_code_data || null,
