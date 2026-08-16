@@ -527,7 +527,7 @@ export function deleteUser(id: number, creator?: { role: string; site_id?: numbe
   }
 
   // Trace d'audit
-  const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string; login: string } | undefined;
+  const user = db.prepare('SELECT sync_id, login, password_hash, role FROM t_users WHERE id_user = ?').get(id) as { sync_id: string; login: string; password_hash: string; role: string } | undefined;
   if (user) {
     insertAuditLog(
       creator?.login || 'ADMIN',
@@ -543,8 +543,14 @@ export function deleteUser(id: number, creator?: { role: string; site_id?: numbe
   }
 
   if (user?.sync_id) {
+    // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase,
+    // voir invariant documenté sur enqueueOutbox — remplacement intégral du payload en
+    // attente, jamais une fusion).
     enqueueOutbox(user.sync_id, 't_users', 'UPDATE', {
       sync_id: user.sync_id,
+      login: user.login,
+      password_hash: user.password_hash,
+      role: user.role,
       statut_actif: 0,
       updated_at: new Date().toISOString()
     });
@@ -626,7 +632,7 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     throw new Error("Accès non autorisé : Rôle insuffisant pour réinitialiser un mot de passe.");
   }
   
-  const target = db.prepare('SELECT site_id, login, sync_id FROM t_users WHERE id_user = ?').get(targetUserId) as { site_id?: number; login: string; sync_id: string } | undefined;
+  const target = db.prepare('SELECT site_id, login, sync_id, role FROM t_users WHERE id_user = ?').get(targetUserId) as { site_id?: number; login: string; sync_id: string; role: string } | undefined;
   if (!target) {
     throw new Error("L'agent cible n'existe pas.");
   }
@@ -658,9 +664,15 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
   // L'ancien push asynchrone Supabase était fragile (pas de réessai en cas
   // d'échec réseau). Le pattern outbox garantit la synchro différée.
   if (target.sync_id) {
+    // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase,
+    // voir invariant documenté sur enqueueOutbox — remplacement intégral du payload en
+    // attente, jamais une fusion). `login` était déjà en scope (target.login) mais absent
+    // du payload — oubli corrigé ici.
     enqueueOutbox(target.sync_id, 't_users', 'UPDATE', {
       sync_id: target.sync_id,
+      login: target.login,
       password_hash: hash,
+      role: target.role,
       updated_at: new Date().toISOString()
     });
     if (networkMonitor.getState() === 'ONLINE') {
@@ -674,7 +686,7 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
 export function updateSelfProfile(userId: number, data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string; login?: string }): { success: boolean } {
   const db = getDatabase()!;
 
-  const user = db.prepare('SELECT role, sync_id, login FROM t_users WHERE id_user = ?').get(userId) as { role: string; sync_id: string; login: string } | undefined;
+  const user = db.prepare('SELECT role, sync_id, login, password_hash FROM t_users WHERE id_user = ?').get(userId) as { role: string; sync_id: string; login: string; password_hash: string } | undefined;
   if (!user) {
     throw new Error("Utilisateur non trouvé.");
   }
@@ -742,8 +754,17 @@ export function updateSelfProfile(userId: number, data: { nom_user?: string; pre
   // moment du push, la modification était perdue. Le pattern outbox garantit
   // la synchro différée dès le retour du réseau, sans risque de perte.
   if (user.sync_id) {
+    // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase,
+    // voir invariant documenté sur enqueueOutbox — remplacement intégral du payload en
+    // attente, jamais une fusion). role et login déjà disponibles via `user` ; password_hash
+    // ajouté ici via `user.password_hash` pour couvrir le cas où l'utilisateur ne change pas
+    // son mot de passe dans cet appel (updateData ne le contient alors pas). Le spread
+    // `...updateData` prime sur ces valeurs de repli lorsque le champ a réellement changé.
     const outboxPayload: Record<string, unknown> = {
       sync_id: user.sync_id,
+      login: user.login,
+      password_hash: user.password_hash,
+      role: user.role,
       ...updateData,
       updated_at: new Date().toISOString()
     };

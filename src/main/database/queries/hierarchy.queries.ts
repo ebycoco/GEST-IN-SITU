@@ -289,8 +289,8 @@ export function deleteSite(id: number) {
   // métier (cf. ipc/handlers.ts, qui ignore systématiquement site_id/centre_id
   // pour ce rôle), cette neutralisation est donc sans impact fonctionnel.
   const affectedSuperAdmins = db.prepare(
-    "SELECT sync_id, login FROM t_users WHERE site_id = ? AND role = 'SUPER ADMIN'"
-  ).all(id) as { sync_id: string | null; login: string }[];
+    "SELECT sync_id, login, password_hash FROM t_users WHERE site_id = ? AND role = 'SUPER ADMIN'"
+  ).all(id) as { sync_id: string | null; login: string; password_hash: string }[];
 
   const transaction = db.transaction(() => {
     // 1. Delete Cards
@@ -354,10 +354,16 @@ export function deleteSite(id: number) {
   }
 
   // Répercuter la neutralisation des comptes SUPER ADMIN vers Supabase.
+  // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase, voir
+  // invariant documenté sur enqueueOutbox — remplacement intégral du payload en attente,
+  // jamais une fusion). role fixé en dur : contraint par le WHERE ci-dessus (role = 'SUPER ADMIN').
   for (const admin of affectedSuperAdmins) {
     if (!admin.sync_id) continue;
     enqueueOutbox(admin.sync_id, 't_users', 'UPDATE', {
       sync_id: admin.sync_id,
+      login: admin.login,
+      password_hash: admin.password_hash,
+      role: 'SUPER ADMIN',
       site_id: null,
       centre_id: null,
       poste_id: null,
@@ -439,11 +445,15 @@ export function resetSiteAdminPassword(siteId: number, newPasswordPlain: string)
 
     for (const admin of admins) {
       if (!admin.sync_id) continue;
-      // Un UPDATE outbox avec seulement les champs modifiés est suffisant.
-      // Supabase mergera via upsert onConflict:sync_id.
+      // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase,
+      // voir invariant documenté sur enqueueOutbox — remplacement intégral du payload en
+      // attente, jamais une fusion). role fixé en dur : contraint par le WHERE ci-dessus
+      // (role = 'ADMINISTRATEUR_SITE').
       enqueueOutbox(admin.sync_id, 't_users', 'UPDATE', {
         sync_id: admin.sync_id,
+        login: admin.login,
         password_hash: hash,
+        role: 'ADMINISTRATEUR_SITE',
         updated_at: new Date().toISOString()
       });
     }
@@ -647,8 +657,8 @@ export function deleteCentre(id: number) {
   // site — à valider avec l'utilisateur si le comportement destructeur
   // (suppression) était en réalité attendu.
   const affectedUsers = db.prepare(
-    "SELECT sync_id, login FROM t_users WHERE centre_id = ?"
-  ).all(id) as { sync_id: string | null; login: string }[];
+    "SELECT sync_id, login, password_hash, role FROM t_users WHERE centre_id = ?"
+  ).all(id) as { sync_id: string | null; login: string; password_hash: string; role: string }[];
 
   // Trace d'audit
   insertAuditLog(
@@ -689,10 +699,18 @@ export function deleteCentre(id: number) {
   }
 
   // Répercuter la neutralisation des comptes vers Supabase.
+  // Payload t_users : login/password_hash/role obligatoires (NOT NULL côté Supabase, voir
+  // invariant documenté sur enqueueOutbox — remplacement intégral du payload en attente,
+  // jamais une fusion). Contrairement à deleteSite (role='SUPER ADMIN' contraint par le
+  // WHERE), ici le rôle n'est PAS contraint (n'importe quel rôle peut être rattaché à un
+  // centre) — jamais codé en dur, toujours lu depuis le SELECT ci-dessus.
   for (const u of affectedUsers) {
     if (!u.sync_id) continue;
     enqueueOutbox(u.sync_id, 't_users', 'UPDATE', {
       sync_id: u.sync_id,
+      login: u.login,
+      password_hash: u.password_hash,
+      role: u.role,
       centre_id: null,
       poste_id: null,
       updated_at: new Date().toISOString()
