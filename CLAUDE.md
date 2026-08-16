@@ -80,3 +80,9 @@ Si le changement effectué (par la session principale ou un agent) touche à une
 
 ### 9.2 Vérification UX après ajout d'interface
 Si le changement ajoute un élément d'interface visible (bouton, page, onglet, modal, nouveau champ de formulaire), propose explicitement : *"Nouvel élément d'interface ajouté, je lance une vérification UX terrain avec `agent-13-qa-terrain-tester` ?"* Ne saute cette proposition que si l'ajout est purement cosmétique sans nouvelle interaction (ex. reformulation de texte), ou si l'utilisateur a déjà explicitement refusé/reporté ce type de vérification dans l'échange en cours.
+
+## 10. Résumé de validation avant action (systématique, toutes sessions)
+Pour toute nouvelle demande substantielle de l'utilisateur (nécessitant une action, une recherche, une modification de code/config, ou une décision) : avant de commencer à agir, produire un résumé fidèle et détaillé de ce qui a été demandé, puis **attendre une validation explicite de l'utilisateur avant de faire quoi que ce soit**.
+- **Exception (pour éviter une boucle) :** une confirmation courte de l'utilisateur ("oui", "vas-y", "go", "corrige ce point", ou équivalent) donnée en réponse à une proposition ou un résumé que la session vient déjà de formuler vaut validation directe — pas de nouveau résumé ni de nouvelle attente pour cette même action.
+- Cette règle est **durable et s'applique dans toutes les sessions sur ce dépôt**, pas seulement dans la conversation où elle a été formulée.
+- Elle se combine avec le réflexe de délégation (§7) et les réflexes de vigilance (§9) : le résumé peut/doit mentionner si la tâche correspond à un agent de la table de routage (§6), mais l'invocation de cet agent reste soumise à la même attente de validation explicite.
