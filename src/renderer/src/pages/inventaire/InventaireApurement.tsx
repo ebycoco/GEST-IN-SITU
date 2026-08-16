@@ -473,7 +473,7 @@ export default function InventaireApurement() {
                 OPERATEUR_APUREMENT : ce composant est aussi monté par le module Inventaire
                 (OPERATEUR_INVENTAIRE, OPERATEUR_LOGISTIQUE via /inventaire), qui ne doit pas
                 voir cette action. */}
-            {user?.role === 'OPERATEUR_APUREMENT' && (
+            {user?.role === 'OPERATEUR_APUREMENT' && selectedCarte?.statut !== 'DOUBLON' && (
               <div style={{ marginTop: 8, padding: 16, background: 'rgba(127, 29, 29, 0.08)', border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {!showDoublonForm ? (
                   <button
