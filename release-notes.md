@@ -55,6 +55,10 @@ Validé par `npx tsc --noEmit` : 0 erreur.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
 
+- **Indicateur de synchronisation Supabase pour l'opérateur, sur "Travail du jour" (Vérification et Saisie)** : un opérateur qui délivre une carte (Vérification) ou en crée une (Saisie) n'avait aucun moyen de savoir, en fin de journée, si son travail avait effectivement atteint Supabase — l'information existait déjà en base mais n'était affichée nulle part. Un badge par carte (Synchronisé / En attente / Échec côté Vérification) et un récapitulatif agrégé ont été ajoutés aux deux écrans, avec un rafraîchissement automatique côté Vérification (30 s, s'arrête dès que tout est synchronisé) puisque la synchro s'y résout réellement en arrière-plan en quelques instants. Côté Saisie, où le workflow reste volontairement 100 % manuel (push admin en masse, aucun état "Échec" possible puisqu'aucune ligne `t_outbox` n'y est jamais créée), le libellé ("À synchroniser (admin)") reflète cette réalité au lieu de laisser croire à une résolution automatique, et aucun polling dédié n'a été ajouté (le rafraîchissement général déjà existant suffit).
+
+Validé par audit de non-régression (`agent-9-senior-auditor`) et QA terrain via harnais Playwright isolé (badge, transitions d'état, cloisonnement site/agent) et `npx tsc --noEmit` : 0 erreur.
+
 ## 🛠️ Corrections & Fiabilité
 
 - **Bouton de synchro ("Synchroniser mes actions" / "mes saisies") restant inactif après une action métier, sur 3 portails** : après une délivrance de carte (OPERATEUR_VERIFICATION, ADMIN_CENTRE) ou une correction qualité (OPERATEUR_QUALITE), le compteur qui pilote l'état actif/inactif du bouton n'était jamais recalculé — l'agent devait quitter puis revenir sur l'écran (ou attendre jusqu'à 30 s pour ADMIN_CENTRE) avant de pouvoir synchroniser. Corrigé sur les 3 portails :
@@ -83,3 +87,7 @@ Validé par `npx tsc --noEmit` : 0 erreur.
 - **6 payloads `t_users` partiels risquant un rejet ou une écriture incomplète côté Supabase** : `resetSiteAdminPassword`, `resetAgentPassword`, `deleteUser` (désactivation), `deleteSite`/`deleteCentre` (neutralisation des comptes rattachés) et `updateSelfProfile` enfilaient des payloads `t_users` omettant parfois `login`, `password_hash` ou `role` — colonnes non nullables côté Supabase — un `PostgREST` strict rejetterait ces écritures dans son intégralité (l'outbox enfile un remplacement complet du payload, jamais une fusion). Les 3 colonnes sont désormais systématiquement incluses sur les 6 fonctions, sans jamais faire de `SELECT *` sur `t_users` (pour ne pas écraser un champ modifié entre-temps sur un autre poste et pas encore redescendu localement).
 
 Validé par `npx tsc --noEmit` : 0 erreur.
+
+- **Cartes issues d'un import massif jamais suivies par le circuit de synchro standard** : après un import CSV/Excel, les cartes fusionnées ne dépendaient que d'un envoi manuel en masse déclenché par un admin (`upload-worker.js`), en dehors de `t_outbox` — pas de suivi individuel, pas de retry standard en cas d'échec, et une carte importée restait invisible pour le nouvel indicateur de synchro de l'opérateur. Chaque carte importée est désormais enfilée dans `t_outbox` (même transaction que la fusion du chunk), suivant le même circuit que toute autre écriture de carte ; le bouton "Forcer la synchronisation" exclut les cartes déjà en attente pour éviter un double-envoi, tout en restant capable de reprendre celles passées en échec.
+
+Validé par audit de non-régression et QA terrain (import réel, vérification `t_outbox`, non-double-envoi) et `npx tsc --noEmit` : 0 erreur.
