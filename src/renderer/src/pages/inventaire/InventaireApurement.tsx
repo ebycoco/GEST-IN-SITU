@@ -226,6 +226,18 @@ export default function InventaireApurement() {
     }
   };
 
+  // Affichage JJ/MM/AAAA : date_de_naissance est stockée en ISO (AAAA-MM-JJ), même helper
+  // que celui déjà utilisé dans VerificationSearchPage/SearchResults.tsx pour cet affichage.
+  const formatBirthDate = (isoDate: string | null | undefined): string => {
+    if (!isoDate) return '—';
+    const parts = isoDate.split('-');
+    if (parts.length === 3) {
+      const [year, month, day] = parts;
+      return `${day}/${month}/${year}`;
+    }
+    return isoDate;
+  };
+
   return (
     <div className="animate-fade-in" style={{ padding: '40px 24px', maxWidth: 800, margin: '0 auto' }} onKeyDown={handleKeyDown}>
       {/* Header */}
@@ -345,7 +357,7 @@ export default function InventaireApurement() {
                         <div>
                           <div style={{ fontWeight: 700, color: 'white', fontSize: 15 }}>{c.noms} {c.prenoms}</div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                            Né(e) le {c.date_de_naissance || '—'} à <span style={{ color: '#ec4899', fontWeight: 600 }}>{c.lieu_de_naissance || '—'}</span>
+                            Né(e) le {formatBirthDate(c.date_de_naissance)} à <span style={{ color: '#ec4899', fontWeight: 600 }}>{c.lieu_de_naissance || '—'}</span>
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: 2 }}>
                             Statut : <span style={{ color: c.statut === 'EN STOCK' ? '#10b981' : '#ec4899', fontWeight: 700 }}>{c.statut}</span> | CMU : {c.num_secu || '—'}
@@ -368,7 +380,7 @@ export default function InventaireApurement() {
               <div style={{ fontSize: 11, fontWeight: 800, color: '#ffd700', textTransform: 'uppercase', marginBottom: 4 }}>Dossier Sélectionné</div>
               <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: 'white' }}>{selectedCarte.noms} {selectedCarte.prenoms}</h3>
               <p style={{ margin: '4px 0 0 0', fontSize: 13, color: 'var(--text-muted)' }}>
-                Né(e) le {selectedCarte.date_de_naissance} à {selectedCarte.lieu_de_naissance} | CMU : {selectedCarte.num_secu || 'NON RENSEIGNÉ'}
+                Né(e) le {formatBirthDate(selectedCarte.date_de_naissance)} à {selectedCarte.lieu_de_naissance} | CMU : {selectedCarte.num_secu || 'NON RENSEIGNÉ'}
               </p>
             </div>
 
