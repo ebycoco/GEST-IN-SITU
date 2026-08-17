@@ -29,7 +29,7 @@ declare global {
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;
         getAgentStats: (userId: number) => Promise<{ today: number; yesterday: number; week: number; month: number; year: number }>;
-        getAgentCardsTodayPaginated: (userId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number }>;
+        getAgentCardsTodayPaginated: (userId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;
         getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;
         getSiteLogistiqueToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string) => Promise<any[]>;

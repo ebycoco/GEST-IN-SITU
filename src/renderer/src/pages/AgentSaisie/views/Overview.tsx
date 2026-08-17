@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Calendar, Target, CalendarDays, ClipboardList, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { Activity, Calendar, Target, CalendarDays, ClipboardList, ChevronLeft, ChevronRight, RefreshCw, CheckCircle2, Clock3, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 
 const PAGE_SIZE = 20;
@@ -13,6 +13,33 @@ interface AgentStats {
 }
 
 const EMPTY_STATS: AgentStats = { today: 0, yesterday: 0, week: 0, month: 0, year: 0 };
+
+// Présentation du badge de statut de synchro par ligne (Travail du jour) — copie à l'identique
+// de SYNC_STATUS_META/SyncStatusBadge de src/renderer/src/pages/AgentVerification/views/Overview.tsx
+// (même palette vert succès / ambre attente / rouge échec). Dupliqué volontairement plutôt que
+// factorisé dans un fichier partagé : périmètre de cette tâche limité aux 2 fichiers Overview.tsx
+// déjà existants, pas de nouvelle abstraction pour seulement 2 usages.
+// Libellé PENDING volontairement différent de la version Vérification : sur ce portail Saisie,
+// createCarte()/updateCarte() n'appellent jamais enqueueOutbox() (workflow de synchro 100%
+// manuel, push en masse déclenché plus tard par un admin via upload-worker.js) — l'état ERROR
+// y est donc structurellement inatteignable et rien ne se résout tout seul en quelques
+// secondes/minutes, contrairement à Vérification où l'auto-refresh 30s a un vrai sens. D'où un
+// libellé qui reflète cette réalité plutôt qu'un simple "En attente" trompeur.
+const SYNC_STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; Icon: typeof CheckCircle2 }> = {
+  SYNCED: { label: 'Synchronisé', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.25)', Icon: CheckCircle2 },
+  PENDING: { label: 'À synchroniser (admin)', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', Icon: Clock3 },
+  ERROR: { label: 'Échec', color: '#f87171', bg: 'rgba(248, 113, 113, 0.1)', border: 'rgba(248, 113, 113, 0.25)', Icon: AlertTriangle }
+};
+
+function SyncStatusBadge({ status }: { status: string }) {
+  const meta = SYNC_STATUS_META[status] || SYNC_STATUS_META.PENDING;
+  const { Icon } = meta;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+      <Icon size={11} /> {meta.label}
+    </span>
+  );
+}
 
 /**
  * Vue d'ensemble du Portail de Saisie (rôle OPERATEUR_SAISIE) :
@@ -37,6 +64,9 @@ export default function Overview() {
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  // Récapitulatif de synchro du "Travail du jour" (badge par ligne + compteurs agrégés) — voir
+  // getAgentCardsTodayPaginated (stats.queries.ts) pour la logique de calcul du statut.
+  const [syncSummary, setSyncSummary] = useState({ synced: 0, pending: 0, error: 0 });
 
   const loadStats = useCallback(async () => {
     if (!user?.id_user) { setStats(EMPTY_STATS); return; }
@@ -48,17 +78,22 @@ export default function Overview() {
     }
   }, [user?.id_user]);
 
-  const loadCardsToday = useCallback(async () => {
+  // `silent` évite de repasser par isLoading (donc par l'écran "Chargement en cours...") lors d'un
+  // rappel en arrière-plan sans flash visuel. Non utilisé par les rappels périodiques actuels de ce
+  // portail (60s / app:data-updated, tous deux non-silencieux, inchangés) : paramètre conservé tel
+  // quel car partagé avec la signature de loadCardsToday d'AgentVerification/views/Overview.tsx.
+  const loadCardsToday = useCallback(async (silent = false) => {
     if (!user?.id_user) { setRows([]); setTotal(0); setIsLoading(false); return; }
     try {
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       const res = await window.api.stats.getAgentCardsTodayPaginated(user.id_user, page, PAGE_SIZE);
       setRows(res?.rows || []);
       setTotal(res?.total || 0);
+      setSyncSummary(res?.syncSummary || { synced: 0, pending: 0, error: 0 });
     } catch (err) {
       console.error("Erreur lors du chargement des saisies du jour :", err);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [user?.id_user, page]);
 
@@ -84,6 +119,11 @@ export default function Overview() {
     };
   }, [loadStats, loadCardsToday]);
 
+  // Pas de polling dédié 30s ici (à la différence de AgentVerification/views/Overview.tsx) :
+  // ce portail fonctionne en workflow de synchro 100% manuel (createCarte()/updateCarte()
+  // n'appellent jamais enqueueOutbox(), push en masse déclenché plus tard par un admin) — un
+  // timer court n'aurait rien de nouveau à refléter dans l'intervalle. Le rafraîchissement
+  // général ~60s ci-dessus (préexistant) suffit à tenir le badge et le récapitulatif à jour.
   const handleRefreshClick = async () => {
     setIsRefreshing(true);
     try {
@@ -145,26 +185,38 @@ export default function Overview() {
 
       {/* Travail du jour : fiches saisies aujourd'hui par l'agent connecté */}
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '20px 24px', color: 'white' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '20px 24px', color: 'white', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <ClipboardList size={20} color="#ffd700" />
             <h2 style={{ margin: 0, fontSize: 18, fontWeight: 800 }}>Travail du jour</h2>
           </div>
-          <button
-            onClick={handleRefreshClick}
-            disabled={isRefreshing}
-            className="btn"
-            style={{
-              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
-              background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
-              cursor: isRefreshing ? 'not-allowed' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'all 0.2s'
-            }}
-            onMouseOver={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
-            onMouseOut={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
-          >
-            <RefreshCw size={16} style={{ animation: isRefreshing ? 'spin 1.5s linear infinite' : 'none' }} />
-            {isRefreshing ? 'Actualisation...' : 'Actualiser'}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            {total > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <SyncStatusBadge status="SYNCED" />
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>{syncSummary.synced}</span>
+                <SyncStatusBadge status="PENDING" />
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>{syncSummary.pending}</span>
+                <SyncStatusBadge status="ERROR" />
+                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{syncSummary.error}</span>
+              </div>
+            )}
+            <button
+              onClick={handleRefreshClick}
+              disabled={isRefreshing}
+              className="btn"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', borderRadius: 8, fontSize: 13,
+                background: 'rgba(255, 255, 255, 0.05)', border: '1px solid rgba(255, 255, 255, 0.1)', color: 'white',
+                cursor: isRefreshing ? 'not-allowed' : 'pointer', opacity: isRefreshing ? 0.6 : 1, transition: 'all 0.2s'
+              }}
+              onMouseOver={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)'; }}
+              onMouseOut={(e) => { if (!isRefreshing) e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'; }}
+            >
+              <RefreshCw size={16} style={{ animation: isRefreshing ? 'spin 1.5s linear infinite' : 'none' }} />
+              {isRefreshing ? 'Actualisation...' : 'Actualiser'}
+            </button>
+          </div>
         </div>
 
         {isLoading ? (
@@ -184,6 +236,7 @@ export default function Overview() {
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Contact</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Heure de saisie</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Synchro</th>
                 </tr>
               </thead>
               <tbody>
@@ -200,6 +253,9 @@ export default function Overview() {
                     <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.contact || '—'}</td>
                     <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
                       {r.created_at ? new Date(r.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </td>
+                    <td style={{ padding: '16px 24px' }}>
+                      <SyncStatusBadge status={r.sync_status} />
                     </td>
                   </tr>
                 ))}

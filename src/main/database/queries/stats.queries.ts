@@ -591,7 +591,11 @@ export function getAgentCardsTodayPaginated(
   userId: number,
   page: number = 0,
   pageSize: number = 20
-): { rows: any[]; total: number } {
+): {
+  rows: any[];
+  total: number;
+  syncSummary: { synced: number; pending: number; error: number };
+} {
   const db = getDatabase()!;
 
   const todayStr = new Date().toISOString().split('T')[0];
@@ -603,25 +607,61 @@ export function getAgentCardsTodayPaginated(
   const safePage = Math.max(0, Math.floor(page) || 0);
   const offset = safePage * safePageSize;
 
-  const whereClause = `
-    FROM t_cartes
-    WHERE created_by = ?
-      AND created_at >= ?
-      AND created_at < ?
+  // Colonnes qualifiées par t_cartes. : t_outbox possède aussi une colonne created_at
+  // (schema.ts ~ligne 919), et cette clause est réutilisée dans des requêtes qui font
+  // LEFT JOIN t_outbox (rows/summaryRow ci-dessous) — sans préfixe, SQLite rejette la
+  // requête à la préparation avec "ambiguous column name: created_at" (bug P0 corrigé).
+  const conditionClause = `
+    WHERE t_cartes.created_by = ?
+      AND t_cartes.created_at >= ?
+      AND t_cartes.created_at < ?
   `;
   const params: (string | number)[] = [userId, todayStr, tomorrowStr];
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as total ${whereClause}`).get(...params) as { total: number } | undefined;
+  const totalRow = db.prepare(`SELECT COUNT(*) as total FROM t_cartes ${conditionClause}`).get(...params) as { total: number } | undefined;
   const total = totalRow?.total || 0;
 
+  // Enrichissement statut de synchro (badge "Travail du jour", Portail Saisie) : même jointure et
+  // même priorité que getVerificationCardsTodayPaginated ci-dessus (jointure sur clés indexées,
+  // t_outbox.id = PK, t_cartes.sync_id = UNIQUE, relation 0..1, aucune ligne dupliquée) :
+  //   - is_dirty = 0 ET (pas de ligne outbox OU statut SYNCED)      → synchronisé
+  //   - is_dirty = 1 ET t_outbox.status = 'ERROR'                   → échec (uniquement ce cas)
+  //   - sinon (is_dirty = 1, pas encore SYNCED, ou PENDING)         → en attente
+  const fromWithJoin = `
+    FROM t_cartes
+    LEFT JOIN t_outbox ON t_outbox.id = t_cartes.sync_id AND t_outbox.table_name = 't_cartes'
+  `;
+  const syncStatusCase = `
+    CASE
+      WHEN t_cartes.is_dirty = 0 THEN 'SYNCED'
+      WHEN t_cartes.is_dirty = 1 AND t_outbox.status = 'ERROR' THEN 'ERROR'
+      ELSE 'PENDING'
+    END
+  `;
+
   const rows = db.prepare(`
-    SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, lieu_de_naissance, rangement, contact, created_at, statut, is_dirty
-    ${whereClause}
-    ORDER BY created_at DESC
+    SELECT t_cartes.id_carte, t_cartes.noms, t_cartes.prenoms, t_cartes.num_secu, t_cartes.date_de_naissance,
+           t_cartes.lieu_de_naissance, t_cartes.rangement, t_cartes.contact, t_cartes.created_at, t_cartes.statut, t_cartes.is_dirty,
+           ${syncStatusCase} AS sync_status
+    ${fromWithJoin}
+    ${conditionClause}
+    ORDER BY t_cartes.created_at DESC
     LIMIT ? OFFSET ?
   `).all(...params, safePageSize, offset);
 
-  return { rows, total };
+  const summaryRow = db.prepare(`
+    SELECT
+      SUM(CASE WHEN ${syncStatusCase} = 'SYNCED' THEN 1 ELSE 0 END) as synced,
+      SUM(CASE WHEN ${syncStatusCase} = 'ERROR' THEN 1 ELSE 0 END) as error
+    ${fromWithJoin}
+    ${conditionClause}
+  `).get(...params) as { synced: number | null; error: number | null } | undefined;
+
+  const synced = summaryRow?.synced || 0;
+  const error = summaryRow?.error || 0;
+  const pending = Math.max(0, total - synced - error);
+
+  return { rows, total, syncSummary: { synced, pending, error } };
 }
 
 export function getSiteSaisieStatsToday(siteId: number, centreId?: number, agentId?: number, dateStr?: string) {
