@@ -465,7 +465,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
     }
     try {
-      const siteId = secureUser.role === 'SUPER ADMIN' ? null : secureUser.site_id;
+      // Correctif (audit agent-9) : ne jamais laisser un ADMINISTRATEUR_SITE avec un
+      // site_id orphelin/null (compte désynchronisé après suppression de site, cf.
+      // migration schema.ts ~ligne 3398) tomber sur siteId=null — valeur par ailleurs
+      // réservée à "tous sites" pour SUPER ADMIN, ce qui romprait le cloisonnement site
+      // (§3 CLAUDE.md). Même garde-fou que resolveScopedSiteId() plus haut dans ce fichier.
+      let siteId: number | null;
+      if (secureUser.role === 'SUPER ADMIN') {
+        siteId = null;
+      } else {
+        if (secureUser.site_id === undefined || secureUser.site_id === null) {
+          throw new Error("Session invalide : site_id introuvable pour cet utilisateur.");
+        }
+        siteId = secureUser.site_id;
+      }
       return await getAgentsPresence({ siteId });
     } catch (e) {
       log.error('IPC Error: presence:getAgents', e);
