@@ -994,3 +994,36 @@ export function getActivitiesByAgentAndDate(siteId: number, centreId?: number | 
     logistique
   };
 }
+
+/**
+ * Récapitulatif agrégé de synchro pour le Portail Qualité (Vue d'ensemble) — contrairement à
+ * Vérification/Saisie/Apurement, il n'existe aucune colonne fiable pour attribuer une correction
+ * Qualité à un agent et une date précise (les corrections passent par plusieurs handlers
+ * qualite:(divers)/cmu:updateCarte sans horodatage "traité par moi aujourd'hui" exploitable) :
+ * pas de vraie liste "mes cartes du jour" possible ici. On se limite donc à un compteur agrégé,
+ * site-wide, sur toutes les cartes is_dirty=1 du site — simple mention "X en attente de synchro
+ * (dont Y en échec)".
+ * Même jointure sur clés indexées que getVerificationCardsTodayPaginated/
+ * getApurementCardsTodayPaginated/getAgentCardsTodayPaginated ci-dessus (t_outbox.id = PK,
+ * t_cartes.sync_id = UNIQUE, relation 0..1). `pending` exclut volontairement les cartes en
+ * erreur pour rester cohérent avec le sens de "pending" utilisé partout ailleurs dans l'app
+ * (en attente normale, pas en échec) : pending = pendingTotal - error.
+ * Cloisonnement (§3 CLAUDE.md) : site_id obligatoire et paramétré, jamais de concaténation SQL.
+ */
+export function getSiteSyncSummary(siteId: number): { pending: number; error: number } {
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT
+      SUM(CASE WHEN t_outbox.status = 'ERROR' THEN 1 ELSE 0 END) as error,
+      COUNT(*) as pendingTotal
+    FROM t_cartes
+    LEFT JOIN t_outbox ON t_outbox.id = t_cartes.sync_id AND t_outbox.table_name = 't_cartes'
+    WHERE t_cartes.site_id = ? AND t_cartes.is_dirty = 1
+  `).get(siteId) as { error: number | null; pendingTotal: number | null } | undefined;
+
+  const error = row?.error || 0;
+  const pendingTotal = row?.pendingTotal || 0;
+  const pending = Math.max(0, pendingTotal - error);
+
+  return { pending, error };
+}

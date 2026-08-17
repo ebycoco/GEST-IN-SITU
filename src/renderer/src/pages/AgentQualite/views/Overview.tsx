@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, AlertTriangle, Fingerprint, Calendar, Activity } from 'lucide-react';
+import { Users, AlertTriangle, Fingerprint, Calendar, Activity, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import { useQualityUIStore } from '../../../stores/qualityUIStore';
 
@@ -82,6 +82,32 @@ export default function Overview() {
   });
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // Récapitulatif agrégé de synchro (site-wide, pas de "travail du jour" par agent possible ici
+  // — voir commentaire de getSiteSyncSummary dans stats.queries.ts). Pas de nouveau timer/polling :
+  // branché sur le même écouteur 'app:data-updated' que dirtyCartesCount dans
+  // AgentQualiteLayout.tsx (ligne ~42-46), dispatché après chaque correction/fusion/suppression
+  // qualité (CorrectionSidePanel.onSave, DoublonsView, MissingDataView, InvalidFormatView).
+  const [syncSummary, setSyncSummary] = useState({ pending: 0, error: 0 });
+
+  const loadSyncSummary = useCallback(async () => {
+    try {
+      const res = await window.api.stats.getSiteSyncSummary(siteIdToUse);
+      setSyncSummary(res || { pending: 0, error: 0 });
+    } catch (error) {
+      console.error('Erreur lors du chargement du récapitulatif de synchro qualité :', error);
+    }
+  }, [siteIdToUse]);
+
+  useEffect(() => {
+    loadSyncSummary();
+  }, [loadSyncSummary]);
+
+  useEffect(() => {
+    const handleDataUpdated = () => { loadSyncSummary(); };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [loadSyncSummary]);
+
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
     setIsFetchingQuery(true);
@@ -122,6 +148,23 @@ export default function Overview() {
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       <h2 style={{ fontSize: 18, fontWeight: 700, color: 'white', margin: 0 }}>Statistiques Globales des Anomalies</h2>
+
+      {(syncSummary.pending > 0 || syncSummary.error > 0) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '10px 16px', borderRadius: 10,
+          background: 'rgba(59, 130, 246, 0.08)', border: '1px solid rgba(59, 130, 246, 0.25)',
+          color: '#93c5fd', fontSize: 13, fontWeight: 600
+        }}>
+          <RefreshCw size={16} style={{ flexShrink: 0 }} />
+          {syncSummary.pending.toLocaleString('fr')} carte{syncSummary.pending > 1 ? 's' : ''} en attente de synchro
+          {syncSummary.error > 0 && (
+            <span style={{ color: '#f87171', fontWeight: 800 }}>
+              , dont {syncSummary.error.toLocaleString('fr')} en échec
+            </span>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
         <QualityCounter

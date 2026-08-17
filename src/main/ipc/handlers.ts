@@ -4883,6 +4883,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  // Portail Qualité — récapitulatif agrégé de synchro (Vue d'ensemble), site-wide (pas de liste
+  // "travail du jour" possible ici, voir commentaire de getSiteSyncSummary dans
+  // stats.queries.ts). Même liste de rôles autorisés que les autres handlers du portail Qualité
+  // (QUALITE_ROLES défini plus haut) et même dérivation du site_id effectif depuis la session
+  // serveur (resolveScopedSiteId) que le reste des endpoints stats:*/cartes:* de ce portail —
+  // jamais le siteId brut envoyé par le renderer, pour respecter le cloisonnement §3 CLAUDE.md.
+  ipcMain.handle('stats:getSiteSyncSummary', (_, siteId?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, QUALITE_ROLES)) {
+      log.warn('[SECURITY] Acces refuse a stats:getSiteSyncSummary : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try { return queries.getSiteSyncSummary(resolveScopedSiteId(siteId)); }
+    catch (e) { log.error('IPC Error: stats:getSiteSyncSummary', e); throw e; }
+  });
+
   // RETRAITS ANALYTICS HANDLERS
   ipcMain.handle('stats:getRetraits', (_, siteId: number, centreId: number | null, period: string, customDate?: string | null) => {
     try {

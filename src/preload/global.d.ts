@@ -41,6 +41,7 @@ declare global {
         getUnsyncedUsersCount: (siteId: number) => Promise<number>;
         getUnsyncedCentresCount: (siteId: number) => Promise<number>;
         getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number }>;
+        getSiteSyncSummary: (siteId?: number) => Promise<{ pending: number; error: number }>;
       };
       cartes: {
         searchAllRecords: (siteId: number, filters: any, limit: number) => Promise<any[]>;

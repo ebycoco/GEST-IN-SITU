@@ -235,6 +235,8 @@ const api = {
       ipcRenderer.invoke('stats:getUnsyncedConformeCardsCount', siteId),
     getDetailedSyncStats: (siteId: number): Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number }> =>
       ipcRenderer.invoke('stats:getDetailedSyncStats', siteId),
+    getSiteSyncSummary: (siteId?: number): Promise<{ pending: number; error: number }> =>
+      ipcRenderer.invoke('stats:getSiteSyncSummary', siteId),
     getUnsyncedUsersCount: (siteId: number): Promise<number> => 
       ipcRenderer.invoke('stats:getUnsyncedUsersCount', siteId),
     
