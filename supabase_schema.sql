@@ -289,3 +289,52 @@ CREATE POLICY "Enable insert access for all users" ON public.t_user_roles FOR IN
 CREATE POLICY "Enable update access for all users" ON public.t_user_roles FOR UPDATE USING (true);
 CREATE POLICY "Enable delete access for all users" ON public.t_user_roles FOR DELETE USING (true);
 
+
+-- ============================================================================
+-- TABLE : t_user_presence (Présence des agents — heartbeat/login/logout)
+-- ============================================================================
+-- Alimentée en écritures fire-and-forget (hors moteur outbox) par
+-- src/main/sync/presence.service.ts : heartbeatPresence(), recordPresenceLogin(),
+-- recordPresenceLogout(). Lue en direct (jamais via SQLite local) par
+-- getAgentsPresence() du même module, pour la future page "Présence des agents"
+-- (ADMINISTRATEUR_SITE sur son site, SUPER ADMIN tous sites).
+--
+-- Une seule ligne par compte (PK user_sync_id), écrasée à chaque battement/
+-- connexion/déconnexion — pas d'historique, pas de table de log, pas de purge
+-- à prévoir. Aucun statut (En ligne/Inactif/Hors ligne) n'est stocké ici : seuls
+-- des timestamps bruts, le calcul du statut se fait côté renderer.
+--
+-- Types alignés sur t_users (sync_id TEXT UNIQUE, site_id/centre_id BIGINT
+-- REFERENCES t_sites(id)/t_centres(id) — cf. section 4 ci-dessus).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS public.t_user_presence (
+    user_sync_id        TEXT PRIMARY KEY REFERENCES public.t_users(sync_id) ON DELETE CASCADE,
+    login                TEXT NOT NULL,
+    site_id              BIGINT REFERENCES public.t_sites(id),
+    centre_id            BIGINT REFERENCES public.t_centres(id),
+    role                 TEXT,
+    last_heartbeat_at    TIMESTAMPTZ,
+    last_login_at        TIMESTAMPTZ,
+    last_logout_at       TIMESTAMPTZ
+);
+
+-- Index de lecture par site/centre (requêtes futures directes sur cette table ;
+-- getAgentsPresence() filtre aujourd'hui par user_sync_id issu du roster t_users,
+-- déjà couvert par la PK ci-dessus, mais ces index restent utiles pour toute
+-- requête directe filtrée site_id/centre_id).
+CREATE INDEX IF NOT EXISTS idx_user_presence_site_id   ON public.t_user_presence(site_id);
+CREATE INDEX IF NOT EXISTS idx_user_presence_centre_id ON public.t_user_presence(centre_id);
+
+-- RLS ACTIVÉ + policy permissive "allow_all_operations_*", même modèle réel que
+-- t_sites/t_centres/t_postes/t_users/t_cartes/t_logs (vérifié directement en base
+-- de production le 2026-08-17 via pg_tables/pg_policies — la mention "RLS
+-- désactivé sur toutes les tables" de la section 8 ci-dessous est OBSOLÈTE/fausse
+-- pour ces tables, ne pas s'y fier ; correction de la section 8 elle-même laissée
+-- en dehors du périmètre de cet ajout).
+ALTER TABLE public.t_user_presence ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "allow_all_operations_t_user_presence" ON public.t_user_presence
+FOR ALL USING (true) WITH CHECK (true);
+
+GRANT ALL ON public.t_user_presence TO anon, authenticated, service_role;
+
