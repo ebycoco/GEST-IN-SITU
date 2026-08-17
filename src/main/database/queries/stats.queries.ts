@@ -216,7 +216,11 @@ export function getVerificationCardsTodayPaginated(
   siteId: number,
   page: number = 0,
   pageSize: number = 20
-): { rows: any[]; total: number } {
+): {
+  rows: any[];
+  total: number;
+  syncSummary: { synced: number; pending: number; error: number };
+} {
   const db = getDatabase()!;
 
   const todayStr = new Date().toISOString().split('T')[0];
@@ -228,8 +232,7 @@ export function getVerificationCardsTodayPaginated(
   const safePage = Math.max(0, Math.floor(page) || 0);
   const offset = safePage * safePageSize;
 
-  const whereClause = `
-    FROM t_cartes
+  const conditionClause = `
     WHERE statut = 'DELIVRE'
       AND UPPER(agent_distributeur) = UPPER(?)
       AND site_id = ?
@@ -238,18 +241,53 @@ export function getVerificationCardsTodayPaginated(
   `;
   const params: (string | number)[] = [agentUsername, siteId, todayStr, tomorrowStr];
 
-  const totalRow = db.prepare(`SELECT COUNT(*) as total ${whereClause}`).get(...params) as { total: number } | undefined;
+  const totalRow = db.prepare(`SELECT COUNT(*) as total FROM t_cartes ${conditionClause}`).get(...params) as { total: number } | undefined;
   const total = totalRow?.total || 0;
 
+  // Enrichissement statut de synchro (badge "Travail du jour", Portail Vérification) : jointure
+  // sur clés indexées (t_outbox.id = PK, t_cartes.sync_id = UNIQUE), relation 0..1, aucune ligne
+  // dupliquée. Priorité is_dirty/synced_at, t_outbox.status en simple enrichissement — jamais
+  // utilisé seul comme source de vérité (une carte peut être synchronisée sans avoir jamais eu
+  // de ligne outbox, cas legacy antérieur à l'introduction du circuit t_outbox pour t_cartes) :
+  //   - is_dirty = 0 ET (pas de ligne outbox OU statut SYNCED)      → synchronisé
+  //   - is_dirty = 1 ET t_outbox.status = 'ERROR'                   → échec (uniquement ce cas)
+  //   - sinon (is_dirty = 1, pas encore SYNCED, ou PENDING)         → en attente
+  const fromWithJoin = `
+    FROM t_cartes
+    LEFT JOIN t_outbox ON t_outbox.id = t_cartes.sync_id AND t_outbox.table_name = 't_cartes'
+  `;
+  const syncStatusCase = `
+    CASE
+      WHEN t_cartes.is_dirty = 0 THEN 'SYNCED'
+      WHEN t_cartes.is_dirty = 1 AND t_outbox.status = 'ERROR' THEN 'ERROR'
+      ELSE 'PENDING'
+    END
+  `;
+
   const rows = db.prepare(`
-    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
-           date_delivrance, nom_retirant, num_retirant, relation_retirant, rangement
-    ${whereClause}
-    ORDER BY date_delivrance DESC
+    SELECT t_cartes.id_carte, t_cartes.noms, t_cartes.prenoms, t_cartes.date_de_naissance,
+           t_cartes.lieu_de_naissance, t_cartes.num_secu, t_cartes.date_delivrance,
+           t_cartes.nom_retirant, t_cartes.num_retirant, t_cartes.relation_retirant, t_cartes.rangement,
+           ${syncStatusCase} AS sync_status
+    ${fromWithJoin}
+    ${conditionClause}
+    ORDER BY t_cartes.date_delivrance DESC
     LIMIT ? OFFSET ?
   `).all(...params, safePageSize, offset);
 
-  return { rows, total };
+  const summaryRow = db.prepare(`
+    SELECT
+      SUM(CASE WHEN ${syncStatusCase} = 'SYNCED' THEN 1 ELSE 0 END) as synced,
+      SUM(CASE WHEN ${syncStatusCase} = 'ERROR' THEN 1 ELSE 0 END) as error
+    ${fromWithJoin}
+    ${conditionClause}
+  `).get(...params) as { synced: number | null; error: number | null } | undefined;
+
+  const synced = summaryRow?.synced || 0;
+  const error = summaryRow?.error || 0;
+  const pending = Math.max(0, total - synced - error);
+
+  return { rows, total, syncSummary: { synced, pending, error } };
 }
 
 /**
