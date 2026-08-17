@@ -311,6 +311,29 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       setActiveRole(requestedRole);
       queries.insertAuditLog(secureUser.login, 'ROLE_SWITCH', `${secureUser.loginRole ?? secureUser.role} → ${requestedRole}`);
+
+      // Correctif P1 (audit agent-9) : le gating "Envoi Automatique" des cartes
+      // (SyncEngine.cardsAutoUpstreamEnabled / miroir outbox.service.ts) n'était mis à
+      // jour qu'au login/logout/sync:setAutoUpstream — jamais lors d'un changement de
+      // rôle actif en cours de session (compte multi-rôles). Résultat : un compte qui
+      // n'a jamais explicitement touché le toggle voyait l'UI (sync:getAutoUpstream,
+      // qui recalcule déjà correctement son repli sur le rôle ACTIF) refléter l'état
+      // attendu (désactivé pour ADMINISTRATEUR_SITE) alors que le moteur réel continuait
+      // d'envoyer automatiquement en arrière-plan — exactement le scénario que la
+      // fonctionnalité devait empêcher. Même formule de repli que sync:getAutoUpstream /
+      // le login (handlers.ts ci-dessus), mais basée sur le NOUVEAU rôle actif
+      // (requestedRole), pas sur le rôle de connexion.
+      try {
+        const db = getDatabase();
+        if (db) {
+          const upstreamPref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_upstream_${secureUser.id_user}`) as { value: string } | undefined;
+          const cardsAutoUpstreamEnabled = upstreamPref ? upstreamPref.value === 'true' : (requestedRole !== 'ADMINISTRATEUR_SITE');
+          syncEngine.setCardsAutoUpstreamEnabled(cardsAutoUpstreamEnabled);
+        }
+      } catch (upstreamPrefErr) {
+        log.warn('Failed to read auto_upstream preference on role switch:', upstreamPrefErr);
+      }
+
       return { success: true, activeRole: requestedRole };
     } catch (e: any) {
       log.error('IPC Error: auth:setActiveRole', e);
@@ -4806,8 +4829,50 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // qui respectent le toggle. Non-bloquant pour la réponse IPC (résultat déjà acquis
       // via runBulkUpload) mais attendu ici pour que le décompte outbox soit à jour avant
       // le retour de ce handler.
+      //
+      // Correctif P1 (audit agent-9) : processOutboxPending() ne traite qu'un lot de
+      // OUTBOX_BATCH_SIZE=50 entrées PAR APPEL (LIMIT interne à outbox.service.ts). Un
+      // import massif avec le toggle désactivé peut laisser largement plus de 50 cartes
+      // PENDING — un unique appel n'en purgeait donc qu'une fraction, contredisant le
+      // commentaire "purge TOUT". On boucle donc jusqu'à épuisement du backlog t_cartes,
+      // avec un plafond de sécurité (politique low-memory §2 CLAUDE.md : jamais de boucle
+      // serrée sans limite) — 100 itérations × 50 = jusqu'à 5000 cartes purgées en un clic,
+      // largement au-delà de tout backlog réaliste sur un poste terrain.
+      //
+      // Sous-cas verrou anti-concurrence (P2 audit) : processOutboxPending() a un verrou
+      // module-level (_isProcessing) qui renvoie silencieusement {processed:0, errors:0} si
+      // un autre traitement outbox est déjà en cours (ex. cycle périodique qui démarre au
+      // même instant). Sans précaution, la boucle interpréterait ce 0 comme "backlog vide"
+      // et s'arrêterait prématurément. On distingue donc ce cas : tant qu'il reste des
+      // cartes PENDING ET qu'aucune progression n'a été faite, on retente une poignée de
+      // fois (courte attente non bloquante pour l'event loop) avant d'abandonner.
       try {
-        await processOutboxPending(false, true);
+        const OUTBOX_FLUSH_MAX_ITERATIONS = 100;
+        const OUTBOX_LOCK_MAX_RETRIES = 5;
+        const OUTBOX_LOCK_RETRY_DELAY_MS = 300;
+        let lockRetries = 0;
+
+        for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
+          const remainingBefore = getOutboxPendingCount('t_cartes');
+          if (remainingBefore === 0) break;
+
+          const { processed, errors } = await processOutboxPending(false, true);
+
+          if (processed === 0 && errors === 0) {
+            // Rien traité : soit le verrou _isProcessing était déjà pris par un autre
+            // appel concurrent (cycle périodique, etc.), soit le backlog est réellement
+            // épuisé entre-temps. On retente un nombre borné de fois avant d'abandonner.
+            lockRetries++;
+            if (lockRetries > OUTBOX_LOCK_MAX_RETRIES) {
+              log.warn(`[sync:startBulk] Vidage forcé de t_outbox interrompu après ${OUTBOX_LOCK_MAX_RETRIES} tentatives sans progression (verrou concurrent persistant ?). ${remainingBefore} carte(s) encore PENDING.`);
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, OUTBOX_LOCK_RETRY_DELAY_MS));
+            continue;
+          }
+
+          lockRetries = 0;
+        }
       } catch (outboxFlushErr: any) {
         log.warn('[sync:startBulk] Échec du vidage forcé de t_outbox (non-bloquant) :', outboxFlushErr?.message || outboxFlushErr);
       }
