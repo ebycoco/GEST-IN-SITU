@@ -36,7 +36,7 @@ export default function AgentsPage() {
     }
     // M-2 fix : un ADMIN_CENTRE ne doit pas pouvoir créer un autre ADMIN_CENTRE
     if (userContext?.role === 'ADMIN_CENTRE') {
-      return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'].includes(r.value));
+      return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(r.value));
     }
     return AVAILABLE_ROLES.filter(r => !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(r.value));
   }, [userContext?.role]);
