@@ -315,14 +315,23 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
 
   let cloudCards: any[] | null = null;
   try {
+    // Correctif (diagnostic production site 4, 2026-08-17) : le pattern `.or(updated_at.gt,
+    // and(updated_at.eq, sync_id.gt))` ne garantit pas à Postgres un unique Index Scan trié
+    // sur l'index composite idx_cartes_site_updated_syncid (id_site, updated_at, sync_id) —
+    // selon la volumétrie restante et les statistiques, le planificateur peut retomber sur un
+    // plan BitmapOr + Sort explicite, qui redevient trop lent (statement timeout serveur) au
+    // fil de la pagination. La fonction RPC fn_downstream_cartes_chunk encapsule une vraie
+    // comparaison de tuple `(updated_at, sync_id) > (watermark, lastSyncId)`, que Postgres
+    // sait toujours traduire en un seul Index Scan ordonné sur cet index composite, quel que
+    // soit le volume restant — voir supabase_schema.sql pour le SQL de la fonction (à créer
+    // manuellement côté Supabase, cf. rapport de l'agent-4-db-sync).
     const { data, error } = await supabase
-      .from('t_cartes')
-      .select('*')
-      .or(`updated_at.gt.${watermark},and(updated_at.eq.${watermark},sync_id.gt.${lastSyncId})`)
-      .eq('id_site', siteId)
-      .order('updated_at', { ascending: true })
-      .order('sync_id', { ascending: true })
-      .limit(500)
+      .rpc('fn_downstream_cartes_chunk', {
+        p_site_id: siteId,
+        p_watermark: watermark,
+        p_last_sync_id: lastSyncId,
+        p_limit: 500
+      })
       .abortSignal(controller.signal);
 
     clearTimeout(timeoutId);
@@ -1109,15 +1118,19 @@ async function runLogsDownstreamChunk(siteId: number): Promise<{ fetched: number
 
   let cloudLogs: any[] | null = null;
   try {
+    // Correctif (même diagnostic que runDownstreamChunk ci-dessus, pattern identique sur
+    // t_logs) : la fonction RPC fn_downstream_logs_chunk encapsule le filtrage site_id +
+    // la comparaison de tuple `(date_heure, sync_id) > (watermark, lastSyncId)` côté serveur,
+    // garantissant un seul Index Scan ordonné sur idx_logs_site_date_syncid sans jamais
+    // retomber sur un plan BitmapOr + Sort. Cloisonnement P0 : filtrage site_id appliqué
+    // DANS la fonction SQL (WHERE site_id = p_site_id), donc toujours côté serveur.
     const { data, error } = await supabase
-      .from('t_logs')
-      .select('id_user, login_user, action, detail, valeur_avant, valeur_apres, date_heure, centre_id, site_id, sync_id')
-      // Cloisonnement P0 : filtrage obligatoire côté serveur sur le site de l'appelant.
-      .eq('site_id', siteId)
-      .or(`date_heure.gt.${watermark},and(date_heure.eq.${watermark},sync_id.gt.${lastSyncId})`)
-      .order('date_heure', { ascending: true })
-      .order('sync_id', { ascending: true })
-      .limit(500)
+      .rpc('fn_downstream_logs_chunk', {
+        p_site_id: siteId,
+        p_watermark: watermark,
+        p_last_sync_id: lastSyncId,
+        p_limit: 500
+      })
       .abortSignal(controller.signal);
 
     clearTimeout(timeoutId);

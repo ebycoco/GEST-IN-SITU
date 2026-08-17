@@ -181,9 +181,61 @@ CREATE INDEX IF NOT EXISTS idx_cartes_updated        ON public.t_cartes(updated_
 CREATE INDEX IF NOT EXISTS idx_cartes_contact        ON public.t_cartes(contact);
 CREATE INDEX IF NOT EXISTS idx_cartes_site_statut    ON public.t_cartes(id_site, statut);
 CREATE INDEX IF NOT EXISTS idx_cartes_sync_id        ON public.t_cartes(sync_id);
+-- Index composite dédié à la pagination keyset du pull downstream (runDownstreamChunk,
+-- src/main/sync/downstream.ts) : sans lui, le filtre id_site + tri (updated_at, sync_id)
+-- force un tri complet des lignes candidates, qui dépasse le statement_timeout Supabase
+-- sur les sites à fort volume (ex: timeout constaté site 4, ~40 700 cartes, 2026-08-17).
+CREATE INDEX IF NOT EXISTS idx_cartes_site_updated_syncid ON public.t_cartes(id_site, updated_at, sync_id);
 CREATE INDEX IF NOT EXISTS idx_logs_date             ON public.t_logs(date_heure);
 CREATE INDEX IF NOT EXISTS idx_logs_action           ON public.t_logs(action);
 CREATE INDEX IF NOT EXISTS idx_logs_sync_id          ON public.t_logs(sync_id);
+-- Même justification que idx_cartes_site_updated_syncid ci-dessus, pour la pagination
+-- keyset de runLogsDownstreamChunk (src/main/sync/downstream.ts).
+CREATE INDEX IF NOT EXISTS idx_logs_site_date_syncid ON public.t_logs(site_id, date_heure, sync_id);
+
+-- ============================================================
+-- 7bis. FONCTIONS RPC — PAGINATION KEYSET DOWNSTREAM (t_cartes / t_logs)
+-- ============================================================
+-- PostgREST ne sait pas exprimer une comparaison de tuple `(a,b) > (x,y)` via son DSL
+-- .or()/.filter() : ces deux fonctions encapsulent la vraie clause côté serveur pour
+-- garantir à Postgres un unique Index Scan trié sur les index composites ci-dessus,
+-- sans jamais retomber sur un plan BitmapOr + Sort (cause du statement timeout site 4,
+-- ~40 700 cartes, 2026-08-17). Appelées via .rpc(...) depuis runDownstreamChunk et
+-- runLogsDownstreamChunk (src/main/sync/downstream.ts). LANGUAGE sql (pas plpgsql) pour
+-- rester éligible à l'inlining par le planificateur à chaque appel.
+CREATE OR REPLACE FUNCTION public.fn_downstream_cartes_chunk(
+  p_site_id BIGINT, p_watermark TIMESTAMPTZ, p_last_sync_id TEXT, p_limit INT DEFAULT 500
+)
+RETURNS SETOF public.t_cartes
+LANGUAGE sql STABLE
+AS $$
+  SELECT * FROM public.t_cartes
+  WHERE id_site = p_site_id AND (updated_at, sync_id) > (p_watermark, p_last_sync_id)
+  ORDER BY updated_at ASC, sync_id ASC
+  LIMIT p_limit;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.fn_downstream_cartes_chunk(BIGINT, TIMESTAMPTZ, TEXT, INT)
+  TO anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION public.fn_downstream_logs_chunk(
+  p_site_id BIGINT, p_watermark TIMESTAMPTZ, p_last_sync_id TEXT, p_limit INT DEFAULT 500
+)
+RETURNS TABLE (
+  id_user BIGINT, login_user TEXT, action TEXT, detail TEXT, valeur_avant TEXT,
+  valeur_apres TEXT, date_heure TIMESTAMPTZ, centre_id BIGINT, site_id BIGINT, sync_id TEXT
+)
+LANGUAGE sql STABLE
+AS $$
+  SELECT id_user, login_user, action, detail, valeur_avant, valeur_apres, date_heure, centre_id, site_id, sync_id
+  FROM public.t_logs
+  WHERE site_id = p_site_id AND (date_heure, sync_id) > (p_watermark, p_last_sync_id)
+  ORDER BY date_heure ASC, sync_id ASC
+  LIMIT p_limit;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.fn_downstream_logs_chunk(BIGINT, TIMESTAMPTZ, TEXT, INT)
+  TO anon, authenticated, service_role;
 
 -- ============================================================
 -- 8. RLS : DÃ‰SACTIVÃ‰ sur toutes les tables
