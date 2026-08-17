@@ -473,6 +473,17 @@ const api = {
       ipcRenderer.invoke('sync:getAutoDownstream'),
     setAutoDownstream: (enabled: boolean): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('sync:setAutoDownstream', enabled),
+    // Contrôle l'envoi automatique des CARTES (t_cartes) uniquement vers Supabase — même
+    // pattern de sécurité que getAutoDownstream/setAutoDownstream (identité dérivée côté
+    // main de la session serveur réelle, aucun paramètre d'identité transmis ici).
+    getAutoUpstream: (): Promise<boolean> =>
+      ipcRenderer.invoke('sync:getAutoUpstream'),
+    setAutoUpstream: (enabled: boolean): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:setAutoUpstream', enabled),
+    // Décompte des cartes (t_cartes) PENDING dans t_outbox — alimente le badge du bouton
+    // "Envoyer les corrections". Distinct de getStatus().outboxCount (toutes tables confondues).
+    getCardsOutboxPendingCount: (): Promise<number> =>
+      ipcRenderer.invoke('sync:getCardsOutboxPendingCount'),
     onStatusChanged: (callback: (status: any) => void) => {
       const listener = (_: any, status: any) => callback(status);
       ipcRenderer.on('sync:status-changed', listener);

@@ -219,6 +219,9 @@ declare global {
 
         getAutoDownstream: () => Promise<boolean>;
         setAutoDownstream: (enabled: boolean) => Promise<{ success: boolean }>;
+        getAutoUpstream: () => Promise<boolean>;
+        setAutoUpstream: (enabled: boolean) => Promise<{ success: boolean }>;
+        getCardsOutboxPendingCount: () => Promise<number>;
         onStatusChanged: (callback: (status: any) => void) => () => void;
         startBulk: (
           siteId: number,

@@ -5,7 +5,7 @@ import { networkMonitor, NetworkState } from './network-monitor';
 import { runUpstream } from './upstream';
 import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus } from './downstream';
 import { getDatabase } from '../database/connection';
-import { processOutboxPending, getOutboxPendingCount } from './outbox.service';
+import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
 import { refreshSecureCurrentUser, getCurrentGrantedRoles, getCurrentUserLogin, stopSessionHeartbeat } from '../auth/session-heartbeat';
 
@@ -85,6 +85,24 @@ class SyncEngine extends EventEmitter {
    * null = aucun utilisateur connecté -> le cycle long est inactif.
    */
   private activeSiteId: number | null = null;
+
+  /**
+   * Préférence "Envoi Automatique" des cartes (upstream, t_cartes uniquement) de
+   * l'utilisateur connecté — miroir en mémoire de `auto_upstream_<id_user>` (t_config).
+   * Lue une fois au login (même point d'appel que auto_downstream_<id_user> dans
+   * handlers.ts) puis mise à jour à chaud par setCardsAutoUpstreamEnabled(), appelée par
+   * l'IPC sync:setAutoUpstream après écriture en base.
+   *
+   * Répercutée vers outbox.service.ts (module transverse, ignorant de la notion de
+   * session) via setOutboxCardsAutoUpstreamEnabled() à chaque changement — c'est CE
+   * miroir-là que processOutboxPending() consulte réellement pour gater les entrées
+   * t_cartes. Ce champ ici sert de source de vérité côté SyncEngine/session.
+   *
+   * Défaut true (envoi actif) : le rôle ADMINISTRATEUR_SITE a un défaut différent
+   * (false) résolu explicitement au login (voir handlers.ts, lecture de
+   * auto_upstream_<id_user>) — ce champ n'est qu'un état neutre avant cette résolution.
+   */
+  private cardsAutoUpstreamEnabled = true;
 
   /**
    * Verrou anti-concurrence pour le downstream automatique.
@@ -238,6 +256,21 @@ class SyncEngine extends EventEmitter {
     }
     this.activeSiteId = null;
     this.pendingDownstreamDue = null;
+  }
+
+  /**
+   * Met à jour la préférence "Envoi Automatique" des cartes (upstream, t_cartes
+   * uniquement) — appelée au login (handlers.ts, résolution du défaut par rôle) et par
+   * l'IPC sync:setAutoUpstream juste après l'écriture de `auto_upstream_<id_user>` en
+   * base. Répercute immédiatement le changement vers outbox.service.ts, seul module qui
+   * applique réellement le gating dans processOutboxPending().
+   *
+   * N'affecte QUE t_cartes : t_sites, t_centres, t_postes, t_users, t_logs continuent de
+   * s'envoyer automatiquement sans condition, quelle que soit cette valeur.
+   */
+  public setCardsAutoUpstreamEnabled(enabled: boolean): void {
+    this.cardsAutoUpstreamEnabled = enabled;
+    setOutboxCardsAutoUpstreamEnabled(enabled);
   }
 
   // ── Cycle dédié comptes/rôles (3 minutes, TOUJOURS actif) ──────────────────

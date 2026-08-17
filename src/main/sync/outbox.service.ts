@@ -5,6 +5,35 @@ import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
 
+// ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
+/**
+ * Miroir en mémoire de la préférence utilisateur `auto_upstream_<id_user>` (t_config),
+ * répercuté ici par SyncEngine.setCardsAutoUpstreamEnabled() à chaque login et à chaque
+ * appel de l'IPC sync:setAutoUpstream. Ce module reste volontairement ignorant de la
+ * notion d'utilisateur/session (transverse à toutes les tables) — il ne connaît qu'un
+ * booléen simple, jamais getSecureCurrentUser().
+ *
+ * Portée stricte : ne gate QUE les entrées t_outbox de table_name = 't_cartes'. Toutes
+ * les autres tables (t_sites, t_centres, t_postes, t_users, t_logs) continuent de
+ * s'envoyer automatiquement sans condition, quelle que soit la valeur de ce flag.
+ *
+ * Défaut true (envoi actif) : si aucun login n'a encore initialisé ce flag (ex: cycle
+ * périodique déclenché avant tout login dans de rares scénarios), le comportement reste
+ * celui d'avant l'introduction du toggle — jamais un blocage silencieux par défaut.
+ */
+let _cardsAutoUpstreamEnabled = true;
+
+/**
+ * Met à jour le miroir en mémoire du gating "Envoi Automatique" des cartes.
+ * Appelé exclusivement par SyncEngine.setCardsAutoUpstreamEnabled() — jamais directement
+ * depuis un handler IPC ou une query, pour garder une source de vérité unique côté
+ * SyncEngine (qui, lui, connaît la notion de session/utilisateur).
+ */
+export function setCardsAutoUpstreamEnabled(enabled: boolean): void {
+  _cardsAutoUpstreamEnabled = enabled;
+  log.info(`[OutboxService] Gating "Envoi Automatique" des cartes (t_cartes) : ${enabled ? 'ACTIVÉ' : 'DÉSACTIVÉ'}.`);
+}
+
 // ─── Constantes de configuration ────────────────────────────────────────────
 /** Nombre maximal de tentatives avant de basculer une entrée en ERROR. */
 const MAX_OUTBOX_ATTEMPTS = 5;
@@ -161,9 +190,15 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  *   appels post-mutation immédiats via scheduleOutboxProcessing(), pour éviter tout
  *   effet de rafale de la promotion ERROR→PENDING sur des mutations rapprochées.
  *   Par défaut `false` (comportement inchangé pour tous les appelants existants).
+ * @param forceCards - `true` UNIQUEMENT pour un déclenchement manuel explicite (bouton
+ *   "Envoyer les corrections" → sync:startBulk) : ignore le gating `_cardsAutoUpstreamEnabled`
+ *   pour cet appel précis, afin que ce bouton reste une porte de sortie garantie pour
+ *   toute carte PENDING dans t_outbox, quel que soit l'état du toggle "Envoi Automatique".
+ *   Automatique (périodique ou immédiat post-sauvegarde) = respecte le toggle (défaut
+ *   `false`). Manuel explicite = l'ignore toujours (`true`).
  * @returns Objet { processed, errors } indiquant les résultats du traitement.
  */
-export async function processOutboxPending(fromPeriodicCycle: boolean = false): Promise<{ processed: number; errors: number }> {
+export async function processOutboxPending(fromPeriodicCycle: boolean = false, forceCards: boolean = false): Promise<{ processed: number; errors: number }> {
   // Verrou anti-concurrence léger (flag module-level)
   if (_isProcessing) {
     log.info('[OutboxService] processOutboxPending ignoré : traitement déjà en cours.');
@@ -191,11 +226,20 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false): 
       _promoteEligibleErrorsToPending(db);
     }
 
+    // Gating "Envoi Automatique" des cartes (t_cartes uniquement) : un appel manuel
+    // explicite (forceCards=true, voir doc du paramètre) ignore toujours ce gating —
+    // seuls les appels automatiques (périodique ou immédiat post-sauvegarde) le respectent.
+    const excludeCardsUpstream = !forceCards && !_cardsAutoUpstreamEnabled;
+    if (excludeCardsUpstream) {
+      log.info('[OutboxService] Toggle "Envoi Automatique" désactivé — entrées t_cartes exclues de ce traitement automatique.');
+    }
+
     // Lire le prochain lot d'entrées PENDING
     const pendingEntries = db.prepare(`
       SELECT id, table_name, operation, payload, status, error_msg, attempts, depends_on
       FROM t_outbox
       WHERE status = 'PENDING'
+        ${excludeCardsUpstream ? "AND table_name != 't_cartes'" : ''}
       ORDER BY created_at ASC
       LIMIT ?
     `).all(OUTBOX_BATCH_SIZE) as OutboxEntry[];
@@ -439,14 +483,24 @@ export function scheduleOutboxProcessing(): void {
 /**
  * Retourne le nombre d'entrées PENDING dans t_outbox.
  * Utile pour les logs de statut du SyncEngine et les badges UI.
+ *
+ * @param tableName - Optionnel. Si fourni, restreint le comptage à cette seule table
+ *   (ex: 't_cartes' pour le badge du bouton "Envoyer les corrections", qui doit refléter
+ *   uniquement les cartes en attente — pas les entrées t_sites/t_centres/t_users/t_logs
+ *   qui s'envoient déjà automatiquement sans lien avec ce bouton). Omis = comportement
+ *   inchangé (compte toutes les tables confondues).
  */
-export function getOutboxPendingCount(): number {
+export function getOutboxPendingCount(tableName?: string): number {
   try {
     const db = getDatabase();
     if (!db) return 0;
-    const row = db.prepare(
-      `SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING'`
-    ).get() as { count: number } | undefined;
+    const row = tableName
+      ? db.prepare(
+          `SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING' AND table_name = ?`
+        ).get(tableName) as { count: number } | undefined
+      : db.prepare(
+          `SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING'`
+        ).get() as { count: number } | undefined;
     return row ? row.count : 0;
   } catch {
     return 0;

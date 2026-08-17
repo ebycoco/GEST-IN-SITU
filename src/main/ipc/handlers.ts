@@ -19,7 +19,7 @@ import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 
 const FAILSAFE_ROOT_ID = 999999;
@@ -219,6 +219,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (user && user.sessionToken) {
         startSessionHeartbeat(user, user.sessionToken);
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion rÃ©ussie de l'utilisateur ${user.login}.`);
+
+        // Préférence "Envoi Automatique" des cartes (upstream, t_cartes uniquement) —
+        // lue une fois au login, avec repli conditionné au rôle de connexion si aucune
+        // ligne n'existe encore en base (défaut désactivé pour ADMINISTRATEUR_SITE, qui
+        // réalise les imports massifs — voir aussi sync:getAutoUpstream, même formule).
+        // Contrairement à auto_downstream_<id_user> ci-dessous, ne dépend pas de site_id :
+        // le gating s'applique via SyncEngine.setCardsAutoUpstreamEnabled(), qui ne
+        // nécessite aucun siteId.
+        try {
+          const db = getDatabase();
+          if (db) {
+            const upstreamPref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_upstream_${user.id_user}`) as { value: string } | undefined;
+            const cardsAutoUpstreamEnabled = upstreamPref ? upstreamPref.value === 'true' : (user.role !== 'ADMINISTRATEUR_SITE');
+            syncEngine.setCardsAutoUpstreamEnabled(cardsAutoUpstreamEnabled);
+          }
+        } catch (upstreamPrefErr) {
+          log.warn('Failed to read auto_upstream preference:', upstreamPrefErr);
+        }
+
         if (user.site_id) {
           try {
             const db = getDatabase();
@@ -254,6 +273,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try {
       syncEngine.stopAutoDownstreamTimer();
       syncEngine.stopUserAccountsSyncTimer();
+      // Réinitialise le gating "Envoi Automatique" des cartes à son état neutre (actif)
+      // pour éviter qu'une préférence désactivée (ex: ADMINISTRATEUR_SITE) ne survive à
+      // la déconnexion et s'applique par erreur à un traitement outbox résiduel avant
+      // qu'un prochain login ne la résolve à nouveau explicitement.
+      syncEngine.setCardsAutoUpstreamEnabled(true);
       await stopSessionHeartbeat();
       if (login) {
         queries.insertAuditLog(login, 'DECONNEXION', `DÃ©connexion volontaire de l'utilisateur ${login}.`);
@@ -4311,6 +4335,66 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  // Sécurité : même pattern que sync:getAutoDownstream/setAutoDownstream ci-dessus —
+  // identité dérivée de getSecureCurrentUser(), jamais d'un paramètre client. Clé
+  // dérivée d'id_user, cohérente avec `auto_downstream_<id_user>`.
+  //
+  // Contrôle l'envoi automatique des CARTES (t_cartes) uniquement vers Supabase — voir
+  // SyncEngine.setCardsAutoUpstreamEnabled() / outbox.service.ts (gating dans
+  // processOutboxPending). N'affecte JAMAIS t_sites/t_centres/t_postes/t_users/t_logs,
+  // qui continuent de s'envoyer automatiquement sans condition.
+  //
+  // Défaut par rôle si aucune ligne n'existe encore en base : `false` (désactivé)
+  // UNIQUEMENT pour ADMINISTRATEUR_SITE (réalise les imports massifs — l'écran
+  // Importation affichera un rappel UI de désactiver ce toggle avant un import), `true`
+  // (activé) pour tout autre rôle. Utilise le rôle ACTIF de la session
+  // (getSecureCurrentUser().role), pas le rôle de connexion — reflète tout changement
+  // de rôle actif via auth:setActiveRole.
+  ipcMain.handle('sync:getAutoUpstream', async () => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return false;
+      const db = getDatabase();
+      if (!db) return false;
+      const row = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_upstream_${secureUser.id_user}`) as { value: string } | undefined;
+      return row ? row.value === 'true' : (secureUser.role !== 'ADMINISTRATEUR_SITE');
+    } catch (e) {
+      log.warn('Erreur getAutoUpstream:', e);
+      return false;
+    }
+  });
+
+  ipcMain.handle('sync:setAutoUpstream', async (_, enabled: boolean) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return { success: false };
+      const db = getDatabase();
+      if (!db) return { success: false };
+      db.prepare("INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(`auto_upstream_${secureUser.id_user}`, enabled ? 'true' : 'false');
+
+      syncEngine.setCardsAutoUpstreamEnabled(enabled);
+      return { success: true };
+    } catch (e) {
+      log.warn('Erreur setAutoUpstream:', e);
+      return { success: false };
+    }
+  });
+
+  // Décompte dédié aux cartes (t_cartes) PENDING dans t_outbox — alimente le badge du
+  // bouton "Envoyer les corrections" (UI, hors périmètre ici). Distinct de
+  // sync:getStatus().outboxCount, qui compte TOUTES les tables confondues (t_sites,
+  // t_centres, t_users, t_logs inclus) et n'est donc pas adapté à ce badge spécifique.
+  ipcMain.handle('sync:getCardsOutboxPendingCount', async () => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return 0;
+      return getOutboxPendingCount('t_cartes');
+    } catch (e) {
+      log.warn('Erreur getCardsOutboxPendingCount:', e);
+      return 0;
+    }
+  });
+
   ipcMain.handle('sync:getCloudCartesCount', async (_, siteId: number) => {
     try {
       const secureUser = getSecureCurrentUser();
@@ -4705,6 +4789,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }, secureUser?.login || 'system');
       } finally {
         // Nettoyage : aucun ecouteur focus attache a ce handler
+      }
+
+      // ── Porte de sortie garantie pour t_outbox (piège de régression identifié) ──────
+      // runBulkUpload (ci-dessus) scanne directement t_cartes par is_dirty/synced_at, avec
+      // un filtre qui EXCLUT ACTIVEMENT les cartes déjà PENDING dans t_outbox (pour éviter
+      // un double envoi normalement pris en charge par processOutboxPending). Si le toggle
+      // "Envoi Automatique" (sync:setAutoUpstream) est désactivé, des cartes peuvent
+      // s'accumuler PENDING dans t_outbox indéfiniment — ET rester exclues de ce scan direct
+      // : sans l'appel forcé ci-dessous, elles ne partiraient plus JAMAIS, ni
+      // automatiquement (toggle OFF), ni via ce bouton manuel (exclues par le filtre
+      // NOT EXISTS de runBulkUpload). forceCards=true ignore le gating du toggle pour cet
+      // appel précis, quel que soit son état — un déclenchement manuel explicite sur ce
+      // bouton doit TOUJOURS purger tout t_outbox PENDING de t_cartes, contrairement aux
+      // chemins automatiques (scheduleOutboxProcessing post-sauvegarde, cycle périodique)
+      // qui respectent le toggle. Non-bloquant pour la réponse IPC (résultat déjà acquis
+      // via runBulkUpload) mais attendu ici pour que le décompte outbox soit à jour avant
+      // le retour de ce handler.
+      try {
+        await processOutboxPending(false, true);
+      } catch (outboxFlushErr: any) {
+        log.warn('[sync:startBulk] Échec du vidage forcé de t_outbox (non-bloquant) :', outboxFlushErr?.message || outboxFlushErr);
       }
 
       // 1. Calcul des anomalies restantes en local (qui n'ont pas pu Ãªtre envoyÃ©es car exclues du filtre) via le Worker pour ne pas geler le Main Thread
