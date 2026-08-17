@@ -7,6 +7,7 @@ import { insertAuditLog } from './audit.queries';
 import { QualityFilters } from '../../../shared/types/quality.types';
 import log from 'electron-log';
 import { isValidDateStrict } from '../../../shared/utils/validators';
+import { normalizeDate } from '../../../shared/utils/date';
 
 /**
  * Enfile automatiquement une carte tout juste corrigée (Qualité) vers t_outbox pour une
@@ -1585,7 +1586,7 @@ export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: strin
 
   if (dateNaissance && dateNaissance.trim()) {
     where += ' AND date_de_naissance = ?';
-    params.push(dateNaissance.trim());
+    params.push(normalizeDate(dateNaissance.trim()));
   }
 
   if (lieuNaissance && lieuNaissance.trim()) {
