@@ -24,7 +24,7 @@ declare global {
         getVerification: (agentUsername: string, siteId: number) => Promise<any>;
         getCardsToday: (agentUsername: string, siteId: number) => Promise<any[]>;
         getVerificationCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
-        getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number }>;
+        getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementStats: (agentUsername: string, siteId: number) => Promise<any>;
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Activity, Calendar, CalendarDays, Target, ClipboardList, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Activity, Calendar, CalendarDays, Target, ClipboardList, ChevronLeft, ChevronRight, CheckCircle2, Clock3, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 
 const PAGE_SIZE = 20;
@@ -14,6 +14,26 @@ interface ApurementStats {
 }
 
 const EMPTY_STATS: ApurementStats = { today: 0, yesterday: 0, week: 0, month: 0, year: 0, last7Days: [] };
+
+// Présentation du badge de statut de synchro par ligne (Travail du jour) — dupliqué à l'identique
+// depuis AgentVerification/views/Overview.tsx (pas d'emplacement partagé raisonnable pour un si
+// petit composant, même choix que pour le Portail Saisie) : mêmes teintes que les pastilles de
+// statut déjà utilisées ailleurs dans l'app (vert succès / ambre attente / rouge échec).
+const SYNC_STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; Icon: typeof CheckCircle2 }> = {
+  SYNCED: { label: 'Synchronisé', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.25)', Icon: CheckCircle2 },
+  PENDING: { label: 'En attente', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', Icon: Clock3 },
+  ERROR: { label: 'Échec', color: '#f87171', bg: 'rgba(248, 113, 113, 0.1)', border: 'rgba(248, 113, 113, 0.25)', Icon: AlertTriangle }
+};
+
+function SyncStatusBadge({ status }: { status: string }) {
+  const meta = SYNC_STATUS_META[status] || SYNC_STATUS_META.PENDING;
+  const { Icon } = meta;
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 800, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+      <Icon size={11} /> {meta.label}
+    </span>
+  );
+}
 
 /**
  * Vue d'ensemble du Portail d'Apurement (rôle OPERATEUR_APUREMENT) :
@@ -37,6 +57,10 @@ export default function ApurementOverview() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  // Récapitulatif de synchro du "Travail du jour" (badge par ligne + compteurs agrégés) — voir
+  // getApurementCardsTodayPaginated (stats.queries.ts) pour la logique de calcul du statut,
+  // portée à l'identique depuis AgentVerification/views/Overview.tsx.
+  const [syncSummary, setSyncSummary] = useState({ synced: 0, pending: 0, error: 0 });
 
   const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
 
@@ -54,23 +78,46 @@ export default function ApurementOverview() {
     loadStats();
   }, [loadStats]);
 
-  const loadCardsToday = useCallback(async () => {
+  // `silent` évite de repasser par isLoading (donc par l'écran "Chargement en cours...") lors des
+  // rappels automatiques en arrière-plan (cf. useEffect de polling ci-dessous) : seul le premier
+  // chargement / changement de page doit afficher l'état de chargement. Même pattern que
+  // AgentVerification/views/Overview.tsx.
+  const loadCardsToday = useCallback(async (silent = false) => {
     if (!user?.login || !siteIdToUse) { setRows([]); setTotal(0); setIsLoading(false); return; }
     try {
-      setIsLoading(true);
+      if (!silent) setIsLoading(true);
       const res = await window.api.stats.getApurementCardsTodayPaginated(user.login, Number(siteIdToUse), page, PAGE_SIZE);
       setRows(res?.rows || []);
       setTotal(res?.total || 0);
+      setSyncSummary(res?.syncSummary || { synced: 0, pending: 0, error: 0 });
     } catch (err) {
       console.error("Erreur lors du chargement du travail d'apurement du jour :", err);
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, [user?.login, siteIdToUse, page]);
 
   useEffect(() => {
     loadCardsToday();
   }, [loadCardsToday]);
+
+  // Rafraîchissement automatique discret du badge de synchro : tant qu'il reste au moins une
+  // carte PENDING/ERROR dans les données déjà chargées, on rappelle loadCardsToday (en mode
+  // silencieux, sans flash de "Chargement en cours...") toutes les 30s pour refléter la fin
+  // réelle de la synchro en arrière-plan sans que l'opérateur ait besoin de changer d'écran.
+  // Justifié ici comme pour le Portail Vérification (la synchro se résout automatiquement) — à
+  // la différence du Portail Saisie où ce polling n'a pas été ajouté. Dès que tout est synchronisé
+  // (pending === 0 && error === 0), le timer s'arrête de lui-même — pas de polling permanent
+  // inutile (politique Low-Memory RAM 8 Go, §2 CLAUDE.md). Le cleanup du useEffect couvre à la
+  // fois le démontage du composant et le cas où la condition d'arrêt est atteinte.
+  useEffect(() => {
+    const hasPendingSync = syncSummary.pending > 0 || syncSummary.error > 0;
+    if (!hasPendingSync) return;
+    const intervalId = setInterval(() => {
+      loadCardsToday(true);
+    }, 30000);
+    return () => clearInterval(intervalId);
+  }, [syncSummary.pending, syncSummary.error, loadCardsToday]);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -124,9 +171,21 @@ export default function ApurementOverview() {
 
       {/* Travail du jour : fiches d'émargement historique traitées aujourd'hui par l'agent connecté */}
       <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-          <ClipboardList size={20} color="#ec4899" />
-          <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: 'white' }}>Travail du jour</h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <ClipboardList size={20} color="#ec4899" />
+            <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: 'white' }}>Travail du jour</h2>
+          </div>
+          {total > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <SyncStatusBadge status="SYNCED" />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>{syncSummary.synced}</span>
+              <SyncStatusBadge status="PENDING" />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', marginRight: 4 }}>{syncSummary.pending}</span>
+              <SyncStatusBadge status="ERROR" />
+              <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{syncSummary.error}</span>
+            </div>
+          )}
         </div>
 
         <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
@@ -147,6 +206,7 @@ export default function ApurementOverview() {
                     <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
                     <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Retirant</th>
                     <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Heure d'apurement</th>
+                    <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Synchro</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -168,6 +228,9 @@ export default function ApurementOverview() {
                       </td>
                       <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
                         {r.updated_at ? new Date(r.updated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                      </td>
+                      <td style={{ padding: '16px 24px' }}>
+                        <SyncStatusBadge status={r.sync_status} />
                       </td>
                     </tr>
                   ))}
