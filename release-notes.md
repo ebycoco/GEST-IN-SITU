@@ -3,6 +3,10 @@
 > **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.15.0, 17 août 2026).
 > Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
 
+## 🚨 Sécurité
+
+- **Cantonnement site/centre basé sur le rôle brut en base au lieu du rôle actif de session, pour les comptes multi-rôles** : plusieurs handlers (`cartes:search`, `debug:getAllAnomalies`, `hierarchy:getCentres`, `db:purge`, `db:emergency-purge`, `maintenance:clearCloudCartes`) et fonctions (`createUser`, `resetAgentPassword`) re-interrogeaient directement `t_users.role` en base pour déterminer le cantonnement, au lieu d'utiliser le rôle **actif** de la session (`getSecureCurrentUser()`, maintenu par `setActiveRole()` lors d'un changement de rôle pour un compte multi-rôles). Découvert via un signalement terrain (recherche de carte devenue introuvable après réaffectation de centre d'un agent multi-rôles) : le rôle stocké en base peut différer du rôle réellement utilisé en session, ce qui pouvait à la fois bloquer indûment un accès légitime (recherche) et, plus grave, contourner des restrictions de portée dans `createUser`/`resetAgentPassword`/les purges destructives pour un compte dont le rôle primaire stocké est plus permissif que le rôle actif choisi. Les 8 occurrences identifiées par audit dédié ont été corrigées pour dériver systématiquement le cantonnement de la session active.
+
 ## 🚀 Nouveautés & Ergonomie
 
 - **Indicateur de synchronisation Supabase pour l'opérateur, sur "Travail du jour" (Apurement)** : même badge par carte (Synchronisé/En attente/Échec) + récapitulatif agrégé + rafraîchissement automatique déjà validé sur Vérification/Saisie, porté à l'identique sur le portail Apurement — toutes les actions d'écriture de ce portail (émargement rétroactif, déclaration de doublon) enfilent déjà systématiquement dans `t_outbox`, donc les 3 états sont tous atteignables et l'auto-refresh 30 s a le même sens que côté Vérification.

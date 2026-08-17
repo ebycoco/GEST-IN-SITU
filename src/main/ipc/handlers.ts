@@ -396,17 +396,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // DEBUG
   ipcMain.handle('debug:getAllAnomalies', async () => {
     try {
-      const userLogin = getCurrentUserLogin();
       const db = getDatabase();
-      if (!db || !userLogin) return [];
-      
-      const user = db.prepare('SELECT id_user, role, site_id FROM t_users WHERE login = ?').get(userLogin) as { id_user: number, role: string, site_id: number } | undefined;
-      
-      if (!user || !verifyUserRole(user.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      if (!db) return [];
+
+      // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+      // (getSecureCurrentUser()), pas d'une re-requête directe sur t_users (rôle "primaire"
+      // statique, potentiellement différent du rôle actif pour un compte multi-rôles).
+      const gateUser = getSecureCurrentUser();
+      if (!gateUser || !verifyUserRole(gateUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
         throw new Error("Accès refusé. Réservé aux administrateurs.");
       }
-      
-      const siteId = user.role === 'SUPER ADMIN' ? null : user.site_id;
+
+      const siteId = gateUser.role === 'SUPER ADMIN' ? null : gateUser.site_id;
       const query = siteId 
         ? 'SELECT * FROM t_import_anomalies WHERE site_id = ? ORDER BY id DESC LIMIT 500'
         : 'SELECT * FROM t_import_anomalies ORDER BY id DESC LIMIT 500';
@@ -489,30 +490,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try {
       const db = getDatabase();
       let finalFilters = filters || {};
-      if (userLogin && db) {
-        const user = db.prepare('SELECT role, site_id, centre_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null; centre_id: number | null } | undefined;
-        if (user && user.role !== 'SUPER ADMIN') {
-          finalFilters = {
-            ...finalFilters,
-            site_id: String(user.site_id)
-          };
-          if (finalFilters.centre_id) {
-            const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(finalFilters.centre_id)) as { site_id: number } | undefined;
-            if (!centre || centre.site_id !== user.site_id) {
-              finalFilters.centre_id = '';
-            }
+      // Sécurité (cloisonnement §3) : le cantonnement doit refléter le rôle ACTIF de la session
+      // serveur en cours (gateUser, déjà obtenu ci-dessus via getSecureCurrentUser()), pas le
+      // rôle "primaire" statique de t_users — pour un compte multi-rôles ayant changé de rôle
+      // actif via setActiveRole(), une re-requête SQL directe sur t_users pouvait diverger de
+      // la session réelle et casser (ou contourner) ce cantonnement.
+      if (gateUser && gateUser.role !== 'SUPER ADMIN') {
+        finalFilters = {
+          ...finalFilters,
+          site_id: String(gateUser.site_id)
+        };
+        if (finalFilters.centre_id && db) {
+          const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(finalFilters.centre_id)) as { site_id: number } | undefined;
+          if (!centre || centre.site_id !== gateUser.site_id) {
+            finalFilters.centre_id = '';
           }
-          // Sécurité (cloisonnement §3, P0-5) : fuite PII confirmée en usage 100% normal (pas
-          // de forgeage requis) — une recherche nom+date de naissance depuis
-          // /admin-centre/recherche remontait la fiche complète (téléphone, n° CMU en clair)
-          // d'un bénéficiaire d'un AUTRE centre du même site, faute de filtre centre_id
-          // serveur. Recadré ici sur le centre réel de l'utilisateur (non falsifiable) —
-          // périmètre strict pour ADMIN_CENTRE, sans option d'élargissement (aucun sélecteur
-          // équivalent n'existe pour ce rôle ailleurs dans l'appli, contrairement à
-          // SUPER ADMIN/ADMINISTRATEUR_SITE qui restent scopés site entier).
-          if (user.role === 'ADMIN_CENTRE') {
-            finalFilters.centre_id = user.centre_id != null ? String(user.centre_id) : '';
-          }
+        }
+        // Sécurité (cloisonnement §3, P0-5) : fuite PII confirmée en usage 100% normal (pas
+        // de forgeage requis) — une recherche nom+date de naissance depuis
+        // /admin-centre/recherche remontait la fiche complète (téléphone, n° CMU en clair)
+        // d'un bénéficiaire d'un AUTRE centre du même site, faute de filtre centre_id
+        // serveur. Recadré ici sur le centre réel de l'utilisateur (non falsifiable) —
+        // périmètre strict pour ADMIN_CENTRE, sans option d'élargissement (aucun sélecteur
+        // équivalent n'existe pour ce rôle ailleurs dans l'appli, contrairement à
+        // SUPER ADMIN/ADMINISTRATEUR_SITE qui restent scopés site entier).
+        if (gateUser.role === 'ADMIN_CENTRE') {
+          finalFilters.centre_id = gateUser.centre_id != null ? String(gateUser.centre_id) : '';
         }
       }
       const results = await queries.searchCartesFTS(query, limit, finalFilters);
@@ -3071,7 +3074,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw new Error("Accès refusé. Privilèges administrateur requis pour créer un agent.");
     }
     // createUser appelle déjà insertAuditLog en interne — pas de doublon ici (C-3 fix)
-    const res = await queries.createUser(data, secureUser.id_user, secureUser.login);
+    const res = await queries.createUser(data, secureUser);
     return res;
   });
   ipcMain.handle('users:update', async (_, id, data) => {
@@ -3171,7 +3174,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     // Le mot de passe temporaire en clair transite une seule fois, dans cette réponse
     // IPC ponctuelle, pour affichage immédiat côté renderer. Il n'est ni loggé ni persisté.
-    return queries.resetAgentPassword(targetUserId, secureUser.id_user);
+    return queries.resetAgentPassword(targetUserId, secureUser);
   });
 
   // LOGS
@@ -3476,16 +3479,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   ipcMain.handle('hierarchy:getCentres', async (_, siteId) => {
     try {
-      const db = getDatabase();
       let finalSiteId = siteId;
-      const userLogin = getCurrentUserLogin();
-      if (userLogin && db) {
-        const user = db.prepare('SELECT role, site_id FROM t_users WHERE login = ?').get(userLogin) as { role: string; site_id: number | null } | undefined;
-        // Sécurité : tout rôle non-SUPER ADMIN est cantonné à son propre site, quel que soit
-        // le siteId envoyé par le renderer (pas uniquement ADMINISTRATEUR_SITE).
-        if (user && user.role !== 'SUPER ADMIN') {
-          finalSiteId = user.site_id ?? undefined;
-        }
+      // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+      // (getSecureCurrentUser()), pas d'une re-requête directe sur t_users — tout rôle
+      // non-SUPER ADMIN est cantonné à son propre site, quel que soit le siteId envoyé par le
+      // renderer (pas uniquement ADMINISTRATEUR_SITE).
+      const secureUser = getSecureCurrentUser();
+      if (secureUser && secureUser.role !== 'SUPER ADMIN') {
+        finalSiteId = secureUser.site_id ?? undefined;
       }
       return queries.getCentres(finalSiteId);
     }
@@ -3805,9 +3806,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       const db = getDatabase()!;
       // Si l'utilisateur est administrateur de site, on vÃ©rifie que siteId correspond Ã  son site_id
+      // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+      // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
+      // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
-        const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
-        if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
+        if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
         }
       }
@@ -3887,9 +3890,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const db = getDatabase()!;
+      // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+      // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
+      // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
-        const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
-        if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
+        if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
         }
       }
@@ -4096,9 +4101,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const db = getDatabase()!;
+      // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+      // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
+      // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
-        const dbUser = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(userId) as { role: string; site_id: number } | undefined;
-        if (dbUser && dbUser.role === 'ADMINISTRATEUR_SITE' && dbUser.site_id !== Number(siteId)) {
+        if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
           throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
         }
       }

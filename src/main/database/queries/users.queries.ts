@@ -203,10 +203,14 @@ export function getUsers(siteId?: number, centreId?: number) {
   return users;
 }
 
-export function createUser(data: Record<string, unknown>, callerUserId: number, callerLogin?: string) {
+export function createUser(data: Record<string, unknown>, caller: { id_user: number; role: string; site_id?: number; centre_id?: number; login?: string }) {
   const db = getDatabase()!;
-  
-  const creator = db.prepare('SELECT role, site_id, centre_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number; centre_id?: number } | undefined;
+
+  // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+  // (caller, transmis par l'appelant via getSecureCurrentUser()), pas d'une re-requête directe
+  // sur t_users — pour un compte multi-rôles ayant changé de rôle actif via setActiveRole(),
+  // le rôle "primaire" statique en base pouvait diverger du rôle réellement utilisé.
+  const creator = caller;
   if (!creator || !['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'].includes(creator.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour créer un utilisateur.");
   }
@@ -356,7 +360,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
   }
 
   insertAuditLog(
-    callerLogin || creator?.role || 'SYSTEM',
+    caller.login || creator?.role || 'SYSTEM',
     'AGENT',
     `[CREATION] Agent ${data.login} créé avec succès.`
   );
@@ -367,7 +371,7 @@ export function createUser(data: Record<string, unknown>, callerUserId: number, 
   // elle-même site_id/centre_id via la session serveur active (getSecureCurrentUser) —
   // cohérent avec le cloisonnement P0 déjà appliqué au reste de t_logs.
   logAudit(
-    callerLogin || creator?.role || 'SYSTEM',
+    caller.login || creator?.role || 'SYSTEM',
     'UTILISATEUR_CREE',
     JSON.stringify({ login: data.login, role: primaryRole, site_id: targetSiteId, centre_id: targetCentreId })
   );
@@ -624,10 +628,13 @@ function generateTemporaryPassword(): string {
   return pwd;
 }
 
-export function resetAgentPassword(targetUserId: number, callerUserId: number): { success: boolean; temporaryPassword: string } {
+export function resetAgentPassword(targetUserId: number, caller: { id_user: number; role: string; site_id?: number }): { success: boolean; temporaryPassword: string } {
   const db = getDatabase()!;
-  
-  const caller = db.prepare('SELECT role, site_id FROM t_users WHERE id_user = ?').get(callerUserId) as { role: string; site_id?: number } | undefined;
+
+  // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
+  // (caller, transmis par l'appelant via getSecureCurrentUser()), pas d'une re-requête directe
+  // sur t_users — pour un compte multi-rôles ayant changé de rôle actif via setActiveRole(),
+  // le rôle "primaire" statique en base pouvait diverger du rôle réellement utilisé.
   if (!caller || !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(caller.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour réinitialiser un mot de passe.");
   }
@@ -658,7 +665,7 @@ export function resetAgentPassword(targetUserId: number, callerUserId: number): 
     WHERE id_user = ?
   `).run(hash, targetUserId);
 
-  logAction(callerUserId, caller.role, 'RESET_PASSWORD', `Réinitialisation du mot de passe de l'agent ${target.login} (${targetUserId})`);
+  logAction(caller.id_user, caller.role, 'RESET_PASSWORD', `Réinitialisation du mot de passe de l'agent ${target.login} (${targetUserId})`);
 
   // ── 2. Enfilage outbox UPDATE (remplacement du push Supabase direct) ───────
   // L'ancien push asynchrone Supabase était fragile (pas de réessai en cas
