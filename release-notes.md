@@ -13,5 +13,6 @@ Validé par audit de non-régression et QA terrain via harnais Playwright isolé
 ## 🛠️ Corrections & Fiabilité
 
 - **Rôle `OPERATEUR_APUREMENT` ignoré par le bouton manuel "Récupérer les agents depuis le Cloud"** : la liste de rôles valides de `pullAgentsFromCloud` (`users.queries.ts`) avait été oubliée lors de l'introduction de ce rôle (v2.13.0) — un agent Apurement remonté via ce bouton spécifique était silencieusement filtré (`Rôle invalide ignoré`), alors que les autres chemins de synchro (cycle automatique, préchargement au démarrage) le géraient déjà correctement. Corrigé.
+- **`ADMIN_CENTRE` ne pouvait pas créer/promouvoir un agent `OPERATEUR_APUREMENT`** : la liste `ASSIGNABLE_ROLES_BY_CREATOR` (`users.queries.ts`) avait le même oubli — `SUPER ADMIN` et `ADMINISTRATEUR_SITE` incluaient déjà ce rôle, pas `ADMIN_CENTRE`, alors qu'il s'agit d'un rôle opérationnel de centre au même titre que les autres `OPERATEUR_*` déjà assignables par ce rôle. Corrigé.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
