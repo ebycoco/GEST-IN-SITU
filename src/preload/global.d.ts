@@ -1,3 +1,5 @@
+import { AgentPresenceRow } from '../shared/types';
+
 export {};
 
 declare global {
@@ -266,6 +268,9 @@ declare global {
       };
       debug: {
         getAllAnomalies: () => Promise<any[]>;
+      };
+      presence: {
+        getAgents: () => Promise<AgentPresenceRow[]>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
     };

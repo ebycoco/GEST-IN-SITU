@@ -4,6 +4,7 @@ import { getSupabaseClient } from '../sync/supabase-client';
 import { networkMonitor } from '../sync/network-monitor';
 import { getDatabase } from '../database/connection';
 import { resolveGrantedRoles } from '../database/queries/users.queries';
+import { heartbeatPresence, PresenceUserRef } from '../sync/presence.service';
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let currentSessionToken: string | null = null;
@@ -50,13 +51,56 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
       log.warn("Erreur lors de la résolution du centre principal pour le heartbeat:", e);
     }
   }
+
+  // Présence agents (câblage de src/main/sync/presence.service.ts, hors périmètre de ce
+  // fichier pour son implémentation interne) : heartbeatPresence()/recordPresenceLogout()
+  // ont besoin d'un `sync_id` non vide pour identifier la ligne Supabase à mettre à jour.
+  // Or authenticateUser() (users.queries.ts, contrat de retour existant VERROUILLÉ — cf.
+  // CLAUDE.md, non modifié ici) ne renvoie pas ce champ dans l'objet `user` reçu en
+  // paramètre. Résolu ici en AJOUT STRICTEMENT ADDITIF sur `secureUserCopy` (aucun champ
+  // existant modifié — même précédent que `secureCurrentGrantedRoles` dans ce fichier),
+  // suivant exactement le même schéma que la résolution du centre principal ci-dessus.
+  // Silencieux si indisponible (ex. ROOT failsafe, sans ligne t_users) : la garde plus bas
+  // (tick du heartbeat) saute alors simplement l'appel à heartbeatPresence().
+  if (!secureUserCopy.sync_id && secureUserCopy.id_user) {
+    try {
+      const db = getDatabase();
+      if (db) {
+        const row = db.prepare('SELECT sync_id FROM t_users WHERE id_user = ?').get(secureUserCopy.id_user) as { sync_id: string } | undefined;
+        if (row?.sync_id) {
+          secureUserCopy.sync_id = row.sync_id;
+        }
+      }
+    } catch (e) {
+      log.warn("Erreur lors de la résolution du sync_id pour la présence agents:", e);
+    }
+  }
+
   secureCurrentUser = secureUserCopy;
 
   log.info(`Démarrage du Heartbeat de session pour l'utilisateur : ${user.login}`);
 
   // Ping local toutes les 2 minutes (120 000 ms) pour la forme et traçabilité locale
-  heartbeatInterval = setInterval(async () => {
+  heartbeatInterval = setInterval(() => {
     log.debug(`Heartbeat local réussi pour ${currentUserLogin}`);
+
+    // Présence agents (Supabase, fire-and-forget) : réutilisation stricte de ce tick
+    // existant (politique low-memory CLAUDE.md §2 — aucun nouveau timer créé).
+    // heartbeatPresence() ne retourne JAMAIS de Promise (signature `void`) et catche toute
+    // erreur réseau/Supabase en interne (cf. presence.service.ts, décision D2) : ne JAMAIS
+    // l'await. No-op silencieux si aucune session active ou si le sync_id n'a pas pu être
+    // résolu ci-dessus (ex. ROOT failsafe).
+    const activeUser = getSecureCurrentUser();
+    if (activeUser?.sync_id) {
+      const presenceUser: PresenceUserRef = {
+        sync_id: activeUser.sync_id,
+        login: activeUser.login,
+        site_id: activeUser.site_id ?? null,
+        centre_id: activeUser.centre_id ?? null,
+        role: activeUser.role,
+      };
+      heartbeatPresence(presenceUser);
+    }
   }, 2 * 60 * 1000);
 }
 

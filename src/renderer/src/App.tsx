@@ -25,6 +25,7 @@ import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import UpdateReadyBanner from './components/UpdateReadyBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
+import AgentsPresencePage from './pages/AgentsPresencePage';
 import MaintenancePage from './pages/MaintenancePage';
 import RoleSelectorPage from './pages/RoleSelectorPage';
 
@@ -182,6 +183,7 @@ export default function App() {
             <Route path="export" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ExportPage /></ProtectedRoute>} />
             <Route path="admin/queue" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><AdminQueuePage /></ProtectedRoute>} />
             <Route path="sync/status" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><SyncStatusDashboard /></ProtectedRoute>} />
+            <Route path="agents/presence" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentsPresencePage /></ProtectedRoute>} />
             <Route path="maintenance" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><MaintenancePage /></ProtectedRoute>} />
             <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><LogsPage /></ProtectedRoute>} />
             <Route path="retraits" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><RetraitsPage /></ProtectedRoute>} />

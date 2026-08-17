@@ -101,6 +101,7 @@ export default function Sidebar() {
         { isHeader: true, label: '📊 PILOTAGE & MONITORING' },
         { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
         { label: 'Monitoring Sync', icon: Activity, path: '/sync/status' },
+        { label: 'Présence des Agents', icon: Users, path: '/agents/presence' },
         { label: 'Suivi des Retraits', icon: BarChart2, path: '/retraits' },
         
         { isHeader: true, label: '🛠️ OPÉRATIONS CMU' },

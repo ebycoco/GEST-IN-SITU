@@ -142,3 +142,25 @@ export interface DetailedSyncStats {
   modifiedCount: number;
   ghostCount: number;
 }
+
+/**
+ * Miroir côté renderer/preload de `AgentPresenceRow` (src/main/sync/presence.service.ts,
+ * module main-process uniquement — non importable depuis preload/renderer). À garder
+ * synchronisé si ce type évolue côté service. Alimente `window.api.presence.getAgents()`
+ * (page "Présence des Agents", AgentsPresencePage.tsx). Aucun statut calculé (En ligne/
+ * Inactif/Hors ligne) : uniquement des timestamps bruts, interprétés côté renderer.
+ */
+export interface AgentPresenceRow {
+  sync_id: string;
+  login: string;
+  nom_user: string | null;
+  prenom_user: string | null;
+  role: string | null;
+  site_id: number | null;
+  centre_id: number | null;
+  last_heartbeat_at: string | null;
+  last_login_at: string | null;
+  last_logout_at: string | null;
+  last_action_at: string | null;
+  last_action_label: string | null;
+}

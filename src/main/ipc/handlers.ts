@@ -21,6 +21,7 @@ import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
 import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
+import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
 const FAILSAFE_ROOT_ID = 999999;
 let activeImportsCount = 0;
@@ -270,6 +271,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('auth:logout', async (_, login: string) => {
+    // Présence agents (Supabase, fire-and-forget) : capturé AVANT tout nettoyage de session
+    // (stopSessionHeartbeat() efface getSecureCurrentUser() plus bas) — recordPresenceLogout()
+    // a besoin du sync_id de la session qui se termine, indisponible une fois le nettoyage
+    // effectué (le fire-and-forget réel ne s'exécute qu'ensuite, via setImmediate, cf.
+    // presence.service.ts décision D2 : l'identité doit donc être capturée ici, pas au
+    // moment où le setImmediate() interne se déclenche).
+    const presenceSyncId = getSecureCurrentUser()?.sync_id ?? null;
     try {
       syncEngine.stopAutoDownstreamTimer();
       syncEngine.stopUserAccountsSyncTimer();
@@ -279,6 +287,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // qu'un prochain login ne la résolve à nouveau explicitement.
       syncEngine.setCardsAutoUpstreamEnabled(true);
       await stopSessionHeartbeat();
+      // NE JAMAIS await recordPresenceLogout() (signature `void`, catche toute erreur en
+      // interne — cf. presence.service.ts D2). No-op si sync_id indisponible (ex. ROOT
+      // failsafe, ou aucune session serveur active au moment de l'appel).
+      if (presenceSyncId) {
+        recordPresenceLogout(presenceSyncId);
+      }
       if (login) {
         queries.insertAuditLog(login, 'DECONNEXION', `DÃ©connexion volontaire de l'utilisateur ${login}.`);
       }
@@ -437,6 +451,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e: any) {
       log.error('auth:registerSuperAdmin error:', e);
       return { success: false, reason: String(e.message || e) };
+    }
+  });
+
+  // PRESENCE DES AGENTS (lecture directe Supabase, cf. presence.service.ts décision D3).
+  // Réservé SUPER ADMIN (tous sites) et ADMINISTRATEUR_SITE (son site uniquement — dérivé
+  // de getSecureCurrentUser(), jamais d'un paramètre client falsifiable, même pattern que
+  // les autres handlers de ce fichier).
+  ipcMain.handle('presence:getAgents', async () => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      log.warn('[SECURITY] Acces refuse a presence:getAgents : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try {
+      const siteId = secureUser.role === 'SUPER ADMIN' ? null : secureUser.site_id;
+      return await getAgentsPresence({ siteId });
+    } catch (e) {
+      log.error('IPC Error: presence:getAgents', e);
+      throw e;
     }
   });
 

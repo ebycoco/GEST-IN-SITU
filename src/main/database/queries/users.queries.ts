@@ -9,6 +9,7 @@ import log from 'electron-log';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { insertAuditLog } from './audit.queries';
 import { logAudit } from '../../utils/audit';
+import { recordPresenceLogin } from '../../sync/presence.service';
 
 // Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
 // Reflète côté serveur la restriction déjà appliquée côté UI (AgentsPage.visibleRoles) :
@@ -140,6 +141,20 @@ export async function authenticateUser(login: string, password: string): Promise
 
   const token = uuidv4();
   db.prepare("UPDATE t_users SET last_login = datetime('now') WHERE id_user = ?").run(user.id_user);
+
+  // Présence agents (Supabase, fire-and-forget) : câblage du login réel (plan d'impact
+  // agent-1-architect-pm validé). recordPresenceLogin() ne retourne JAMAIS de Promise
+  // (signature `void`) et catche toute erreur réseau/Supabase en interne (cf.
+  // presence.service.ts, décision D2) : NE JAMAIS l'await ici, sous peine d'impacter le
+  // temps de réponse du login (100% des connexions passent par cette fonction, avec ou
+  // sans réseau).
+  recordPresenceLogin({
+    sync_id: user.sync_id,
+    login: user.login,
+    site_id: user.site_id ?? null,
+    centre_id: user.centre_id ?? null,
+    role: user.role,
+  });
 
   try {
     logAction(user.id_user, user.role, 'LOGIN', `Connexion locale de l'utilisateur ${user.login}`);

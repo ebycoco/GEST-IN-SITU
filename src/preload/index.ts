@@ -1,12 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { 
-  IUser, 
-  ICarte, 
-  ISite, 
-  IDeliveryData, 
-  ISiteSummary, 
-  IGlobalStats, 
-  ILog 
+import {
+  IUser,
+  ICarte,
+  ISite,
+  IDeliveryData,
+  ISiteSummary,
+  IGlobalStats,
+  ILog,
+  AgentPresenceRow
 } from '../shared/types';
 
 const api = {
@@ -621,6 +622,11 @@ const api = {
   // Debug
   debug: {
     getAllAnomalies: (filterType?: string): Promise<any[]> => ipcRenderer.invoke('debug:getAllAnomalies', filterType)
+  },
+  // Présence des agents (page "Présence des Agents", Pilotage & Monitoring)
+  presence: {
+    getAgents: (): Promise<AgentPresenceRow[]> =>
+      ipcRenderer.invoke('presence:getAgents'),
   }
 };
 
