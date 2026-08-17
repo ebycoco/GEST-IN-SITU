@@ -175,7 +175,7 @@ export function searchCartesFTS(query: string, limit = 100, filters?: Record<str
 
   if (filters?.date_de_naissance) {
     filtersSql += ' AND t_cartes.date_de_naissance = @date_de_naissance';
-    params.date_de_naissance = filters.date_de_naissance;
+    params.date_de_naissance = normalizeDate(filters.date_de_naissance);
     hasFilters = true;
   }
   if (filters?.lieu_de_naissance) {
