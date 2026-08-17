@@ -35,6 +35,10 @@ export default function ImportPage() {
   const [isEmergencyPurging, setIsEmergencyPurging] = useState(false);
   const [purgeProgress, setPurgeProgress] = useState(0);
   const [cardCount, setCardCount] = useState<number>(0);
+  // Rappel non bloquant : si "Envoi Automatique" (préférence sync.getAutoUpstream) est activé,
+  // un import massif enverrait les cartes vers Supabase au fil de l'eau pendant le traitement.
+  // Purement informatif — n'empêche techniquement rien (handleImport reste inchangé).
+  const [autoUpstreamEnabled, setAutoUpstreamEnabled] = useState(false);
   // Index (0-based, même ordre que preview.rows, en-tête exclu, lignes vides exclues)
   // des lignes d'aperçu exclues par l'utilisateur via la corbeille. On ne modifie JAMAIS
   // preview.rows par splice() : ça décalerait les index et romprait la correspondance
@@ -68,6 +72,26 @@ export default function ImportPage() {
       fetchCardCount();
     }
   }, []);
+
+  useEffect(() => {
+    window.api.sync.getAutoUpstream()
+      .then(setAutoUpstreamEnabled)
+      .catch(err => console.error('Failed to fetch auto upstream preference', err));
+  }, []);
+
+  const handleDisableAutoUpstreamNow = async () => {
+    try {
+      const res = await window.api.sync.setAutoUpstream(false);
+      if (res.success) {
+        setAutoUpstreamEnabled(false);
+        toast.success('Envoi automatique désactivé.');
+      } else {
+        toast.error("Erreur lors de la désactivation.");
+      }
+    } catch (e: any) {
+      toast.error(`Erreur système : ${e.message}`);
+    }
+  };
 
   // ─── ANTI-FREEZE (Couche 3) — Réconciliation au retour de focus ───────────
   // Écoute le signal 'app:focus-restored' dispatché par MainLayout via la
@@ -351,7 +375,34 @@ export default function ImportPage() {
 
       {/* Page Content Stack */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 40 }}>
-        
+
+        {/* Rappel non bloquant : Envoi Automatique actif pendant un import */}
+        {autoUpstreamEnabled && (
+          <div className="animate-slide-up" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16,
+            padding: '16px 24px', borderRadius: 20,
+            background: 'rgba(255, 230, 0, 0.08)', border: '1px solid rgba(255, 230, 0, 0.25)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <Info size={20} color="#FFE600" style={{ flexShrink: 0 }} />
+              <p style={{ margin: 0, color: '#FFE600', fontSize: 13, fontWeight: 600, lineHeight: 1.5 }}>
+                L'Envoi Automatique est actuellement activé : pensez à le désactiver avant de lancer cet import, pour éviter d'envoyer des cartes en cours de traitement vers le cloud.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleDisableAutoUpstreamNow}
+              className="btn"
+              style={{
+                padding: '10px 20px', borderRadius: 12, fontWeight: 800, fontSize: 13,
+                background: '#FFE600', color: '#000', border: 'none', cursor: 'pointer', whiteSpace: 'nowrap'
+              }}
+            >
+              Désactiver maintenant
+            </button>
+          </div>
+        )}
+
         {/* Step 1: Upload (Only if no file) */}
         {!file && (
           <div className="import-step-card animate-slide-up" style={{ borderStyle: 'dashed', borderColor: 'rgba(108, 99, 255, 0.3)' }}>

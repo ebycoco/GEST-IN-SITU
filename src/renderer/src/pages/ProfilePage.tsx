@@ -133,6 +133,41 @@ export default function ProfilePage() {
     }
   };
 
+  // Préférence "Envoi Automatique" (upload cartes -> Supabase). Initialisée à true le temps
+  // du premier chargement IPC : le backend renvoie déjà la bonne valeur par défaut selon le
+  // rôle connecté (désactivé par défaut pour ADMINISTRATEUR_SITE), aucune logique de rôle
+  // à dupliquer ici. Même pattern que autoDownstream ci-dessus.
+  const [autoUpstream, setAutoUpstream] = useState(true);
+  const [isLoadingUpstreamPref, setIsLoadingUpstreamPref] = useState(true);
+
+  React.useEffect(() => {
+    if (user?.id_user) {
+      window.api.sync.getAutoUpstream().then(val => {
+        setAutoUpstream(val);
+        setIsLoadingUpstreamPref(false);
+      }).catch(err => {
+        console.error("Failed to fetch auto upstream preference", err);
+        setIsLoadingUpstreamPref(false);
+      });
+    }
+  }, [user?.id_user]);
+
+  const handleToggleAutoUpstream = async () => {
+    if (!user?.id_user) return;
+    try {
+      const newVal = !autoUpstream;
+      const res = await window.api.sync.setAutoUpstream(newVal);
+      if (res.success) {
+        setAutoUpstream(newVal);
+        toast.success(`Envoi automatique ${newVal ? 'activé' : 'désactivé'}.`);
+      } else {
+        toast.error("Erreur lors de l'enregistrement de la préférence.");
+      }
+    } catch (e: any) {
+      toast.error(`Erreur système : ${e.message}`);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSuperAdmin) return;
@@ -529,12 +564,50 @@ export default function ProfilePage() {
                     boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
                   }} />
                 </div>
-                <input 
-                  type="checkbox" 
-                  checked={autoDownstream} 
-                  onChange={handleToggleAutoDownstream} 
+                <input
+                  type="checkbox"
+                  checked={autoDownstream}
+                  onChange={handleToggleAutoDownstream}
                   disabled={isLoadingSyncPref}
-                  style={{ display: 'none' }} 
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+              <div>
+                <h4 style={{ margin: 0, fontSize: 14, color: 'white', fontWeight: 600 }}>Envoi Automatique</h4>
+                <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.5 }}>
+                  Dès qu'une carte est modifiée, l'envoi vers le cloud se fait automatiquement dès que possible. Ce réglage est désactivé par défaut pour les administrateurs de site le temps de réaliser leurs imports (voir le rappel affiché sur l'écran Importation) — pensez à le réactiver une fois l'import terminé.
+                </p>
+              </div>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: isLoadingUpstreamPref ? 'not-allowed' : 'pointer', opacity: isLoadingUpstreamPref ? 0.5 : 1 }}>
+                <div style={{
+                  position: 'relative',
+                  width: 44,
+                  height: 24,
+                  backgroundColor: autoUpstream ? 'var(--accent-primary)' : 'rgba(255, 255, 255, 0.1)',
+                  borderRadius: 24,
+                  transition: 'background-color 0.3s'
+                }}>
+                  <div style={{
+                    position: 'absolute',
+                    top: 2,
+                    left: autoUpstream ? 22 : 2,
+                    width: 20,
+                    height: 20,
+                    backgroundColor: 'white',
+                    borderRadius: '50%',
+                    transition: 'left 0.3s, transform 0.3s',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                  }} />
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoUpstream}
+                  onChange={handleToggleAutoUpstream}
+                  disabled={isLoadingUpstreamPref}
+                  style={{ display: 'none' }}
                 />
               </label>
             </div>

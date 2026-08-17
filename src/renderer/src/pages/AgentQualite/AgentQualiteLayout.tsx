@@ -77,6 +77,20 @@ export default function AgentQualiteLayout() {
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
+  // Badge purement informatif sur le bouton "Envoyer les corrections" : nombre de cartes
+  // actuellement en attente dans l'outbox (distinct de conformeCartesCount/pushDisabled,
+  // qui restent la seule source de vérité pour l'activation du bouton). Recalculé chaque
+  // fois que dirtyCartesCount change (déclenché par loadStats, y compris via le listener
+  // 'app:data-updated' ci-dessus) — même pattern qu'InventaireLayout.tsx/ApurementLayout.tsx.
+  const [cardsOutboxPendingCount, setCardsOutboxPendingCount] = useState<number>(0);
+  useEffect(() => {
+    let cancelled = false;
+    window.api.sync.getCardsOutboxPendingCount()
+      .then(count => { if (!cancelled) setCardsOutboxPendingCount(count); })
+      .catch(err => console.error('Failed to fetch cards outbox pending count:', err));
+    return () => { cancelled = true; };
+  }, [dirtyCartesCount]);
+
   // triggerRefresh() est un simple incrément synchrone de compteur (cf. qualityUIStore.ts) qui ne
   // rafraîchit que les listes des vues enfants (Doublons, Données Manquantes, etc.) — il ne
   // recalculait jamais dirtyCartesCount/cloudCartesCount/detailedSyncStats, qui pilotent
@@ -195,6 +209,16 @@ export default function AgentQualiteLayout() {
             >
               <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
               {isBulkUploading ? 'ENVOI...' : 'Envoyer les corrections'}
+              {cardsOutboxPendingCount > 0 && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10,
+                  background: 'rgba(0,0,0,0.25)', color: pushDisabled ? '#ffffff' : '#000000',
+                  fontSize: 11, fontWeight: 800
+                }}>
+                  {cardsOutboxPendingCount.toLocaleString('fr')}
+                </span>
+              )}
             </button>
           </div>
         </div>
