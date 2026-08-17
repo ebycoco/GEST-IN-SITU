@@ -3804,7 +3804,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const purgeStartTime = performance.now();
       // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-      const db = getDatabase()!;
       // Si l'utilisateur est administrateur de site, on vÃ©rifie que siteId correspond Ã  son site_id
       // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
       // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
@@ -3889,7 +3888,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         throw new Error("AccÃ¨s refusÃ©. PrivilÃ¨ges administrateur requis pour la purge forcÃ©e.");
       }
 
-      const db = getDatabase()!;
       // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
       // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
       // directe sur t_users.
