@@ -60,6 +60,9 @@ interface OutboxEntry {
  * excluded.payload`), jamais une fusion. Un payload partiel omettant l'une de ces 3
  * colonnes écrase silencieusement (ou fait rejeter par PostgREST) l'entrée existante.
  */
+// SQL d'upsert (INSERT ... ON CONFLICT(id) DO UPDATE) dupliqué intentionnellement (sans la
+// journalisation verbeuse ci-dessous) dans src/main/workers/import-worker.js (worker JS pur,
+// ne peut pas importer ce module TS) — tenir synchronisé si le schéma t_outbox évolue.
 export function enqueueOutbox(
   id: string,
   tableName: string,

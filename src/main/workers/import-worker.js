@@ -922,6 +922,37 @@ async function run() {
     'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id)'
   );
 
+  // Enfilage Outbox des cartes fusionnées par ce chunk (voir chunkTx plus bas) : sélectionne
+  // les lignes t_cartes réellement touchées (jointure restreinte à la plage id_tmp de CE chunk,
+  // et updated_at = @now pour exclure les lignes non modifiées par la garde métier du UPDATE
+  // ci-dessus, ex: statut déjà DELIVRE/ANNULE). SELECT * (plutôt qu'une énumération manuelle de
+  // colonnes) réplique fidèlement la structure de payload attendue par mapCardPayload() côté
+  // outbox.service.ts, sans risque de drift si le schéma t_cartes évolue.
+  const touchedCardsStmt = db.prepare(
+    'SELECT t_cartes.* FROM t_cartes ' +
+    'JOIN t_import_temp ON t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id ' +
+    'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
+    '  AND t_cartes.updated_at = @now ' +
+    '  AND t_cartes.sync_id IS NOT NULL'
+  );
+
+  // SQL dupliqué intentionnellement depuis enqueueOutbox() (src/main/sync/outbox.service.ts) —
+  // ce worker JS pur non transpilé ne peut pas importer ce module TS. Tenir synchronisé si le
+  // schéma t_outbox évolue. Journalisation volontairement omise ici (potentiellement des
+  // milliers de cartes par import) pour ne pas dégrader les performances/IO.
+  const outboxUpsertStmt = db.prepare(
+    'INSERT INTO t_outbox (id, table_name, operation, payload, status, attempts, created_at, error_msg, depends_on) ' +
+    "VALUES (@id, 't_cartes', 'UPDATE', @payload, 'PENDING', 0, datetime('now'), NULL, NULL) " +
+    'ON CONFLICT(id) DO UPDATE SET ' +
+    '  operation = excluded.operation, ' +
+    '  payload = excluded.payload, ' +
+    "  status = 'PENDING', " +
+    '  attempts = 0, ' +
+    '  error_msg = NULL, ' +
+    '  created_at = excluded.created_at, ' +
+    '  depends_on = excluded.depends_on'
+  );
+
   if (maxId >= minId && minId > 0) {
     const totalChunks = Math.ceil((maxId - minId + 1) / CHUNK_SIZE);
     let chunkIndex = 0;
@@ -986,6 +1017,14 @@ async function run() {
         const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
         chunkInsertMs = performance.now() - iStart;
         chunkIChanges = iRes.changes;
+
+        // Enfilage Outbox (même transaction de chunk) : les cartes importées suivent
+        // désormais le circuit standard t_outbox au lieu d'être poussées en direct par
+        // upload-worker.js (voir filtre NOT EXISTS ajouté dans ce dernier).
+        const touchedCards = touchedCardsStmt.all({ now: now, startId: startId, endId: endId });
+        for (const card of touchedCards) {
+          outboxUpsertStmt.run({ id: card.sync_id, payload: JSON.stringify(card) });
+        }
       });
       
       // 6. Temps exact du COMMIT + 7. Temps du checkpoint WAL (inclus dans le commit SQLite)

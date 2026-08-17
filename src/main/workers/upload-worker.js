@@ -49,6 +49,17 @@ async function run() {
     queryParams.push(centreId);
   }
 
+  // Exclut les cartes déjà prises en charge par le circuit standard t_outbox (ex: cartes
+  // fusionnées par un import massif, voir import-worker.js) — évite un double envoi direct
+  // hors-outbox par ce worker de synchronisation manuelle en masse.
+  filterClause += `
+    AND NOT EXISTS (
+      SELECT 1 FROM t_outbox o
+      WHERE o.table_name = 't_cartes' AND o.status = 'PENDING'
+      AND o.id = t_cartes.sync_id
+    )
+  `;
+
   if (onlyModified) {
     filterClause += ` AND ((is_dirty = 1 AND synced_at IS NOT NULL AND synced_at != '') OR is_dirty = -1) AND statut != 'BROUILLON' `;
   } else {
