@@ -1,7 +1,7 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.15.0
 
-> **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.14.0, 13 août 2026).
-> Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
+> **Date de release :** 17 août 2026.
+> Contenu détaillé également repris dans `CHANGELOG.md` (section [2.15.0]).
 
 ## 🚨 Sécurité
 
@@ -30,17 +30,7 @@ Validé par `npx tsc --noEmit` : 0 erreur.
 - Validé par un test fonctionnel vivant dédié (10 scénarios : déclaration, blocages croisés, RBAC, isolation site/centre, annulation) — 0 anomalie bloquante. Le bouton "Marquer comme doublon" du cahier d'apurement est désormais masqué si la carte sélectionnée est déjà doublon.
 - **Synchronisation cross-poste des 7 colonnes de traçabilité doublon** : les mappings montant/descendant (`payload-mapper.ts`, `upstream.ts`, `upload-worker.js`, `download-worker.js`) ne propageaient pas encore ces colonnes vers/depuis Supabase — un autre poste voyait bien `statut = DOUBLON` après synchro mais jamais qui a déclaré, quand, ni pourquoi. Corrigé sur les deux sens de synchro.
 
-> **⚠️ ACTION MANUELLE REQUISE AVANT LE PROCHAIN `npm run build:win`** : les 7 colonnes doivent être créées sur la table `public.t_cartes` de l'instance Supabase de production avant de livrer cette version, sinon **toute synchronisation montante de cartes échouera** (colonne inconnue pour PostgREST), pas seulement celle des doublons.
-> ```sql
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_declare_par TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_declare_le TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_motif TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS statut_avant_doublon TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_annule_par TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_annule_le TEXT;
-> ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS doublon_motif_annulation TEXT;
-> ```
-> Aucun mécanisme de migration Supabase versionné n'existe dans ce dépôt (`supabase_schema.sql` est déjà obsolète par rapport à plusieurs colonnes antérieures) — exécution manuelle via le SQL Editor Supabase.
+> **✅ Schéma Supabase (production) vérifié conforme** : les 7 colonnes ont été créées sur `public.t_cartes` en production et vérifiées présentes par lecture directe lors de l'audit `agent-12-deploy-validator` du 2026-08-17. Aucun mécanisme de migration Supabase versionné n'existe encore dans ce dépôt (`supabase_schema.sql` est déjà obsolète par rapport à plusieurs colonnes antérieures) — toute évolution future de schéma nécessitera une vérification manuelle équivalente avant diffusion.
 
 Validé par `npx tsc --noEmit` : 0 erreur.
 
