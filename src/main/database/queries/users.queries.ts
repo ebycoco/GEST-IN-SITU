@@ -855,7 +855,7 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
         const validRoles = [
           'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
           'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE'
+          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
         ];
         if (!validRoles.includes(u.role)) {
           log.warn(`[pullAgentsFromCloud] Rôle invalide ignoré pour ${u.login}: ${u.role}`);
