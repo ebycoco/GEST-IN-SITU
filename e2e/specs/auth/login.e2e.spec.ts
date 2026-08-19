@@ -1,9 +1,8 @@
 /**
  * e2e/specs/auth/login.e2e.spec.ts
  *
- * Étape 1 du plan E2E (voir .agents/storage/factory_memory.md,
- * section "2026-07-31 — Plan d'Implémentation Étanche : Suite E2E Automatisée") :
- * spike de validation + couverture du parcours de connexion.
+ * Étape 1 du plan E2E (2026-07-31 — Plan d'Implémentation Étanche : Suite E2E
+ * Automatisée) : spike de validation + couverture du parcours de connexion.
  *
  * Rôles couverts dans ce premier incrément : OPERATEUR_VERIFICATION et
  * ADMINISTRATEUR_SITE (voir e2e/fixtures/test-users.ts). L'extension aux

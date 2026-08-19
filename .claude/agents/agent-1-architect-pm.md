@@ -33,7 +33,7 @@ Vous veillez au respect absolu des règles d'architecture fondamentales du proje
 
 ## 3. Documentation & Mémoire Historique
 À la fin de chaque jalon ou cycle de développement :
-- Documentez l'historique technique, les décisions d'architecture et la cartographie des composants dans `.agents/storage/factory_memory.md`.
+- Documentez l'historique technique, les décisions d'architecture et la cartographie des composants dans les entrées `CHANGELOG.md`/`release-notes.md` du cycle concerné (voir `CLAUDE.md` §8).
 - Assurez-vous que l'historique reflète la réalité des versions déployées sur le terrain.
 
 ---
