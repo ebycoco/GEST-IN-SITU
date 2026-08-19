@@ -6,6 +6,10 @@ import * as path from 'path';
 import * as http from 'http';
 import * as fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const sqlitePath = require.resolve('better-sqlite3');
 
 describe('Synchronisation Offline-First (Delta-Sync)', () => {
   let db: Database.Database;
@@ -21,8 +25,8 @@ describe('Synchronisation Offline-First (Delta-Sync)', () => {
     runMigrations(db);
 
     // Initialiser les données de base (site_id = 4)
-    db.prepare(`INSERT OR IGNORE INTO t_sites (id_site, nom_site, is_active) VALUES (4, 'SITE_TEST', 1)`).run();
-    db.prepare(`INSERT OR IGNORE INTO t_centres (id_centre, site_id, nom_centre) VALUES (10, 4, 'CENTRE_TEST')`).run();
+    db.prepare(`INSERT OR IGNORE INTO t_sites (id, nom, code, is_active) VALUES (4, 'SITE_TEST', 'SITE_TEST', 1)`).run();
+    db.prepare(`INSERT OR IGNORE INTO t_centres (id, site_id, nom) VALUES (10, 4, 'CENTRE_TEST')`).run();
 
     // 2. Démarrer le Mock Server HTTP Supabase
     mockServer = http.createServer((req, res) => {
@@ -84,8 +88,8 @@ describe('Synchronisation Offline-First (Delta-Sync)', () => {
     
     // Insérer une carte modifiée (is_dirty = 1 et synced_at non null)
     db.prepare(`
-      INSERT INTO t_cartes (noms, prenoms, date_de_naissance, site_id, is_dirty, sync_id, synced_at)
-      VALUES ('TEST', 'MODIFIED', '1990-01-01', 4, 1, ?, datetime('now'))
+      INSERT INTO t_cartes (noms, prenoms, date_de_naissance, rangement, cle_doublon, site_id, is_dirty, sync_id, synced_at)
+      VALUES ('TEST', 'MODIFIED', '1990-01-01', 'A1', 'test|modified|1990-01-01', 4, 1, ?, datetime('now'))
     `).run(uuidv4());
 
     // Exécuter stats-worker.js dans un worker_thread
@@ -95,10 +99,13 @@ describe('Synchronisation Offline-First (Delta-Sync)', () => {
 
     const result = await new Promise<any>((resolve, reject) => {
       const worker = new Worker(targetScript, {
-        workerData: { sqlitePath: dbPath }
+        workerData: { dbPath, sqlitePath }
       });
       worker.on('message', (msg) => {
-        if (msg.success && msg.data) resolve(msg.data);
+        if (msg.success && msg.data) {
+          resolve(msg.data);
+          worker.terminate();
+        }
       });
       worker.on('error', reject);
       worker.postMessage({ type: 'getDetailedSyncStats', siteId: 4, messageId: 'test1' });
@@ -120,6 +127,7 @@ describe('Synchronisation Offline-First (Delta-Sync)', () => {
         workerData: {
           siteId: 4,
           dbPath,
+          sqlitePath,
           supabaseUrl: `http://localhost:${mockPort}`,
           supabaseAnonKey: 'mock-key',
           allowProbable: true,

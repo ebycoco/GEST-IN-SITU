@@ -9,6 +9,8 @@ build/*
 *.sqlite
 *.sqlite3
 *.db
+*.db-wal
+*.db-shm
 .DS_Store
 doc/
 build-log.txt
