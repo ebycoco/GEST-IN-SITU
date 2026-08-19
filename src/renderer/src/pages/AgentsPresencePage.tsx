@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { Users, RefreshCw, WifiOff, Clock, MapPin, ShieldAlert, CheckCircle2 } from 'lucide-react';
+import { Users, RefreshCw, WifiOff, Clock, MapPin, ShieldAlert, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { AgentPresenceRow } from '../../../shared/types';
@@ -44,6 +44,7 @@ const HEARTBEAT_OFFLINE_MIN = 15;
 const ACTION_STALE_MIN = 10;
 const POLL_INTERVAL_MS = 45000; // 45s (fourchette 30-60s demandée par le plan)
 const CLOCK_TICK_MS = 30000; // recalcule les badges même sans nouvelle donnée serveur
+const PAGE_SIZE = 10; // pagination CÔTÉ CLIENT du tableau "Détail par agent" (aucune requête serveur)
 
 function computeStatus(row: AgentPresenceRow, nowMs: number): PresenceStatus {
   const heartbeatMs = row.last_heartbeat_at ? new Date(row.last_heartbeat_at).getTime() : null;
@@ -97,6 +98,7 @@ export default function AgentsPresencePage() {
   const [siteFilter, setSiteFilter] = useState<number | 'ALL'>('ALL');
   const [sites, setSites] = useState<Array<{ id: number; nom: string }>>([]);
   const [centreNameById, setCentreNameById] = useState<Record<number, string>>({});
+  const [currentPage, setCurrentPage] = useState(1); // pagination client du tableau "Détail par agent" (1-based)
 
   // Synchronise la valeur initiale du filtre local avec le sélecteur "CONTEXTE
   // OPÉRATIONNEL" du Sidebar (activeSiteId, SUPER ADMIN uniquement — cf. Sidebar.tsx).
@@ -189,6 +191,27 @@ export default function AgentsPresencePage() {
     if (!isSuperAdmin || siteFilter === 'ALL') return rows;
     return rows.filter((r) => r.site_id === siteFilter);
   }, [rows, isSuperAdmin, siteFilter]);
+
+  // Pagination CÔTÉ CLIENT (simple slice en mémoire, aucune requête supplémentaire —
+  // politique low-memory CLAUDE.md §2) du tableau "Détail par agent" uniquement : les
+  // widgets récapitulatifs juste en dessous comptent toujours sur visibleRows en entier.
+  const totalPages = Math.max(1, Math.ceil(visibleRows.length / PAGE_SIZE));
+
+  // Reset à la page 1 quand le filtre de site change (nouveau périmètre de lignes).
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [siteFilter]);
+
+  // Reset à la page 1 quand la page courante n'existe plus (ex. un refresh silencieux
+  // du polling a réduit le nombre de lignes filtrées sous la page actuellement affichée).
+  useEffect(() => {
+    setCurrentPage((p) => (p > totalPages ? 1 : p));
+  }, [totalPages]);
+
+  const paginatedRows = useMemo(
+    () => visibleRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [visibleRows, currentPage]
+  );
 
   const counts = useMemo(() => {
     const c: Record<PresenceStatus, number> = { EN_LIGNE: 0, INACTIF: 0, HORS_LIGNE: 0 };
@@ -374,6 +397,7 @@ export default function AgentsPresencePage() {
             <span>Aucun agent trouvé pour ce périmètre.</span>
           </div>
         ) : (
+          <>
           <div style={{ overflowX: 'auto' }}>
             <table className="presence-table">
               <thead>
@@ -388,7 +412,7 @@ export default function AgentsPresencePage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map((row) => {
+                {paginatedRows.map((row) => {
                   const status = computeStatus(row, now);
                   const meta = STATUS_META[status];
                   const centreNom = row.centre_id != null ? (centreNameById[row.centre_id] || `Centre #${row.centre_id}`) : '—';
@@ -424,6 +448,38 @@ export default function AgentsPresencePage() {
               </tbody>
             </table>
           </div>
+
+          {/* Pagination client (slice en mémoire de visibleRows, aucun impact sur les
+              widgets récapitulatifs ni sur les données chargées) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '14px 24px', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              {visibleRows.length} agent{visibleRows.length > 1 ? 's' : ''} au total
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                className="presence-btn-refresh"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                style={{ padding: '8px 12px' }}
+              >
+                <ChevronLeft size={14} />
+                <span>PRÉCÉDENT</span>
+              </button>
+              <span style={{ fontSize: 12, fontWeight: 700, color: '#ffd700', minWidth: 60, textAlign: 'center' }}>
+                {currentPage} / {totalPages}
+              </span>
+              <button
+                className="presence-btn-refresh"
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                style={{ padding: '8px 12px' }}
+              >
+                <span>SUIVANT</span>
+                <ChevronRight size={14} />
+              </button>
+            </div>
+          </div>
+          </>
         )}
       </div>
     </div>

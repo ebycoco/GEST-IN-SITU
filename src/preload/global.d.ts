@@ -273,6 +273,7 @@ declare global {
         getAgents: () => Promise<AgentPresenceRow[]>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
+      onUsersSynced: (callback: (data: any) => void) => () => void;
     };
   }
 }

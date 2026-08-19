@@ -47,6 +47,7 @@ Quand une demande touche un des domaines suivants, invoquer l'agent correspondan
 | Versioning SemVer, CHANGELOG, `SCHEMA_VERSION` | `agent-11-release-manager` |
 | Checklist GO/NO-GO avant publication | `agent-12-deploy-validator` |
 | Test fonctionnel vivant de l'appli (lancer, cliquer, vérifier en base) par rôle | `agent-13-qa-terrain-tester` |
+| Diagnostic d'un bug signalé par l'utilisateur (erreur rencontrée en manipulant l'appli), recherche de cause racine | `agent-14-debugger` |
 
 Le routage lui-même (décider quel agent invoquer) reste la responsabilité de la session principale — aucun agent ne doit être invoqué pour "orchestrer" les autres.
 

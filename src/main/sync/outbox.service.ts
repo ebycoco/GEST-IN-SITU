@@ -1,5 +1,6 @@
 import log from 'electron-log';
 import { v4 as uuidv4 } from 'uuid';
+import { BrowserWindow } from 'electron';
 import { getDatabase } from '../database/connection';
 import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
@@ -208,6 +209,11 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
   _isProcessing = true;
   let processed = 0;
   let errors = 0;
+  // Compte les agents (t_users) effectivement resynchronisés dans ce batch, hors DELETE
+  // (une suppression physique locale ne concerne pas le compteur "agents en attente
+  // d'envoi" côté UI) — sert uniquement à notifier le Renderer via 'sync:users-synced'
+  // pour rafraîchir le badge pendingPushUsersCount de AgentsPage sans polling.
+  let usersSyncedCount = 0;
 
   try {
     const db = getDatabase();
@@ -442,6 +448,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
 
         log.info(`[OutboxService] ✓ ${entry.table_name} [${entry.operation}] synchronisé (id=${entry.id})`);
         processed++;
+        if (entry.table_name === 't_users' && entry.operation !== 'DELETE') usersSyncedCount++;
 
       } catch (networkErr: any) {
         // Exception réseau (timeout, DNS, etc.) → conserver PENDING
@@ -455,6 +462,17 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
 
     if (processed > 0 || errors > 0) {
       log.info(`[OutboxService] Traitement terminé : ${processed} synchronisé(s), ${errors} en erreur.`);
+    }
+
+    // Notifie le Renderer qu'au moins un agent (t_users) vient d'être poussé avec succès
+    // vers Supabase, pour lui permettre de rafraîchir silencieusement le badge
+    // pendingPushUsersCount (AgentsPage) sans dépendre d'une action utilisateur explicite.
+    // Canal dédié 'sync:users-synced' — ne PAS réutiliser 'sync:updated-data' (consommé par
+    // MainLayout pour un toast de téléchargement de cartes, sémantique différente).
+    if (usersSyncedCount > 0) {
+      BrowserWindow.getAllWindows().forEach(w => {
+        if (!w.isDestroyed()) w.webContents.send('sync:users-synced', { count: usersSyncedCount });
+      });
     }
 
     return { processed, errors };

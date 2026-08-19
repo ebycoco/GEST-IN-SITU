@@ -215,6 +215,19 @@ export default function AgentsPage() {
     return () => window.removeEventListener('app:data-updated', handleDataUpdated);
   }, [loadData]);
 
+  // Rafraîchissement silencieux du badge "Envoyer vers le Cloud" dès qu'un push d'agents
+  // (t_users) réussit côté outbox — quel que soit le déclencheur (immédiat post-création/
+  // modification, cycle périodique, ou bouton manuel). Sans cela, pendingPushUsersCount
+  // restait figé jusqu'au prochain rechargement manuel de la page (voir outbox.service.ts,
+  // canal IPC 'sync:users-synced').
+  useEffect(() => {
+    if (!window.api?.onUsersSynced) return;
+    const unsubscribe = window.api.onUsersSynced(() => {
+      loadData(true); // silencieux : ne pas remettre loading=true, juste rafraîchir le badge/liste
+    });
+    return () => unsubscribe();
+  }, [loadData]);
+
   // OPTIM-3 : Chargement des centres séparé — ne se déclenche que si le site change
   useEffect(() => {
     const siteIdToUse = userContext?.role === 'SUPER ADMIN' ? activeSiteId : userContext?.site_id;

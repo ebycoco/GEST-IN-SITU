@@ -585,6 +585,14 @@ const api = {
     ipcRenderer.on('sync:updated-data', listener);
     return () => ipcRenderer.removeListener('sync:updated-data', listener);
   },
+  // Notifie le Renderer qu'un ou plusieurs agents (t_users) viennent d'être poussés avec
+  // succès vers Supabase (émis par processOutboxPending, canal dédié — voir outbox.service.ts).
+  // Utilisé par AgentsPage pour rafraîchir silencieusement le badge pendingPushUsersCount.
+  onUsersSynced: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('sync:users-synced', listener);
+    return () => ipcRenderer.removeListener('sync:users-synced', listener);
+  },
   // Auto Updater
   updater: {
     check: (): Promise<{ success: boolean; result?: any; error?: string }> =>
