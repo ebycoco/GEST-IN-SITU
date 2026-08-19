@@ -53,8 +53,7 @@ import { tmpdir } from 'os';
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(__dirname, '../../..');
 const MAIN_ENTRY_E2E_CLOUD = join(PROJECT_ROOT, 'dist-e2e-cloud', 'main', 'index.js');
-const SEED_SCRIPT_SRC =
-  'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\344cf3c3-4173-4a2a-bbd7-a341c1d208bf\\scratchpad\\seed-2-centres-sync.ts';
+const SEED_SCRIPT_SRC = join(__dirname, '../../fixtures/seeds/seed-2-centres-sync.ts');
 
 interface Seed2CentresResult {
   dbPath: string;
@@ -66,7 +65,7 @@ interface Seed2CentresResult {
 }
 
 // ─── Bundling + exécution du seed custom (même technique que seed-runner.ts,
-// dupliquée localement — fichier hors e2e/fixtures/, confinement STOP&WARN) ──
+// dupliquée localement — script permanent versionné sous e2e/fixtures/seeds/) ──
 async function bundleSeedScript(): Promise<string> {
   const result = await build({
     entryPoints: [SEED_SCRIPT_SRC],

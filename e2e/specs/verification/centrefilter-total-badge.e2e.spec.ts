@@ -52,16 +52,17 @@ import { test, expect, _electron as electron } from '@playwright/test';
 import type { ElectronApplication, Page } from '@playwright/test';
 import { teardownSeededApp, type E2EEnvironment } from '../../fixtures/electron-app';
 import { runSeedInElectronNode } from '../../fixtures/seed-runner';
+import { build } from 'esbuild';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { join, resolve } from 'path';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(__dirname, '../../..');
 const MAIN_ENTRY_PROD = join(PROJECT_ROOT, 'dist', 'main', 'index.js');
-const SEED_SCRIPT = 'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\344cf3c3-4173-4a2a-bbd7-a341c1d208bf\\scratchpad\\seed-centrefilter.js';
+const SEED_SCRIPT = join(__dirname, '../../fixtures/seeds/seed-centrefilter.ts');
 
 interface SeedCentreFilterResult {
   siteId: number;
@@ -77,11 +78,34 @@ interface SeedCentreFilterResult {
   opvEmpty: { login: string; password: string; id: number };
 }
 
+// ─── Bundling + exécution du seed (script permanent versionné sous
+// e2e/fixtures/seeds/, même technique de bundling esbuild que les autres
+// specs de ce dépôt — better-sqlite3 est un module natif ABI Electron) ─────
+async function bundleSeedCentreFilterScript(): Promise<string> {
+  const result = await build({
+    entryPoints: [SEED_SCRIPT],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node20',
+    external: ['better-sqlite3'],
+    write: false,
+    logLevel: 'silent'
+  });
+  const output = result.outputFiles?.[0]?.text;
+  if (!output) throw new Error('[E2E][seed-centrefilter] esbuild n\'a produit aucune sortie.');
+  return output;
+}
+
 async function runSeedCentreFilter(userDataDir: string): Promise<SeedCentreFilterResult> {
+  const bundleCode = await bundleSeedCentreFilterScript();
+  const bundleDir = mkdtempSync(join(tmpdir(), 'gest-in-situ-e2e-seedcf-'));
+  const bundlePath = join(bundleDir, 'seed-centrefilter.bundle.cjs');
+  writeFileSync(bundlePath, bundleCode, 'utf-8');
   const electronPath = require('electron') as unknown as string;
   const { stdout, stderr } = await execFileAsync(
     electronPath,
-    [SEED_SCRIPT, userDataDir],
+    [bundlePath, userDataDir],
     {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_PATH: join(PROJECT_ROOT, 'node_modules') },
       encoding: 'utf-8'
@@ -92,7 +116,7 @@ async function runSeedCentreFilter(userDataDir: string): Promise<SeedCentreFilte
   const marker = '__SEED_CENTREFILTER_RESULT__:';
   const line = stdout.split(/\r?\n/).reverse().find((l) => l.startsWith(marker));
   if (!line) {
-    throw new Error(`[E2E] seed-centrefilter.js n'a produit aucun résultat exploitable.\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
+    throw new Error(`[E2E] seed-centrefilter.ts n'a produit aucun résultat exploitable.\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
   }
   return JSON.parse(line.slice(marker.length));
 }

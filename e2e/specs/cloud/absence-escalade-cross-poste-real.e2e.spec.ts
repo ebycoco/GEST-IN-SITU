@@ -46,8 +46,7 @@ import { tmpdir } from 'os';
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(__dirname, '../../..');
 const MAIN_ENTRY_E2E_CLOUD = join(PROJECT_ROOT, 'dist-e2e-cloud', 'main', 'index.js');
-const SEED_SCRIPT_SRC =
-  'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\0ecf52dd-3c68-446e-99c9-2a28cf4e9dcc\\scratchpad\\seed-escalade-cross-poste.ts';
+const SEED_SCRIPT_SRC = join(__dirname, '../../fixtures/seeds/seed-escalade-cross-poste.ts');
 
 interface SeedResult {
   dbPath: string;
@@ -61,7 +60,7 @@ interface SeedResult {
 }
 
 // ─── Bundling + exécution du seed custom (même technique que les autres specs
-// cloud de ce dossier — fichier hors e2e/fixtures/, confinement STOP&WARN) ──
+// cloud de ce dossier — script permanent versionné sous e2e/fixtures/seeds/) ──
 async function bundleSeedScript(): Promise<string> {
   const result = await build({
     entryPoints: [SEED_SCRIPT_SRC],

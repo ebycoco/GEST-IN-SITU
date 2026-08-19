@@ -64,8 +64,7 @@ import { tmpdir } from 'os';
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(__dirname, '../../..');
 const MAIN_ENTRY_E2E_CLOUD = join(PROJECT_ROOT, 'dist-e2e-cloud', 'main', 'index.js');
-const SEED_SCRIPT_SRC =
-  'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\344cf3c3-4173-4a2a-bbd7-a341c1d208bf\\scratchpad\\seed-qualite-cloud-sync.ts';
+const SEED_SCRIPT_SRC = join(__dirname, '../../fixtures/seeds/seed-qualite-cloud-sync.ts');
 
 interface SeedQualiteCloudResult {
   dbPath: string;

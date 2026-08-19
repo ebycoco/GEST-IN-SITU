@@ -27,13 +27,16 @@
 import { test, expect } from '@playwright/test';
 import { launchSeededApp, teardownSeededApp, type E2EEnvironment } from '../../fixtures/electron-app';
 import { getTestUser } from '../../fixtures/test-users';
+import { build } from 'esbuild';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { join, resolve } from 'path';
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = resolve(__dirname, '../../..');
-const EXTRA_SEED_SCRIPT = 'C:\\Users\\EBYCHOCO\\AppData\\Local\\Temp\\claude\\d--Espace-travail-GEST-IN-SITU-CARTE-ABOBO-V2\\344cf3c3-4173-4a2a-bbd7-a341c1d208bf\\scratchpad\\extra-seed-qualite.js';
+const EXTRA_SEED_SCRIPT = join(__dirname, '../../fixtures/seeds/extra-seed-qualite.ts');
 
 interface ExtraSeedResult {
   siteBId: number;
@@ -41,12 +44,35 @@ interface ExtraSeedResult {
   cardIds: Record<string, number>;
 }
 
+// ─── Bundling + exécution du seed (script permanent versionné sous
+// e2e/fixtures/seeds/, même technique de bundling esbuild que les autres
+// specs de ce dépôt — better-sqlite3 est un module natif ABI Electron) ─────
+async function bundleExtraSeedQualiteScript(): Promise<string> {
+  const result = await build({
+    entryPoints: [EXTRA_SEED_SCRIPT],
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node20',
+    external: ['better-sqlite3'],
+    write: false,
+    logLevel: 'silent'
+  });
+  const output = result.outputFiles?.[0]?.text;
+  if (!output) throw new Error('[E2E][extra-seed-qualite] esbuild n\'a produit aucune sortie.');
+  return output;
+}
+
 async function runExtraSeed(userDataDir: string, siteId: number, centreId: number): Promise<ExtraSeedResult> {
+  const bundleCode = await bundleExtraSeedQualiteScript();
+  const bundleDir = mkdtempSync(join(tmpdir(), 'gest-in-situ-e2e-extraseedq-'));
+  const bundlePath = join(bundleDir, 'extra-seed-qualite.bundle.cjs');
+  writeFileSync(bundlePath, bundleCode, 'utf-8');
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const electronPath = require('electron') as unknown as string;
   const { stdout, stderr } = await execFileAsync(
     electronPath,
-    [EXTRA_SEED_SCRIPT, userDataDir, String(siteId), String(centreId)],
+    [bundlePath, userDataDir, String(siteId), String(centreId)],
     {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_PATH: join(PROJECT_ROOT, 'node_modules') },
       encoding: 'utf-8'
@@ -55,7 +81,7 @@ async function runExtraSeed(userDataDir: string, siteId: number, centreId: numbe
   const marker = '__EXTRA_SEED_QUALITE_RESULT__:';
   const line = stdout.split(/\r?\n/).reverse().find((l) => l.startsWith(marker));
   if (!line) {
-    throw new Error(`[E2E] extra-seed-qualite.js n'a produit aucun résultat exploitable.\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
+    throw new Error(`[E2E] extra-seed-qualite.ts n'a produit aucun résultat exploitable.\n--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`);
   }
   return JSON.parse(line.slice(marker.length));
 }
