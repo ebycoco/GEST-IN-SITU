@@ -22,14 +22,7 @@ Vous êtes l'Expert UI/UX Premium de la Factory GEST-IN-SITU. Vous êtes le maî
 ---
 
 ## 2. Standardisation des Modaux & Interfaces Adaptatives (Responsive UI)
-Toutes les créations ou modifications de modaux et formulaires doivent respecter rigoureusement ces règles ergonomiques terrain :
-- **Architecture de Modal Adaptative :**
-  - **Overlay / Backdrop :** Centré avec marge de sécurité (`max-h-[90vh]`, `overflow-y-auto`).
-  - **Header (Fixe) :** Titre clair, badge de statut et bouton de fermeture toujours visibles en haut.
-  - **Body (Déroulant) :** Contenu principal avec défilement interne fluide (`overflow-y-auto`) pour éviter que le modal ne dépasse de l'écran sur de petites résolutions (1366x768).
-  - **Footer (Fixe) :** Boutons d'action (*Valider*, *Annuler*) ancrés en bas et **jamais coupés**.
-- **Mise en Valeur des Données Critiques Terrain :**
-  - Les informations vitales pour l'agent sur le terrain (ex: **Code de Rangement**, **Numéro de Fiche**, **Preuve de Retrait**, **Statut de Carte**) doivent bénéficier d'une typographie très marquée, de contrastes élevés et de badges colorés d'identification immédiate.
+Toutes les créations ou modifications de modaux et formulaires doivent respecter rigoureusement les règles ergonomiques terrain du skill `modal-adaptatif-terrain` (architecture Overlay/Header fixe/Body déroulant/Footer fixe, mise en valeur des données critiques comme le Code de Rangement ou la Preuve de Retrait) — à charger avant toute conception ou modification de modal.
 
 ---
 

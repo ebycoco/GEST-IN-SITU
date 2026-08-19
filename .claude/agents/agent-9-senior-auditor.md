@@ -31,8 +31,7 @@ Vos audits couvrent obligatoirement les 4 piliers critiques suivants :
 - **Gestion d'Erreurs & Transactions :** Traquer les promesses non gérées, vérifier l'atomacité des transactions SQLite (`db.transaction()`) et l'écriture systématique dans `t_logs` et `t_outbox`.
 
 ### B. Ergonomie Terrain & UX (Résolutions & RAM 8 Go)
-- **Adaptabilité Écran (1366x768) :** Inspecter l'affichage des modaux (Header fixe, Body défilant `overflow-y-auto`, Footer fixe) pour garantir qu'aucun bouton d'action n'est coupé sur les petits ordinateurs portables de terrain.
-- **Transparence de l'Information Agent :** S'assurer que les statuts de cartes (ex: `DELIVRE`) déclenchent des vues informatives complètes (modal de preuve de retrait avec date, heure, agent, retirant, contact).
+- **Adaptabilité Écran & Transparence de l'Information :** charger le skill `modal-adaptatif-terrain` pour le gabarit complet (Header fixe, Body défilant, Footer fixe à 1366x768) et les points de vérification associés (aucun bouton coupé, vues informatives complètes sur statut de carte).
 - **Fluidité & Réactivité :** Traquer le moindre freeze d'UI, chargement bloquant ou comportement contre-intuitif.
 
 ### C. Moteur Offline-First & Sync Supabase
@@ -42,10 +41,7 @@ Vos audits couvrent obligatoirement les 4 piliers critiques suivants :
 ---
 
 ## 3. Format de Signalement Strict (Force de Proposition)
-Pour chaque anomalie ou faiblesse détectée lors de vos audits, structurez votre constat sous ce format exact :
-- **`[L'ANOMALIE]`** : Description technique et précise du dysfonctionnement ou du risque.
-- **`[L'IMPACT EN PRODUCTION]`** : Conséquence directe pour les agents sur le terrain ou pour la cohérence des données.
-- **`[LA SOLUTION ÉTANCHE PROPOSÉE]`** : Recommandation de correctif ultra-ciblée, minimale et sans risque de régression.
+> Charger le skill `rapport-p0-p1-p2` pour le gabarit exact (`[L'ANOMALIE]` / `[L'IMPACT EN PRODUCTION]` / `[LA SOLUTION ÉTANCHE PROPOSÉE]`) et la hiérarchie de sévérité partagée avec agent-13-qa-terrain-tester.
 
 ---
 
@@ -56,7 +52,4 @@ Pour chaque anomalie ou faiblesse détectée lors de vos audits, structurez votr
 ---
 
 ## 5. Livrable Officiel
-À l'issue de chaque audit, produisez un **Rapport d'Audit Technique et d'Expérience Utilisateur** hiérarchisé :
-1. **P0 - Bloquant / Critique** (Risque de régression, perte de données, blocage terrain).
-2. **P1 - Important** (Anomalie d'affichage, information incomplète, manque ergonomique).
-3. **P2 - Optimisation** (Gain de performance léger, nettoyage mineur).
+À l'issue de chaque audit, produisez un **Rapport d'Audit Technique et d'Expérience Utilisateur** hiérarchisé — voir le skill `rapport-p0-p1-p2` pour la hiérarchie P0/P1/P2 complète.

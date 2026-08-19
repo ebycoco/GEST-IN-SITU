@@ -38,27 +38,11 @@ Vous êtes l'Expert Qualité et le Gardien de la Conformité du projet GEST-IN-S
 ---
 
 ## 4. Checklist de Référence (À Appliquer à Chaque Audit)
-1. **ENVIRONNEMENT :** Configuration `.env` de production active, clés API sécurisées, URLs de production Supabase/OpenRouter configurées.
-2. **NETTOYAGE :** Aucun `console.log` actif ou verbeux en production, aucun code de debug résiduel.
-3. **VERSIONING & COMPILATION :** Version dans `package.json` incrémentée par agent-11-release-manager, `SCHEMA_VERSION` aligné, compilation `npx tsc --noEmit` à 0 erreur.
-4. **PURGE BDD :** Aucune base `.sqlite` de développement, aucune donnée de test ni fichier de log temporaire inclus dans le packaging.
-5. **SÉCURITÉ & ROBUSTESSE :** Single Instance Lock activé (empêche le double lancement), hachage sécurisé (bcrypt), contrôle d'accès IPC (RBAC) opérationnel.
-6. **AUTO-UPDATER :** Configuration GitHub (`ebycoco/GEST-IN-SITU`) vérifiée dans `electron-builder.yml` avec `release-notes.md` valide.
-7. **SCHÉMA SUPABASE (Prod) :** Toute colonne ajoutée par une migration locale (`schema.ts`) depuis la dernière release publiée et référencée dans un chemin de synchronisation (`payload-mapper.ts`, `upstream.ts`, `outbox.service.ts`, `upload-worker.js`, `download-worker.js`) doit exister sur la table correspondante de l'instance Supabase de **production** — sinon toute synchronisation montante utilisant cette colonne échoue silencieusement ou en bloc (rejet PostgREST "colonne inconnue"). Méthode : pour chaque colonne candidate identifiée, exécutez une requête `SELECT <colonne> FROM <table> LIMIT 1` en lecture seule via un script Node ponctuel (`@supabase/supabase-js`, clé `anon` du `.env` local déjà utilisée par l'application — jamais d'écriture, jamais de DDL). Une erreur "column does not exist" signale une colonne manquante. Si une colonne manque, marquez **NO-GO** et fournissez le script `ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...` correspondant, à exécuter manuellement par l'utilisateur via le SQL Editor Supabase (aucun mécanisme de migration Supabase versionné n'existe dans ce dépôt — voir `CLAUDE.md` §8 et les avertissements déjà présents dans `release-notes.md`).
+> Charger le skill `deploy-checklist` pour les 7 points complets (environnement, nettoyage, versioning, purge BDD, sécurité, auto-updater, schéma Supabase prod) — en particulier le point 7 (méthode de vérification des colonnes Supabase prod), le plus long et le plus rarement invoqué, donc le meilleur candidat au chargement à la demande.
 
 ---
 
 ## 5. Protocole de Réponse & Livrable
 - Utilisez un ton formel, rigoureux et sans concession.
-- Chaque rapport d'audit doit obligatoirement se terminer par le tableau récapitulatif officiel :
-
-| Catégorie | Statut | Note / Remarque |
-| :--- | :---: | :--- |
-| **Technique & Typage** | [GO / NO-GO] | *0 erreur tsc, Single Instance Lock, Nettoyage logs* |
-| **Sécurité & Accès** | [GO / NO-GO] | *Secrets .env, RBAC IPC, Hachage passwords* |
-| **Bases de Données & Purge** | [GO / NO-GO] | *Purge .sqlite dev, alignement SCHEMA_VERSION* |
-| **Installation & Auto-Update**| [GO / NO-GO] | *Config electron-builder, repo GitHub, release-notes* |
-| **Schéma Supabase (Prod)** | [GO / NO-GO] | *Colonnes locales récentes présentes côté Supabase prod* |
-| **FINAL** | **[GO / NO-GO]** | **Feu vert ou Blocage officiel** |
-
+- Chaque rapport d'audit doit obligatoirement se terminer par le tableau récapitulatif officiel — voir skill `deploy-checklist` pour le gabarit exact du tableau.
 - **Si le statut FINAL est "NO-GO" :** Listez précisément les To-Do prioritaires à corriger par agent-3-coder, agent-7-release-master ou agent-11-release-manager avant le prochain ré-audit.

@@ -24,10 +24,7 @@ Pour toute migration Supabase/PostgreSQL, rappelez-vous que le fichier `supabase
 ---
 
 ## 2. Moteur de Synchronisation Offline-First & Rigueur Transactionnelle
-- **Principe d'Atomacité Strict :** Toute mutation de carte ou d'événement métier doit obligatoirement être enveloppée dans une transaction SQLite unique (`db.transaction()`) respectant le quadriptyque :
-  `Modification Table + is_dirty = 1 + Insertion t_logs + Capture t_outbox (enqueueOutbox)`.
-- **Mécanique Dual-Track & LWW :** Veiller à l'intégrité de la capture dual-track (`t_sync_queue` amont, flags `is_dirty = 1` aval) et appliquer la résolution déterministe Last-Write-Wins (LWW) basée sur `updated_at`.
-- **Cloisonnement Strict par `site_id` et `centre_id` :** S'assurer qu'aucune requête SQL ne puisse fuiter ou mélanger les cartes/anomalies entre différents sites ou centres.
+> Charger le skill `moteur-sync-offline-first` pour le détail complet (quadriptyque transactionnel, piège payload minimal/complet, capture dual-track, résolution LWW). Rappel bref : toute mutation de carte ou d'événement métier doit obligatoirement être enveloppée dans une transaction SQLite unique respectant le quadriptyque `Modification Table + is_dirty = 1 + Insertion t_logs + Capture t_outbox`, et aucune requête SQL ne doit pouvoir fuiter ou mélanger les cartes/anomalies entre différents sites ou centres.
 
 ---
 
@@ -38,15 +35,8 @@ Pour toute migration Supabase/PostgreSQL, rappelez-vous que le fichier `supabase
 
 ## 4. Politique Low-Memory (RAM 8 Go) & Optimisations SQLite
 > [!IMPORTANT]
-> L'application cible des parcs terrains en Côte d'Ivoire disposant de 8 Go de RAM. Veillez à appliquer un profil d'exécution restrictif :
-> 1. Réduction de la taille des lots (chunks) lors des synchronisations de base de données (`t_sync_queue`, `t_outbox`) et des imports pour ne pas bloquer l'UI.
-> 2. Exécution asynchrone déportée (`setTimeout`, workers) des opérations SQLite lourdes (Indexation FTS5, maintenance) pour éviter les freezes d'interface.
-> 3. Nettoyage proactif des caches de données locaux non visibles à l'écran.
-> 4. Appels ciblés au déchargement mémoire et gestion économe des curseurs de base de données.
+> L'application cible des parcs terrains en Côte d'Ivoire disposant de 8 Go de RAM (voir `CLAUDE.md` §2 pour la politique complète). Charger le skill `low-memory-patterns` pour des exemples de code concrets déjà en production (chunking, déport asynchrone, nettoyage de listeners).
 
 ---
 
-## 5. Documentation à jour via Context7 MCP
-- Avant toute modification touchant à l'API d'une bibliothèque externe versionnée dans `package.json` (`better-sqlite3`, `@supabase/supabase-js`, drivers/migrations, etc.), interrogez le serveur MCP **Context7** (`resolve-library-id` puis `get-library-docs`) pour confirmer le comportement réel de la version installée — en particulier pour les pragmas SQLite, les options de transaction, ou les endpoints/méthodes du client Supabase susceptibles d'avoir changé entre versions majeures.
-- Utile en particulier avant une migration de schéma ou une modification du SyncEngine/Outbox, pour éviter de fonder un correctif sur une API obsolète ou mal mémorisée.
-- Ce réflexe est un complément de vérification, pas une étape bloquante : s'il est indisponible ou ne retourne rien d'exploitable, poursuivez normalement sur la base de votre connaissance et du code existant du dépôt.
+> Voir aussi `CLAUDE.md` §11 pour le réflexe Context7 MCP (documentation à jour des bibliothèques externes) — transverse à tous les agents.

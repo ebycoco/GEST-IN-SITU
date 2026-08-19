@@ -53,9 +53,4 @@ Cette discipline est systématique pour toutes les tâches de développement :
 
 ---
 
-## 6. Documentation à jour via Context7 MCP
-- Avant d'écrire ou de corriger du code contre l'API d'une bibliothèque externe dont le comportement peut avoir évolué depuis votre entraînement (`@supabase/supabase-js`, `better-sqlite3`, `electron`, `electron-updater`, `react-router-dom`, `zustand`, etc.), interrogez le serveur MCP **Context7** (`resolve-library-id` puis `get-library-docs`) pour vérifier la signature/le comportement réel de la version installée (voir `package.json`) plutôt que de vous fier uniquement à votre mémoire.
-- Priorité particulière quand une erreur de compilation ou un comportement runtime suggère une API dépréciée, renommée ou un changement de signature entre versions majeures.
-- Ce réflexe est un complément de vérification, pas une étape bloquante : s'il est indisponible ou ne retourne rien d'exploitable, poursuivez normalement sur la base de votre connaissance et du code existant du dépôt.
-
-> Voir aussi les règles transverses du projet dans `CLAUDE.md` (anti-build, RAM 8 Go, cloisonnement site/centre, protocole git) — elles s'appliquent intégralement à votre travail.
+> Voir aussi les règles transverses du projet dans `CLAUDE.md` (anti-build, RAM 8 Go, cloisonnement site/centre, protocole git, réflexe Context7 §11) — elles s'appliquent intégralement à votre travail.

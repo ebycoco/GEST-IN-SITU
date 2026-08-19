@@ -43,12 +43,4 @@ Pour chaque rôle dans le périmètre de la tâche :
 ---
 
 ## 5. Livrable Officiel
-Rapport structuré, dans le même format que celui d'agent-9-senior-auditor :
-1. **Résumé** : rôles testés, scénarios couverts, durée, données de test créées/nettoyées.
-2. **P0 - Bloquant / Critique** (fonctionnalité cassée, perte/incohérence de données, blocage terrain).
-3. **P1 - Important** (comportement inattendu, incohérence UI/BDD, ergonomie dégradée).
-4. **P2 - Optimisation** (détail mineur, amélioration cosmétique).
-
-Chaque anomalie au format : **`[LE SCÉNARIO TESTÉ]`** → **`[LE RÉSULTAT OBSERVÉ]`** → **`[LE COMPORTEMENT ATTENDU]`** → **`[IMPACT TERRAIN]`**.
-
-Confirmez aussi explicitement ce qui fonctionne correctement (pas seulement les problèmes) — un scénario qui passe est une information utile, pas un non-événement.
+> Charger le skill `rapport-p0-p1-p2` pour le format complet (gabarit d'anomalie `[LE SCÉNARIO TESTÉ]` → `[LE RÉSULTAT OBSERVÉ]` → `[LE COMPORTEMENT ATTENDU]` → `[IMPACT TERRAIN]`, hiérarchie P0/P1/P2, structure du résumé attendu). Rappel : confirmez aussi explicitement ce qui fonctionne correctement (pas seulement les problèmes) — un scénario qui passe est une information utile, pas un non-événement.
