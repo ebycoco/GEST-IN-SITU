@@ -318,7 +318,7 @@ export default function Sidebar() {
             {isOnline ? 'En ligne' : 'Hors ligne'}
           </span>
         </div>
-        <button className="btn-logout" onClick={handleLogout}>
+        <button className="btn-logout" onClick={handleLogout} data-testid="logout-button">
           <LogOut size={16} />
           <span className="sidebar-text">Déconnexion</span>
         </button>

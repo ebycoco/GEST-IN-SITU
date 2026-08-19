@@ -1,26 +1,28 @@
 -- ============================================================
--- GEST-IN-SITU : SchÃ©ma Supabase/PostgreSQL officiel
--- Version : alignÃ©e sur schema.ts v18 + mapping bulk-uploader.ts
--- GÃ©nÃ©rÃ© le : 2026-07-03
--- ============================================================
--- RELATION AVEC supabase/migrations/ (depuis le 19/08/2026)
--- ============================================================
--- Ce fichier reste la VUE D'ENSEMBLE lisible du schéma complet, pratique
--- pour une relecture globale ou pour amorcer un nouvel environnement.
--- Mais ce n'est plus la source de vérité du processus de changement :
--- toute évolution FUTURE du schéma (nouvelle table, colonne, index,
--- fonction RPC, policy RLS...) doit désormais être écrite D'ABORD comme un
--- nouveau fichier dans supabase/migrations/ (voir supabase/migrations/README.md
--- pour la convention et la procédure d'application manuelle sur dev PUIS
--- prod), puis reportée ICI en second lieu pour que ce document reste
--- synchronisé avec l'état réel. Ne plus modifier ce fichier en premier.
+-- 0001_baseline_schema.sql
+-- GEST-IN-SITU : schéma Supabase/PostgreSQL — instantané de référence
 --
--- L'état actuel de ce fichier a été rétroactivement découpé en baseline
--- dans supabase/migrations/0001_baseline_schema.sql et
--- supabase/migrations/0002_t_user_presence.sql (cause du dernier écart
--- dev/prod corrigé le 19/08/2026 : la section t_user_presence ci-dessous
--- avait été appliquée à la main en production sans geste équivalent côté
--- dev, faute d'un mécanisme de migration tracé).
+-- Capturé le 19/08/2026, à la création du dossier supabase/migrations/,
+-- à partir de l'état ALORS DÉJÀ APPLIQUÉ (identique) sur les deux projets
+-- Supabase du projet :
+--   - Dev/Staging : zddibqgutigwxjwbojmn
+--   - Production  : itvyayakwgzvfqvdrgyv
+--
+-- ⚠️ NE PAS REJOUER TEL QUEL SUR UN PROJET EXISTANT. Ce fichier contient
+-- des `DROP TABLE ... CASCADE` sur les tables principales (voir section 0
+-- ci-dessous) : les exécuter sur dev ou prod supprimerait les données
+-- réelles (200k+ cartes en production). Ce fichier est un instantané
+-- historique/documentaire, utile pour reconstruire un environnement neuf
+-- (nouveau projet Supabase vierge) — pas une migration incrémentale à
+-- appliquer sur une base déjà à jour.
+--
+-- Pour toute évolution FUTURE du schéma : nouveau fichier
+-- NNNN_description.sql dans ce même dossier, idempotent
+-- (CREATE ... IF NOT EXISTS / CREATE OR REPLACE), voir README.md.
+--
+-- Contenu identique à supabase_schema.sql (racine du dépôt) tel qu'il
+-- existait avant l'ajout de la section t_user_presence — cet ajout est
+-- isolé dans 0002_t_user_presence.sql pour illustrer la convention.
 -- ============================================================
 
 -- ============================================================
@@ -115,7 +117,7 @@ CREATE TABLE public.t_users (
 );
 
 -- ============================================================
--- 5. t_cartes â€” TABLE PRINCIPALE (200k+ lignes)
+-- 5. t_cartes — TABLE PRINCIPALE (200k+ lignes)
 -- Mapping bulk-uploader.ts :
 --   date_de_naissance -> date_naissance
 --   lieu_de_naissance -> lieu_naissance
@@ -163,13 +165,13 @@ CREATE TABLE public.t_cartes (
 );
 
 -- ============================================================
--- 6. t_logs â€” Journal d'audit
+-- 6. t_logs — Journal d'audit
 -- ============================================================
 CREATE TABLE public.t_logs (
     id_log          BIGSERIAL PRIMARY KEY,
     id_user         BIGINT REFERENCES public.t_users(id_user),
     login_user      TEXT,
-    action          TEXT NOT NULL,
+    action           TEXT NOT NULL,
     detail          TEXT,
     valeur_avant    TEXT,
     valeur_apres    TEXT,
@@ -257,7 +259,12 @@ GRANT EXECUTE ON FUNCTION public.fn_downstream_logs_chunk(BIGINT, TIMESTAMPTZ, T
   TO anon, authenticated, service_role;
 
 -- ============================================================
--- 8. RLS : DÃ‰SACTIVÃ‰ sur toutes les tables
+-- 8. RLS : DÉSACTIVÉ sur ces tables (état d'origine du projet — voir
+-- cependant 0002_t_user_presence.sql, dont la table a RLS ACTIVÉ avec
+-- une policy permissive : la mention "RLS désactivé sur toutes les
+-- tables" ci-dessous ne s'applique donc plus littéralement à
+-- l'ensemble du schéma depuis le 17/08/2026 ; correction de ce
+-- commentaire volontairement laissée hors périmètre)
 -- ============================================================
 ALTER TABLE public.t_sites    DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.t_centres  DISABLE ROW LEVEL SECURITY;
@@ -276,6 +283,10 @@ GRANT ALL ON public.t_users    TO anon, authenticated, service_role;
 GRANT ALL ON public.t_cartes   TO anon, authenticated, service_role;
 GRANT ALL ON public.t_logs     TO anon, authenticated, service_role;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- ============================================================
+-- 10. t_app_version — version minimale/latest de l'app (auto-updater)
+-- ============================================================
 DROP TABLE IF EXISTS public.t_app_version CASCADE;
 CREATE TABLE public.t_app_version (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -289,7 +300,7 @@ INSERT INTO public.t_app_version (min_version, latest_version, release_notes) VA
 
 
 -- ============================================================================
--- TABLE : t_user_roles (Roles multiples par agent)
+-- 11. TABLE : t_user_roles (Roles multiples par agent)
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.t_user_roles (
     id SERIAL PRIMARY KEY,
@@ -307,53 +318,3 @@ CREATE POLICY "Enable read access for all users" ON public.t_user_roles FOR SELE
 CREATE POLICY "Enable insert access for all users" ON public.t_user_roles FOR INSERT WITH CHECK (true);
 CREATE POLICY "Enable update access for all users" ON public.t_user_roles FOR UPDATE USING (true);
 CREATE POLICY "Enable delete access for all users" ON public.t_user_roles FOR DELETE USING (true);
-
-
--- ============================================================================
--- TABLE : t_user_presence (Présence des agents — heartbeat/login/logout)
--- ============================================================================
--- Alimentée en écritures fire-and-forget (hors moteur outbox) par
--- src/main/sync/presence.service.ts : heartbeatPresence(), recordPresenceLogin(),
--- recordPresenceLogout(). Lue en direct (jamais via SQLite local) par
--- getAgentsPresence() du même module, pour la future page "Présence des agents"
--- (ADMINISTRATEUR_SITE sur son site, SUPER ADMIN tous sites).
---
--- Une seule ligne par compte (PK user_sync_id), écrasée à chaque battement/
--- connexion/déconnexion — pas d'historique, pas de table de log, pas de purge
--- à prévoir. Aucun statut (En ligne/Inactif/Hors ligne) n'est stocké ici : seuls
--- des timestamps bruts, le calcul du statut se fait côté renderer.
---
--- Types alignés sur t_users (sync_id TEXT UNIQUE, site_id/centre_id BIGINT
--- REFERENCES t_sites(id)/t_centres(id) — cf. section 4 ci-dessus).
--- ============================================================================
-CREATE TABLE IF NOT EXISTS public.t_user_presence (
-    user_sync_id        TEXT PRIMARY KEY REFERENCES public.t_users(sync_id) ON DELETE CASCADE,
-    login                TEXT NOT NULL,
-    site_id              BIGINT REFERENCES public.t_sites(id),
-    centre_id            BIGINT REFERENCES public.t_centres(id),
-    role                 TEXT,
-    last_heartbeat_at    TIMESTAMPTZ,
-    last_login_at        TIMESTAMPTZ,
-    last_logout_at       TIMESTAMPTZ
-);
-
--- Index de lecture par site/centre (requêtes futures directes sur cette table ;
--- getAgentsPresence() filtre aujourd'hui par user_sync_id issu du roster t_users,
--- déjà couvert par la PK ci-dessus, mais ces index restent utiles pour toute
--- requête directe filtrée site_id/centre_id).
-CREATE INDEX IF NOT EXISTS idx_user_presence_site_id   ON public.t_user_presence(site_id);
-CREATE INDEX IF NOT EXISTS idx_user_presence_centre_id ON public.t_user_presence(centre_id);
-
--- RLS ACTIVÉ + policy permissive "allow_all_operations_*", même modèle réel que
--- t_sites/t_centres/t_postes/t_users/t_cartes/t_logs (vérifié directement en base
--- de production le 2026-08-17 via pg_tables/pg_policies — la mention "RLS
--- désactivé sur toutes les tables" de la section 8 ci-dessous est OBSOLÈTE/fausse
--- pour ces tables, ne pas s'y fier ; correction de la section 8 elle-même laissée
--- en dehors du périmètre de cet ajout).
-ALTER TABLE public.t_user_presence ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "allow_all_operations_t_user_presence" ON public.t_user_presence
-FOR ALL USING (true) WITH CHECK (true);
-
-GRANT ALL ON public.t_user_presence TO anon, authenticated, service_role;
-

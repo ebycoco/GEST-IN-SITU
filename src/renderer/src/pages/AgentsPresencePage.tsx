@@ -86,6 +86,7 @@ function displayName(row: AgentPresenceRow): string {
 
 export default function AgentsPresencePage() {
   const user = useAuthStore((s) => s.user);
+  const activeSiteId = useAuthStore((s) => s.activeSiteId);
   const isSuperAdmin = user?.role === 'SUPER ADMIN';
 
   const [rows, setRows] = useState<AgentPresenceRow[]>([]);
@@ -96,6 +97,16 @@ export default function AgentsPresencePage() {
   const [siteFilter, setSiteFilter] = useState<number | 'ALL'>('ALL');
   const [sites, setSites] = useState<Array<{ id: number; nom: string }>>([]);
   const [centreNameById, setCentreNameById] = useState<Record<number, string>>({});
+
+  // Synchronise la valeur initiale du filtre local avec le sélecteur "CONTEXTE
+  // OPÉRATIONNEL" du Sidebar (activeSiteId, SUPER ADMIN uniquement — cf. Sidebar.tsx).
+  // Ne s'exécute qu'au montage et à chaque changement effectif de activeSiteId (donc à
+  // chaque bascule de contexte côté Sidebar) : un choix local du filtre effectué par
+  // l'utilisateur sur CETTE page, entre deux bascules de contexte, n'est jamais écrasé.
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    setSiteFilter(activeSiteId ?? 'ALL');
+  }, [isSuperAdmin, activeSiteId]);
 
   // Libellés (sites/centres) — lecture SQLite locale déjà cantonnée côté serveur
   // (hierarchy:getSites / hierarchy:getCentres), une seule fois au montage.
