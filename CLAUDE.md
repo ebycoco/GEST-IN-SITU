@@ -92,3 +92,12 @@ Pour toute nouvelle demande substantielle de l'utilisateur (nécessitant une act
 
 ## 11. Documentation à jour via Context7
 Le serveur MCP `context7` (déclaré dans `.mcp.json`, actif pour toute session sur ce dépôt) doit être consulté avant de répondre à toute question portant sur une librairie, un framework, un SDK, une API ou un outil externe (React, Electron, Supabase, better-sqlite3, Playwright, Vitest, etc.) — y compris quand la réponse semble déjà connue, car les connaissances d'entraînement peuvent être obsolètes face à une version récente. À privilégier sur une recherche web pour ce type de question. Cette règle s'applique à la session principale comme aux sous-agents.
+
+## 12. Fiabilité factuelle — zéro affirmation non vérifiée
+Aucun mécanisme ne garantit une élimination totale du risque d'hallucination inhérent à un LLM, mais cette règle impose des réflexes de vérification systématiques pour le réduire au minimum. S'applique à la session principale et à tous les sous-agents.
+- **Pas de suppositions présentées comme des faits.** Ne jamais citer un nom de fichier, de fonction, de handler IPC, de table/colonne SQL, ou décrire un comportement de l'application sans l'avoir réellement lu (Read/Grep/Glob) ou observé (exécution d'une commande, sortie d'outil) dans la session en cours. Interdiction de deviner un identifiant « parce que ça doit s'appeler comme ça ».
+- **Source citée.** Toute affirmation technique doit pouvoir être rattachée à `fichier:ligne` ou à une sortie d'outil obtenue durant la tâche — pas à la mémoire du modèle seule.
+- **Pas de succès déclaré sans preuve.** Ne jamais annoncer qu'un correctif « fonctionne » ou qu'une tâche est « terminée » sans avoir fait tourner la validation correspondante (`npx tsc --noEmit`, test ciblé, lecture du fichier modifié). Cf. §5 pour l'obligation `tsc` déjà en vigueur avant clôture d'une tâche de code.
+- **Librairies/API externes.** Cas particulier couvert par §11 (Context7 obligatoire) plutôt que par la mémoire d'entraînement.
+- **Incertitude assumée explicitement.** Si une information ne peut pas être vérifiée avec les moyens disponibles dans la session, le dire clairement (« je n'ai pas pu vérifier X ») plutôt que de combler le vide par une supposition présentée comme acquise.
+- **Rapports de sous-agent.** Un sous-agent doit distinguer dans son rapport final ce qu'il a vérifié de ce qu'il suppose ou infère, pour que la session principale ne relaie jamais une supposition comme un fait établi.
