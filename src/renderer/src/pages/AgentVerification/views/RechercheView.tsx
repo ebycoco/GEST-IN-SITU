@@ -38,12 +38,6 @@ export default function RechercheView() {
   const { refreshStats } = useOutletContext<{ refreshStats: () => Promise<void> }>();
   const loadCardsTodayMock = async () => {};
 
-  const isCentrePrincipal = (c: any): boolean => {
-    if (!c) return false;
-    return Number(c.numero) === 1 ||
-           (typeof c.nom === 'string' && (c.nom.toUpperCase().includes('PRINCIPAL') || c.nom.toUpperCase().includes('MAIRIE')));
-  };
-
   useEffect(() => {
     // Garde anti-race : ignore un setState issu d'un run precedent de cet effet
     // si un nouveau run a demarre entre-temps (deps changees) ou si le composant
@@ -134,23 +128,20 @@ export default function RechercheView() {
     setSelectedCarte, setShowReportModal, setModalStep, setShowProofModal
   );
 
+  // Sécurité Box / Prefixes
+  // Alignement (P0-5) : cette fonction ne pilote que l'affichage (badge "autorisé"/bouton
+  // d'action dans SearchResults) mais utilisait auparavant une heuristique "centre principal"
+  // (isCentrePrincipal / prefixe_rangement) beaucoup plus permissive que le verrou d'écriture
+  // réel DeliveryModal.canDeliver (comparaison stricte centre_id + site_id). Un agent d'un
+  // centre "principal" voyait donc le badge/bouton "autorisé" pour des cartes d'un AUTRE
+  // centre alors que la délivrance était in fine bloquée par canDeliver — incohérence gelée ici
+  // sur la même logique exacte que canDeliver (déjà alignée côté VerificationSearchPage/index.tsx,
+  // cf. P0-5), pour qu'un futur correctif touchant l'une des deux fonctions sans l'autre ne
+  // puisse plus rouvrir un écart entre affichage et action réelle.
   const isAgentAuthorisedForCard = (carteToCheck: any): boolean => {
-    if (user?.role === 'SUPER ADMIN') return true;
-    if (user?.site_id !== carteToCheck?.site_id) return false;
-    if (user?.role === 'ADMINISTRATEUR_SITE') return true;
-
-    if (isCentrePrincipal(userCentre)) {
-      return true;
-    }
-
-    if (!userCentre || !userCentre.prefixe_rangement || !carteToCheck?.rangement) {
-      return user?.centre_id === carteToCheck?.centre_id;
-    }
-
-    const agentPrefixes = userCentre.prefixe_rangement.split(',').map((p: string) => p.trim().toUpperCase());
-    const cardRangementUpper = carteToCheck.rangement.trim().toUpperCase();
-
-    return agentPrefixes.some((prefix: string) => cardRangementUpper.startsWith(prefix));
+    const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_SITE';
+    if (isAdmin) return true;
+    return !!(user && carteToCheck && user.centre_id === carteToCheck.centre_id && user.site_id === carteToCheck.site_id);
   };
 
   return (
