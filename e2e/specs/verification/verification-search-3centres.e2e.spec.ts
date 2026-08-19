@@ -32,7 +32,7 @@
  *  - Blocage UI (liste SearchResults) : isAgentAuthorisedForCard()
  *    (RechercheView.tsx:119-135) compare le préfixe de rangement de l'agent
  *    (userCentre.prefixe_rangement) au rangement de la carte ; si non
- *    autorisé -> badge "Non autorisé pour votre Box" (SearchResults.tsx:
+ *    autorisé -> badge "Carte hors de votre centre" (SearchResults.tsx:
  *    327-340), bouton de retrait absent.
  *  - Blocage UI (modale, cas single-match auto-ouvert) : canDeliver
  *    (DeliveryModal.tsx:66-67, égalité STRICTE centre_id) désactive les 2
@@ -278,7 +278,7 @@ test.describe.serial('RechercheView — Topologie 3 centres nommés (ZZTEST_SITE
     await expect(deliveryModal()).not.toBeVisible();
 
     const row = window.locator('.card').filter({ hasText: 'ZZTEST_CARTE_C1' });
-    await expect(row.getByText('Non autorisé pour votre Box')).toBeVisible({ timeout: 10000 });
+    await expect(row.getByText('Carte hors de votre centre')).toBeVisible({ timeout: 10000 });
     await expect(row.getByRole('button', { name: /Procéder au Retrait/ })).toHaveCount(0);
 
     const unchanged = queryDb(dbPath, `SELECT statut FROM t_cartes WHERE id_carte=${idC1};`);
@@ -306,7 +306,7 @@ test.describe.serial('RechercheView — Topologie 3 centres nommés (ZZTEST_SITE
     await expect(deliveryModal()).not.toBeVisible();
 
     const row = window.locator('.card').filter({ hasText: 'ZZTEST_CARTE_C2' });
-    await expect(row.getByText('Non autorisé pour votre Box')).toBeVisible({ timeout: 10000 });
+    await expect(row.getByText('Carte hors de votre centre')).toBeVisible({ timeout: 10000 });
     await expect(row.getByRole('button', { name: /Procéder au Retrait/ })).toHaveCount(0);
 
     const unchanged = queryDb(dbPath, `SELECT statut FROM t_cartes WHERE id_carte=${idC2};`);

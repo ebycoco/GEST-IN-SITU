@@ -417,7 +417,7 @@ export function SearchResults({
                     fontWeight: 700,
                     maxWidth: 240
                   }}>
-                    Non autorisé pour votre Box ({carte.rangement || 'Sans rangement'})
+                    Carte hors de votre centre ({carte.rangement || 'Sans rangement'})
                   </div>
                 ) : isPerdue ? (
                   <button

@@ -9,6 +9,20 @@ export function signalerAbsence(id: number, agentLogin: string, agentInfo: strin
   const db = getDatabase()!;
   return db.transaction(() => {
     const now = new Date().toISOString();
+
+    // Verrou centre (cloisonnement §3, même pattern que delivrerCarte()/declarerDoublon() dans
+    // cartes.queries.ts) : pour OPERATEUR_VERIFICATION/ADMIN_CENTRE, un signalement d'absence
+    // hors du centre de l'appelant est refusé. SELECT préalable nécessaire (absent jusqu'ici
+    // dans cette fonction, qui ne relisait la carte qu'après l'UPDATE) — exécuté dans la même
+    // transaction que l'UPDATE ci-dessous pour éviter toute race condition entre la lecture et
+    // l'écriture.
+    if (currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
+      const carteAvant = db.prepare('SELECT centre_id, site_id FROM t_cartes WHERE id_carte = ?').get(id) as { centre_id: number | null; site_id: number } | undefined;
+      if (carteAvant && (carteAvant.centre_id !== currentUser.centre_id || carteAvant.site_id !== currentUser.site_id)) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
     let query = `
       UPDATE t_cartes SET statut_physique = 'ABSENT',
         agent_signalement_absence = @agentLogin, date_signalement_absence = @now,

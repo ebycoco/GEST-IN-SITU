@@ -589,7 +589,7 @@ test.describe.serial('VerificationSearchPage — OPERATEUR_VERIFICATION (QA Terr
     // 2 homonymes (même ddn) répartis sur centre3 (op3, propre centre) et
     // centre4 (autre centre) -> force le rendu de la LISTE SearchResults.tsx
     // (pas d'auto-ouverture de modale, cf. test 14) : c'est le seul cas où le
-    // badge "Non autorisé pour votre Box" (SearchResults.tsx:327-340) est visible.
+    // badge "Carte hors de votre centre" (SearchResults.tsx:327-340) est visible.
     await window.locator('input[placeholder="Ex: KOFFI KOFFI KAN"]').fill('ZZTEST_MULTIBADGE');
     await window.locator('input[placeholder="JJ/MM/AAAA"]').fill('09/09/1999');
     await submitNameSearch();
@@ -601,7 +601,7 @@ test.describe.serial('VerificationSearchPage — OPERATEUR_VERIFICATION (QA Terr
     // Carte du PROPRE centre de op3 (centre3) -> bouton actif.
     await expect(ownCard.getByRole('button', { name: /Procéder au Retrait/ })).toBeEnabled();
     // Carte de centre4 (un autre centre, non principal) -> badge + pas de bouton de retrait.
-    await expect(otherCard.getByText('Non autorisé pour votre Box')).toBeVisible();
+    await expect(otherCard.getByText('Carte hors de votre centre')).toBeVisible();
     await expect(otherCard.getByRole('button', { name: /Procéder au Retrait/ })).toHaveCount(0);
 
     const unchanged = queryDb(dbPath, `SELECT statut FROM t_cartes WHERE id_carte IN (${idOwn}, ${idOther});`);
