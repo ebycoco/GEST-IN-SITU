@@ -45,17 +45,17 @@ function verifyUserRole(userId: number | null | undefined, allowedRoles: string[
     const db = getDatabase();
     if (!db) return false;
 
-    // 1. VÃ©rification dans la table principale t_users
+    // 1. Vérification dans la table principale t_users
     const user = db.prepare('SELECT role, statut_actif FROM t_users WHERE id_user = ?').get(userId) as { role: string; statut_actif: number } | undefined;
     if (!user || user.statut_actif !== 1) return false;
 
     if (allowedRoles.includes(user.role)) return true;
 
-    // 2. VÃ©rification dans la table t_user_roles (rÃ´les multiples)
+    // 2. Vérification dans la table t_user_roles (rôles multiples)
     const roles = db.prepare('SELECT role FROM t_user_roles WHERE id_user = ?').all(userId) as { role: string }[];
     return roles.some(r => allowedRoles.includes(r.role));
   } catch (err) {
-    log.error(`[verifyUserRole] Ã‰chec de la validation de rÃ´le pour l'utilisateur ID ${userId} :`, err);
+    log.error(`[verifyUserRole] Échec de la validation de rôle pour l'utilisateur ID ${userId} :`, err);
     return false;
   }
 }
@@ -145,7 +145,7 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 export function registerIpcHandlers(mainWindow: BrowserWindow): void {
-  // Ã‰couteur de changement d'Ã©tat rÃ©seau pour notifier le Renderer
+  // Écouteur de changement d'état réseau pour notifier le Renderer
   networkMonitor.on('change', async ({ newState }) => {
     try {
       const db = getDatabase();
@@ -219,7 +219,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
       if (user && user.sessionToken) {
         startSessionHeartbeat(user, user.sessionToken);
-        queries.insertAuditLog(user.login, 'CONNEXION', `Connexion rÃ©ussie de l'utilisateur ${user.login}.`);
+        queries.insertAuditLog(user.login, 'CONNEXION', `Connexion réussie de l'utilisateur ${user.login}.`);
 
         // Préférence "Envoi Automatique" des cartes (upstream, t_cartes uniquement) —
         // lue une fois au login, avec repli conditionné au rôle de connexion si aucune
@@ -294,7 +294,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         recordPresenceLogout(presenceSyncId);
       }
       if (login) {
-        queries.insertAuditLog(login, 'DECONNEXION', `DÃ©connexion volontaire de l'utilisateur ${login}.`);
+        queries.insertAuditLog(login, 'DECONNEXION', `Déconnexion volontaire de l'utilisateur ${login}.`);
       }
       return true;
     } catch (e) {
@@ -924,7 +924,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       }
 
-      log.info(`[User Action] CrÃ©ation d'une nouvelle carte CMU pour ${data.noms} ${data.prenoms} par ${userLogin}`);
+      log.info(`[User Action] Création d'une nouvelle carte CMU pour ${data.noms} ${data.prenoms} par ${userLogin}`);
       const res = await queries.createCarte(data, siteId);
       logAudit(
         userLogin,
@@ -1688,7 +1688,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.insertAuditLog(
         secureUser.login || data.agent_resolution_absence || 'ADMIN',
         'VALIDATION',
-        `Validation/RÃ©solution d'absence physique pour la carte ID ${id}. Nouveau rangement : ${data.nouveau_rangement}.`
+        `Validation/Résolution d'absence physique pour la carte ID ${id}. Nouveau rangement : ${data.nouveau_rangement}.`
       );
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_RESOLUE' });
@@ -1710,7 +1710,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.insertAuditLog(
         secureUser.login || 'ADMIN',
         'VALIDATION',
-        `DÃ©claration de perte validÃ©e pour la carte ID ${id}.`
+        `Déclaration de perte validée pour la carte ID ${id}.`
       );
       if (mainWindow && !mainWindow.isDestroyed()) {
         // Type distinct de ABSENCE_RESOLUE (retrouvée) : declarerPerdue() est une issue
@@ -1993,7 +1993,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:inventairePhysiqueScan', e); throw e; }
   });
 
-  // â”€â”€â”€ CACHE MEMOIZATION POUR stats:get â”€â”€â”€
+  // ─── CACHE MEMOIZATION POUR stats:get ───
   // Evite les appels concurrents (React StrictMode) et ajoute un TTL de 15s.
   const STATS_CACHE_TTL_MS = 15000;
   let statsCache: { [key: string]: { promise: Promise<any>; timestamp: number } } = {};
@@ -2012,17 +2012,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const cacheKey = `${siteId}_${centreId || 'all'}`;
       const now = Date.now();
 
-      // Retourner la promesse en cours (rÃ©sout le problÃ¨me des requÃªtes concurrentes)
-      // OU le rÃ©sultat en cache s'il a moins de 15 secondes
-      // â”€â”€â”€ Contournement explicite du cache (forceRefresh) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // Bug P1 (agent-13) : un clic sur "Actualiser" pouvait recevoir une rÃ©ponse
-      // vieille de jusqu'Ã  STATS_CACHE_TTL_MS sans aucune indication de pÃ©remption.
-      // Quand forceRefresh === true, on ignore volontairement une entrÃ©e de cache
-      // encore valide et on recalcule un rÃ©sultat frais pour CET appel prÃ©cis.
-      // Le rÃ©sultat frais est nÃ©anmoins toujours rÃ©-Ã©crit dans statsCache[cacheKey]
-      // plus bas (comportement inchangÃ©) : d'Ã©ventuels appels concurrents dans les
-      // millisecondes suivantes (chargement initial, autres composants montÃ©s en
-      // parallÃ¨le) continuent de bÃ©nÃ©ficier normalement de la mÃ©moÃ¯sation.
+      // Retourner la promesse en cours (résout le problème des requêtes concurrentes)
+      // OU le résultat en cache s'il a moins de 15 secondes
+      // ─── Contournement explicite du cache (forceRefresh) ────────────────────
+      // Bug P1 (agent-13) : un clic sur "Actualiser" pouvait recevoir une réponse
+      // vieille de jusqu'à STATS_CACHE_TTL_MS sans aucune indication de péremption.
+      // Quand forceRefresh === true, on ignore volontairement une entrée de cache
+      // encore valide et on recalcule un résultat frais pour CET appel précis.
+      // Le résultat frais est néanmoins toujours ré-écrit dans statsCache[cacheKey]
+      // plus bas (comportement inchangé) : d'éventuels appels concurrents dans les
+      // millisecondes suivantes (chargement initial, autres composants montés en
+      // parallèle) continuent de bénéficier normalement de la mémoïsation.
       if (!forceRefresh && statsCache[cacheKey] && (now - statsCache[cacheKey].timestamp < STATS_CACHE_TTL_MS)) {
         return await statsCache[cacheKey].promise;
       }
@@ -2045,14 +2045,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
               }
             }
 
-            // â”€â”€â”€ CHRONO SQLITE : stats:get â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ─── CHRONO SQLITE : stats:get ────────────────────────────────────────
             const statsStart = performance.now();
             const res = await queries.getStats(siteId, centreId);
             const statsDuration = performance.now() - statsStart;
             if (statsDuration > 200) {
-              log.warn(`[LENTEUR SQLITE] RequÃªte stats:get a pris ${statsDuration.toFixed(2)} ms (seuil 200 ms dÃ©passÃ©)`);
+              log.warn(`[LENTEUR SQLITE] Requête stats:get a pris ${statsDuration.toFixed(2)} ms (seuil 200 ms dépassé)`);
             }
-            // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            // ────────────────────────────────────────────────────────────────────────
             resolve(res);
           } catch (e: any) {
             log.error('Erreur SQL dans stats:get, retour format degrade', e);
@@ -2167,14 +2167,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
-        { name: 'Fichiers donnÃ©es', extensions: ['csv', 'xlsx', 'xls'] },
+        { name: 'Fichiers données', extensions: ['csv', 'xlsx', 'xls'] },
         { name: 'Tous', extensions: ['*'] }
       ]
     });
     return result.canceled ? null : result.filePaths[0];
   });
 
-  // DÃ©tecteur d'encodage pour supporter UTF-8 et Windows-1252 (Latin1)
+  // Détecteur d'encodage pour supporter UTF-8 et Windows-1252 (Latin1)
   function detectEncoding(filePath: string): 'utf8' | 'latin1' {
     try {
       const fd = openSync(filePath, 'r');
@@ -2659,7 +2659,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         log.error('Failed to resolve centres routing table for import', err);
       }
 
-      // Suspendre le moteur de sync pour Ã©viter les conflits de verrou SQLite pendant l'import
+      // Suspendre le moteur de sync pour éviter les conflits de verrou SQLite pendant l'import
       syncEngine.pause();
 
       activeImportsCount++;
@@ -2671,12 +2671,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       };
 
-      // â”€â”€â”€ ANTI-FREEZE THROTTLE (Couche 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      // Limite les Ã©missions IPC de progression Ã  1 toutes les 200ms.
-      // Quand la fenÃªtre n'a pas le focus (utilisateur sur Chrome/Edge),
+      // ─── ANTI-FREEZE THROTTLE (Couche 1) ────────────────────────────────────
+      // Limite les émissions IPC de progression à 1 toutes les 200ms.
+      // Quand la fenêtre n'a pas le focus (utilisateur sur Chrome/Edge),
       // Chromium suspend le Renderer et accumule les messages IPC. Au retour,
-      // la rafale provoque le freeze "Ne rÃ©pond pas" de Windows 11.
-      // La solution : bufferiser la derniÃ¨re valeur et flusher au retour du focus.
+      // la rafale provoque le freeze "Ne répond pas" de Windows 11.
+      // La solution : bufferiser la dernière valeur et flusher au retour du focus.
       const IMPORT_THROTTLE_MS = 200;
       let importLastSentAt = 0;
       let importBufferedProgress = -1;
@@ -2688,10 +2688,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       };
 
-      // Listener focus : envoi unique de la valeur bufferisÃ©e au retour de l'utilisateur
+      // Listener focus : envoi unique de la valeur bufferisée au retour de l'utilisateur
       const onMainWindowFocus = () => flushImportProgress();
       mainWindow.on('focus', onMainWindowFocus);
-      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ────────────────────────────────────────────────────────────────────────
 
       const worker = new Worker(workerPath, {
         workerData: {
@@ -2712,10 +2712,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       worker.on('message', (msg: any) => {
         if (msg.type === 'progress') {
-          // Throttle : on bufferise toujours la derniÃ¨re valeur
+          // Throttle : on bufferise toujours la dernière valeur
           importBufferedProgress = msg.value;
           const now = Date.now();
-          // N'Ã©mettre que si la fenÃªtre est visible ET que l'intervalle est Ã©coulÃ©
+          // N'émettre que si la fenêtre est visible ET que l'intervalle est écoulé
           const windowFocused = !mainWindow.isDestroyed() && mainWindow.isFocused();
           if (windowFocused && (now - importLastSentAt) >= IMPORT_THROTTLE_MS) {
             importLastSentAt = now;
@@ -2730,7 +2730,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           queries.insertAuditLog(
             agent || 'ADMIN',
             'IMPORT_CARTE',
-            `Importation rÃ©ussie de ${msg.result.inserted || 0} cartes. Doublons dÃ©tectÃ©s : ${msg.result.duplicates || 0}.`
+            `Importation réussie de ${msg.result.inserted || 0} cartes. Doublons détectés : ${msg.result.duplicates || 0}.`
           );
           decrement();
           syncEngine.resume();
@@ -2863,7 +2863,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // EXPORT - PDF with save dialog
   ipcMain.handle('export:pdf', async (_, filters?: Record<string, string>) => {
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: 'Exporter la liste d\'Ã©margement en PDF',
+      title: 'Exporter la liste d\'émargement en PDF',
       defaultPath: `LISTE_EMARGEMENT_${new Date().toISOString().slice(0, 10)}.pdf`,
       filters: [
         { name: 'Document PDF', extensions: ['pdf'] },
@@ -2901,7 +2901,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // Document Title & Context metadata
       doc.setFontSize(18);
       doc.setTextColor(30, 41, 59); // slate-800
-      doc.text("LISTE DE CONTRÃ”LE ET D'Ã‰MARGEMENT - CARTES CMU", 14, 18);
+      doc.text("LISTE DE CONTRÔLE ET D'ÉMARGEMENT - CARTES CMU", 14, 18);
 
       const selectedStatut = filters?.statut || 'TOUS';
       const selectedRangement = filters?.rangement || 'ALL';
@@ -2918,17 +2918,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       doc.setFontSize(10);
       doc.setTextColor(100, 116, 139); // slate-500
       doc.text(`Site : ${siteName.toUpperCase()}  |  Filtre : ${selectedStatut}  |  Rangement : ${selectedRangement === 'ALL' ? 'Tous' : selectedRangement}`, 14, 25);
-      doc.text(`Date de gÃ©nÃ©ration : ${new Date().toLocaleDateString('fr-FR')}  |  Nombre de cartes : ${rows.length}`, 14, 30);
+      doc.text(`Date de génération : ${new Date().toLocaleDateString('fr-FR')}  |  Nombre de cartes : ${rows.length}`, 14, 30);
 
       // Define columns
       const columns = [
-        { header: 'NÂ°', dataKey: 'index' },
+        { header: 'N°', dataKey: 'index' },
         { header: 'NOM DE FAMILLE', dataKey: 'noms' },
-        { header: 'PRÃ‰NOM(S)', dataKey: 'prenoms' },
+        { header: 'PRÉNOM(S)', dataKey: 'prenoms' },
         { header: 'DATE NAISS.', dataKey: 'date_de_naissance' },
         { header: 'RANGEMENT', dataKey: 'rangement' },
         { header: 'CONTACT', dataKey: 'contact' },
-        { header: 'Ã‰MARGEMENT / SIGNATURE', dataKey: 'emargement' }
+        { header: 'ÉMARGEMENT / SIGNATURE', dataKey: 'emargement' }
       ];
 
       // Format data
@@ -2936,15 +2936,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         index: idx + 1,
         noms: (r.noms || '').toUpperCase(),
         prenoms: (r.prenoms || '').toUpperCase(),
-        date_de_naissance: r.date_de_naissance || 'â€”',
+        date_de_naissance: r.date_de_naissance || '—',
         rangement: r.rangement || 'NON CLASSE',
-        contact: r.contact || 'â€”',
+        contact: r.contact || '—',
         emargement: '' // Empty cell for manual signature
       }));
 
       await sendProgress(70);
 
-      // GÃ©nÃ©ration de la table FTS asynchrone pour ne pas bloquer l'Event Loop
+      // Génération de la table FTS asynchrone pour ne pas bloquer l'Event Loop
       await new Promise<void>((resolveTable) => {
         setImmediate(() => {
           autoTable(doc, {
@@ -3206,7 +3206,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     queries.insertAuditLog(
       userLogin,
       'VALIDATION',
-      `Modification du compte utilisateur ID ${id} (${data.login ? 'login : ' + data.login : 'champs mis Ã  jour'}).`
+      `Modification du compte utilisateur ID ${id} (${data.login ? 'login : ' + data.login : 'champs mis à jour'}).`
     );
     return res;
   });
@@ -3272,7 +3272,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // LOGS
   ipcMain.handle('logs:get', (_, offset, limit, filters) => queries.getLogs(offset, limit, filters));
-  ipcMain.handle('logs:add', (_, userId, login, action, detail) => queries.logAction(userId, login, action, detail));
+  ipcMain.handle('logs:add', (_, _userId, _login, action, detail) => {
+    // Sécurité (P2, audit agent-9-senior-auditor) : ce handler acceptait userId/login bruts
+    // venus du renderer sans dérivation de la session sécurisée, contrairement aux autres
+    // handlers d'écriture d'audit de ce fichier — queries.logAction() écrit pourtant dans
+    // t_logs (table synchronisée Supabase, is_dirty=1) avec ces valeurs non vérifiées. Aucun
+    // appelant renderer câblé à ce jour (canal exposé mais inutilisé côté UI) — restriction a
+    // minima, même pattern que users:getProfile ci-dessus : l'identité (userId/login) est
+    // dérivée exclusivement de getSecureCurrentUser(), les paramètres userId/login du renderer
+    // sont ignorés pour l'identité (action/detail restent des données métier légitimes du log).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) {
+      log.warn('[SECURITY] Accès refusé à logs:add : session invalide.');
+      return;
+    }
+    return queries.logAction(secureUser.id_user, secureUser.login, action, detail);
+  });
   
   ipcMain.handle('logs:consultation', async (_, offset: number, limit: number, filters?: any) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
@@ -3882,37 +3897,37 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // etablie via un vrai login ROOT (mot de passe verifie cote serveur, voir
     // auth:login) -- le bypass reste alors legitime.
     const secureUser = getSecureCurrentUser();
-    // Suspendre temporairement le sync engine pour Ã©viter des Ã©critures concurrentes
-    // (SyncEngine) pendant la fenÃªtre oÃ¹ les triggers FTS5 sont absents (DROP/DELETE brut/
-    // recrÃ©ation) -- mÃªme correctif et mÃªme justification que db:emergency-purge ci-dessous.
+    // Suspendre temporairement le sync engine pour éviter des écritures concurrentes
+    // (SyncEngine) pendant la fenêtre où les triggers FTS5 sont absents (DROP/DELETE brut/
+    // recréation) -- même correctif et même justification que db:emergency-purge ci-dessous.
     syncEngine.pause();
     try {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
-        throw new Error("AccÃ¨s refusÃ©. Vous devez Ãªtre administrateur pour purger la base de donnÃ©es.");
+        throw new Error("Accès refusé. Vous devez être administrateur pour purger la base de données.");
       }
 
-      // â”€â”€â”€ LOG AVANT ACTION DESTRUCTRICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de donnÃ©es locale pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
+      // ─── LOG AVANT ACTION DESTRUCTRICE ──────────────────────────────────────
+      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de données locale pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
       const purgeStartTime = performance.now();
-      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ───────────────────────────────────────────────────────────────────────────
 
-      // Si l'utilisateur est administrateur de site, on vÃ©rifie que siteId correspond Ã  son site_id
+      // Si l'utilisateur est administrateur de site, on vérifie que siteId correspond à son site_id
       // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
       // (secureUser, déjà obtenu via getSecureCurrentUser() plus haut), pas d'une re-requête
       // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
         if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
-          throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
+          throw new Error("Accès refusé. Vous ne pouvez pas purger les données d'un autre site.");
         }
       }
 
       queries.insertAuditLog(
         secureUser?.login || 'ADMIN',
         'VALIDATION',
-        `Purge de la base de donnÃ©es locale (cartes et historique associÃ©) pour le site ID ${siteId}.`
+        `Purge de la base de données locale (cartes et historique associé) pour le site ID ${siteId}.`
       );
-      // â”€â”€â”€ ANTI-FREEZE THROTTLE â€” purge progress (Couche 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ─── ANTI-FREEZE THROTTLE — purge progress (Couche 1) ─────────────────────────
       const PURGE_THROTTLE_MS = 200;
       let purgeLastSentAt = 0;
       let purgeBuffered = -1;
@@ -3923,7 +3938,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       };
       mainWindow.on('focus', onPurgeFocus);
-      // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      // ───────────────────────────────────────────────────────────────────────────
       try {
         const res = await queries.purgeLocalDatabase(Number(siteId), (percent) => {
           purgeBuffered = percent;
@@ -3935,16 +3950,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             purgeBuffered = -1;
           }
         });
-        // â”€â”€â”€ LOG APRÃˆS SUCCÃˆS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─── LOG APRÈS SUCCÈS ───────────────────────────────────────────────────────
         const purgeDuration = (performance.now() - purgeStartTime).toFixed(2);
-        log.info(`[PURGE LOCALE] Purge locale rÃ©ussie. Reconstruction du schÃ©ma effectuÃ©e en ${purgeDuration} ms pour le site ID ${siteId}.`);
+        log.info(`[PURGE LOCALE] Purge locale réussie. Reconstruction du schéma effectuée en ${purgeDuration} ms pour le site ID ${siteId}.`);
         // AUD-004 : Audit log post-succes (logAudit)
         logAudit(
           secureUser?.login || 'ADMIN',
           'PURGE_LOCALE',
           `Purge locale reussie pour le site ID ${siteId}. ${(res as any)?.count ?? 0} cartes supprimees.`
         );
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ──────────────────────────────────────────────────────────────────────
         return res;
       } finally {
         mainWindow.removeListener('focus', onPurgeFocus);
@@ -3955,12 +3970,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
     }
     catch (e) {
-      log.error(`[PURGE LOCALE] Ã‰CHEC CRITIQUE de la purge locale pour le site ID ${siteId} :`, e);
+      log.error(`[PURGE LOCALE] ÉCHEC CRITIQUE de la purge locale pour le site ID ${siteId} :`, e);
       throw e;
     } finally {
-      // Reprise garantie du sync engine (symÃ©trique Ã  db:emergency-purge ci-dessous).
+      // Reprise garantie du sync engine (symétrique à db:emergency-purge ci-dessous).
       syncEngine.resume();
-      log.info(`[PURGE LOCALE] Purge locale exÃ©cutÃ©e, synchronisation rÃ©activÃ©e pour le site ID ${siteId}.`);
+      log.info(`[PURGE LOCALE] Purge locale exécutée, synchronisation réactivée pour le site ID ${siteId}.`);
     }
   });
 
@@ -3969,16 +3984,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // jamais du paramètre client `currentUser` (falsifiable) -- même correctif et
     // même justification que db:purge ci-dessus.
     const secureUser = getSecureCurrentUser();
-    // Suspendre temporairement le sync engine pour Ã©viter des verrous SQLite concurrents (Database is locked)
+    // Suspendre temporairement le sync engine pour éviter des verrous SQLite concurrents (Database is locked)
     syncEngine.pause();
-    // â”€â”€â”€ LOG AVANT ACTION DESTRUCTRICE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    log.info(`[MAINTENANCE] Initialisation de la rÃ©paration forcÃ©e (Emergency Purge) pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
+    // ─── LOG AVANT ACTION DESTRUCTRICE ──────────────────────────────────────
+    log.info(`[MAINTENANCE] Initialisation de la réparation forcée (Emergency Purge) pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
     const repairStartTime = performance.now();
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ────────────────────────────────────────────────────────────────────────
     try {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
-        throw new Error("AccÃ¨s refusÃ©. PrivilÃ¨ges administrateur requis pour la purge forcÃ©e.");
+        throw new Error("Accès refusé. Privilèges administrateur requis pour la purge forcée.");
       }
 
       // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
@@ -3986,7 +4001,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
         if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
-          throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
+          throw new Error("Accès refusé. Vous ne pouvez pas purger les données d'un autre site.");
         }
       }
 
@@ -4018,10 +4033,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             purgeBuffered = -1;
           }
         });
-        // â”€â”€â”€ LOG APRÃˆS SUCCÃˆS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ─── LOG APRÈS SUCCÈS ────────────────────────────────────────────────────
         const repairDuration = (performance.now() - repairStartTime).toFixed(2);
-        log.info(`[MAINTENANCE] RÃ©paration forcÃ©e terminÃ©e avec succÃ¨s pour le site ID ${siteId} en ${repairDuration} ms.`);
-        // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        log.info(`[MAINTENANCE] Réparation forcée terminée avec succès pour le site ID ${siteId} en ${repairDuration} ms.`);
+        // ──────────────────────────────────────────────────────────────────────
         return res;
       } finally {
         if (win) {
@@ -4032,12 +4047,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       }
     } catch (e) {
-      log.error(`[MAINTENANCE] Ã‰CHEC CRITIQUE de la rÃ©paration forcÃ©e pour le site ID ${siteId} :`, e);
+      log.error(`[MAINTENANCE] ÉCHEC CRITIQUE de la réparation forcée pour le site ID ${siteId} :`, e);
       throw e;
     } finally {
       // Reprise garantie du sync engine
       syncEngine.resume();
-      log.info(`[MAINTENANCE] RÃ©paration forcÃ©e exÃ©cutÃ©e, synchronisation rÃ©activÃ©e pour le site ID ${siteId}.`);
+      log.info(`[MAINTENANCE] Réparation forcée exécutée, synchronisation réactivée pour le site ID ${siteId}.`);
     }
   });
   ipcMain.handle('db:getCardCount', async (_, siteId?: number) => {
@@ -4105,7 +4120,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
         log.warn('[SECURITY] Accès refusé à maintenance:clearAll : session invalide ou rôle non autorisé.');
-        throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis pour effacer toutes les donnÃ©es.");
+        throw new Error("Accès refusé. Rôle SUPER ADMIN requis pour effacer toutes les données.");
       }
 
       const db = getDatabase()!;
@@ -4117,7 +4132,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.clearDatabaseCartes(undefined);
       event.sender.send('maintenance-progress', 100);
       const clearAllDuration = (performance.now() - clearAllStart).toFixed(2);
-      log.info(`[MAINTENANCE] maintenance:clearAll rÃ©ussi. Toutes les cartes ont Ã©tÃ© effacÃ©es en ${clearAllDuration} ms.`);
+      log.info(`[MAINTENANCE] maintenance:clearAll réussi. Toutes les cartes ont été effacées en ${clearAllDuration} ms.`);
       
       setImmediate(() => {
         logAudit(userLogin, 'SUPERADMIN_PURGE_CLOUD', {
@@ -4133,7 +4148,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       return { success: true };
     } catch (e) {
-      log.error('[MAINTENANCE] Ã‰CHEC CRITIQUE de maintenance:clearAll :', e);
+      log.error('[MAINTENANCE] ÉCHEC CRITIQUE de maintenance:clearAll :', e);
       throw e;
     }
   });
@@ -4145,7 +4160,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
         log.warn('[SECURITY] Accès refusé à maintenance:clearDatabaseCartes : session invalide ou rôle non autorisé.');
-        throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis.");
+        throw new Error("Accès refusé. Rôle SUPER ADMIN requis.");
       }
 
       const db = getDatabase()!;
@@ -4157,7 +4172,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.clearDatabaseCartes(siteId);
       event.sender.send('maintenance-progress', 100);
       const clearSiteDuration = (performance.now() - clearSiteStart).toFixed(2);
-      log.info(`[MAINTENANCE] maintenance:clearDatabaseCartes rÃ©ussi pour le site ID ${siteId} en ${clearSiteDuration} ms.`);
+      log.info(`[MAINTENANCE] maintenance:clearDatabaseCartes réussi pour le site ID ${siteId} en ${clearSiteDuration} ms.`);
       
       setImmediate(() => {
         logAudit(userLogin, 'SUPERADMIN_PURGE_CLOUD', {
@@ -4173,7 +4188,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       return { success: true };
     } catch (e) {
-      log.error(`[MAINTENANCE] Ã‰CHEC CRITIQUE de maintenance:clearDatabaseCartes pour le site ID ${siteId} :`, e);
+      log.error(`[MAINTENANCE] ÉCHEC CRITIQUE de maintenance:clearDatabaseCartes pour le site ID ${siteId} :`, e);
       throw e;
     }
   });
@@ -4188,7 +4203,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
         log.warn('[SECURITY] Accès refusé à maintenance:clearCloudCartes : session invalide ou rôle non autorisé.');
-        throw new Error("AccÃ¨s refusÃ©. PrivilÃ¨ges administrateur requis pour la purge Cloud.");
+        throw new Error("Accès refusé. Privilèges administrateur requis pour la purge Cloud.");
       }
 
       const db = getDatabase()!;
@@ -4197,7 +4212,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // directe sur t_users.
       if (userId !== FAILSAFE_ROOT_ID) {
         if (secureUser && secureUser.role === 'ADMINISTRATEUR_SITE' && secureUser.site_id !== Number(siteId)) {
-          throw new Error("AccÃ¨s refusÃ©. Vous ne pouvez pas purger les donnÃ©es d'un autre site.");
+          throw new Error("Accès refusé. Vous ne pouvez pas purger les données d'un autre site.");
         }
       }
 
@@ -4277,15 +4292,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       while (keepDeleting) {
-        // RÃ©cupÃ©ration par lots de 2000
+        // Récupération par lots de 2000
         const { data, error: fetchError } = await withNetworkRetry(
           () => supabase.from('t_cartes').select('sync_id').eq('id_site', siteId).limit(2000),
           'FETCH des IDs'
         );
 
         if (fetchError) {
-          log.error(`[PURGE CLOUD] Ã‰CHEC FETCH de la purge Supabase pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(fetchError, null, 2));
-          throw new Error(`Erreur lors de la rÃ©cupÃ©ration des IDs sur Supabase : [${fetchError.code || 'NO_CODE'}] ${fetchError.message}`);
+          log.error(`[PURGE CLOUD] ÉCHEC FETCH de la purge Supabase pour le site ${siteId} (détails complets):`, JSON.stringify(fetchError, null, 2));
+          throw new Error(`Erreur lors de la récupération des IDs sur Supabase : [${fetchError.code || 'NO_CODE'}] ${fetchError.message}`);
         }
 
         if (!data || data.length === 0) {
@@ -4299,21 +4314,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         const ids = data.map(d => d.sync_id);
 
         // PostgREST limite la taille des URLs (~8KB). 2000 UUIDs = 74KB = Bad Request.
-        // On dÃ©coupe donc en sous-lots de 100 (3.7KB max) et on les lance en parallÃ¨le.
+        // On découpe donc en sous-lots de 100 (3.7KB max) et on les lance en parallèle.
         const chunkSize = 100;
         const chunks = [];
         for (let i = 0; i < ids.length; i += chunkSize) {
           chunks.push(ids.slice(i, i + chunkSize));
         }
 
-        // ExÃ©cution sÃ©quentielle des 20 requÃªtes de 100 pour ne pas saturer le thread principal et le rÃ©seau
+        // Exécution séquentielle des 20 requêtes de 100 pour ne pas saturer le thread principal et le réseau
         for (const chunk of chunks) {
           const { error: deleteError } = await withNetworkRetry(
             () => supabase.from('t_cartes').delete().in('sync_id', chunk),
             `DELETE lot de ${chunk.length}`
           );
           if (deleteError) {
-            log.error(`[PURGE CLOUD] Ã‰CHEC DELETE par lot pour le site ${siteId} (dÃ©tails complets):`, JSON.stringify(deleteError, null, 2));
+            log.error(`[PURGE CLOUD] ÉCHEC DELETE par lot pour le site ${siteId} (détails complets):`, JSON.stringify(deleteError, null, 2));
             throw new Error(`Erreur lors de la suppression par lot sur Supabase : [${deleteError.code || 'NO_CODE'}] ${deleteError.message}`);
           }
 
@@ -4323,13 +4338,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
              event.sender.send('db:purge-cloud-progress', percent);
           }
           
-          // Respiration CPU obligatoire (10ms) pour libÃ©rer l'Event Loop et Ã©viter le "Freeze" de la UI
+          // Respiration CPU obligatoire (10ms) pour libérer l'Event Loop et éviter le "Freeze" de la UI
           await new Promise(resolve => setTimeout(resolve, 10));
         }
 
-        log.info(`[PURGE CLOUD] Lot de ${ids.length} cartes supprimÃ©. Total cumulÃ© : ${totalDeleted}`);
+        log.info(`[PURGE CLOUD] Lot de ${ids.length} cartes supprimé. Total cumulé : ${totalDeleted}`);
         
-        // DeuxiÃ¨me respiration aprÃ¨s chaque lot de 2000
+        // Deuxième respiration après chaque lot de 2000
         await new Promise(resolve => setTimeout(resolve, 50));
       }
 
@@ -4340,10 +4355,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         SET is_dirty = 1, synced_at = NULL 
         WHERE site_id = ?
       `).run(siteId);
-      log.info(`[PURGE CLOUD] Statut de synchronisation rÃ©initialisÃ© en local pour le site ${siteId}. Lignes impactÃ©es : ${runResult.changes}`);
+      log.info(`[PURGE CLOUD] Statut de synchronisation réinitialisé en local pour le site ${siteId}. Lignes impactées : ${runResult.changes}`);
 
       const cloudPurgeDuration = (performance.now() - cloudPurgeStart).toFixed(2);
-      log.info(`[PURGE CLOUD] Purge Supabase rÃ©ussie pour le site ID ${siteId} en ${cloudPurgeDuration} ms.`);
+      log.info(`[PURGE CLOUD] Purge Supabase réussie pour le site ID ${siteId} en ${cloudPurgeDuration} ms.`);
       
       logAudit(
         userLogin,
@@ -4352,7 +4367,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       );
       return { success: true, count: runResult.changes };
     } catch (e: any) {
-      log.error(`[PURGE CLOUD] Ã‰CHEC CRITIQUE de la purge Supabase pour le site ID ${siteId} :`, e);
+      log.error(`[PURGE CLOUD] ÉCHEC CRITIQUE de la purge Supabase pour le site ID ${siteId} :`, e);
       logAudit(
         userLogin,
         'PURGE_CLOUD_SUPABASE_FAILURE',
@@ -4514,12 +4529,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         .eq('id_site', siteId);
 
       if (error) {
-        log.warn(`[SYNC] Erreur rÃ©seau ou Supabase pour le count du site ${siteId}:`, error.message);
+        log.warn(`[SYNC] Erreur réseau ou Supabase pour le count du site ${siteId}:`, error.message);
         return -1;
       }
       return count !== null ? count : 0;
     } catch (err) {
-      log.warn(`[SYNC] Exception rÃ©seau lors du count du site ${siteId}:`, err);
+      log.warn(`[SYNC] Exception réseau lors du count du site ${siteId}:`, err);
       return -1;
     }
   });
@@ -4534,12 +4549,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         .eq('id_site', siteId);
 
       if (error) {
-        log.warn(`[SYNC] Erreur rÃ©seau ou Supabase pour le total count du site ${siteId}:`, error.message);
+        log.warn(`[SYNC] Erreur réseau ou Supabase pour le total count du site ${siteId}:`, error.message);
         return -1;
       }
       return count !== null ? count : 0;
     } catch (err) {
-      log.warn(`[SYNC] Exception rÃ©seau lors du total count du site ${siteId}:`, err);
+      log.warn(`[SYNC] Exception réseau lors du total count du site ${siteId}:`, err);
       return -1;
     }
   });
@@ -4551,19 +4566,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN'])) {
         log.warn('[SECURITY] Accès refusé à maintenance:fullReset : session invalide ou rôle non autorisé.');
-        throw new Error("AccÃ¨s refusÃ©. RÃ´le SUPER ADMIN requis pour la rÃ©initialisation totale.");
+        throw new Error("Accès refusé. Rôle SUPER ADMIN requis pour la réinitialisation totale.");
       }
 
       const db = getDatabase()!;
       const sqliteVersionRow = db.prepare("select sqlite_version() as version").get() as { version: string } | undefined;
       const sqliteVersion = sqliteVersionRow ? sqliteVersionRow.version : '3.x';
 
-      log.info(`[MAINTENANCE] Initialisation de maintenance:fullReset (rÃ©initialisation systÃ¨me totale) par l'utilisateur '${userLogin}'.`);
+      log.info(`[MAINTENANCE] Initialisation de maintenance:fullReset (réinitialisation système totale) par l'utilisateur '${userLogin}'.`);
       const fullResetStart = performance.now();
       const res = queries.fullSystemReset();
       event.sender.send('maintenance-progress', 100);
       const fullResetDuration = (performance.now() - fullResetStart).toFixed(2);
-      log.info(`[MAINTENANCE] maintenance:fullReset rÃ©ussi en ${fullResetDuration} ms. SystÃ¨me complÃ¨tement rÃ©initialisÃ©.`);
+      log.info(`[MAINTENANCE] maintenance:fullReset réussi en ${fullResetDuration} ms. Système complètement réinitialisé.`);
       
       setImmediate(() => {
         // Log de maintenance DB
@@ -4923,7 +4938,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         log.warn('[sync:startBulk] Échec du vidage forcé de t_outbox (non-bloquant) :', outboxFlushErr?.message || outboxFlushErr);
       }
 
-      // 1. Calcul des anomalies restantes en local (qui n'ont pas pu Ãªtre envoyÃ©es car exclues du filtre) via le Worker pour ne pas geler le Main Thread
+      // 1. Calcul des anomalies restantes en local (qui n'ont pas pu être envoyées car exclues du filtre) via le Worker pour ne pas geler le Main Thread
       let strictCount = 0;
       let probableCount = 0;
       let invalidCount = 0;
@@ -5144,22 +5159,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  // SUPER ADMIN â€” Synchronisation ForcÃ©e Globale
+  // SUPER ADMIN — Synchronisation Forcée Globale
   ipcMain.handle('sync:forceGlobal', async (_, currentUser) => {
     try {
       queries.insertAuditLog(
         currentUser?.login || 'SUPER ADMIN',
         'VALIDATION',
-        "Lancement d'une synchronisation globale forcÃ©e Supabase par le Super Admin."
+        "Lancement d'une synchronisation globale forcée Supabase par le Super Admin."
       );
       return await queries.forceGlobalSuperAdminSync();
     } catch (error) {
-      log.error('Erreur lors de la synchronisation forcÃ©e globale:', error);
+      log.error('Erreur lors de la synchronisation forcée globale:', error);
       throw error;
     }
   });
 
-  // SITE ADMIN â€” Synchronisation ForcÃ©e du Site
+  // SITE ADMIN — Synchronisation Forcée du Site
   ipcMain.handle('sync:forceSite', async (_, siteId: number, currentUser) => {
     try {
       const secureUser = getSecureCurrentUser();
@@ -5169,16 +5184,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.insertAuditLog(
         currentUser?.login || 'ADMIN',
         'VALIDATION',
-        `Lancement de la synchronisation forcÃ©e Supabase pour le site ID ${siteId} par l'administrateur.`
+        `Lancement de la synchronisation forcée Supabase pour le site ID ${siteId} par l'administrateur.`
       );
       return await queries.forceSiteAdminSync(Number(siteId));
     } catch (error) {
-      log.error(`Erreur lors de la synchronisation forcÃ©e du site ${siteId}:`, error);
+      log.error(`Erreur lors de la synchronisation forcée du site ${siteId}:`, error);
       throw error;
     }
   });
 
-  // SITE ADMIN â€” Synchronisation ForcÃ©e des Agents du Site
+  // SITE ADMIN — Synchronisation Forcée des Agents du Site
   ipcMain.handle('sync:forceAgents', async (_, siteId: number, currentUser) => {
     try {
       const secureUser = getSecureCurrentUser();
@@ -5188,11 +5203,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queries.insertAuditLog(
         currentUser?.login || 'ADMIN',
         'VALIDATION',
-        `Lancement de la synchronisation forcÃ©e des comptes agents pour le site ID ${siteId} par l'administrateur.`
+        `Lancement de la synchronisation forcée des comptes agents pour le site ID ${siteId} par l'administrateur.`
       );
       return await queries.forceAgentsSync(Number(siteId));
     } catch (error) {
-      log.error(`Erreur lors de la synchronisation forcÃ©e des agents du site ${siteId}:`, error);
+      log.error(`Erreur lors de la synchronisation forcée des agents du site ${siteId}:`, error);
       throw error;
     }
   });
@@ -5291,7 +5306,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
 
       if (!siteId || isNaN(Number(siteId))) {
-        throw new Error("siteId obligatoire et valide requis pour la rÃ©cupÃ©ration.");
+        throw new Error("siteId obligatoire et valide requis pour la récupération.");
       }
 
       const isCentreAdmin = secureUser.role === 'ADMIN_CENTRE';
@@ -5310,7 +5325,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       );
       return res;
     } catch (error: any) {
-      log.error(`Erreur lors de la rÃ©cupération des agents pour le site ${siteId}:`, error);
+      log.error(`Erreur lors de la récupération des agents pour le site ${siteId}:`, error);
       logAudit(
         userLogin,
         'SYNC_AGENTS_FAILURE',
@@ -5703,13 +5718,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'])) {
         log.warn('[SECURITY] Acces refuse a audit:delete : session invalide ou role non autorise.');
-        throw new Error("AccÃ¨s refusÃ©. Session ou rÃ´le non autorisÃ© Ã  supprimer les audits.");
+        throw new Error("Accès refusé. Session ou rôle non autorisé à supprimer les audits.");
       }
       queries.deleteAuditLog(id);
       queries.insertAuditLog(
         secureUser?.login || 'ADMIN',
         'VALIDATION',
-        `Suppression de l'entrÃ©e d'audit ID ${id} par l'administrateur.`
+        `Suppression de l'entrée d'audit ID ${id} par l'administrateur.`
       );
       return { success: true };
     } catch (e) {
