@@ -2,6 +2,22 @@
 
 Application Electron offline-first de gestion des cartes CMU, **déployée et en exploitation active en Côte d'Ivoire** sur des postes de terrain (8 Go de RAM). Ces règles s'appliquent à toute intervention sur ce dépôt, y compris par les sous-agents définis dans `.claude/agents/`.
 
+## Commandes de développement
+
+- `npm install` — installation des dépendances (déclenche `patch-package` via `postinstall`).
+- `npm run dev` — lance l'application en mode développement (`electron-vite dev`).
+- `npm run lint` — analyse statique ESLint (`eslint src/`).
+- `npx tsc --noEmit` — validation stricte des types, **obligatoire avant de clore toute tâche de code** (§5), 0 erreur tolérée.
+- `npm test` — tests unitaires Vitest (exclut `e2e/**`, voir `vitest.config.ts`). `npm run test:watch` pour le mode watch.
+  - Test ciblé : `npx vitest run <chemin-du-fichier>`.
+- `npm run test:e2e` — tests de bout en bout Playwright (`pretest:e2e` lance automatiquement `electron-vite build`, un build simple non-packaging, autorisé). `npm run test:e2e:ui` pour le mode UI interactif.
+  - Test ciblé : `npx playwright test <mot-clé-ou-fichier>`.
+  - Attention : les specs `e2e/specs/**/*.cloud.e2e.spec.ts` touchent un vrai projet Supabase dev/staging (`.env.e2e`) — jamais la production, mais jamais anodin non plus.
+- `npm run build` — build electron-vite seul (pas de packaging).
+- `npm run build:win` / `npm run release` — packaging complet, **soumis à l'interdiction §1** : jamais à l'initiative d'un agent.
+
+Le skill `/run-tests` orchestre le flux de validation courant (rapide : `tsc` + Vitest ; e2e complet ; e2e ciblé) avec un format de résumé standardisé — à privilégier plutôt que de ré-enchaîner ces commandes manuellement.
+
 ## 1. Interdiction formelle de compilation/release automatique
 `npm run release`, `npm run make` ou toute commande de packaging **ne doivent jamais être lancés de la propre initiative d'un agent**. Ces commandes ne s'exécutent que sur instruction écrite et explicite de l'utilisateur.
 
@@ -101,3 +117,30 @@ Aucun mécanisme ne garantit une élimination totale du risque d'hallucination i
 - **Librairies/API externes.** Cas particulier couvert par §11 (Context7 obligatoire) plutôt que par la mémoire d'entraînement.
 - **Incertitude assumée explicitement.** Si une information ne peut pas être vérifiée avec les moyens disponibles dans la session, le dire clairement (« je n'ai pas pu vérifier X ») plutôt que de combler le vide par une supposition présentée comme acquise.
 - **Rapports de sous-agent.** Un sous-agent doit distinguer dans son rapport final ce qu'il a vérifié de ce qu'il suppose ou infère, pour que la session principale ne relaie jamais une supposition comme un fait établi.
+
+## Architecture
+
+Trois processus Electron standards, plus du code partagé :
+- `src/main/` — processus principal (BDD, synchronisation, handlers IPC, auth, workers).
+- `src/preload/` — pont de sécurité (`contextBridge`) exposant une API `window.api.*` typée au renderer ; chaque méthode wrappe un `ipcRenderer.invoke('<canal>', ...)` correspondant à un handler dans `src/main/ipc/handlers.ts`.
+- `src/renderer/src/` — UI React (pages par rôle métier dans `pages/`, état global via `stores/` en `zustand`, `hooks/` pour les abonnements IPC/réseau).
+- `src/shared/` — types (`types.ts`, `types/quality.types.ts`) et utilitaires (`utils/date.ts`, `utils/validators.ts`) communs aux trois processus.
+
+**IPC** : `src/main/ipc/handlers.ts` est le point d'entrée unique de tous les canaux IPC (fichier volumineux, un handler par capacité métier). Toute décision de cantonnement site/centre y dérive de `getSecureCurrentUser()` — voir §3.
+
+**Base de données** (`src/main/database/`) :
+- `connection.ts` — instance `better-sqlite3` (mode WAL).
+- `schema.ts` — migrations séquentielles numérotées et `SCHEMA_VERSION` (constante à aligner à chaque release, cf. §8/§11 et skill `semver-release-rules`).
+- `queries/*.queries.ts` — requêtes SQL regroupées par domaine (`cartes`, `hierarchy`, `users`, `sync`, `stats`, `audit`, `import`, `maintenance`, `absence`, `logs`, `config`).
+
+**Synchronisation** (`src/main/sync/`) — moteur offline-first résilient : `sync-engine.ts` orchestre le cycle, `outbox.service.ts` gère la file d'attente locale des mutations à propager, `upstream.ts`/`downstream.ts`/`bulk-uploader.ts` traitent respectivement l'envoi, la réception et les imports massifs vers/depuis Supabase (`supabase-client.ts`), `presence.service.ts` et `network-monitor.ts` suivent la présence agent et l'état réseau. Le pattern transactionnel obligatoire pour toute mutation de carte est documenté dans le skill `moteur-sync-offline-first` (à charger avant toute écriture touchant `t_cartes`).
+
+**Auth** (`src/main/auth/`) : `local-auth.ts` (login/session locale) et `session-heartbeat.ts` (maintient `getSecureCurrentUser()`, source de vérité du rôle actif — §3).
+
+**Workers** (`src/main/workers/*.js`) : traitements lourds déportés (import, download, upload, stats) conformément à la politique Low-Memory §2 — voir skill `low-memory-patterns` pour les patterns de chunking attendus.
+
+**Tests** : Vitest (`vitest.config.ts`, exclut `e2e/**`) pour les tests unitaires (`tests/`) ; Playwright (`playwright.config.ts`, cible `e2e/specs/**/*.e2e.spec.ts`) pour les tests de bout en bout, chacun dans sa propre instance Electron isolée (`workers: 1`, cf. commentaires du fichier de config) — les deux suites sont strictement indépendantes, ne pas les faire cohabiter dans un même pattern de découverte.
+
+## 13. Gouvernance & mémoire de projet
+
+Voir `docs/GOVERNANCE.md` : classification du projet (mode HEAVY), fichiers `PROJECT_STATE.md`/`TASKS.md`, fréquence et intégration des audits `agent-9-senior-auditor`. Ce document ne redéfinit aucune règle des §1-12 ci-dessus — il les complète.
