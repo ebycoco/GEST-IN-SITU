@@ -116,7 +116,7 @@ export function useDeliveryFlow(
       }, 50);
     } catch (err) {
       console.error('Failed to deliver card:', err);
-      toast.error('Erreur lors de la validation du retrait.');
+      toast.error(err instanceof Error && err.message ? err.message : 'Erreur lors de la validation du retrait.');
     } finally {
       setIsFinalizing(false);
     }

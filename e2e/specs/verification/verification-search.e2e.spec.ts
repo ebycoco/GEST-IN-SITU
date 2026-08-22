@@ -295,6 +295,69 @@ test.describe.serial('VerificationSearchPage — OPERATEUR_VERIFICATION (QA Terr
     expect(after).toBe('DELIVRE|ZZTEST-URGENCE-1');
   });
 
+  test('3b. Carte non classée rattachée à un AUTRE centre que celui de l\'opérateur (même site) -> délivrance autorisée et centre_id rattaché (correctif cartes.queries.ts:delivrerCarte)', async () => {
+    const { window } = env;
+    // Reproduit précisément le bug corrigé : une carte encore "NON CLASSÉE" peut porter un
+    // centre_id par défaut (import) qui ne correspond pas à celui de l'opérateur l'ayant
+    // physiquement retrouvée. Contrairement au seed `nonclasse` (déjà sur env.seed.centreId,
+    // qui ne pouvait donc pas exercer ce cas), cette carte est insérée directement avec
+    // extraSeed.centre3Id (un centre distinct, même site) — même pattern d'INSERT direct via
+    // sqlite3 CLI déjà utilisé ailleurs dans ce spec (ex: ligne ~715, 796) pour ajuster un état
+    // que le seed partagé ne couvre pas.
+    expect(extraSeed.centre3Id).not.toBe(env.seed.centreId);
+    const idCarte = Number(
+      queryDb(
+        dbPath,
+        `INSERT INTO t_cartes (noms, prenoms, date_de_naissance, rangement, statut, statut_physique, contact, site_id, centre_id, agent_saisie, sync_id, is_dirty) ` +
+          `VALUES ('ZZTEST_NONCLASSE2', 'FOFANA', '1992-11-11', '', 'EN STOCK', 'OK', '0100000099', ${env.seed.siteId}, ${extraSeed.centre3Id}, 'SYSTEM', 'zztest-extra-carte-nonclasse2-${Date.now()}', 0); ` +
+          `SELECT last_insert_rowid();`
+      )
+    );
+
+    await goToRecherche();
+    await fillNameSearch('ZZTEST_NONCLASSE2 FOFANA', '11/11/1992');
+    await submitNameSearch();
+
+    // Match unique EN STOCK non-absent -> auto-ouverture (cf. commentaire test 14 : le
+    // cloisonnement centre n'est jamais vérifié à ce stade, seulement site_id côté serveur).
+    await expect(deliveryModal()).toBeVisible({ timeout: 10000 });
+    await expect(deliveryModal().getByText('NON CLASSÉ', { exact: true })).toBeVisible();
+
+    // Avant le correctif, canDeliver (DeliveryModal.tsx) exigeait déjà une égalité stricte de
+    // centre_id -> le bouton "Oui, j'ai la carte" serait resté désactivé ici sur le front. Le
+    // périmètre de cette tâche est le serveur (delivrerCarte) : on vérifie ce dernier
+    // directement via un appel IPC "forcé" (même technique que le forcedResult du test 14),
+    // qui documente que le blocage a bien disparu pour une carte NON CLASSÉE une fois le
+    // rangement d'urgence fourni, et que centre_id est rattaché à celui de l'opérateur.
+    const forcedResult = await window.evaluate(
+      async ({ id, siteId, centreId }) => {
+        try {
+          await (window as any).api.cartes.delivrer(
+            id,
+            {
+              nom_retirant: 'ZZTEST_NONCLASSE2 FOFANA',
+              num_retirant: '0100000099',
+              type_retirant: 'ASSURE',
+              agent_distributeur: 'E2E_OPERATEUR_VERIFICATION',
+              rangement: 'ZZTEST-URGENCE-2'
+            },
+            { role: 'OPERATEUR_VERIFICATION', site_id: siteId, centre_id: centreId, login: 'E2E_OPERATEUR_VERIFICATION' }
+          );
+          return { ok: true };
+        } catch (e: any) {
+          return { ok: false, message: e?.message || String(e) };
+        }
+      },
+      { id: idCarte, siteId: env.seed.siteId, centreId: env.seed.centreId }
+    );
+    expect(forcedResult.ok).toBe(true);
+
+    const after = queryDb(dbPath, `SELECT statut, rangement, centre_id FROM t_cartes WHERE id_carte=${idCarte};`);
+    expect(after).toBe(`DELIVRE|ZZTEST-URGENCE-2|${env.seed.centreId}`);
+
+    await window.locator('.btn-close').click();
+  });
+
   test('4. Carte signalée ABSENTE -> pas de retrait possible, badge et bouton désactivé', async () => {
     const { window } = env;
     const idCarte = extraSeed.cardIds['absente'];

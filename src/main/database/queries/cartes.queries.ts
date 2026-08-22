@@ -579,14 +579,27 @@ export function delivrerCarte(
 
   const runTx = db.transaction(() => {
     // Vérifier l'existence et l'accès à la carte
-    const carte = db.prepare('SELECT contact, sync_id, site_id, centre_id, statut FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { contact: string | null; sync_id: string | null; site_id: number; centre_id: number | null; statut: string } | undefined;
+    const carte = db.prepare('SELECT contact, sync_id, site_id, centre_id, statut, rangement FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { contact: string | null; sync_id: string | null; site_id: number; centre_id: number | null; statut: string; rangement: string | null } | undefined;
 
     if (!carte) {
       throw new Error("Carte introuvable, déjà distribuée, ou accès non autorisé pour votre site.");
     }
 
+    // Même règle que isUnclassifiedCard côté front (useDeliveryFlow.ts) : une carte sans
+    // rangement exploitable est considérée non classée.
+    const isUnclassified = !carte.rangement || carte.rangement.trim() === '' || carte.rangement.trim().toUpperCase() === 'NON CLASSE';
+
+    // Garde serveur (tous rôles) : le rangement d'urgence, déjà imposé côté client pour une
+    // carte non classée, doit aussi l'être ici — un appel IPC direct ne doit pas pouvoir le contourner.
+    if (isUnclassified && (!data.rangement || data.rangement.trim() === '')) {
+      throw new Error("Le rangement d'urgence est obligatoire pour cette carte.");
+    }
+
     if (currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
-      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+      if (carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre site.");
+      }
+      if (!isUnclassified && carte.centre_id !== currentUser.centre_id) {
         throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
       }
     }
@@ -621,6 +634,13 @@ export function delivrerCarte(
       );
     }
 
+    // Rattachement centre_id : une carte non classée délivrée avec un rangement d'urgence
+    // saisi se voit désormais affecter le centre de l'opérateur qui l'a physiquement retrouvée
+    // (elle n'en avait pas de fiable jusqu'ici) ; sinon centre_id reste inchangé (COALESCE).
+    const centreIdOverride = (isUnclassified && data.rangement && data.rangement.trim() !== '' && currentUser?.centre_id != null)
+      ? currentUser.centre_id
+      : null;
+
     const query = `
       UPDATE t_cartes SET
         statut = 'DELIVRE',
@@ -632,13 +652,14 @@ export function delivrerCarte(
         agent_distributeur = @agent_distributeur,
         centre_retrait = @centre_retrait,
         rangement = COALESCE(@rangement, rangement),
+        centre_id = COALESCE(@centre_id_override, centre_id),
         updated_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
     `;
-    
-    const params: any = { 
+
+    const params: any = {
       id,
       nom_retirant: data.nom_retirant,
       num_retirant: data.num_retirant,
@@ -647,6 +668,7 @@ export function delivrerCarte(
       agent_distributeur: data.agent_distributeur,
       centre_retrait: data.centre_retrait || null,
       rangement: data.rangement || null,
+      centre_id_override: centreIdOverride,
       now,
       updated_by: currentUser?.id_user || null
     };
