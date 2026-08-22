@@ -241,7 +241,7 @@ export default function VerificationSearchPage() {
   // deux fonctions sans l'autre ne puisse plus rouvrir un écart entre affichage et action réelle.
   const isAgentAuthorisedForCard = (carteToCheck: any): boolean => {
     if (isAdmin) return true;
-    return !!(user && carteToCheck && user.centre_id === carteToCheck.centre_id && user.site_id === carteToCheck.site_id);
+    return !!(user && carteToCheck && user.site_id === carteToCheck.site_id && (user.centre_id === carteToCheck.centre_id || isUnclassifiedCard(carteToCheck)));
   };
 
   if (isCountLoading) {

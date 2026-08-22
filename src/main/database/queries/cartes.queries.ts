@@ -637,7 +637,7 @@ export function delivrerCarte(
     // Rattachement centre_id : une carte non classée délivrée avec un rangement d'urgence
     // saisi se voit désormais affecter le centre de l'opérateur qui l'a physiquement retrouvée
     // (elle n'en avait pas de fiable jusqu'ici) ; sinon centre_id reste inchangé (COALESCE).
-    const centreIdOverride = (isUnclassified && data.rangement && data.rangement.trim() !== '' && currentUser?.centre_id != null)
+    const centreIdOverride = (isUnclassified && data.rangement && data.rangement.trim() !== '' && currentUser?.centre_id != null && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE'))
       ? currentUser.centre_id
       : null;
 

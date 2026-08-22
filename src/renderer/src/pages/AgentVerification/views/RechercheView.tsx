@@ -141,7 +141,7 @@ export default function RechercheView() {
   const isAgentAuthorisedForCard = (carteToCheck: any): boolean => {
     const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_SITE';
     if (isAdmin) return true;
-    return !!(user && carteToCheck && user.centre_id === carteToCheck.centre_id && user.site_id === carteToCheck.site_id);
+    return !!(user && carteToCheck && user.site_id === carteToCheck.site_id && (user.centre_id === carteToCheck.centre_id || isUnclassifiedCard(carteToCheck)));
   };
 
   return (

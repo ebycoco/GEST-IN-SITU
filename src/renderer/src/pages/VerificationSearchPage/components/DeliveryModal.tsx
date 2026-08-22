@@ -72,7 +72,7 @@ export function DeliveryModal({
 
   const displayCarte = fullCarte || selectedCarte;
   const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN' || user?.role === 'ADMIN_SITE';
-  const canDeliver = isAdmin || (user && displayCarte && user.centre_id === displayCarte.centre_id && user.site_id === displayCarte.site_id);
+  const canDeliver = isAdmin || (user && displayCarte && user.site_id === displayCarte.site_id && (user.centre_id === displayCarte.centre_id || isUnclassifiedCard(displayCarte)));
 
   return (
     <div style={{
