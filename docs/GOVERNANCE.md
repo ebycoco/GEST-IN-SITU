@@ -84,6 +84,36 @@ Après un audit, ajouter en tête de `TASKS.md` :
 
 Cette règle ne change rien à `CLAUDE.md` §7 (délégation) : l'audit reste proposé, jamais lancé d'initiative.
 
+### Autorisation permanente — intégration automatique post-rapport
+
+**Même principe que `CLAUDE.md` §5** (autorisation durable pour la séquence commit → release-notes.md → push) : l'invocation d'un agent couvert par cette clause **vaut déjà autorisation** pour la suite ci-dessous. Aucune confirmation supplémentaire n'est nécessaire une fois l'agent lancé.
+
+**Critère d'application** — cette autorisation s'applique à tout agent dont le rapport final contient des **items non résolus dans la session** (findings, issues, recommandations qui restent à traiter après coup), pas aux agents dont le travail EST déjà le résultat final (correctif appliqué, fichier produit, étape d'un pipeline déjà orchestré ailleurs).
+
+Agents couverts actuellement :
+- `agent-9-senior-auditor` (audit qualité/sécurité)
+- `agent-13-qa-terrain-tester` (bugs remontés non corrigés dans la foulée)
+- `agent-5-qa-optimisation` (fuites mémoire détectées non corrigées dans la foulée)
+- `agent-10-refactoring-speed-booster` (points de perf identifiés non traités dans la foulée)
+- `agent-14-debugger` — **uniquement en cas de diagnostic sans résolution** (cf. rapport d'échec debug ×3, `CLAUDE.md` §12) ; si le bug est résolu dans la session, rien à tracker.
+
+Non couverts (traitement déjà géré ailleurs, ne pas dupliquer) :
+- `agent-3-coder`, `agent-4-db-sync`, `agent-6-qa-syntax`, `agent-1-architect-pm`, `agent-2-designer`, `agent-8-icon-asset-master` — production/correctif direct, suivi via `git diff` et restitution normale (§10 de `CLAUDE.md`).
+- `agent-7-release-master`, `agent-11-release-manager`, `agent-12-deploy-validator` — déjà orchestrés par le pipeline `CLAUDE.md` §8.
+
+**Nouvel agent non listé** : appliquer le critère ci-dessus (findings à suivre vs. résultat déjà final) plutôt que d'attendre une mise à jour de cette liste.
+
+Dès qu'un agent couvert rend son rapport, la session principale enchaîne directement, sans attendre de validation :
+
+1. **Mise à jour de `TASKS.md`** : insertion du bloc `## 🔴 [TYPE] — [nom de l'agent] — [date]` en tête de fichier (`[TYPE]` = AUDIT, QA TERRAIN, OPTIMISATION, DIAGNOSTIC selon l'agent), au format P0/P1 (ou équivalent), P2, P3, avec la date du prochain audit calculée selon la fréquence en vigueur (§3.1) si applicable à cet agent.
+2. **Mise à jour de `PROJECT_STATE.md`** : rafraîchissement de la section **SANTÉ DU PROJET** (date du dernier rapport par agent, nombre d'items ouverts, prochaine échéance si récurrente).
+3. Si le rapport contient un ou plusieurs items **P0/P1** (ou équivalent bloquant), la ligne **Bloquant** de `PROJECT_STATE.md` est mise à jour pour le signaler explicitement (cf. Règle de blocage ci-dessus).
+
+**Ce que cette autorisation ne couvre pas** (inchangé, comme pour `CLAUDE.md` §5-§6) :
+- Le traitement effectif des items reste soumis au protocole STOP & WARN (`CLAUDE.md` §4) et à la proposition de délégation (`CLAUDE.md` §7) — seule l'écriture des fichiers de suivi est automatisée, pas la correction du code.
+- Aucun commit n'est déclenché par cette séquence — la mise à jour de `TASKS.md`/`PROJECT_STATE.md` suit le protocole Git normal (`CLAUDE.md` §5 : commit uniquement si contenu à committer, `git diff` vérifié avant).
+- Une dérogation P1 (accordée par l'utilisateur) reste un acte explicite distinct — elle n'est jamais déduite automatiquement d'un rapport.
+
 ---
 
 ## 4. Décisions structurantes — `docs/decisions/`
