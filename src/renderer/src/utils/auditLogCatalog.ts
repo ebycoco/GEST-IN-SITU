@@ -267,6 +267,16 @@ export const AUDIT_ACTION_CATALOG: Record<string, AuditActionMeta> = {
   },
   APUREMENT_GENERATION_PV: { label: 'Procès-verbal d\'apurement généré', category: 'info' },
   APUREMENT_ERREUR: { label: 'Erreur d\'apurement', category: 'danger' },
+  CARTE_APUREMENT_CORRIGEE: {
+    label: 'Émargement Apurement corrigé',
+    category: 'warning',
+    summarize: (d) => `Émargement de la carte #${d.id_carte ?? '?'} corrigé${d.motif ? ` — motif : ${d.motif}` : ''}.`
+  },
+  CARTE_APUREMENT_ANNULEE: {
+    label: 'Émargement Apurement annulé',
+    category: 'danger',
+    summarize: (d) => `Émargement de la carte #${d.id_carte ?? '?'} annulé, carte remise EN STOCK${d.motif_annulation ? ` — motif : ${d.motif_annulation}` : ''}.`
+  },
 
   // ── File d'attente / guichets ────────────────────────────────────────────────────────
   QUEUE_ENREGISTREMENT: { label: 'Bénéficiaire enregistré en file d\'attente', category: 'info' },

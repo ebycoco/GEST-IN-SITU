@@ -480,6 +480,124 @@ export function getApurementCardsTodayPaginated(
   return { rows, total, syncSummary: { synced, pending, error } };
 }
 
+/**
+ * Liste paginée des cartes actuellement déchargées (statut DELIVRE) éligibles à une
+ * correction/annulation d'émargement tracée (Portail d'Apurement, onglet "Cartes déchargées" —
+ * plan validé : correction/annulation d'un émargement Apurement erroné). Contrairement à
+ * getApurementCardsTodayPaginated ci-dessus (limité au travail du jour d'UN agent), cette liste
+ * n'est PAS bornée à "aujourd'hui" : les rôles admin (SUPER ADMIN/ADMINISTRATEUR_SITE/
+ * ADMIN_CENTRE) doivent pouvoir retrouver et corriger un émargement de n'importe quel jour, la
+ * fenêtre de tolérance "jour même" ne s'appliquant qu'à OPERATEUR_APUREMENT (appliquée serveur
+ * dans corrigerApurementRetirant/annulerApurementDechargement, cartes.queries.ts — l'affichage
+ * ici est purement informatif, l'enforcement réel reste côté mutation).
+ * Cantonnement (CLAUDE.md §3), dérivé exclusivement de `currentUser` (jamais d'un paramètre
+ * client — le handler IPC ne fait que relayer getSecureCurrentUser()), en liste blanche
+ * explicite des rôles admin :
+ *   - SUPER ADMIN            : aucune restriction (tous sites/centres).
+ *   - ADMINISTRATEUR_SITE    : site_id = currentUser.site_id.
+ *   - ADMIN_CENTRE           : site_id + centre_id = currentUser.site_id/centre_id.
+ *   - tout autre rôle (OPERATEUR_APUREMENT comme tout rôle actif imprévu, ex. compte multi-rôle
+ *     dont le rôle actif de session diffère du rôle nominal détenteur du gate IPC grossier) :
+ *     site_id = currentUser.site_id ET agent_distributeur = currentUser.login (ne peut de toute
+ *     façon agir que sur ses propres émargements — lui montrer les émargements d'un collègue
+ *     serait à la fois inutile et une fuite d'info inutile : identité/téléphone du retirant,
+ *     agent distributeur). Correctif P0 (audit sécurité août 2026) : l'ancienne logique en liste
+ *     noire (filtre agent_distributeur appliqué seulement si `role === 'OPERATEUR_APUREMENT'`)
+ *     laissait un rôle actif tiers voir la liste complète du site.
+ * Politique Low-Memory (RAM 8 Go) : pageSize toujours borné (LIMIT/OFFSET, plafond 100), jamais
+ * de chargement de l'historique complet en mémoire — même garde-fou que
+ * getApurementCardsTodayPaginated ci-dessus.
+ */
+export function getApurementCorrectionsListPaginated(
+  currentUser: { role: string; site_id?: number; centre_id?: number; login?: string },
+  page: number = 0,
+  pageSize: number = 20,
+  search?: string
+): {
+  rows: any[];
+  total: number;
+  syncSummary: { synced: number; pending: number; error: number };
+} {
+  const db = getDatabase()!;
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  const conditions: string[] = ["t_cartes.statut = 'DELIVRE'"];
+  const params: (string | number)[] = [];
+
+  const ADMIN_ROLES = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'];
+
+  if (currentUser.role !== 'SUPER ADMIN') {
+    conditions.push('t_cartes.site_id = ?');
+    params.push(currentUser.site_id ?? -1);
+  }
+  if (currentUser.role === 'ADMIN_CENTRE') {
+    conditions.push('t_cartes.centre_id = ?');
+    params.push(currentUser.centre_id ?? -1);
+  }
+  if (!ADMIN_ROLES.includes(currentUser.role)) {
+    conditions.push('UPPER(t_cartes.agent_distributeur) = UPPER(?)');
+    params.push(currentUser.login ?? '');
+  }
+
+  const searchTrimmed = (search || '').trim();
+  if (searchTrimmed) {
+    conditions.push('(t_cartes.noms LIKE ? OR t_cartes.prenoms LIKE ? OR t_cartes.num_secu LIKE ?)');
+    const like = `%${searchTrimmed}%`;
+    params.push(like, like, like);
+  }
+
+  const conditionClause = `WHERE ${conditions.join(' AND ')}`;
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as total FROM t_cartes ${conditionClause}`).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  // Même jointure/priorité de badge de statut de synchro que getApurementCardsTodayPaginated
+  // ci-dessus (jointure sur clés indexées, aucune ligne dupliquée).
+  const fromWithJoin = `
+    FROM t_cartes
+    LEFT JOIN t_outbox ON t_outbox.id = t_cartes.sync_id AND t_outbox.table_name = 't_cartes'
+  `;
+  const syncStatusCase = `
+    CASE
+      WHEN t_cartes.is_dirty = 0 THEN 'SYNCED'
+      WHEN t_cartes.is_dirty = 1 AND t_outbox.status = 'ERROR' THEN 'ERROR'
+      ELSE 'PENDING'
+    END
+  `;
+
+  // Réutilise idx_cartes_site_statut / idx_cartes_site_centre_statut (index existants) : le
+  // prédicat statut='DELIVRE' + site_id (+ centre_id pour ADMIN_CENTRE) est déjà couvert.
+  const rows = db.prepare(`
+    SELECT t_cartes.id_carte, t_cartes.noms, t_cartes.prenoms, t_cartes.date_de_naissance, t_cartes.lieu_de_naissance, t_cartes.num_secu,
+           t_cartes.date_delivrance, t_cartes.nom_retirant, t_cartes.num_retirant, t_cartes.relation_retirant, t_cartes.agent_distributeur,
+           t_cartes.centre_retrait, t_cartes.rangement, t_cartes.updated_at,
+           t_cartes.apurement_correction_par, t_cartes.apurement_correction_le, t_cartes.apurement_correction_motif,
+           t_cartes.apurement_annulation_par, t_cartes.apurement_annulation_le, t_cartes.apurement_annulation_motif,
+           ${syncStatusCase} AS sync_status
+    ${fromWithJoin}
+    ${conditionClause}
+    ORDER BY t_cartes.updated_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  const summaryRow = db.prepare(`
+    SELECT
+      SUM(CASE WHEN ${syncStatusCase} = 'SYNCED' THEN 1 ELSE 0 END) as synced,
+      SUM(CASE WHEN ${syncStatusCase} = 'ERROR' THEN 1 ELSE 0 END) as error
+    ${fromWithJoin}
+    ${conditionClause}
+  `).get(...params) as { synced: number | null; error: number | null } | undefined;
+
+  const synced = summaryRow?.synced || 0;
+  const error = summaryRow?.error || 0;
+  const pending = Math.max(0, total - synced - error);
+
+  return { rows, total, syncSummary: { synced, pending, error } };
+}
+
 export function getUnsyncedCardsCount(siteId: number): number {
   const db = getDatabase()!;
   const row = db.prepare('SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ? AND is_dirty = 1').get(siteId) as { count: number };

@@ -37,6 +37,10 @@ export const CRUD_SYNC_WHITELIST: ReadonlySet<string> = new Set([
   // Cartes CMU — déclaration / annulation de doublon (cartes:declarerDoublon, cartes:annulerDoublon)
   'CARTE_DOUBLON_DECLAREE',
   'CARTE_DOUBLON_ANNULEE',
+  // Cartes CMU — correction / annulation d'un émargement Apurement erroné (cartes:corrigerApurement,
+  // cartes:annulerApurement — plan validé)
+  'CARTE_APUREMENT_CORRIGEE',
+  'CARTE_APUREMENT_ANNULEE',
   // Cartes CMU — même entité métier, canal alternatif cmu:*
   'CMU_SAISIE',
   'CMU_NOUVELLE_SAISIE',

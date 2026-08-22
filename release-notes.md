@@ -3,11 +3,20 @@
 > **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.16.1, 19 août 2026).
 > Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
 
+### 🚀 Nouveautés & Ergonomie
+
+- **Correction/annulation d'un émargement Apurement erroné** : nouvel onglet "Cartes déchargées" dans le portail Apurement (`OPERATEUR_APUREMENT`, `SUPER ADMIN`, `ADMINISTRATEUR_SITE`, `ADMIN_CENTRE`), permettant de corriger les informations du retirant sur une carte déjà déchargée, ou d'annuler complètement une décharge faite par erreur (retour `EN STOCK`). Motif obligatoire dans les deux cas, traçabilité complète (qui/quand/pourquoi) dans le Journal d'Audit. `OPERATEUR_APUREMENT` peut corriger ses propres émargements le jour même ; passé ce délai, seuls les rôles admin peuvent intervenir. La resaisie silencieuse d'une carte déjà déchargée (sans trace, sans contrôle) est désormais bloquée.
+- **`ADMIN_CENTRE` disposait de l'accès technique au portail Apurement sans jamais avoir de lien de navigation pour y accéder** : entrée "Apurement Historique" ajoutée au menu de ce rôle. Détecté par test terrain vivant.
+
 ### 🚨 Sécurité
 
+- **Contournement possible du contrôle d'accès sur la correction/annulation d'un émargement Apurement pour un compte multi-rôle** : la vérification de la fenêtre de tolérance (propriétaire + jour même) ne s'appliquait qu'au rôle actif `OPERATEUR_APUREMENT` exact ; un compte disposant de ce rôle parmi ses rôles accordés mais actif sous un autre rôle passait outre toute restriction. Passage en liste blanche des rôles admin exemptés, tout le reste restreint par défaut. Détecté par `agent-9-senior-auditor`. Corrigé.
 - **Déclaration/annulation de doublon (`cartes:declarerDoublon`/`cartes:annulerDoublon`) invisible dans le Journal d'Audit Système depuis un autre poste** : `CRUD_SYNC_WHITELIST` (`audit.ts`) ne listait pas les actions `CARTE_DOUBLON_DECLAREE`/`CARTE_DOUBLON_ANNULEE`, alors que le code affirmait déjà les rendre visibles cross-poste — sans cette entrée, `logAudit()` écrivait uniquement dans `t_audit_log` (local au poste), jamais dans `t_logs` (synchronisé). La carte elle-même restait correctement synchronisée ; seul le trail d'audit manquait. Détecté par `agent-9-senior-auditor`. Corrigé.
 - **Canal IPC `logs:add` sans dérivation de session** : `userId`/`login` étaient acceptés bruts depuis le renderer au lieu d'être dérivés de `getSecureCurrentUser()`, contrairement aux autres handlers d'écriture d'audit — surface exposée mais sans appelant renderer câblé à ce jour. Restriction a minima appliquée, même pattern que `users:getProfile`. Détecté par `agent-9-senior-auditor`. Corrigé.
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Colonnes de traçabilité de la correction/annulation d'un émargement Apurement absentes du mapping de synchronisation Supabase** : ajoutées aux 4 points de mapping (`payload-mapper.ts`, `upstream.ts`, `upload-worker.js`, `download-worker.js`) ainsi qu'au schéma Supabase (migration `0003_apurement_correction_annulation.sql`, appliquée en dev/staging — application en production restant à faire). Sans ce correctif, la trace "qui a corrigé/quand/pourquoi" restait bloquée sur le poste d'origine.
+- **Aucune isolation entre le chemin de base SQLite d'un lancement `npm run dev` et celui de l'application packagée en production** : un lancement dev utilise désormais un sous-dossier `userData/dev` distinct, sans impact sur le chemin de production existant. Détecté lors d'un test terrain vivant.
+- **L'auto-updater effectuait un appel réseau réel (GitHub) même en environnement de test isolé** (`GEST_IN_SITU_E2E_DISABLE_SYNC=1`) : garde ajoutée, symétrique à celle déjà en place sur le moteur de synchronisation Supabase.
 - **Mojibake (corruption d'encodage UTF-8) dans des messages d'erreur affichés aux agents terrain** (`handlers.ts`, ex. "Accès refusé…" affiché "AccÃ¨s refusÃ©…") : ~230 occurrences corrigées (messages `throw new Error` remontés en toast côté renderer, logs internes, commentaires), aucune logique touchée. Détecté par `agent-9-senior-auditor`.

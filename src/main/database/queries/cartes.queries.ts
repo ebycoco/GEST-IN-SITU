@@ -1619,6 +1619,15 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
     throw new Error("Action refusée : cette carte est déclarée en doublon et ne peut plus être émargée. Contactez un administrateur pour vérifier ou annuler cette déclaration.");
   }
 
+  // Verrou DELIVRE (plan de correction/annulation d'un émargement Apurement erroné, validé) :
+  // la resaisie silencieuse d'une fiche déjà déchargée écrasait auparavant l'émargement existant
+  // sans trace d'audit (bug d'origine documenté dans le plan). Redirection explicite vers le
+  // nouveau flux tracé (corrigerApurementRetirant/annulerApurementDechargement ci-dessous),
+  // seul moyen désormais de modifier une fiche DELIVRE.
+  if (carte?.statut === 'DELIVRE') {
+    throw new Error("Action refusée : cette carte a déjà été déchargée. Utilisez l'onglet \"Cartes déchargées\" pour corriger ou annuler cet émargement (action tracée).");
+  }
+
   const result = db.prepare(`
     UPDATE t_cartes
     SET statut = 'DELIVRE',
@@ -1652,6 +1661,275 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
   }
 
   return result;
+}
+
+/**
+ * Vérifie la fenêtre de tolérance "jour même" pour la correction/annulation d'un émargement
+ * Apurement (plan validé — correction/annulation d'un émargement Apurement erroné).
+ * Comparaison sur `updated_at` (horodatage serveur de l'émargement), pas sur `date_delivrance`
+ * (saisie libre du cahier historique) — même convention que getApurementStats/
+ * getApurementCardsTodayPaginated (stats.queries.ts). Liste blanche explicite des rôles admin
+ * (SUPER ADMIN/ADMINISTRATEUR_SITE/ADMIN_CENTRE) : eux seuls n'ont aucune fenêtre de temps ni
+ * d'auteur à respecter (déjà cloisonnés par site/centre en amont). Tout rôle non-admin —
+ * OPERATEUR_APUREMENT comme tout rôle actif imprévu (ex. compte multi-rôle dont le rôle actif
+ * de session diffère du rôle nominal détenteur du gate IPC grossier) — est restreint par défaut
+ * à ses propres émargements du jour même. Correctif P0 (audit sécurité août 2026) : l'ancienne
+ * logique en liste noire (`role !== 'OPERATEUR_APUREMENT'`) laissait passer sans restriction tout
+ * rôle actif autre que ces deux catégories.
+ */
+function assertApurementToleranceWindow(
+  carte: { agent_distributeur: string | null; updated_at: string | null },
+  currentUser?: { role: string; login?: string }
+): void {
+  const ADMIN_ROLES = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'];
+  if (!currentUser || ADMIN_ROLES.includes(currentUser.role)) return;
+
+  if ((carte.agent_distributeur || '').trim().toUpperCase() !== (currentUser.login || '').trim().toUpperCase()) {
+    throw new Error("Action refusée : vous ne pouvez corriger ou annuler que vos propres émargements. Contactez un administrateur.");
+  }
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+  const updatedAt = carte.updated_at || '';
+  if (!(updatedAt >= todayStr && updatedAt < tomorrowStr)) {
+    throw new Error("Action refusée : le délai de correction du jour même est dépassé. Contactez un administrateur (SUPER ADMIN / ADMINISTRATEUR_SITE / ADMIN_CENTRE) pour corriger cet émargement.");
+  }
+}
+
+/**
+ * Cas B (plan validé — correction/annulation d'un émargement Apurement erroné) : corrige les
+ * champs du retirant d'une carte déjà déchargée (statut DELIVRE inchangé) — mauvaise carte non
+ * concernée, seules les informations saisies étaient erronées. Ne touche JAMAIS
+ * `agent_distributeur` (trace historique de qui a déchargé initialement, jamais réécrite — même
+ * principe que `doublon_declare_par` face à `doublon_annule_par`). Motif obligatoire. RBAC mixte
+ * vérifié dans la même transaction que la lecture de la carte (élimine tout TOCTOU) :
+ * OPERATEUR_APUREMENT limité à ses propres émargements du jour même (assertApurementToleranceWindow
+ * ci-dessus), sinon réservé aux rôles admin. Le RBAC grossier (liste de rôles autorisés) reste
+ * appliqué côté handler IPC (cartes:corrigerApurement), jamais ici — architecture identique à
+ * declarerDoublon/annulerDeclarationDoublon ci-dessus. Retourne `{ result, before }` : `before`
+ * (valeurs des champs retirant avant correction) alimente le JSON `details` de l'audit
+ * (t_audit_log/t_logs), même convention que declarerDoublon pour `statut_avant_doublon`.
+ */
+export function corrigerApurementRetirant(
+  id: number,
+  fields: { date_delivrance: string; nom_retirant: string; num_retirant: string; relation_retirant: string },
+  motif: string,
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
+) {
+  const db = getDatabase()!;
+
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    const carte = db.prepare(`
+      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at,
+             date_delivrance, nom_retirant, num_retirant, relation_retirant
+      FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)
+    `).get(id, siteIdToUse, siteIdToUse) as {
+      sync_id: string | null; site_id: number; centre_id: number | null; statut: string;
+      agent_distributeur: string | null; updated_at: string | null;
+      date_delivrance: string | null; nom_retirant: string | null; num_retirant: string | null; relation_retirant: string | null;
+    } | undefined;
+
+    if (!carte) {
+      throw new Error("Carte introuvable, ou accès non autorisé pour votre site.");
+    }
+
+    if (currentUser && currentUser.role === 'ADMIN_CENTRE') {
+      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
+    if (carte.statut !== 'DELIVRE') {
+      throw new Error("Cette carte n'est pas (ou plus) déchargée — aucune correction à effectuer.");
+    }
+
+    assertApurementToleranceWindow(carte, currentUser);
+
+    const now = new Date().toISOString();
+    const before = {
+      date_delivrance: carte.date_delivrance,
+      nom_retirant: carte.nom_retirant,
+      num_retirant: carte.num_retirant,
+      relation_retirant: carte.relation_retirant
+    };
+
+    const query = `
+      UPDATE t_cartes SET
+        date_delivrance = @date_delivrance,
+        nom_retirant = @nom_retirant,
+        num_retirant = @num_retirant,
+        relation_retirant = @relation_retirant,
+        apurement_correction_par = @correction_par,
+        apurement_correction_le = @now,
+        apurement_correction_motif = @motif,
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `;
+
+    const params: any = {
+      id,
+      date_delivrance: fields.date_delivrance,
+      nom_retirant: fields.nom_retirant.trim().toUpperCase(),
+      num_retirant: fields.num_retirant.trim(),
+      relation_retirant: fields.relation_retirant.trim(),
+      correction_par: currentUser?.login || 'ADMIN',
+      motif,
+      now,
+      updated_by: currentUser?.id_user || null
+    };
+
+    const result = db.prepare(query).run(params);
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de la correction de l'émargement.");
+    }
+
+    if (carte.sync_id) {
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return { result, before };
+  });
+
+  // Filet de rattrapage FTS5 — voir commentaire équivalent dans declarerDoublon() ci-dessus.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[corrigerApurementRetirant] FTS5 shadow tables corrompues. Suppression du trigger pour correction sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[corrigerApurementRetirant] Correction exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Cas A (plan validé — correction/annulation d'un émargement Apurement erroné) : annule
+ * complètement un déchargement erroné (mauvaise carte émargée) — retour à `EN STOCK`, champs du
+ * retirant remis à NULL (une carte redevenue disponible n'affiche plus un retirant erroné,
+ * valeur effacée conservée dans le JSON d'audit). Motif obligatoire. Même architecture RBAC que
+ * corrigerApurementRetirant ci-dessus (fenêtre de tolérance jour même pour OPERATEUR_APUREMENT,
+ * vérifiée dans la même transaction que la lecture de la carte). Retourne `{ result, before }`.
+ */
+export function annulerApurementDechargement(
+  id: number,
+  motif: string,
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
+) {
+  const db = getDatabase()!;
+
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    const carte = db.prepare(`
+      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at,
+             date_delivrance, nom_retirant, num_retirant, relation_retirant, centre_retrait
+      FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)
+    `).get(id, siteIdToUse, siteIdToUse) as {
+      sync_id: string | null; site_id: number; centre_id: number | null; statut: string;
+      agent_distributeur: string | null; updated_at: string | null;
+      date_delivrance: string | null; nom_retirant: string | null; num_retirant: string | null;
+      relation_retirant: string | null; centre_retrait: string | null;
+    } | undefined;
+
+    if (!carte) {
+      throw new Error("Carte introuvable, ou accès non autorisé pour votre site.");
+    }
+
+    if (currentUser && currentUser.role === 'ADMIN_CENTRE') {
+      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
+      }
+    }
+
+    if (carte.statut !== 'DELIVRE') {
+      throw new Error("Cette carte n'est pas (ou plus) déchargée — aucune annulation à effectuer.");
+    }
+
+    assertApurementToleranceWindow(carte, currentUser);
+
+    const now = new Date().toISOString();
+    const before = {
+      statut: carte.statut,
+      date_delivrance: carte.date_delivrance,
+      nom_retirant: carte.nom_retirant,
+      num_retirant: carte.num_retirant,
+      relation_retirant: carte.relation_retirant,
+      agent_distributeur: carte.agent_distributeur,
+      centre_retrait: carte.centre_retrait
+    };
+
+    const query = `
+      UPDATE t_cartes SET
+        statut = 'EN STOCK',
+        date_delivrance = NULL,
+        nom_retirant = NULL,
+        num_retirant = NULL,
+        relation_retirant = NULL,
+        agent_distributeur = NULL,
+        centre_retrait = NULL,
+        apurement_annulation_par = @annulation_par,
+        apurement_annulation_le = @now,
+        apurement_annulation_motif = @motif,
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `;
+
+    const params: any = {
+      id,
+      annulation_par: currentUser?.login || 'ADMIN',
+      motif,
+      now,
+      updated_by: currentUser?.id_user || null
+    };
+
+    const result = db.prepare(query).run(params);
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de l'annulation de l'émargement.");
+    }
+
+    if (carte.sync_id) {
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+
+    return { result, before };
+  });
+
+  // Filet de rattrapage FTS5 — voir commentaire équivalent dans declarerDoublon() ci-dessus.
+  try {
+    return runTx();
+  } catch (err: any) {
+    if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
+      log.warn('[annulerApurementDechargement] FTS5 shadow tables corrompues. Suppression du trigger pour annulation sécurisée...');
+      db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
+      const result = runTx();
+      log.info('[annulerApurementDechargement] Annulation exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
+      nuclearResetFts5();
+      return result;
+    }
+    throw err;
+  }
 }
 
 export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string, currentUser?: { role: string; site_id?: number }) {

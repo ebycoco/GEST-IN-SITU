@@ -172,6 +172,14 @@ const api = {
       ipcRenderer.invoke('cartes:updateApurementHistorique', id, fields),
     inventairePhysiqueScan: (identifiant: string, rangement: string): Promise<any> =>
       ipcRenderer.invoke('cartes:inventairePhysiqueScan', identifiant, rangement),
+    corrigerApurement: (
+      id: number,
+      fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string },
+      motif: string
+    ): Promise<any> =>
+      ipcRenderer.invoke('cartes:corrigerApurement', id, fields, motif),
+    annulerApurement: (id: number, motif: string): Promise<any> =>
+      ipcRenderer.invoke('cartes:annulerApurement', id, motif),
   },
   logistique: {
     recevoirLot: (payload: { lot_id: string; quantite: number; centre_origine: string }): Promise<{ success: boolean }> =>
@@ -208,6 +216,8 @@ const api = {
       siteId: number
     ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days: { dayName: string; count: number }[] }> =>
       ipcRenderer.invoke('stats:getApurementStats', agentUsername, siteId),
+    getApurementCorrectionsListPaginated: (page?: number, pageSize?: number, search?: string): Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }> =>
+      ipcRenderer.invoke('stats:getApurementCorrectionsListPaginated', page, pageSize, search),
     getAgentToday: (userId: number): Promise<number> =>
       ipcRenderer.invoke('stats:getAgentToday', userId),
     getAgentRecentSaisies: (userId: number, limit?: number, offset?: number): Promise<{ total: number; rows: any[] }> =>

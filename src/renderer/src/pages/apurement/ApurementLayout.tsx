@@ -1,17 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpenCheck, Database, Globe, RefreshCw, LayoutDashboard } from 'lucide-react';
+import { BookOpenCheck, Database, Globe, RefreshCw, LayoutDashboard, History } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import InventaireApurement from '../inventaire/InventaireApurement';
 import ApurementOverview from './ApurementOverview';
+import ApurementCorrections from './ApurementCorrections';
 
-type Tab = 'OVERVIEW' | 'APUREMENT';
+type Tab = 'OVERVIEW' | 'APUREMENT' | 'CORRECTIONS';
 
 /**
  * Portail dédié au rôle OPERATEUR_APUREMENT.
  *
- * Deux onglets internes (pas de nouvelle route react-router, `/apurement` reste unique dans
+ * Trois onglets internes (pas de nouvelle route react-router, `/apurement` reste unique dans
  * App.tsx), sur le modèle exact d'InventaireLayout.tsx (`type Tab`, `useState<Tab>`, rendu
  * conditionnel) :
  * - "Vue d'ensemble" (ApurementOverview, par défaut à l'ouverture) : 4 KPI + liste paginée du
@@ -20,6 +21,9 @@ type Tab = 'OVERVIEW' | 'APUREMENT';
  *   (aucune prop reçue, ne dépend que de useAuthStore pour site_id/login) et reste réutilisé
  *   tel quel depuis InventaireLayout.tsx (onglet APUREMENT), donc partagé sans modification
  *   entre les deux portails.
+ * - "Cartes déchargées" (ApurementCorrections, plan validé — correction/annulation d'un
+ *   émargement Apurement erroné) : liste des cartes DELIVRE avec actions tracées de
+ *   correction/annulation d'un émargement erroné (RBAC mixte, voir cartes.queries.ts).
  *
  * La barre de synchro cloud (badge local + Actualiser + Récupérer + Envoyer les corrections)
  * reprend à l'identique le bloc déjà en place dans InventaireLayout.tsx / AgentQualiteLayout.tsx.
@@ -239,6 +243,30 @@ export default function ApurementLayout() {
             <BookOpenCheck size={18} />
             TRAVAIL D'APUREMENT
           </button>
+
+          <button
+            onClick={() => setActiveTab('CORRECTIONS')}
+            className="hover-scale"
+            style={{
+              flex: 1,
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              border: 'none',
+              borderRadius: 12,
+              background: activeTab === 'CORRECTIONS' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+              color: activeTab === 'CORRECTIONS' ? 'white' : 'var(--text-muted)',
+              fontWeight: 800,
+              cursor: 'pointer',
+              transition: 'all 0.2s',
+              boxShadow: activeTab === 'CORRECTIONS' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
+            }}
+          >
+            <History size={18} />
+            CARTES DÉCHARGÉES
+          </button>
         </div>
       </div>
 
@@ -246,6 +274,7 @@ export default function ApurementLayout() {
       <div style={{ flex: 1, overflow: 'auto' }}>
         {activeTab === 'OVERVIEW' && <ApurementOverview />}
         {activeTab === 'APUREMENT' && <InventaireApurement />}
+        {activeTab === 'CORRECTIONS' && <ApurementCorrections />}
       </div>
     </div>
   );

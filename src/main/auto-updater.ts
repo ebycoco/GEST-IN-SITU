@@ -5,6 +5,13 @@ import { is } from '@electron-toolkit/utils';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// ─── GARDE-FOU E2E (positionnée UNIQUEMENT par e2e/fixtures/electron-app.ts ou un
+// lancement QA terrain scratch) ─ Quand cette variable vaut '1', aucune requête
+// réseau réelle ne doit jamais atteindre GitHub (recherche de mise à jour), même en
+// mode dev (is.dev force normalement forceDevUpdateConfig). Jamais positionnée par
+// défaut en dev ou en production.
+const E2E_DISABLE_SYNC = process.env.GEST_IN_SITU_E2E_DISABLE_SYNC === '1';
+
 // ─── FILET DE SÉCURITÉ : MARQUEUR DE MISE À JOUR EN ATTENTE ─────────────────
 // Nom du fichier marqueur JSON écrit dans userData juste avant de déclencher
 // l'installation visible (quitAndInstall). Ce dossier n'est jamais touché par
@@ -70,6 +77,11 @@ export function triggerUpdateInstall(): void {
 }
 
 export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
+  if (E2E_DISABLE_SYNC) {
+    log.warn('[AutoUpdater] Configuration ignorée : GEST_IN_SITU_E2E_DISABLE_SYNC=1 (contexte E2E/QA isolé).');
+    return;
+  }
+
   autoUpdater.logger = log;
   (autoUpdater.logger as any).transports.file.level = 'info';
 

@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 68;
+export const SCHEMA_VERSION = 69;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -453,6 +453,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number, isE
       log.info('Running migration v68: Adding last_attempt_at column to t_outbox (retry backoff progressif des entrees en echec definitif)');
       migrateV68(db);
     }
+
+    if (currentVersion < 69) {
+      log.info('Running migration v69: Adding apurement correction/cancellation tracking columns to t_cartes (corrigerApurementRetirant/annulerApurementDechargement)');
+      migrateV69(db);
+    }
   } catch (seqError: any) {
     if (isEmergencyRetry) {
       // Garde anti-rÃ©cursion explicite : on est dÃ©jÃ  en train de rejouer la
@@ -808,6 +813,13 @@ function migrateV1(db: Database.Database): void {
       doublon_annule_par TEXT,
       doublon_annule_le TEXT,
       doublon_motif_annulation TEXT,
+      -- Correction/annulation d'un émargement Apurement (V69) — Opérateur Apurement
+      apurement_correction_par TEXT,
+      apurement_correction_le TEXT,
+      apurement_correction_motif TEXT,
+      apurement_annulation_par TEXT,
+      apurement_annulation_le TEXT,
+      apurement_annulation_motif TEXT,
       FOREIGN KEY (site_id) REFERENCES t_sites(id),
       FOREIGN KEY (centre_id) REFERENCES t_centres(id),
       FOREIGN KEY (poste_id) REFERENCES t_postes(id)
@@ -2009,6 +2021,15 @@ function migrateV27_safetyNet(db: Database.Database): void {
   safeAlter('t_cartes', 'doublon_annule_par', 'TEXT');
   safeAlter('t_cartes', 'doublon_annule_le', 'TEXT');
   safeAlter('t_cartes', 'doublon_motif_annulation', 'TEXT');
+  // Correction/annulation d'un émargement Apurement (V69) — Opérateur Apurement.
+  // Même justification que le bloc doublon ci-dessus : garanti sur le chemin
+  // d'installation fraîche et la reconstruction d'urgence, en plus de migrateV69.
+  safeAlter('t_cartes', 'apurement_correction_par', 'TEXT');
+  safeAlter('t_cartes', 'apurement_correction_le', 'TEXT');
+  safeAlter('t_cartes', 'apurement_correction_motif', 'TEXT');
+  safeAlter('t_cartes', 'apurement_annulation_par', 'TEXT');
+  safeAlter('t_cartes', 'apurement_annulation_le', 'TEXT');
+  safeAlter('t_cartes', 'apurement_annulation_motif', 'TEXT');
   try {
     db.exec("CREATE INDEX IF NOT EXISTS idx_cartes_created_by ON t_cartes (created_by);");
   } catch (indexErr: any) {
@@ -3803,6 +3824,37 @@ function migrateV68(db: Database.Database): void {
     log.info('[MIGRATION V68] Migration V68 terminée avec succès.');
   } catch (e: any) {
     log.error('[MIGRATION V68] Erreur :', e.message);
+    throw e;
+  }
+}
+
+function migrateV69(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V69] Ajout des colonnes de traçabilité de correction/annulation d\'un émargement Apurement à t_cartes...');
+    const tableInfo = db.pragma('table_info(t_cartes)') as { name: string }[];
+    const existingCols = new Set(tableInfo.map(c => c.name));
+
+    const columnsToAdd = [
+      { name: 'apurement_correction_par', type: 'TEXT' },
+      { name: 'apurement_correction_le', type: 'TEXT' },
+      { name: 'apurement_correction_motif', type: 'TEXT' },
+      { name: 'apurement_annulation_par', type: 'TEXT' },
+      { name: 'apurement_annulation_le', type: 'TEXT' },
+      { name: 'apurement_annulation_motif', type: 'TEXT' }
+    ];
+
+    for (const col of columnsToAdd) {
+      if (!existingCols.has(col.name)) {
+        db.exec(`ALTER TABLE t_cartes ADD COLUMN ${col.name} ${col.type};`);
+        log.info(`[MIGRATION V69] Colonne '${col.name}' ajoutee a t_cartes.`);
+      } else {
+        log.info(`[MIGRATION V69] Colonne '${col.name}' deja presente, migration ignoree.`);
+      }
+    }
+
+    log.info('[MIGRATION V69] Migration V69 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V69] Erreur :', e.message);
     throw e;
   }
 }

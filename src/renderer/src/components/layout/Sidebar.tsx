@@ -130,6 +130,7 @@ export default function Sidebar() {
     if (user.role === 'ADMIN_CENTRE') {
       return [
         { label: 'Portail Supervision', icon: Building2, path: '/admin-centre' },
+        { label: 'Apurement Historique', icon: BookOpenCheck, path: '/apurement' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

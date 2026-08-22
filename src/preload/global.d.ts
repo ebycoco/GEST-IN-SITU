@@ -28,6 +28,7 @@ declare global {
         getVerificationCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementStats: (agentUsername: string, siteId: number) => Promise<any>;
+        getApurementCorrectionsListPaginated: (page?: number, pageSize?: number, search?: string) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;
         getAgentStats: (userId: number) => Promise<{ today: number; yesterday: number; week: number; month: number; year: number }>;
@@ -94,6 +95,8 @@ declare global {
         searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
         updateApurementHistorique: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) => Promise<any>;
         inventairePhysiqueScan: (identifiant: string, rangement: string) => Promise<any>;
+        corrigerApurement: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string }, motif: string) => Promise<any>;
+        annulerApurement: (id: number, motif: string) => Promise<any>;
       };
       logistique: {
         recevoirLot: (payload: { lot_id: string; quantite: number; centre_origine: string }) => Promise<{ success: boolean }>;

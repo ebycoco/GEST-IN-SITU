@@ -112,21 +112,24 @@ export default function InventaireApurement() {
     }, 50);
   };
 
-  // Sécurité métier : updateApurementHistorique fait un UPDATE sans vérifier l'état actuel de
-  // la carte — une resaisie sur une fiche déjà déchargée (statut === 'DELIVRE') écraserait
-  // silencieusement l'émargement déjà enregistré (date/nom/téléphone du retirant). L'agent peut
-  // avoir oublié qu'il (ou un collègue) a déjà traité cette fiche : on affiche donc un
-  // avertissement explicite avant de laisser resaisir, avec option d'annulation.
+  // Sécurité métier (plan validé — correction/annulation d'un émargement Apurement erroné) :
+  // la resaisie silencieuse sur une fiche déjà déchargée (statut === 'DELIVRE') est désormais
+  // bloquée en dur, cohérente avec le verrou serveur ajouté à updateApurementHistorique()
+  // (cartes.queries.ts) — auparavant, un avertissement laissait l'agent continuer et écraser
+  // silencieusement l'émargement existant sans aucune trace d'audit. La seule voie de correction
+  // désormais est l'onglet "Cartes déchargées" du Portail d'Apurement (correction/annulation
+  // tracées), accessible aux rôles SUPER ADMIN/ADMINISTRATEUR_SITE/ADMIN_CENTRE/
+  // OPERATEUR_APUREMENT. Ce composant restant partagé avec le module Inventaire (route
+  // /inventaire, OPERATEUR_INVENTAIRE/OPERATEUR_LOGISTIQUE — voir InventaireLayout.tsx), ces
+  // rôles n'ayant pas accès à cet onglet sont redirigés vers un administrateur à la place.
+  const CAN_ACCESS_CORRECTIONS_TAB = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'];
   const selectCard = async (carte: any) => {
     if (carte.statut === 'DELIVRE') {
-      const confirmed = await confirmService.confirm({
-        title: 'Carte déjà déchargée',
-        message: `Cette carte a déjà été déchargée le ${carte.date_delivrance || '—'} par ${carte.agent_distributeur || 'un agent inconnu'}, au nom de ${carte.nom_retirant || 'un retirant non renseigné'}. Voulez-vous vraiment continuer et remplacer cet émargement ?`,
-        isDanger: true,
-        confirmText: 'Continuer quand même',
-        cancelText: 'Annuler'
-      });
-      if (!confirmed) return;
+      const redirection = CAN_ACCESS_CORRECTIONS_TAB.includes(user?.role || '')
+        ? `Rendez-vous dans l'onglet "Cartes déchargées" du Portail d'Apurement pour corriger ou annuler cet émargement (action tracée).`
+        : `Contactez un administrateur ou un agent du Portail d'Apurement pour corriger ou annuler cet émargement (action tracée).`;
+      toast.error(`Cette carte a déjà été déchargée le ${carte.date_delivrance || '—'} par ${carte.agent_distributeur || 'un agent inconnu'}, au nom de ${carte.nom_retirant || 'un retirant non renseigné'}. ${redirection}`, { duration: 7000 });
+      return;
     }
     // Même logique d'avertissement précoce que ci-dessus pour DELIVRE (P1 QA terrain) : sans ce
     // blocage, l'agent découvrait le rejet serveur (updateApurementHistorique, déjà correct)

@@ -159,7 +159,16 @@ CREATE TABLE public.t_cartes (
     is_dirty                    INTEGER DEFAULT 0,
     synced_at                   TIMESTAMPTZ,
     created_at                  TIMESTAMPTZ DEFAULT NOW(),
-    updated_at                  TIMESTAMPTZ DEFAULT NOW()
+    updated_at                  TIMESTAMPTZ DEFAULT NOW(),
+    -- Correction/annulation d'un émargement Apurement (voir
+    -- supabase/migrations/0003_apurement_correction_annulation.sql — appliqué
+    -- sur dev/staging le 22/08/2026 ; production à traiter séparément) :
+    apurement_correction_par    TEXT,
+    apurement_correction_le     TEXT,
+    apurement_correction_motif  TEXT,
+    apurement_annulation_par    TEXT,
+    apurement_annulation_le     TEXT,
+    apurement_annulation_motif  TEXT
 );
 
 -- ============================================================

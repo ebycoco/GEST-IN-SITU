@@ -158,7 +158,7 @@ export default function App() {
             <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE']}><InventaireLayout /></ProtectedRoute>} />
 
             {/* Portail dédié Opérateur Apurement (émargement rétroactif des cahiers historiques) */}
-            <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><ApurementLayout /></ProtectedRoute>} />
+            <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><ApurementLayout /></ProtectedRoute>} />
 
             {/* Routes Agent de Qualité & Admin */}
             <Route path="agent-qualite" element={<ProtectedRoute requiredRoles={['OPERATEUR_QUALITE', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentQualiteLayout /></ProtectedRoute>}>

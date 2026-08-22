@@ -33,6 +33,33 @@ import { resetOutboxErrors } from './sync/outbox.service';
 
 import { stopSessionHeartbeat } from './auth/session-heartbeat';
 
+// ─── ISOLATION DEV/PROD DU DOSSIER userData (SQLite + fichiers annexes) ────────
+// Correctif P0 (QA terrain, août 2026) : en mode développement (`npm run dev`),
+// Electron faisait pointer `userData` vers le même dossier que l'app packagée
+// en production (%APPDATA%\gest-in-situ\...), donc vers la même base SQLite
+// (comptes réels, dont un compte SUPER ADMIN réel), sans aucune séparation.
+// Un lancement `npm run dev` redirige désormais `userData` vers un
+// sous-dossier `dev` distinct — la production (app packagée,
+// `app.isPackaged === true`) n'est jamais affectée, ni son chemin ni ses
+// données déjà présentes.
+// Garde supplémentaire : ne PAS rediriger si `--user-data-dir=...` est déjà
+// passé explicitement en ligne de commande (switch natif Chromium/Electron).
+// C'est le mécanisme dont dépend toute la suite e2e Playwright (voir
+// e2e/fixtures/electron-app.ts) : chaque test lance l'app non empaquetée
+// (`app.isPackaged === false`) sur un `userDataDir` temporaire jetable déjà
+// pré-seedé (`<userDataDir>/data/gest_in_situ.db`) — sans cette garde, ce
+// bloc ajouterait un sous-dossier `dev` inattendu et l'app ne retrouverait
+// plus la base seedée par les tests.
+// DOIT s'exécuter avant tout appel à `app.getPath('userData')` dans le cycle
+// de vie du processus main (connection.ts::getDbPath/getBackupDir,
+// checkPendingUpdateMarker ci-dessous, auto-updater.ts) — placé ici, au point
+// d'entrée main, avant toute autre logique applicative.
+const hasExplicitUserDataDir = process.argv.some((arg) => arg.startsWith('--user-data-dir='));
+if (!app.isPackaged && !hasExplicitUserDataDir) {
+  app.setPath('userData', join(app.getPath('userData'), 'dev'));
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 // --- SÉCURITÉ CONTRE LES CRASHS GLOBAUX (MAIN PROCESS) ---
 process.on('uncaughtException', (error) => {
   log.error('🚨 [FATAL] Exception non gérée dans le Main Process :', error);

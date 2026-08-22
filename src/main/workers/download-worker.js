@@ -72,6 +72,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       date_resolution_absence, agent_resolution_absence, note_resolution,
       doublon_declare_par, doublon_declare_le, doublon_motif, statut_avant_doublon,
       doublon_annule_par, doublon_annule_le, doublon_motif_annulation,
+      apurement_correction_par, apurement_correction_le, apurement_correction_motif,
+      apurement_annulation_par, apurement_annulation_le, apurement_annulation_motif,
       site_id, centre_id, poste_id, qr_code_data, sync_id,
       created_at, updated_at, synced_at, is_dirty
     ) VALUES (
@@ -84,6 +86,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
       :date_resolution_absence, :agent_resolution_absence, :note_resolution,
       :doublon_declare_par, :doublon_declare_le, :doublon_motif, :statut_avant_doublon,
       :doublon_annule_par, :doublon_annule_le, :doublon_motif_annulation,
+      :apurement_correction_par, :apurement_correction_le, :apurement_correction_motif,
+      :apurement_annulation_par, :apurement_annulation_le, :apurement_annulation_motif,
       :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
       :created_at, :updated_at, :updated_at, 0
     )
@@ -111,6 +115,10 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         doublon_motif = :doublon_motif, statut_avant_doublon = :statut_avant_doublon,
         doublon_annule_par = :doublon_annule_par, doublon_annule_le = :doublon_annule_le,
         doublon_motif_annulation = :doublon_motif_annulation,
+        apurement_correction_par = :apurement_correction_par, apurement_correction_le = :apurement_correction_le,
+        apurement_correction_motif = :apurement_correction_motif,
+        apurement_annulation_par = :apurement_annulation_par, apurement_annulation_le = :apurement_annulation_le,
+        apurement_annulation_motif = :apurement_annulation_motif,
         is_dirty = 0
     WHERE id_carte = :idCarte
   `);
@@ -135,7 +143,11 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
         doublon_declare_par = :doublon_declare_par, doublon_declare_le = :doublon_declare_le,
         doublon_motif = :doublon_motif, statut_avant_doublon = :statut_avant_doublon,
         doublon_annule_par = :doublon_annule_par, doublon_annule_le = :doublon_annule_le,
-        doublon_motif_annulation = :doublon_motif_annulation
+        doublon_motif_annulation = :doublon_motif_annulation,
+        apurement_correction_par = :apurement_correction_par, apurement_correction_le = :apurement_correction_le,
+        apurement_correction_motif = :apurement_correction_motif,
+        apurement_annulation_par = :apurement_annulation_par, apurement_annulation_le = :apurement_annulation_le,
+        apurement_annulation_motif = :apurement_annulation_motif
     WHERE id_carte = :idCarte
   `);
   const updateWatermarkStmt = database.prepare(`
@@ -202,6 +214,12 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
             doublon_annule_par: card.doublon_annule_par || null,
             doublon_annule_le: card.doublon_annule_le || null,
             doublon_motif_annulation: card.doublon_motif_annulation || null,
+            apurement_correction_par: card.apurement_correction_par || null,
+            apurement_correction_le: card.apurement_correction_le || null,
+            apurement_correction_motif: card.apurement_correction_motif || null,
+            apurement_annulation_par: card.apurement_annulation_par || null,
+            apurement_annulation_le: card.apurement_annulation_le || null,
+            apurement_annulation_motif: card.apurement_annulation_motif || null,
             site_id: card.id_site || card.site_id ? Number(card.id_site || card.site_id) : null,
             centre_id: card.id_centre || card.centre_id || null,
             poste_id: card.id_poste || card.poste_id || null,
@@ -243,7 +261,13 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               statut_avant_doublon: card.statut_avant_doublon || null,
               doublon_annule_par: card.doublon_annule_par || null,
               doublon_annule_le: card.doublon_annule_le || null,
-              doublon_motif_annulation: card.doublon_motif_annulation || null
+              doublon_motif_annulation: card.doublon_motif_annulation || null,
+              apurement_correction_par: card.apurement_correction_par || null,
+              apurement_correction_le: card.apurement_correction_le || null,
+              apurement_correction_motif: card.apurement_correction_motif || null,
+              apurement_annulation_par: card.apurement_annulation_par || null,
+              apurement_annulation_le: card.apurement_annulation_le || null,
+              apurement_annulation_motif: card.apurement_annulation_motif || null
             });
             processedCount++;
           }
@@ -289,6 +313,12 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               doublon_annule_par: card.doublon_annule_par || null,
               doublon_annule_le: card.doublon_annule_le || null,
               doublon_motif_annulation: card.doublon_motif_annulation || null,
+              apurement_correction_par: card.apurement_correction_par || null,
+              apurement_correction_le: card.apurement_correction_le || null,
+              apurement_correction_motif: card.apurement_correction_motif || null,
+              apurement_annulation_par: card.apurement_annulation_par || null,
+              apurement_annulation_le: card.apurement_annulation_le || null,
+              apurement_annulation_motif: card.apurement_annulation_motif || null,
               centre_id: card.id_centre || card.centre_id || null,
               poste_id: card.id_poste || card.poste_id || null,
               qr_code_data: card.qr_code_data || null,

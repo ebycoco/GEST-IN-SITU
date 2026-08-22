@@ -54,6 +54,13 @@ export interface ICarte {
   doublon_annule_par?: string | null;
   doublon_annule_le?: string | null;
   doublon_motif_annulation?: string | null;
+  // Correction/annulation d'un émargement Apurement (V69) — Opérateur Apurement
+  apurement_correction_par?: string | null;
+  apurement_correction_le?: string | null;
+  apurement_correction_motif?: string | null;
+  apurement_annulation_par?: string | null;
+  apurement_annulation_le?: string | null;
+  apurement_annulation_motif?: string | null;
 }
 
 export interface ISite {

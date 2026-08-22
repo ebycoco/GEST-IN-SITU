@@ -1978,6 +1978,100 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: cartes:updateApurementHistorique', e); throw e; }
   });
 
+  // Correction/annulation d'un émargement Apurement erroné (plan validé) — Cas B : la carte
+  // reste correctement identifiée (DELIVRE inchangé), seules les informations du retirant
+  // étaient erronées. Sécurité : identité et périmètre dérivés exclusivement de la session
+  // serveur (jamais du paramètre client), même modèle que cartes:declarerDoublon ci-dessus.
+  // RBAC mixte à fenêtre de tolérance (§3 plan) : OPERATEUR_APUREMENT peut corriger ses propres
+  // émargements le jour même, sinon réservé aux rôles admin — la vérification fine (même agent +
+  // même jour) est faite dans queries.corrigerApurementRetirant, dans la même transaction que la
+  // lecture de la carte (élimine tout TOCTOU) ; ce handler ne fait que le gate grossier
+  // (liste de rôles autorisés à *tenter* l'action).
+  ipcMain.handle('cartes:corrigerApurement', async (_, id, fields, motif) => {
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:corrigerApurement : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour corriger cet émargement.");
+    }
+
+    const motifTrimmed = typeof motif === 'string' ? motif.trim() : '';
+    if (!motifTrimmed) {
+      throw new Error("Le motif de la correction est obligatoire.");
+    }
+
+    try {
+      const { result, before } = await queries.corrigerApurementRetirant(id, fields, motifTrimmed, resolvedUser as any);
+      queries.insertAuditLog(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_APUREMENT_CORRIGEE',
+        `Émargement Apurement corrigé pour la carte ID ${id} par ${resolvedUser?.login || 'SYSTEM'}. Motif : ${motifTrimmed}`
+      );
+      // Couverture CRUD_SYNC_WHITELIST (même pattern que cartes:declarerDoublon ci-dessus) :
+      // visible cross-poste via t_logs/logAudit(), en plus de insertAuditLog() (t_audit_log
+      // local). `before` (valeurs avant correction) part dans le JSON `details`, même convention
+      // que declarerDoublon pour statut_avant_doublon.
+      logAudit(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_APUREMENT_CORRIGEE',
+        JSON.stringify({ id_carte: id, motif: motifTrimmed, before, after: fields })
+      );
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      return result;
+    }
+    catch (e) { log.error('IPC Error: cartes:corrigerApurement', e); throw e; }
+  });
+
+  // Correction/annulation d'un émargement Apurement erroné (plan validé) — Cas A : mauvaise
+  // carte déchargée, annulation complète (retour à EN STOCK). Même architecture RBAC que
+  // cartes:corrigerApurement ci-dessus.
+  ipcMain.handle('cartes:annulerApurement', async (_, id, motif) => {
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:annulerApurement : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour annuler cet émargement.");
+    }
+
+    const motifTrimmed = typeof motif === 'string' ? motif.trim() : '';
+    if (!motifTrimmed) {
+      throw new Error("Le motif de l'annulation est obligatoire.");
+    }
+
+    try {
+      const { result, before } = await queries.annulerApurementDechargement(id, motifTrimmed, resolvedUser as any);
+      queries.insertAuditLog(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_APUREMENT_ANNULEE',
+        `Émargement Apurement annulé pour la carte ID ${id} par ${resolvedUser?.login || 'SYSTEM'}. Motif : ${motifTrimmed}`
+      );
+      logAudit(
+        resolvedUser?.login || 'SYSTEM',
+        'CARTE_APUREMENT_ANNULEE',
+        JSON.stringify({ id_carte: id, motif_annulation: motifTrimmed, before })
+      );
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      return result;
+    }
+    catch (e) { log.error('IPC Error: cartes:annulerApurement', e); throw e; }
+  });
+
   ipcMain.handle('cartes:inventairePhysiqueScan', async (_, identifiant, rangement) => {
     // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
     // Recherche par identifiant (num_secu) : le filtrage de site est délégué à
@@ -5115,6 +5209,26 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return queries.getApurementStats(effectiveAgentUsername, scoped.siteId);
     } catch (e) {
       log.error('IPC Error: stats:getApurementStats', e);
+      throw e;
+    }
+  });
+
+  // Portail d'Apurement — onglet "Cartes déchargées" (plan validé — correction/annulation d'un
+  // émargement Apurement erroné). Liste des cartes DELIVRE éligibles à corrigerApurement/
+  // annulerApurement (mêmes rôles autorisés à *tenter* l'action que ces deux handlers — la
+  // vérification fine, y compris la fenêtre de tolérance "jour même" pour OPERATEUR_APUREMENT,
+  // reste appliquée serveur dans les fonctions de mutation, pas ici). Identité/scoping dérivés
+  // exclusivement de getSecureCurrentUser() (§3 CLAUDE.md) — jamais d'un paramètre client.
+  ipcMain.handle('stats:getApurementCorrectionsListPaginated', (_, page?: number, pageSize?: number, search?: string) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_APUREMENT'])) {
+      log.warn('[SECURITY] Acces refuse a stats:getApurementCorrectionsListPaginated : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour consulter cette liste.");
+    }
+    try {
+      return queries.getApurementCorrectionsListPaginated(secureUser, page ?? 0, pageSize ?? 20, search);
+    } catch (e) {
+      log.error('IPC Error: stats:getApurementCorrectionsListPaginated', e);
       throw e;
     }
   });
