@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download, CloudDownload, AtSign } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { AUTO_DOWNSTREAM_CHANGED_EVENT } from '../hooks/useAutoDownstreamPreference';
+import { AUTO_UPSTREAM_CHANGED_EVENT } from '../hooks/useAutoUpstreamPreference';
 import toast from 'react-hot-toast';
 
 export default function ProfilePage() {
@@ -164,6 +165,10 @@ export default function ProfilePage() {
       const res = await window.api.sync.setAutoUpstream(newVal);
       if (res.success) {
         setAutoUpstream(newVal);
+        // Notifie les autres vues déjà montées (bouton manuel de synchro upstream) pour
+        // qu'elles re-lisent la préférence sans rechargement complet de la page — cf.
+        // useAutoUpstreamPreference.ts.
+        window.dispatchEvent(new CustomEvent(AUTO_UPSTREAM_CHANGED_EVENT));
         toast.success(`Envoi automatique ${newVal ? 'activé' : 'désactivé'}.`);
       } else {
         toast.error("Erreur lors de l'enregistrement de la préférence.");

@@ -9,6 +9,8 @@ import { useVerificationStats } from './hooks/useVerificationStats';
 import { useVerificationSearch } from './hooks/useVerificationSearch';
 import { useDeliveryFlow } from './hooks/useDeliveryFlow';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
+import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
+import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
 
 // Components
 import { SearchForm } from './components/SearchForm';
@@ -76,6 +78,10 @@ export default function VerificationSearchPage() {
     };
   }, []);
 
+  // Pas de conformeCount local dédié dans cette vue — dirtyCartesCount (compteur brut
+  // is_dirty=1) sert d'équivalent, comme dans le reste du fichier (cf. plan validé A.5).
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(dirtyCartesCount, isBulkUploading);
+
   const fetchSyncStats = async () => {
     if (user?.site_id) {
       try {
@@ -107,6 +113,7 @@ export default function VerificationSearchPage() {
       const res = await window.api.sync.startBulk(Number(user.site_id), false, false);
       if (res.success) {
         toast.success(res.message, { id: toastId });
+        refreshActionableCount();
       } else {
         toast.error(res.message || "Erreur lors de l'envoi", { id: toastId });
       }
@@ -332,30 +339,34 @@ export default function VerificationSearchPage() {
               {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
-            <button 
-              onClick={handleStartBulkUpload} 
-              disabled={isBulkUploading || dirtyCartesCount === 0}
-              className="btn-plein-soleil" 
-              style={{ 
-                padding: '12px 24px', 
-                borderRadius: 12, 
-                fontWeight: 700,
-                backgroundColor: (isBulkUploading || dirtyCartesCount === 0) ? '#555555' : '#FFE600',
-                color: (isBulkUploading || dirtyCartesCount === 0) ? '#ffffff' : '#000000',
-                border: '1px solid #FFE600',
-                cursor: (isBulkUploading || dirtyCartesCount === 0) ? 'not-allowed' : 'pointer',
-                opacity: (isBulkUploading || dirtyCartesCount === 0) ? 0.5 : 1,
-                boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                transition: 'all 0.2s ease-in-out',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${dirtyCartesCount > 0 ? ` (${dirtyCartesCount})` : ''}`}
-            </button>
+            {pushVisible && (
+              <button
+                onClick={handleStartBulkUpload}
+                disabled={pushDisabled}
+                className="btn-plein-soleil"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  backgroundColor: pushDisabled ? '#555555' : '#FFE600',
+                  color: pushDisabled ? '#ffffff' : '#000000',
+                  border: '1px solid #FFE600',
+                  cursor: pushDisabled ? 'not-allowed' : 'pointer',
+                  opacity: pushDisabled ? 0.5 : 1,
+                  boxShadow: '0 4px 15px rgba(255, 230, 0, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  transition: 'all 0.2s ease-in-out',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isBulkUploading ? 'ENVOI EN COURS...' : `ENVOYER LES CARTES VERS LE CLOUD${actionableCount > 0 ? ` (${actionableCount})` : ''}`}
+              </button>
+            )}
+
+            <AutoSyncIndicators />
           </div>
         )}
       </div>

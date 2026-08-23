@@ -3,6 +3,8 @@ import { Outlet } from 'react-router-dom';
 import { Building2, Database, Globe, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
+import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
+import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { toast } from 'react-hot-toast';
 
@@ -136,6 +138,7 @@ export default function AdminCentreLayout() {
            toast.error(`Des anomalies ont bloqué l'envoi de certaines cartes. Veuillez les corriger dans l'onglet Cartes.`, { duration: 6000 });
         }
         setDetailedSyncStats((prev: any) => prev ? { ...prev, cleanCount: 0, modifiedCount: 0 } : prev); // Update optimiste, en attendant le prochain tick
+        refreshActionableCount();
       } else {
         toast.error(res.message || "Erreur de synchronisation", { id: toastId });
       }
@@ -151,7 +154,7 @@ export default function AdminCentreLayout() {
   // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
   // des cartes que l'envoi rejettera silencieusement.
   const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
-  const pushDisabled = isBulkUploading || conformeCount === 0;
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -230,30 +233,34 @@ export default function AdminCentreLayout() {
               {isPullingCards ? 'RÉCUPÉRATION...' : `RÉCUPÉRER${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
-              <button
-                onClick={handleStartBulkUpload}
-                disabled={pushDisabled}
-                className="btn-plein-soleil"
-                style={{
-                  padding: '12px 24px',
-                  borderRadius: 12,
-                  fontWeight: 700,
-                  backgroundColor: pushDisabled ? '#555555' : '#FFE600',
-                  color: pushDisabled ? '#ffffff' : '#000000',
-                  border: '1px solid #FFE600',
-                  cursor: pushDisabled ? 'not-allowed' : 'pointer',
-                  opacity: pushDisabled ? 0.5 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '8px',
-                  flex: '1 1 auto',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-                {isBulkUploading ? 'ENVOI...' : `Synchroniser mes saisies${conformeCount > 0 ? ` (${conformeCount.toLocaleString('fr')})` : ''}`}
-              </button>
+              {pushVisible && (
+                <button
+                  onClick={handleStartBulkUpload}
+                  disabled={pushDisabled}
+                  className="btn-plein-soleil"
+                  style={{
+                    padding: '12px 24px',
+                    borderRadius: 12,
+                    fontWeight: 700,
+                    backgroundColor: pushDisabled ? '#555555' : '#FFE600',
+                    color: pushDisabled ? '#ffffff' : '#000000',
+                    border: '1px solid #FFE600',
+                    cursor: pushDisabled ? 'not-allowed' : 'pointer',
+                    opacity: pushDisabled ? 0.5 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    flex: '1 1 auto',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                  {isBulkUploading ? 'ENVOI...' : `Synchroniser mes saisies${actionableCount > 0 ? ` (${actionableCount.toLocaleString('fr')})` : ''}`}
+                </button>
+              )}
+
+              <AutoSyncIndicators />
           </div>
         </div>
 

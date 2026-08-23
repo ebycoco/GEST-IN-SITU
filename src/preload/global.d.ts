@@ -227,6 +227,7 @@ declare global {
         getAutoUpstream: () => Promise<boolean>;
         setAutoUpstream: (enabled: boolean) => Promise<{ success: boolean }>;
         getCardsOutboxPendingCount: () => Promise<number>;
+        getCardsOutboxActionableCount: () => Promise<number>;
         onStatusChanged: (callback: (status: any) => void) => () => void;
         startBulk: (
           siteId: number,

@@ -525,6 +525,39 @@ export function getOutboxPendingCount(tableName?: string): number {
   }
 }
 
+/**
+ * Retourne le nombre d'entrées "actionnables" dans t_outbox : PENDING (en attente d'un
+ * prochain cycle d'envoi) ET ERROR (échec d'envoi après épuisement des tentatives
+ * automatiques, cf. MAX_OUTBOX_ATTEMPTS). Fonction additive, distincte de
+ * `getOutboxPendingCount` — celle-ci reste inchangée et continue de servir de condition
+ * d'arrêt à la boucle de vidage forcé de `sync:startBulk` (handlers.ts) ; élargir son filtre
+ * à ERROR y casserait ce comportement (une carte en ERROR ne doit pas bloquer indéfiniment
+ * cette boucle de vidage).
+ *
+ * Usage : détecter, côté UI, une carte réellement bloquée en échec d'auto-envoi (pas
+ * seulement une entrée en cours de traitement normal) afin de réafficher le bouton manuel de
+ * synchro upstream quand l'envoi automatique est actif — cf. usePushButtonVisibility.ts.
+ *
+ * @param tableName - Optionnel. Si fourni, restreint le comptage à cette seule table
+ *   (ex: 't_cartes').
+ */
+export function getOutboxActionableCount(tableName?: string): number {
+  try {
+    const db = getDatabase();
+    if (!db) return 0;
+    const row = tableName
+      ? db.prepare(
+          `SELECT COUNT(*) as count FROM t_outbox WHERE status IN ('PENDING', 'ERROR') AND table_name = ?`
+        ).get(tableName) as { count: number } | undefined
+      : db.prepare(
+          `SELECT COUNT(*) as count FROM t_outbox WHERE status IN ('PENDING', 'ERROR')`
+        ).get() as { count: number } | undefined;
+    return row ? row.count : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── Helpers privés ──────────────────────────────────────────────────────────
 
 /** Verrou interne anti-concurrence du worker outbox. */

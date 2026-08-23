@@ -19,7 +19,7 @@ import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxActionableCount } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
@@ -4569,6 +4569,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return getOutboxPendingCount('t_cartes');
     } catch (e) {
       log.warn('Erreur getCardsOutboxPendingCount:', e);
+      return 0;
+    }
+  });
+
+  // Décompte "actionnable" (PENDING + ERROR) dédié aux cartes — alimente la visibilité du
+  // bouton manuel de synchro upstream quand l'Envoi Automatique est actif : contrairement à
+  // sync:getCardsOutboxPendingCount ci-dessus, ce compteur inclut aussi les entrées en ERROR
+  // (échec réel d'auto-envoi après épuisement des tentatives), afin que le bouton réapparaisse
+  // dans ce cas précis. Cf. getOutboxActionableCount (outbox.service.ts) et
+  // usePushButtonVisibility.ts (UI, hors périmètre ici).
+  ipcMain.handle('sync:getCardsOutboxActionableCount', async () => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return 0;
+      return getOutboxActionableCount('t_cartes');
+    } catch (e) {
+      log.warn('Erreur getCardsOutboxActionableCount:', e);
       return 0;
     }
   });

@@ -10,6 +10,8 @@ import { CorrectionSidePanel } from '../../components/Quality/CorrectionSidePane
 import { IdentificationGuidee } from '../../components/Quality/IdentificationGuidee';
 import { useQualityUIStore } from '../../stores/qualityUIStore';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
+import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
+import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
 
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
@@ -79,22 +81,25 @@ export default function AgentQualiteLayout() {
   // Meme correctif que AgentVerificationLayout.tsx (cloudCartesCount === 0 ne couvrait
   // pas le cas -1, laissant le bouton actif alors que le cloud est injoignable).
   const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount <= 0;
-  const pushDisabled = isBulkUploading || conformeCartesCount === 0;
+  const {
+    visible: pushVisible,
+    disabled: pushDisabled,
+    refreshActionableCount,
+    outboxBacklogCount,
+    refreshOutboxBacklogCount
+  } = usePushButtonVisibility(conformeCartesCount, isBulkUploading);
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
-  // Badge purement informatif sur le bouton "Envoyer les corrections" : nombre de cartes
-  // actuellement en attente dans l'outbox (distinct de conformeCartesCount/pushDisabled,
-  // qui restent la seule source de vérité pour l'activation du bouton). Recalculé chaque
-  // fois que dirtyCartesCount change (déclenché par loadStats, y compris via le listener
-  // 'app:data-updated' ci-dessus) — même pattern qu'InventaireLayout.tsx/ApurementLayout.tsx.
-  const [cardsOutboxPendingCount, setCardsOutboxPendingCount] = useState<number>(0);
-  useEffect(() => {
-    let cancelled = false;
-    window.api.sync.getCardsOutboxPendingCount()
-      .then(count => { if (!cancelled) setCardsOutboxPendingCount(count); })
-      .catch(err => console.error('Failed to fetch cards outbox pending count:', err));
-    return () => { cancelled = true; };
-  }, [dirtyCartesCount]);
+  const handlePushClick = async () => {
+    // forceMissing=true : une donnée manquante (rangement, nom, prénom, contact...) ne doit
+    // plus bloquer l'envoi cloud une fois la date corrigée. Seuls les doublons
+    // (forceProbable) et les dates invalides (forceInvalid) restent des blocages durs.
+    const res = await handleStartBulkUpload(false, false, true, (detailedSyncStats?.modifiedCount || 0) > 0);
+    if (res && (res as any).success) {
+      refreshActionableCount();
+      refreshOutboxBacklogCount();
+    }
+  };
 
   // triggerRefresh() est un simple incrément synchrone de compteur (cf. qualityUIStore.ts) qui ne
   // rafraîchit que les listes des vues enfants (Doublons, Données Manquantes, etc.) — il ne
@@ -190,41 +195,45 @@ export default function AgentQualiteLayout() {
               {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
-            <button
-              // forceMissing=true : une donnée manquante (rangement, nom, prénom, contact...) ne
-              // doit plus bloquer l'envoi cloud une fois la date corrigée. Seuls les doublons
-              // (forceProbable) et les dates invalides (forceInvalid) restent des blocages durs.
-              onClick={() => handleStartBulkUpload(false, false, true, (detailedSyncStats?.modifiedCount || 0) > 0)}
-              disabled={pushDisabled}
-              className="btn-plein-soleil"
-              style={{
-                padding: '12px 24px',
-                borderRadius: 12,
-                fontWeight: 700,
-                backgroundColor: pushDisabled ? '#555555' : '#FFE600',
-                color: pushDisabled ? '#ffffff' : '#000000',
-                border: '1px solid #FFE600',
-                cursor: pushDisabled ? 'not-allowed' : 'pointer',
-                opacity: pushDisabled ? 0.5 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : 'Envoyer les corrections'}
-              {cardsOutboxPendingCount > 0 && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                  minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10,
-                  background: 'rgba(0,0,0,0.25)', color: pushDisabled ? '#ffffff' : '#000000',
-                  fontSize: 11, fontWeight: 800
-                }}>
-                  {cardsOutboxPendingCount.toLocaleString('fr')}
-                </span>
-              )}
-            </button>
+            {pushVisible && (
+              <button
+                onClick={handlePushClick}
+                disabled={pushDisabled}
+                className="btn-plein-soleil"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  backgroundColor: pushDisabled ? '#555555' : '#FFE600',
+                  color: pushDisabled ? '#ffffff' : '#000000',
+                  border: '1px solid #FFE600',
+                  cursor: pushDisabled ? 'not-allowed' : 'pointer',
+                  opacity: pushDisabled ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isBulkUploading ? 'ENVOI...' : 'Envoyer les corrections'}
+                {/* Badge informatif : backlog réel t_outbox (outboxBacklogCount), distinct de
+                    actionableCount qui pilote uniquement l'activation du bouton — cf. audit
+                    agent-9-senior-auditor P1 #1 (usePushButtonVisibility.ts). */}
+                {outboxBacklogCount > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 20, height: 20, padding: '0 6px', borderRadius: 10,
+                    background: 'rgba(0,0,0,0.25)', color: pushDisabled ? '#ffffff' : '#000000',
+                    fontSize: 11, fontWeight: 800
+                  }}>
+                    {outboxBacklogCount.toLocaleString('fr')}
+                  </span>
+                )}
+              </button>
+            )}
+
+            <AutoSyncIndicators />
           </div>
         </div>
 

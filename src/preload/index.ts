@@ -495,6 +495,10 @@ const api = {
     // "Envoyer les corrections". Distinct de getStatus().outboxCount (toutes tables confondues).
     getCardsOutboxPendingCount: (): Promise<number> =>
       ipcRenderer.invoke('sync:getCardsOutboxPendingCount'),
+    // Décompte "actionnable" (PENDING + ERROR) des cartes dans t_outbox — alimente la
+    // visibilité du bouton manuel de synchro upstream (cf. usePushButtonVisibility.ts).
+    getCardsOutboxActionableCount: (): Promise<number> =>
+      ipcRenderer.invoke('sync:getCardsOutboxActionableCount'),
     onStatusChanged: (callback: (status: any) => void) => {
       const listener = (_: any, status: any) => callback(status);
       ipcRenderer.on('sync:status-changed', listener);

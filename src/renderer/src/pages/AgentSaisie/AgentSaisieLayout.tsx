@@ -7,6 +7,8 @@ import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
+import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
+import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
 import { toast } from 'react-hot-toast';
 
 export default function AgentSaisieLayout() {
@@ -85,7 +87,14 @@ export default function AgentSaisieLayout() {
   // donnée manquante) — distinct de dirtyCartesCount (brut) pour ne pas activer le bouton
   // sur des cartes que l'envoi rejettera silencieusement.
   const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
-  const pushDisabled = isBulkUploading || conformeCount === 0;
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading);
+
+  const handlePushClick = async () => {
+    const res = await handleStartBulkUpload(false, false, false);
+    if (res && (res as any).success) {
+      refreshActionableCount();
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>
@@ -135,30 +144,34 @@ export default function AgentSaisieLayout() {
               {isPullingCards && !isBackgroundPulling ? 'TÉLÉCHARGEMENT EN COURS...' : `Télécharger depuis le Cloud${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
-            <button
-              onClick={() => handleStartBulkUpload(false, false, false)}
-              disabled={pushDisabled}
-              className="btn-plein-soleil"
-              style={{
-                padding: '12px 24px',
-                borderRadius: 12,
-                fontWeight: 700,
-                backgroundColor: pushDisabled ? '#555555' : '#FFE600',
-                color: pushDisabled ? '#ffffff' : '#000000',
-                border: '1px solid #FFE600',
-                cursor: pushDisabled ? 'not-allowed' : 'pointer',
-                opacity: pushDisabled ? 0.5 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '8px',
-                flex: '1 1 auto',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isBulkUploading ? 'ENVOI...' : `Synchroniser vers le Cloud${conformeCount > 0 ? ` (${conformeCount.toLocaleString('fr')})` : ''}`}
-            </button>
+            {pushVisible && (
+              <button
+                onClick={handlePushClick}
+                disabled={pushDisabled}
+                className="btn-plein-soleil"
+                style={{
+                  padding: '12px 24px',
+                  borderRadius: 12,
+                  fontWeight: 700,
+                  backgroundColor: pushDisabled ? '#555555' : '#FFE600',
+                  color: pushDisabled ? '#ffffff' : '#000000',
+                  border: '1px solid #FFE600',
+                  cursor: pushDisabled ? 'not-allowed' : 'pointer',
+                  opacity: pushDisabled ? 0.5 : 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  flex: '1 1 auto',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                <Globe size={18} style={{ animation: isBulkUploading ? 'spin 1.5s linear infinite' : 'none' }} />
+                {isBulkUploading ? 'ENVOI...' : `Synchroniser vers le Cloud${actionableCount > 0 ? ` (${actionableCount.toLocaleString('fr')})` : ''}`}
+              </button>
+            )}
+
+            <AutoSyncIndicators />
 
             {/* NOUVEAU BOUTON : PUBLIER BROUILLONS */}
             <button
