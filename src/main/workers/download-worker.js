@@ -4,7 +4,10 @@
 //
 // Protocole de communication (parentPort):
 //   ← reçoit : { type: 'write-chunk', watermark, lastSyncId, cloudCards, siteId }
-//   → envoie  : { type: 'chunk-done', processed, watermark, lastSyncId }
+//   → envoie  : { type: 'chunk-done', processed, watermark, lastSyncId, insertedLabels }
+//     (insertedLabels : libellés bornés — max 6, {noms,prenoms,rangement,sync_id} — des
+//     cartes réellement insérées/mises à jour dans ce chunk, pour la notification
+//     granulaire par carte côté renderer, voir downstream.ts CARDS_NOTIFICATION_THRESHOLD)
 //   → envoie  : { type: 'error', message }
 //   → envoie  : { type: 'log', level, message }
 
@@ -158,6 +161,23 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
   let latestUpdatedAt = watermark;
   let latestSyncId = lastSyncId;
 
+  // Libellés bornés (seuil de notification granulaire côté renderer, voir downstream.ts
+  // CARDS_NOTIFICATION_THRESHOLD/CARDS_LABEL_CAP) des cartes réellement insérées/mises à
+  // jour dans CE chunk. Plafonné à CARDS_LABEL_CAP quel que soit le volume du chunk (jusqu'à
+  // 500) — politique low-memory (§2 CLAUDE.md) : jamais la liste complète d'un gros chunk.
+  const CARDS_LABEL_CAP = 6;
+  const insertedLabels = [];
+  function pushLabel(card) {
+    if (insertedLabels.length < CARDS_LABEL_CAP) {
+      insertedLabels.push({
+        noms: card.noms || '',
+        prenoms: card.prenoms || '',
+        rangement: card.rangement || null,
+        sync_id: card.sync_id
+      });
+    }
+  }
+
   // Désactivation temporaire des FK pendant la transaction (base fraîche / ordre d'arrivée)
   database.exec('PRAGMA foreign_keys = OFF;');
   try {
@@ -229,6 +249,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
             updated_at: card.updated_at || new Date().toISOString()
           });
           processedCount++;
+          pushLabel(card);
         } else if (localCard.is_dirty === 1) {
           // Carte modifiée localement (non encore renvoyée) : on protège les champs
           // en cours de correction, MAIS on adopte quand même un statut cloud plus
@@ -270,6 +291,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               apurement_annulation_motif: card.apurement_annulation_motif || null
             });
             processedCount++;
+            pushLabel(card);
           }
         } else {
           // UPDATE si la version Cloud est plus récente
@@ -325,6 +347,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               updated_at: card.updated_at || new Date().toISOString()
             });
             processedCount++;
+            pushLabel(card);
           }
         }
       }
@@ -337,7 +360,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
     database.exec('PRAGMA foreign_keys = ON;');
   }
 
-  return { processed: processedCount, watermark: latestUpdatedAt, lastSyncId: latestSyncId };
+  return { processed: processedCount, watermark: latestUpdatedAt, lastSyncId: latestSyncId, insertedLabels };
 }
 
 // ─── Point d'entrée (messages du Main Thread) ────────────────────────────────

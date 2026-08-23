@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { networkMonitor, NetworkState } from './network-monitor';
 
 import { runUpstream } from './upstream';
-import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus } from './downstream';
+import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus, getPendingCardsCount } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
@@ -30,6 +30,25 @@ const USER_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
 // Délai avant le PREMIER cycle comptes/rôles après login — même logique que
 // AUTO_DOWNSTREAM_INITIAL_DELAY_MS : laisser l'UI s'installer avant tout appel réseau.
 const USER_SYNC_INITIAL_DELAY_MS = 10 * 1000; // 10 secondes
+
+// ─── INTERVALLE DU CYCLE COURT DÉDIÉ AUX CARTES (superposé au cycle long de 2h) ─────────────
+// 75 secondes — volontairement au milieu de la fourchette 60-90s demandée : assez fréquent
+// pour une remontée quasi temps réel des cartes livrées/modifiées sur un autre poste (le cas
+// d'usage motivant ce correctif : éviter d'attendre jusqu'à 2h pour les voir apparaître), tout
+// en restant raisonnable sur le nombre d'appels Supabase supplémentaires par poste actif — un
+// tick "rien de neuf" ne coûte qu'un seul COUNT(*) exact head:true (getPendingCardsCount,
+// downstream.ts), pas un cycle complet (voir triggerCardsShortSync ci-dessous). Le point
+// d'incertitude sur les quotas Supabase pour ce volume d'appels supplémentaires n'a pas pu
+// être vérifié (cf. rapport agent-4-db-sync) ; 75s (plutôt que 60s) réduit d'environ 20% le
+// nombre d'appels par rapport au minimum de la fourchette, en attendant une vérification.
+// Ce cycle est un complément du cycle long de 2h (AUTO_DOWNSTREAM_INTERVAL_MS), qui reste
+// INCHANGÉ et sert de filet de sécurité indépendant.
+const CARDS_SHORT_SYNC_INTERVAL_MS = 75 * 1000; // 75 secondes
+
+// Délai avant le PREMIER tick du cycle court cartes — décalé de 5s par rapport au délai
+// initial du cycle long (10s) pour éviter deux requêtes réseau simultanées juste après le
+// login (même esprit que USER_SYNC_INITIAL_DELAY_MS vs AUTO_DOWNSTREAM_INITIAL_DELAY_MS).
+const CARDS_SHORT_SYNC_INITIAL_DELAY_MS = 15 * 1000; // 15 secondes
 
 // ─── TYPES EXPORTÉS ─────────────────────────────────────────────────────────
 export type AutoDownstreamEvent =
@@ -116,6 +135,20 @@ class SyncEngine extends EventEmitter {
    * null = aucune synchronisation en retard.
    */
   private pendingDownstreamDue: number | null = null;
+
+  // ── Cycle court dédié aux cartes (superposé au cycle long de 2h) ───────────
+  /**
+   * Timer récurrent du cycle court (CARDS_SHORT_SYNC_INTERVAL_MS).
+   * Démarré/arrêté strictement EN MÊME TEMPS que downstreamTimer (cycle long) —
+   * voir startAutoDownstreamTimer()/stopAutoDownstreamTimer() — afin d'être gated
+   * par exactement la même préférence `auto_downstream_<id_user>`, sans dupliquer
+   * la logique de lecture de cette préférence (handlers.ts) dans un nouveau point
+   * d'appel séparé.
+   */
+  private cardsShortTimer: NodeJS.Timeout | null = null;
+
+  /** Timer du délai initial avant le premier tick du cycle court cartes. */
+  private cardsShortInitialDelay: NodeJS.Timeout | null = null;
 
   // ── Cycle dédié comptes/rôles (3 minutes, TOUJOURS actif) ──────────────────
   /**
@@ -231,6 +264,21 @@ class SyncEngine extends EventEmitter {
     // .unref() : le timer n'empêche pas Electron de quitter proprement.
     this.downstreamTimer.unref();
 
+    // ── Cycle court dédié aux cartes (superposé, ~75s) ──────────────────────
+    // Démarré ICI, dans la même méthode que le cycle long : il hérite ainsi
+    // exactement du même gating par la préférence `auto_downstream_<id_user>`
+    // (résolue par l'appelant avant d'invoquer startAutoDownstreamTimer — voir
+    // handlers.ts, login et sync:setAutoDownstream) sans nouveau point d'appel.
+    this.cardsShortInitialDelay = setTimeout(() => {
+      this.cardsShortInitialDelay = null;
+      setImmediate(() => this.triggerCardsShortSync(siteId));
+    }, CARDS_SHORT_SYNC_INITIAL_DELAY_MS);
+
+    this.cardsShortTimer = setInterval(() => {
+      setImmediate(() => this.triggerCardsShortSync(siteId));
+    }, CARDS_SHORT_SYNC_INTERVAL_MS);
+    this.cardsShortTimer.unref();
+
     // Notifier le renderer qu'un cycle est planifié
     this.notifyRenderer('sync:auto-downstream', {
       phase: 'scheduled',
@@ -240,7 +288,8 @@ class SyncEngine extends EventEmitter {
 
   /**
    * A appeler lors d'un logout ou d'une fermeture de session.
-   * Stoppe proprement tous les timers du cycle long.
+   * Stoppe proprement tous les timers du cycle long ET du cycle court cartes
+   * (démarrés ensemble par startAutoDownstreamTimer ci-dessus).
    */
   public stopAutoDownstreamTimer(): void {
     if (this.downstreamInitialDelay !== null) {
@@ -250,6 +299,14 @@ class SyncEngine extends EventEmitter {
     if (this.downstreamTimer !== null) {
       clearInterval(this.downstreamTimer);
       this.downstreamTimer = null;
+    }
+    if (this.cardsShortInitialDelay !== null) {
+      clearTimeout(this.cardsShortInitialDelay);
+      this.cardsShortInitialDelay = null;
+    }
+    if (this.cardsShortTimer !== null) {
+      clearInterval(this.cardsShortTimer);
+      this.cardsShortTimer = null;
     }
     if (this.activeSiteId !== null) {
       log.info(`[SyncEngine][AutoDownstream] Cycle automatique arrêté pour le site ${this.activeSiteId}.`);
@@ -835,8 +892,16 @@ class SyncEngine extends EventEmitter {
       // pendant ce court instant se retrouverait avec un updated_at antérieur au nouveau
       // watermark et ne serait plus jamais retirée par aucun futur downstream.
 
-      // Notifier le renderer de la mise à jour des données
-      this.notifyRenderer('sync:updated-data', { source: 'auto-downstream', siteId, count: pulledCount });
+      // Correctif doublon de toast (2026-08-23) : runDownstream() (downstream.ts) émet déjà
+      // 'sync:updated-data' en interne avec { count: totalMerged } dès que totalMerged > 0
+      // (voir downstream.ts, fin de runDownstream). Une SECONDE émission était faite ICI avec
+      // { source: 'auto-downstream', siteId, count: pulledCount } pour le même cycle réel —
+      // MainLayout.tsx ne filtrant pas sur `source`, le toast « Synchronisation terminée »
+      // s'affichait deux fois à chaque cycle auto-downstream qui ramenait des cartes. Cette
+      // émission est donc retirée : runDownstream() reste la SEULE source de vérité pour ce
+      // canal (déjà le cas pour les pulls manuels sync:pullSiteCards/sync:forceFullPull, qui
+      // n'émettaient jamais eux-mêmes). Le canal dédié 'sync:cards-received' (également émis
+      // par runDownstream) porte désormais la granularité par carte — voir downstream.ts.
 
     } catch (err: any) {
       const reason = err?.message ?? String(err);
@@ -853,6 +918,81 @@ class SyncEngine extends EventEmitter {
       // Le verrou DOIT être libéré dans le bloc finally pour garantir qu'un
       // échec ne bloque pas tous les cycles suivants.
       this.isDownstreamRunning = false;
+    }
+  }
+
+  // ── Cycle court dédié aux cartes (superposé au cycle long de 2h) ──────────
+
+  /**
+   * Point d'entrée du cycle court dédié aux cartes (CARDS_SHORT_SYNC_INTERVAL_MS, ~75s).
+   * Complète le cycle long de 2h (triggerAutoDownstream) SANS le remplacer : celui-ci reste
+   * un filet de sécurité indépendant et INCHANGÉ.
+   *
+   * Contrat low-memory (§2 CLAUDE.md) : un tick qui ne trouve rien de neuf doit rester très
+   * léger — UN SEUL appel Supabase (getPendingCardsCount, downstream.ts : un COUNT(*) exact
+   * head:true, aucune ligne transférée, aucune écriture SQLite). runDownstream() (le pull
+   * complet, avec ses écritures SQLite via DownloadWorker) n'est déclenché QUE si ce comptage
+   * révèle qu'il y a effectivement quelque chose à rapatrier.
+   *
+   * Verrous : réutilise STRICTEMENT isDownstreamRunning / isSyncing / globalSyncLocked, déjà
+   * partagés par triggerAutoDownstream/triggerUserAccountsSync/beginManualDownstream — aucun
+   * nouveau verrou n'est créé ici, pour ne pas rouvrir la fenêtre de collision SQLITE_BUSY
+   * déjà corrigée en production (cf. commentaires plus haut dans ce fichier, ~L470-540). Une
+   * seconde vérification de ces verrous est faite APRÈS l'attente réseau du comptage (avant de
+   * poser isDownstreamRunning), pour fermer la fenêtre de course où un autre déclencheur
+   * (triggerAutoDownstream, triggerUserAccountsSync, un pull manuel) aurait pu démarrer pendant
+   * cette attente — même exigence d'atomicité que beginManualDownstream() ci-dessus.
+   */
+  private async triggerCardsShortSync(siteId: number): Promise<void> {
+    if (this.isDownstreamRunning) {
+      log.info('[SyncEngine][CardsShortSync] Ignoré : un downstream (auto/manuel/comptes) est déjà en cours.');
+      return;
+    }
+    if (this.globalSyncLocked) {
+      log.info('[SyncEngine][CardsShortSync] Ignoré : verrou global actif (opération destructrice en cours).');
+      return;
+    }
+    if (this.isSyncing) {
+      log.info('[SyncEngine][CardsShortSync] Ignoré : cycle upstream en cours. Reprise au prochain tick (~75s).');
+      return;
+    }
+
+    const networkState = networkMonitor.getState();
+    if (networkState !== 'ONLINE') {
+      // Contrairement au cycle long (pendingDownstreamDue + reprise immédiate au retour
+      // réseau), l'intervalle de ce cycle est déjà assez court (~75s) pour qu'une simple
+      // reprise au tick suivant soit suffisante — pas de mémorisation d'échéance en retard.
+      return;
+    }
+
+    try {
+      const pendingCount = await getPendingCardsCount(siteId);
+      if (pendingCount <= 0) {
+        // Tick léger : rien de neuf, un seul appel Supabase, aucune écriture SQLite.
+        return;
+      }
+
+      // Re-vérification post-await : le comptage ci-dessus a suspendu ce tick le temps d'un
+      // aller-retour réseau, pendant lequel un autre déclenchement a pu démarrer et poser un
+      // des verrous partagés.
+      if (this.isDownstreamRunning || this.globalSyncLocked || this.isSyncing) {
+        log.info('[SyncEngine][CardsShortSync] Concurrence détectée après le comptage léger — abandon, reprise au prochain tick.');
+        return;
+      }
+
+      log.info(`[SyncEngine][CardsShortSync] ${pendingCount} carte(s) en attente détectée(s) — pull ciblé pour le site ${siteId}.`);
+
+      this.isDownstreamRunning = true;
+      try {
+        await runDownstream(siteId);
+        // Notification renderer ('sync:updated-data' + 'sync:cards-received') déjà émise par
+        // runDownstream() lui-même (downstream.ts) — aucune émission supplémentaire ici, même
+        // principe que pour les pulls manuels (sync:pullSiteCards/sync:forceFullPull).
+      } finally {
+        this.isDownstreamRunning = false;
+      }
+    } catch (err) {
+      log.warn(`[SyncEngine][CardsShortSync] Erreur lors du cycle court dédié aux cartes pour le site ${siteId} :`, err);
     }
   }
 

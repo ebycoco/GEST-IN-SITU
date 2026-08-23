@@ -25,6 +25,64 @@ import { join } from 'path';
 // dans le module qui possède la logique de préchargement.
 let _isPreloadingUsers = false;
 
+// ─── Notification granulaire par carte (sync:cards-received) ───────────────────────────────
+// Seuil en dessous duquel le renderer affiche une notification PAR carte plutôt qu'un toast
+// agrégé unique — voir le bloc d'émission en fin de runDownstream() ci-dessous, et
+// MainLayout.tsx (consommateur). CARDS_LABEL_CAP = seuil + 1 : on ne retient jamais plus de
+// libellés que nécessaire pour savoir qu'on a dépassé le seuil (politique low-memory §2 :
+// liste bornée, jamais la liste complète d'un chunk de 500).
+const CARDS_NOTIFICATION_THRESHOLD = 5;
+const CARDS_LABEL_CAP = CARDS_NOTIFICATION_THRESHOLD + 1;
+
+/** Libellé minimal d'une carte reçue, pour affichage renderer (voir CARDS_NOTIFICATION_THRESHOLD). */
+export interface ReceivedCardLabel {
+  noms: string;
+  prenoms: string;
+  rangement: string | null;
+  sync_id: string;
+}
+
+/**
+ * Calcule le nombre de cartes en attente de téléchargement depuis Supabase pour ce site,
+ * SANS déclencher aucun téléchargement ni écriture SQLite — un simple COUNT(*) exact
+ * (head: true, aucune ligne transférée). Requête volontairement dupliquée (et non extraite)
+ * de celle déjà utilisée en interne par runDownstream() (ci-dessous, ~L156-176, pour sa barre
+ * de progression) : ne PAS refactoriser runDownstream pour partager ce bout de code — cette
+ * fonction est un ajout isolé pour le cycle court dédié aux cartes (sync-engine.ts,
+ * triggerCardsShortSync), afin de ne prendre aucun risque de régression sur le pull principal
+ * déjà éprouvé en production.
+ */
+export async function getPendingCardsCount(siteId: number): Promise<number> {
+  if (!siteId || isNaN(Number(siteId))) return 0;
+  const supabase = getSupabaseClient();
+  if (!supabase) return 0;
+  const db = getDatabase();
+  if (!db) return 0;
+
+  try {
+    let watermark = '1970-01-01T00:00:00Z';
+    let lastSyncId = '00000000-0000-0000-0000-000000000000';
+    const configRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
+    if (configRow && configRow.value) watermark = configRow.value;
+    const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
+    if (configRowId && configRowId.value) lastSyncId = configRowId.value;
+
+    const { count, error } = await supabase.from('t_cartes')
+      .select('*', { count: 'exact', head: true })
+      .or(`updated_at.gt.${watermark},and(updated_at.eq.${watermark},sync_id.gt.${lastSyncId})`)
+      .eq('id_site', siteId);
+
+    if (error) {
+      log.warn('[SYNC] getPendingCardsCount: erreur Supabase lors du comptage léger :', error.message);
+      return 0;
+    }
+    return count || 0;
+  } catch (err: any) {
+    log.warn('[SYNC] getPendingCardsCount: exception lors du comptage léger :', err.message || err);
+    return 0;
+  }
+}
+
 /**
  * Récupère les données depuis Supabase modifiées après le watermark et les intègre localement.
  * Réalise la résolution de conflit (Pilier 4) et évite les boucles infinies.
@@ -188,10 +246,22 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
 
   let totalFetched = 0;
 
+  // Libellés bornés des cartes réellement insérées/mises à jour (voir CARDS_NOTIFICATION_THRESHOLD
+  // et CARDS_LABEL_CAP plus haut) — accumulés à travers les chunks, plafonnés à CARDS_LABEL_CAP
+  // quel que soit le volume réel (politique low-memory §2 : jamais la liste complète).
+  let cardLabels: ReceivedCardLabel[] = [];
+
   while (hasMore) {
-    const { fetched, processed } = await runDownstreamChunk(siteId);
+    const { fetched, processed, insertedLabels } = await runDownstreamChunk(siteId);
     totalFetched += fetched;
     totalMerged += processed;
+
+    if (insertedLabels && insertedLabels.length > 0 && cardLabels.length < CARDS_LABEL_CAP) {
+      for (const label of insertedLabels) {
+        if (cardLabels.length >= CARDS_LABEL_CAP) break;
+        cardLabels.push(label);
+      }
+    }
 
     if (fetched < 500) {
       hasMore = false;
@@ -278,6 +348,24 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     BrowserWindow.getAllWindows().forEach(w =>
       w.webContents.send('sync:updated-data', { count: totalMerged })
     );
+
+    // ── Canal dédié 'sync:cards-received' (granularité par carte) ─────────────────────────
+    // Distinct de 'sync:updated-data' ci-dessus (sémantique différente, précédent exact :
+    // 'sync:users-synced' dans outbox.service.ts) : sous le seuil, le renderer affiche une
+    // notification par carte (libellés ci-dessous) ; au-dessus (pull massif, bootstrap,
+    // forceFullPull), `cards` est vide et le renderer bascule sur le résumé agrégé via `count`.
+    // Émis pour les 3 appelants de runDownstream (cycle auto 2h, cycle court cartes, pull
+    // manuel sync:pullSiteCards, sync:forceFullPull) de façon uniforme, exactement comme
+    // 'sync:updated-data' ci-dessus.
+    const isGranular = totalMerged <= CARDS_NOTIFICATION_THRESHOLD;
+    BrowserWindow.getAllWindows().forEach(w =>
+      w.webContents.send('sync:cards-received', {
+        count: totalMerged,
+        cards: isGranular ? cardLabels : []
+      })
+    );
+    // Politique low-memory (§2) : libère explicitement la liste bornée après émission.
+    cardLabels = [];
   }
 
   return totalMerged;
@@ -286,7 +374,7 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
 /**
  * Traite un unique lot (chunk) de 500 cartes maximum de Supabase via Worker.
  */
-async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; processed: number }> {
+async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
   const db = getDatabase()!;
   
   // 1. Récupération du watermark local dans t_config
@@ -306,7 +394,7 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
   const supabase = getSupabaseClient();
   if (!supabase) {
     log.warn('[runDownstreamChunk] Client Supabase non disponible — chunk ignoré.');
-    return { fetched: 0, processed: 0 };
+    return { fetched: 0, processed: 0, insertedLabels: [] };
   }
 
   // 2. Requête Supabase avec AbortController
@@ -345,13 +433,13 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
     clearTimeout(timeoutId);
     if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
       log.warn("⚠️ [SUPABASE] Requête downstream interrompue : Timeout. Passage en mode dégradé.");
-      return { fetched: 0, processed: 0 };
+      return { fetched: 0, processed: 0, insertedLabels: [] };
     }
     throw err;
   }
 
   if (!cloudCards || cloudCards.length === 0) {
-    return { fetched: 0, processed: 0 };
+    return { fetched: 0, processed: 0, insertedLabels: [] };
   }
 
   log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud. Sending to Worker...`);
@@ -396,7 +484,7 @@ async function writeChunkViaWorkerWithRetry(
   watermark: string,
   lastSyncId: string,
   siteId: number
-): Promise<{ fetched: number; processed: number }> {
+): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
   let lastErr: any = null;
   for (let attempt = 0; attempt <= CHUNK_WRITE_MAX_RETRIES; attempt++) {
     try {
@@ -428,7 +516,7 @@ function writeChunkViaWorker(
   watermark: string,
   lastSyncId: string,
   siteId: number
-): Promise<{ fetched: number; processed: number }> {
+): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
   return new Promise((resolve, reject) => {
     let sqlitePath: string;
     try {
@@ -442,7 +530,7 @@ function writeChunkViaWorker(
       workerData: { dbPath: getDbPath(), sqlitePath }
     });
 
-    let chunkResult: { fetched: number; processed: number } | null = null;
+    let chunkResult: { fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] } | null = null;
     let chunkError: Error | null = null;
 
     worker.on('message', (msg) => {
@@ -454,7 +542,12 @@ function writeChunkViaWorker(
         // fetched = pagination réelle (pour savoir s'il reste des pages sur Supabase) ;
         // processed = nombre de cartes réellement insérées/mises à jour localement
         // (certaines cartes reçues peuvent être déjà à jour et donc ignorées par le worker).
-        chunkResult = { fetched: cloudCards.length, processed: msg.processed || 0 };
+        // insertedLabels = libellés bornés (CARDS_LABEL_CAP) déjà plafonnés côté worker.
+        chunkResult = {
+          fetched: cloudCards.length,
+          processed: msg.processed || 0,
+          insertedLabels: Array.isArray(msg.insertedLabels) ? msg.insertedLabels : []
+        };
         worker.postMessage({ type: 'close' });
       } else if (msg.type === 'error') {
         log.error(`[DownloadWorker] Erreur: ${msg.message}`);
@@ -471,7 +564,7 @@ function writeChunkViaWorker(
     worker.on('exit', (code) => {
       if (code !== 0) log.warn(`[DownloadWorker] Exited with code ${code}`);
       if (chunkError) reject(chunkError);
-      else resolve(chunkResult || { fetched: 0, processed: 0 });
+      else resolve(chunkResult || { fetched: 0, processed: 0, insertedLabels: [] });
     });
 
     worker.postMessage({

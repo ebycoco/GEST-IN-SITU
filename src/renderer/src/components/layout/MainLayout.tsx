@@ -50,24 +50,46 @@ export default function MainLayout() {
   }, []);
   // ──────────────────────────────────────────────────────────────────────────
 
-  // ─── Notification finale unique (sync:updated-data) ──────────────────────
-  // Désormais cette notification s'affiche UNE SEULE FOIS à la fin du
-  // téléchargement complet, avec le nombre EXACT de cartes reçues.
+  // ─── Notification de récupération de cartes (sync:cards-received) ────────
+  // Canal DÉDIÉ (émis par runDownstream, src/main/sync/downstream.ts), distinct de
+  // 'sync:updated-data' — celui-ci reste utilisé ailleurs (ex: ResolusTab.tsx,
+  // EscaladesResoluesTab.tsx) comme simple signal générique de rechargement, sans
+  // texte affiché ici, et n'est plus consommé pour du toast dans ce composant : avant
+  // ce correctif, sync-engine.ts émettait EN PLUS une notification 'sync:updated-data'
+  // pour chaque cycle auto-downstream, causant un doublon de ce toast (corrigé à la
+  // source dans sync-engine.ts). Sous le seuil de granularité (voir downstream.ts,
+  // CARDS_NOTIFICATION_THRESHOLD = 5), une notification par carte ; au-dessus (pull
+  // massif, bootstrap, forceFullPull), un résumé agrégé unique — comportement visuel
+  // historique conservé, désormais porté par ce canal.
+  // Abonnement IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2).
   useEffect(() => {
-    if (window.api && window.api.onDatabaseUpdated) {
-      const unsubscribe = window.api.onDatabaseUpdated((data) => {
-        const cardCount = data.count ?? data.processedCount ?? 0;
-        if (cardCount > 0) {
+    if (window.api?.sync?.onCardsReceived) {
+      const unsubscribe = window.api.sync.onCardsReceived((data) => {
+        const count = data?.count ?? 0;
+        const cards = data?.cards ?? [];
+        if (count <= 0) return;
+
+        const toastStyle = {
+          duration: cards.length > 0 ? 5000 : 7000,
+          style: {
+            background: '#000',
+            color: '#FFD700',
+            border: '1px solid #FFD700'
+          }
+        };
+
+        if (cards.length > 0) {
+          cards.forEach((card) => {
+            const label = [card.prenoms, card.noms].filter(Boolean).join(' ').trim() || 'Carte';
+            toast.success(
+              `📥 Carte récupérée : ${label}${card.rangement ? ` (${card.rangement})` : ''}`,
+              toastStyle
+            );
+          });
+        } else {
           toast.success(
-            `📥 Synchronisation terminée : ${cardCount.toLocaleString('fr')} carte(s) téléchargée(s) !`,
-            {
-              duration: 7000,
-              style: {
-                background: '#000',
-                color: '#FFD700',
-                border: '1px solid #FFD700'
-              }
-            }
+            `📥 Synchronisation terminée : ${count.toLocaleString('fr')} carte(s) téléchargée(s) !`,
+            toastStyle
           );
         }
       });

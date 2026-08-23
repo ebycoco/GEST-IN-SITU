@@ -563,6 +563,25 @@ const api = {
       ipcRenderer.on('sync:downstream-progress', listener);
       return () => ipcRenderer.removeListener('sync:downstream-progress', listener);
     },
+    /**
+     * Écoute la notification granulaire par carte d'un pull downstream (cycle auto 2h,
+     * cycle court dédié cartes ~75s, pull manuel sync:pullSiteCards/sync:forceFullPull).
+     * Canal DÉDIÉ, distinct de onDatabaseUpdated ('sync:updated-data', sémantique différente
+     * — voir handlers.ts/downstream.ts) : sous le seuil (5 cartes), `cards` contient un
+     * libellé par carte réellement insérée/mise à jour ; au-dessus, `cards` est vide et
+     * seul `count` doit être utilisé (résumé agrégé).
+     *
+     * @param callback - Fonction appelée à chaque émission ('sync:cards-received').
+     * @returns Fonction de nettoyage à appeler au démontage du composant.
+     */
+    onCardsReceived: (callback: (data: {
+      count: number;
+      cards: { noms: string; prenoms: string; rangement: string | null; sync_id: string }[];
+    }) => void) => {
+      const listener = (_: any, data: any) => callback(data);
+      ipcRenderer.on('sync:cards-received', listener);
+      return () => ipcRenderer.removeListener('sync:cards-received', listener);
+    },
   },
   // Maintenance
   maintenance: {

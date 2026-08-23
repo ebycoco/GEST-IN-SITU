@@ -247,6 +247,10 @@ declare global {
         }>;
         onBulkProgress: (callback: (p: number) => void) => () => void;
         onDownstreamProgress: (callback: (p: { progress: number; merged: number; total: number }) => void) => () => void;
+        onCardsReceived: (callback: (data: {
+          count: number;
+          cards: { noms: string; prenoms: string; rangement: string | null; sync_id: string }[];
+        }) => void) => () => void;
         cancelBulk: (currentUser?: any) => Promise<{ success: boolean; message: string }>;
         getUnreadCount: (siteId?: number) => Promise<number>;
         getUnreadList: (siteId?: number) => Promise<any[]>;
