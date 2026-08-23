@@ -741,14 +741,22 @@ export function declarerDoublon(
 
   const runTx = db.transaction(() => {
     // Vérifier l'existence et l'accès à la carte — même modèle de cloisonnement que delivrerCarte()
-    const carte = db.prepare('SELECT sync_id, site_id, centre_id, statut, doublon_declare_par, doublon_declare_le FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { sync_id: string | null; site_id: number; centre_id: number | null; statut: string; doublon_declare_par: string | null; doublon_declare_le: string | null } | undefined;
+    const carte = db.prepare('SELECT sync_id, site_id, centre_id, statut, doublon_declare_par, doublon_declare_le, rangement FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as { sync_id: string | null; site_id: number; centre_id: number | null; statut: string; doublon_declare_par: string | null; doublon_declare_le: string | null; rangement: string | null } | undefined;
 
     if (!carte) {
       throw new Error("Carte introuvable, ou accès non autorisé pour votre site.");
     }
 
+    // Même règle que isUnclassifiedCard côté front (useDeliveryFlow.ts) et que delivrerCarte()
+    // ci-dessus : une carte sans rangement exploitable est considérée non classée, et ne doit
+    // pas être bloquée par le centre_id d'import par défaut de la carte.
+    const isUnclassified = !carte.rangement || carte.rangement.trim() === '' || carte.rangement.trim().toUpperCase() === 'NON CLASSE';
+
     if (currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
-      if (carte.centre_id !== currentUser.centre_id || carte.site_id !== currentUser.site_id) {
+      if (carte.site_id !== currentUser.site_id) {
+        throw new Error("Action refusée : Cette carte appartient à un autre site.");
+      }
+      if (!isUnclassified && carte.centre_id !== currentUser.centre_id) {
         throw new Error("Action refusée : Cette carte appartient à un autre centre de distribution.");
       }
     }
