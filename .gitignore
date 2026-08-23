@@ -28,3 +28,7 @@ dist-e2e-cloud/
 # Identifiants Supabase du projet dev/staging e2e-cloud — jamais committés.
 .env.e2e
 .env.e2e.local
+
+# Fichier de crash généré par bash.exe (Git Bash/MSYS2) en cas d'échec de fork() —
+# artefact de l'environnement Windows local, sans rapport avec le projet.
+bash.exe.stackdump
