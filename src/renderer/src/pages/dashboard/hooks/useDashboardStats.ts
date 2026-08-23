@@ -49,6 +49,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const [cloudCartesCount, setCloudCartesCount] = useState<number>(0);
   const [totalCloudCartesCount, setTotalCloudCartesCount] = useState<number>(0);
   const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number } | null>(null);
+  const [centreCardsCount, setCentreCardsCount] = useState<number | null>(null);
 
   const loadGlobalData = async (silent = false) => {
     try {
@@ -237,6 +238,74 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     return () => clearInterval(interval);
   }, [user?.role, user?.site_id, activeSiteId]);
 
+  // ── Badge "cartes du centre" (généralisé depuis AgentVerificationLayout.tsx) ────────────
+  // Contexte : le badge `stats.total` reste volontairement scopé au SITE pour la plupart des
+  // rôles (recherche multi-centre autorisée, cf. correctif RechercheView.tsx). Ce second badge
+  // est un appel IPC indépendant, avec `centreId` explicitement fourni, pour afficher en plus
+  // le sous-total propre au centre de l'utilisateur. Restreint aux rôles qui en ont l'usage
+  // (pattern de gating identique à CLOUD_COUNT_ROLES ci-dessus) pour ne pas déclencher un appel
+  // réseau superflu sur les rôles sans ce badge à l'écran.
+  const CENTRE_CARDS_COUNT_ROLES = ['OPERATEUR_VERIFICATION', 'ADMIN_CENTRE'];
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.role || !CENTRE_CARDS_COUNT_ROLES.includes(user.role)) {
+      setCentreCardsCount(null);
+      return undefined;
+    }
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (siteIdToUse && user?.centre_id) {
+      window.api.stats.get(siteIdToUse, user.centre_id)
+        .then((s: any) => { if (!cancelled) setCentreCardsCount(s?.total ?? 0); })
+        .catch(() => { if (!cancelled) setCentreCardsCount(null); });
+    }
+    return () => { cancelled = true; };
+  }, [user?.site_id, user?.centre_id, user?.role, activeSiteId]);
+
+  // ── Rafraîchissement dynamique des compteurs sur ajout de carte en tâche de fond ──────────
+  // Abonnement à 'sync:cards-received' (émis UNIQUEMENT par les cycles automatiques silencieux,
+  // voir downstream.ts) : incrémentation optimiste de stats.total et centreCardsCount, SANS
+  // requête SQL complète, quand une carte est effectivement AJOUTÉE (jamais sur une simple
+  // mise à jour). Le badge site s'incrémente pour tout ajout ; le badge centre uniquement si
+  // l'ajout concerne le centre de l'utilisateur connecté (insertedInMyCentre).
+  // Abonnement IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2).
+  useEffect(() => {
+    if (!window.api?.sync?.onCardsReceived) return undefined;
+    const unsubscribe = window.api.sync.onCardsReceived((data) => {
+      const insertedCount = data?.insertedCount ?? 0;
+      const insertedInMyCentre = data?.insertedInMyCentre ?? 0;
+      if (insertedCount <= 0) return;
+
+      // Garde anti-décalage site (cas SUPER ADMIN en vue gouvernance d'un site différent
+      // du site de connexion) : ignorer toute notification ne concernant pas le site affiché.
+      const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+      if (data?.siteId != null && siteIdToUse != null && Number(data.siteId) !== Number(siteIdToUse)) {
+        return;
+      }
+
+      const totalIncrement = user?.role === 'ADMIN_CENTRE' ? insertedInMyCentre : insertedCount;
+      if (totalIncrement > 0) {
+        setStats((prev: any) => {
+          const next = prev ? { ...prev, total: (prev.total ?? 0) + totalIncrement } : prev;
+          // Mise à jour simultanée du cache renderer (risque de régression identifié : un
+          // démontage/remontage ultérieur du layout ne doit pas resservir une valeur de
+          // cache antérieure au pull).
+          if (next) {
+            useCacheStore.getState().setDashboardCache({
+              ...useCacheStore.getState().dashboardCache,
+              stats: next
+            });
+          }
+          return next;
+        });
+      }
+
+      if (user?.role && CENTRE_CARDS_COUNT_ROLES.includes(user.role) && insertedInMyCentre > 0) {
+        setCentreCardsCount((prev) => (prev !== null ? prev + insertedInMyCentre : prev));
+      }
+    });
+    return () => unsubscribe();
+  }, [user?.role, user?.site_id, user?.centre_id, activeSiteId]);
+
   useEffect(() => {
     const cache = useCacheStore.getState().dashboardCache;
     let hasCache = false;
@@ -286,6 +355,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     cloudCartesCount,
     totalCloudCartesCount,
     detailedSyncStats,
+    centreCardsCount,
     loadGlobalData,
     loadStats
   };

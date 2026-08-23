@@ -576,7 +576,11 @@ const api = {
      */
     onCardsReceived: (callback: (data: {
       count: number;
-      cards: { noms: string; prenoms: string; rangement: string | null; sync_id: string }[];
+      insertedCount?: number;
+      updatedCount?: number;
+      insertedInMyCentre?: number;
+      siteId?: number;
+      cards: { noms: string; prenoms: string; rangement: string | null; sync_id: string; isNew?: boolean }[];
     }) => void) => {
       const listener = (_: any, data: any) => callback(data);
       ipcRenderer.on('sync:cards-received', listener);

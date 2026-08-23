@@ -6,6 +6,7 @@ import { BrowserWindow, app } from 'electron';
 import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
+import { getSecureCurrentUser } from '../auth/session-heartbeat';
 
 // ─── Garde de réentrance : preloadUsersFromCloud() ──────────────────────────
 // `syncEngine.init()` est déclenché depuis `mainWindow.on('ready-to-show', ...)`
@@ -40,6 +41,7 @@ export interface ReceivedCardLabel {
   prenoms: string;
   rangement: string | null;
   sync_id: string;
+  isNew: boolean;
 }
 
 /**
@@ -101,6 +103,14 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
     return 0;
   }
   const db = getDatabase()!;
+
+  // Résolution du centre_id de l'utilisateur connecté AVANT la boucle de chunks (CLAUDE.md
+  // §3) : le DownloadWorker tourne dans un thread séparé sans accès à getSecureCurrentUser(),
+  // donc seule cette valeur déjà validée côté thread principal lui est transmise en lecture
+  // seule via postMessage — jamais une valeur renderer. Sert au comptage
+  // insertedInMyCentreCount (badge "Les cartes de ce centre", voir useDashboardStats.ts).
+  const secureUser = getSecureCurrentUser();
+  const myCentreId = secureUser?.centre_id != null ? Number(secureUser.centre_id) : null;
 
   // 1. TÉLÉCHARGER ET STOCKER LE SITE COURANT (t_sites)
   try {
@@ -251,10 +261,19 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
   // quel que soit le volume réel (politique low-memory §2 : jamais la liste complète).
   let cardLabels: ReceivedCardLabel[] = [];
 
+  // Compteurs exacts NON plafonnés (contrairement à cardLabels ci-dessus, borné à
+  // CARDS_LABEL_CAP) — accumulés à travers tous les chunks du pull.
+  let totalInserted = 0;
+  let totalUpdated = 0;
+  let totalInsertedInMyCentre = 0;
+
   while (hasMore) {
-    const { fetched, processed, insertedLabels } = await runDownstreamChunk(siteId);
+    const { fetched, processed, insertedCount, updatedCount, insertedInMyCentreCount, insertedLabels } = await runDownstreamChunk(siteId, myCentreId);
     totalFetched += fetched;
     totalMerged += processed;
+    totalInserted += insertedCount || 0;
+    totalUpdated += updatedCount || 0;
+    totalInsertedInMyCentre += insertedInMyCentreCount || 0;
 
     if (insertedLabels && insertedLabels.length > 0 && cardLabels.length < CARDS_LABEL_CAP) {
       for (const label of insertedLabels) {
@@ -369,6 +388,10 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
       BrowserWindow.getAllWindows().forEach(w =>
         w.webContents.send('sync:cards-received', {
           count: totalMerged,
+          insertedCount: totalInserted,
+          updatedCount: totalUpdated,
+          insertedInMyCentre: totalInsertedInMyCentre,
+          siteId,
           cards: isGranular ? cardLabels : []
         })
       );
@@ -383,7 +406,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
 /**
  * Traite un unique lot (chunk) de 500 cartes maximum de Supabase via Worker.
  */
-async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
+async function runDownstreamChunk(siteId: number, myCentreId: number | null): Promise<{ fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] }> {
   const db = getDatabase()!;
   
   // 1. Récupération du watermark local dans t_config
@@ -403,7 +426,7 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
   const supabase = getSupabaseClient();
   if (!supabase) {
     log.warn('[runDownstreamChunk] Client Supabase non disponible — chunk ignoré.');
-    return { fetched: 0, processed: 0, insertedLabels: [] };
+    return { fetched: 0, processed: 0, insertedCount: 0, updatedCount: 0, insertedInMyCentreCount: 0, insertedLabels: [] };
   }
 
   // 2. Requête Supabase avec AbortController
@@ -442,20 +465,20 @@ async function runDownstreamChunk(siteId: number): Promise<{ fetched: number; pr
     clearTimeout(timeoutId);
     if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
       log.warn("⚠️ [SUPABASE] Requête downstream interrompue : Timeout. Passage en mode dégradé.");
-      return { fetched: 0, processed: 0, insertedLabels: [] };
+      return { fetched: 0, processed: 0, insertedCount: 0, updatedCount: 0, insertedInMyCentreCount: 0, insertedLabels: [] };
     }
     throw err;
   }
 
   if (!cloudCards || cloudCards.length === 0) {
-    return { fetched: 0, processed: 0, insertedLabels: [] };
+    return { fetched: 0, processed: 0, insertedCount: 0, updatedCount: 0, insertedInMyCentreCount: 0, insertedLabels: [] };
   }
 
   log.info(`Downstream Chunk: Found ${cloudCards.length} updates on Cloud. Sending to Worker...`);
 
   // 3. Délégation au Worker pour l'insertion SQLite (zéro gel UI), avec retry borné sur
   // erreur transitoire de verrouillage (voir writeChunkViaWorker ci-dessous).
-  return writeChunkViaWorkerWithRetry(cloudCards, watermark, lastSyncId, siteId);
+  return writeChunkViaWorkerWithRetry(cloudCards, watermark, lastSyncId, siteId, myCentreId);
 }
 
 /**
@@ -492,12 +515,13 @@ async function writeChunkViaWorkerWithRetry(
   cloudCards: any[],
   watermark: string,
   lastSyncId: string,
-  siteId: number
-): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
+  siteId: number,
+  myCentreId: number | null
+): Promise<{ fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] }> {
   let lastErr: any = null;
   for (let attempt = 0; attempt <= CHUNK_WRITE_MAX_RETRIES; attempt++) {
     try {
-      return await writeChunkViaWorker(cloudCards, watermark, lastSyncId, siteId);
+      return await writeChunkViaWorker(cloudCards, watermark, lastSyncId, siteId, myCentreId);
     } catch (err: any) {
       lastErr = err;
       const isLastAttempt = attempt >= CHUNK_WRITE_MAX_RETRIES;
@@ -524,8 +548,9 @@ function writeChunkViaWorker(
   cloudCards: any[],
   watermark: string,
   lastSyncId: string,
-  siteId: number
-): Promise<{ fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] }> {
+  siteId: number,
+  myCentreId: number | null
+): Promise<{ fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] }> {
   return new Promise((resolve, reject) => {
     let sqlitePath: string;
     try {
@@ -539,7 +564,7 @@ function writeChunkViaWorker(
       workerData: { dbPath: getDbPath(), sqlitePath }
     });
 
-    let chunkResult: { fetched: number; processed: number; insertedLabels: ReceivedCardLabel[] } | null = null;
+    let chunkResult: { fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] } | null = null;
     let chunkError: Error | null = null;
 
     worker.on('message', (msg) => {
@@ -551,10 +576,14 @@ function writeChunkViaWorker(
         // fetched = pagination réelle (pour savoir s'il reste des pages sur Supabase) ;
         // processed = nombre de cartes réellement insérées/mises à jour localement
         // (certaines cartes reçues peuvent être déjà à jour et donc ignorées par le worker).
+        // insertedCount/updatedCount/insertedInMyCentreCount = compteurs exacts NON plafonnés.
         // insertedLabels = libellés bornés (CARDS_LABEL_CAP) déjà plafonnés côté worker.
         chunkResult = {
           fetched: cloudCards.length,
           processed: msg.processed || 0,
+          insertedCount: msg.insertedCount || 0,
+          updatedCount: msg.updatedCount || 0,
+          insertedInMyCentreCount: msg.insertedInMyCentreCount || 0,
           insertedLabels: Array.isArray(msg.insertedLabels) ? msg.insertedLabels : []
         };
         worker.postMessage({ type: 'close' });
@@ -573,7 +602,7 @@ function writeChunkViaWorker(
     worker.on('exit', (code) => {
       if (code !== 0) log.warn(`[DownloadWorker] Exited with code ${code}`);
       if (chunkError) reject(chunkError);
-      else resolve(chunkResult || { fetched: 0, processed: 0, insertedLabels: [] });
+      else resolve(chunkResult || { fetched: 0, processed: 0, insertedCount: 0, updatedCount: 0, insertedInMyCentreCount: 0, insertedLabels: [] });
     });
 
     worker.postMessage({
@@ -581,7 +610,8 @@ function writeChunkViaWorker(
       cloudCards,
       watermark,
       lastSyncId,
-      siteId
+      siteId,
+      myCentreId
     });
   });
 }

@@ -3,11 +3,16 @@
 // dans un thread séparé pour ne JAMAIS bloquer le thread principal d'Electron.
 //
 // Protocole de communication (parentPort):
-//   ← reçoit : { type: 'write-chunk', watermark, lastSyncId, cloudCards, siteId }
-//   → envoie  : { type: 'chunk-done', processed, watermark, lastSyncId, insertedLabels }
-//     (insertedLabels : libellés bornés — max 6, {noms,prenoms,rangement,sync_id} — des
+//   ← reçoit : { type: 'write-chunk', watermark, lastSyncId, cloudCards, siteId, myCentreId }
+//     (myCentreId : centre_id de l'utilisateur connecté, résolu côté thread principal via
+//     getSecureCurrentUser() — CLAUDE.md §3, le worker n'y a structurellement pas accès)
+//   → envoie  : { type: 'chunk-done', processed, insertedCount, updatedCount,
+//                 insertedInMyCentreCount, watermark, lastSyncId, insertedLabels }
+//     (insertedLabels : libellés bornés — max 6, {noms,prenoms,rangement,sync_id,isNew} — des
 //     cartes réellement insérées/mises à jour dans ce chunk, pour la notification
-//     granulaire par carte côté renderer, voir downstream.ts CARDS_NOTIFICATION_THRESHOLD)
+//     granulaire par carte côté renderer, voir downstream.ts CARDS_NOTIFICATION_THRESHOLD.
+//     insertedCount/updatedCount/insertedInMyCentreCount : compteurs exacts NON plafonnés,
+//     contrairement à insertedLabels qui reste borné à CARDS_LABEL_CAP.)
 //   → envoie  : { type: 'error', message }
 //   → envoie  : { type: 'log', level, message }
 
@@ -60,7 +65,7 @@ function getOrOpenDb() {
 
 // ─── Traitement d'un chunk ──────────────────────────────────────────────────
 
-function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
+function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId }) {
   const database = getOrOpenDb();
 
   const selectStmt = database.prepare('SELECT id_carte, updated_at, is_dirty, statut FROM t_cartes WHERE sync_id = ?');
@@ -167,16 +172,23 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
   // 500) — politique low-memory (§2 CLAUDE.md) : jamais la liste complète d'un gros chunk.
   const CARDS_LABEL_CAP = 6;
   const insertedLabels = [];
-  function pushLabel(card) {
+  function pushLabel(card, isNew) {
     if (insertedLabels.length < CARDS_LABEL_CAP) {
       insertedLabels.push({
         noms: card.noms || '',
         prenoms: card.prenoms || '',
         rangement: card.rangement || null,
-        sync_id: card.sync_id
+        sync_id: card.sync_id,
+        isNew: !!isNew
       });
     }
   }
+
+  // Compteurs exacts NON plafonnés (coût mémoire nul, contrairement aux labels bornés
+  // ci-dessus) — voir en-tête de fichier pour la sémantique de chaque compteur.
+  let insertedCount = 0;
+  let updatedCount = 0;
+  let insertedInMyCentreCount = 0;
 
   // Désactivation temporaire des FK pendant la transaction (base fraîche / ordre d'arrivée)
   database.exec('PRAGMA foreign_keys = OFF;');
@@ -249,7 +261,11 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
             updated_at: card.updated_at || new Date().toISOString()
           });
           processedCount++;
-          pushLabel(card);
+          insertedCount++;
+          if (myCentreId != null && Number(card.id_centre || card.centre_id) === Number(myCentreId)) {
+            insertedInMyCentreCount++;
+          }
+          pushLabel(card, true);
         } else if (localCard.is_dirty === 1) {
           // Carte modifiée localement (non encore renvoyée) : on protège les champs
           // en cours de correction, MAIS on adopte quand même un statut cloud plus
@@ -291,7 +307,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               apurement_annulation_motif: card.apurement_annulation_motif || null
             });
             processedCount++;
-            pushLabel(card);
+            updatedCount++;
+            pushLabel(card, false);
           }
         } else {
           // UPDATE si la version Cloud est plus récente
@@ -347,7 +364,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
               updated_at: card.updated_at || new Date().toISOString()
             });
             processedCount++;
-            pushLabel(card);
+            updatedCount++;
+            pushLabel(card, false);
           }
         }
       }
@@ -360,7 +378,15 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId }) {
     database.exec('PRAGMA foreign_keys = ON;');
   }
 
-  return { processed: processedCount, watermark: latestUpdatedAt, lastSyncId: latestSyncId, insertedLabels };
+  return {
+    processed: processedCount,
+    insertedCount,
+    updatedCount,
+    insertedInMyCentreCount,
+    watermark: latestUpdatedAt,
+    lastSyncId: latestSyncId,
+    insertedLabels
+  };
 }
 
 // ─── Point d'entrée (messages du Main Thread) ────────────────────────────────

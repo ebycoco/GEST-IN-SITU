@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Building2, Database, Globe, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
+import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { toast } from 'react-hot-toast';
 
 export default function AdminCentreLayout() {
@@ -11,6 +12,11 @@ export default function AdminCentreLayout() {
   // bouton manuel "Récupérer" ci-dessous doit rester désactivé et masquer son compteur —
   // cf. useAutoDownstreamPreference.ts.
   const autoDownstream = useAutoDownstreamPreference();
+  // Additif : n'alimente que les deux badges ci-dessous (stats.total / centreCardsCount),
+  // sans toucher aux states locaux existants (cloudCartesCount/detailedSyncStats/
+  // fetchBaseData) qui pilotent déjà les boutons de sync de ce layout — coexistence
+  // volontaire, hors périmètre de cet ajout.
+  const { stats: dashboardStats, centreCardsCount } = useDashboardStats(user, null, false);
   const [centreName, setCentreName] = useState<string>('');
   
   // Sync States
@@ -170,8 +176,42 @@ export default function AdminCentreLayout() {
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <button 
-              onClick={handleSyncUsers} 
+            {dashboardStats?.total !== undefined && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 16px',
+                background: 'rgba(74, 222, 128, 0.05)',
+                borderRadius: 12,
+                border: '1px solid rgba(74, 222, 128, 0.2)',
+                color: 'var(--text-secondary)'
+              }}>
+                <Database size={16} color="#4ade80" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Cartes disponibles en local :</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'white' }}>
+                  {dashboardStats.total.toLocaleString('fr-FR')}
+                </span>
+              </div>
+            )}
+
+            {centreCardsCount !== null && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '10px 16px',
+                background: 'rgba(96, 165, 250, 0.05)',
+                borderRadius: 12,
+                border: '1px solid rgba(96, 165, 250, 0.2)',
+                color: 'var(--text-secondary)'
+              }}>
+                <Database size={16} color="#60a5fa" />
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Les cartes de ce centre :</span>
+                <span style={{ fontSize: 15, fontWeight: 800, color: 'white' }}>
+                  {centreCardsCount.toLocaleString('fr-FR')}
+                </span>
+              </div>
+            )}
+
+            <button
+              onClick={handleSyncUsers}
               disabled={isSyncingUsers }
               className="btn-outline" 
               style={{ ...syncBtnStyle, cursor: (isSyncingUsers ) ? 'not-allowed' : 'pointer', opacity: (isSyncingUsers ) ? 0.5 : 1 }}

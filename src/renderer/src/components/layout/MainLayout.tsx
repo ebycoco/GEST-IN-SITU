@@ -81,12 +81,24 @@ export default function MainLayout() {
         if (cards.length > 0) {
           cards.forEach((card) => {
             const label = [card.prenoms, card.noms].filter(Boolean).join(' ').trim() || 'Carte';
+            const verbe = card.isNew ? 'ajoutée' : 'mise à jour';
             toast.success(
-              `📥 Carte récupérée : ${label}${card.rangement ? ` (${card.rangement})` : ''}`,
+              `📥 Carte ${verbe} : ${label}${card.rangement ? ` (${card.rangement})` : ''}`,
               toastStyle
             );
           });
+        } else if (typeof data?.insertedCount === 'number' && typeof data?.updatedCount === 'number') {
+          const inserted = data.insertedCount;
+          const updated = data.updatedCount;
+          const parts: string[] = [];
+          if (inserted > 0) parts.push(`${inserted.toLocaleString('fr')} carte(s) ajoutée(s)`);
+          if (updated > 0) parts.push(`${updated.toLocaleString('fr')} carte(s) mise(s) à jour`);
+          const summary = parts.length > 0
+            ? parts.join(', ')
+            : `${count.toLocaleString('fr')} carte(s) téléchargée(s)`;
+          toast.success(`📥 Synchronisation terminée : ${summary} !`, toastStyle);
         } else {
+          // Repli défensif : payload sans insertedCount/updatedCount (compat ancienne version).
           toast.success(
             `📥 Synchronisation terminée : ${count.toLocaleString('fr')} carte(s) téléchargée(s) !`,
             toastStyle
