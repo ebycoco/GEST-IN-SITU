@@ -3,7 +3,8 @@ import { useAuthStore } from '../../stores/authStore';
 import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
-  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck
+  PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck,
+  Fingerprint, Calendar, AlertTriangle, History
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import iconLogo from '../../assets/icon.png';
@@ -129,8 +130,19 @@ export default function Sidebar() {
 
     if (user.role === 'ADMIN_CENTRE') {
       return [
-        { label: 'Portail Supervision', icon: Building2, path: '/admin-centre' },
+        { isHeader: true, label: 'PORTAIL SUPERVISION' },
+        { label: 'Tableau de Bord', icon: LayoutDashboard, path: '/admin-centre', end: true },
+        { label: 'Cartes CMU', icon: CreditCard, path: '/admin-centre/cartes' },
+        { label: 'Recherche CMU', icon: Search, path: '/admin-centre/recherche' },
+        { label: 'Suivi des Retraits', icon: BarChart2, path: '/admin-centre/retraits' },
+        { label: 'File d\'attente', icon: Clock, path: '/admin-centre/queue' },
+        { label: 'Journaux', icon: FileText, path: '/admin-centre/logs' },
+        { label: 'Mon équipe', icon: Users, path: '/admin-centre/equipe' },
+
+        { isHeader: true, label: 'AUTRES' },
         { label: 'Apurement Historique', icon: BookOpenCheck, path: '/apurement' },
+
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
@@ -138,7 +150,15 @@ export default function Sidebar() {
     // Autres rôles...
     if (user.role === 'OPERATEUR_QUALITE') {
       return [
-        { label: 'Qualité & Assainissement', icon: ShieldCheck, path: '/agent-qualite' },
+        { isHeader: true, label: 'QUALITÉ & ASSAINISSEMENT' },
+        { label: 'Vue d\'ensemble', icon: LayoutDashboard, path: '/agent-qualite', end: true },
+        { label: 'Doublons', icon: Users, path: '/agent-qualite/doublons' },
+        { label: 'Données Manquantes', icon: Fingerprint, path: '/agent-qualite/manquants' },
+        { label: 'Dates Invalides ou Absentes', icon: Calendar, path: '/agent-qualite/invalides' },
+        { label: 'Autres Anomalies', icon: AlertTriangle, path: '/agent-qualite/anomalies-brutes' },
+        { label: 'Recherche Universelle', icon: Search, path: '/agent-qualite/recherche-universelle' },
+
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
@@ -156,14 +176,26 @@ export default function Sidebar() {
     }
     if (user.role === 'OPERATEUR_APUREMENT') {
       return [
-        { label: 'Apurement Historique', icon: BookOpenCheck, path: '/apurement' },
+        { isHeader: true, label: 'PORTAIL D\'APUREMENT' },
+        { label: 'Vue d\'ensemble', icon: LayoutDashboard, path: '/apurement', end: true },
+        { label: 'Travail d\'apurement', icon: BookOpenCheck, path: '/apurement/travail' },
+        { label: 'Cartes déchargées', icon: History, path: '/apurement/cartes-dechargees' },
+
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
     if (user.role === 'OPERATEUR_VERIFICATION') {
       return [
-        { label: 'Portail Vérification', icon: Search, path: '/agent-verification' },
+        { isHeader: true, label: 'PORTAIL DE VÉRIFICATION' },
+        { label: 'Vue d\'ensemble', icon: LayoutDashboard, path: '/agent-verification', end: true },
+        { label: 'Recherche Active', icon: Search, path: '/agent-verification/recherche' },
+        { label: 'Signalements d\'anomalies', icon: AlertTriangle, path: '/agent-verification/signalements' },
+
+        { isHeader: true, label: 'AUTRES' },
         { label: 'Recherche Rapide', icon: FileText, path: '/search' },
+
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
@@ -291,7 +323,7 @@ export default function Sidebar() {
             <NavLink 
               key={item.path} 
               to={initialDataLoading ? "#" : item.path} 
-              end={item.path === '/dashboard'}
+              end={item.path === '/dashboard' || item.end === true}
               onClick={(e) => {
                 if (initialDataLoading) {
                   e.preventDefault();

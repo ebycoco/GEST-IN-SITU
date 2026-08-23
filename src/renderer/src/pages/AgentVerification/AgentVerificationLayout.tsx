@@ -227,18 +227,22 @@ export default function AgentVerificationLayout() {
           </div>
         </div>
 
-        {/* Sous-navigation Modulaire */}
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          <NavLink to="/agent-verification" end className="tab-link" style={getNavLinkStyle}>
-            <LayoutDashboard size={16} /> Vue d'ensemble
-          </NavLink>
-          <NavLink to="/agent-verification/recherche" className="tab-link" style={getNavLinkStyle}>
-            <Search size={16} /> Recherche Active
-          </NavLink>
-          <NavLink to="/agent-verification/signalements" className="tab-link" style={getNavLinkStyle}>
-            <AlertTriangle size={16} /> Signalements d'anomalies
-          </NavLink>
-        </div>
+        {/* Sous-navigation Modulaire — masquée pour OPERATEUR_VERIFICATION (navigation désormais
+            via la sidebar, cf. Sidebar.tsx) ; reste affichée telle quelle pour SUPER ADMIN /
+            ADMINISTRATEUR_SITE / ADMIN_CENTRE qui partagent cette même route `/agent-verification`. */}
+        {user?.role !== 'OPERATEUR_VERIFICATION' && (
+          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+            <NavLink to="/agent-verification" end className="tab-link" style={getNavLinkStyle}>
+              <LayoutDashboard size={16} /> Vue d'ensemble
+            </NavLink>
+            <NavLink to="/agent-verification/recherche" className="tab-link" style={getNavLinkStyle}>
+              <Search size={16} /> Recherche Active
+            </NavLink>
+            <NavLink to="/agent-verification/signalements" className="tab-link" style={getNavLinkStyle}>
+              <AlertTriangle size={16} /> Signalements d'anomalies
+            </NavLink>
+          </div>
+        )}
       </div>
 
       {/* Contenu Principal (Outlet) */}

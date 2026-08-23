@@ -1,36 +1,36 @@
 import React, { useState, useEffect } from 'react';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { BookOpenCheck, Database, Globe, RefreshCw, LayoutDashboard, History } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
-import InventaireApurement from '../inventaire/InventaireApurement';
-import ApurementOverview from './ApurementOverview';
-import ApurementCorrections from './ApurementCorrections';
-
-type Tab = 'OVERVIEW' | 'APUREMENT' | 'CORRECTIONS';
 
 /**
- * Portail dédié au rôle OPERATEUR_APUREMENT.
+ * Portail dédié au rôle OPERATEUR_APUREMENT (également partagé, en lecture, par SUPER ADMIN /
+ * ADMINISTRATEUR_SITE / ADMIN_CENTRE via la route `/apurement`).
  *
- * Trois onglets internes (pas de nouvelle route react-router, `/apurement` reste unique dans
- * App.tsx), sur le modèle exact d'InventaireLayout.tsx (`type Tab`, `useState<Tab>`, rendu
- * conditionnel) :
- * - "Vue d'ensemble" (ApurementOverview, par défaut à l'ouverture) : 4 KPI + liste paginée du
- *   travail du jour.
- * - "Travail d'apurement" : rend <InventaireApurement /> — le composant est déjà autonome
+ * Trois sous-routes react-router imbriquées sous `/apurement` (App.tsx), sur le modèle exact
+ * d'AgentQualiteLayout.tsx / AgentVerificationLayout.tsx (`NavLink` + `<Outlet />`) :
+ * - "Vue d'ensemble" (index, ApurementOverview) : 4 KPI + liste paginée du travail du jour.
+ * - "Travail d'apurement" (`travail`, InventaireApurement) — le composant est déjà autonome
  *   (aucune prop reçue, ne dépend que de useAuthStore pour site_id/login) et reste réutilisé
  *   tel quel depuis InventaireLayout.tsx (onglet APUREMENT), donc partagé sans modification
  *   entre les deux portails.
- * - "Cartes déchargées" (ApurementCorrections, plan validé — correction/annulation d'un
- *   émargement Apurement erroné) : liste des cartes DELIVRE avec actions tracées de
- *   correction/annulation d'un émargement erroné (RBAC mixte, voir cartes.queries.ts).
+ * - "Cartes déchargées" (`cartes-dechargees`, ApurementCorrections) : liste des cartes DELIVRE
+ *   avec actions tracées de correction/annulation d'un émargement erroné (RBAC mixte, voir
+ *   cartes.queries.ts).
+ *
+ * La barre à onglets horizontale ci-dessous n'est masquée que pour OPERATEUR_APUREMENT (dont la
+ * navigation passe désormais par la sidebar, cf. Sidebar.tsx) — elle reste affichée telle quelle
+ * pour SUPER ADMIN/ADMINISTRATEUR_SITE/ADMIN_CENTRE qui partagent cette même route.
  *
  * La barre de synchro cloud (badge local + Actualiser + Récupérer + Envoyer les corrections)
  * reprend à l'identique le bloc déjà en place dans InventaireLayout.tsx / AgentQualiteLayout.tsx.
  */
 export default function ApurementLayout() {
   const { user, activeSiteId } = useAuthStore();
-  const [activeTab, setActiveTab] = useState<Tab>('OVERVIEW');
+  const location = useLocation();
+  const isOverview = location.pathname === '/apurement' || location.pathname === '/apurement/';
 
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loading: isStatsLoading, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
@@ -194,88 +194,65 @@ export default function ApurementLayout() {
           </div>
         </div>
 
-        {/* Onglets internes : Vue d'ensemble / Travail d'apurement (même pattern qu'InventaireLayout.tsx) */}
-        <div style={{ display: 'flex', gap: 12, background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 16, border: '1px solid rgba(255,255,255,0.05)' }}>
-          <button
-            onClick={() => setActiveTab('OVERVIEW')}
-            className="hover-scale"
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              border: 'none',
-              borderRadius: 12,
-              background: activeTab === 'OVERVIEW' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
-              color: activeTab === 'OVERVIEW' ? 'white' : 'var(--text-muted)',
-              fontWeight: 800,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: activeTab === 'OVERVIEW' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
-            }}
-          >
-            <LayoutDashboard size={18} />
-            VUE D'ENSEMBLE
-          </button>
+        {/* Onglets : Vue d'ensemble / Travail d'apurement / Cartes déchargées. Masqués pour
+            OPERATEUR_APUREMENT (navigation désormais via la sidebar, cf. Sidebar.tsx) — restent
+            affichés tels quels pour SUPER ADMIN/ADMINISTRATEUR_SITE/ADMIN_CENTRE qui partagent
+            cette même route `/apurement`. */}
+        {user?.role !== 'OPERATEUR_APUREMENT' && (
+          <div style={{ display: 'flex', gap: 12, background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 16, border: '1px solid rgba(255,255,255,0.05)' }}>
+            <NavLink
+              to="/apurement"
+              end
+              className="hover-scale"
+              style={() => getNavLinkStyle({ isActive: isOverview })}
+            >
+              <LayoutDashboard size={18} />
+              VUE D'ENSEMBLE
+            </NavLink>
 
-          <button
-            onClick={() => setActiveTab('APUREMENT')}
-            className="hover-scale"
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              border: 'none',
-              borderRadius: 12,
-              background: activeTab === 'APUREMENT' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
-              color: activeTab === 'APUREMENT' ? 'white' : 'var(--text-muted)',
-              fontWeight: 800,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: activeTab === 'APUREMENT' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
-            }}
-          >
-            <BookOpenCheck size={18} />
-            TRAVAIL D'APUREMENT
-          </button>
+            <NavLink
+              to="/apurement/travail"
+              className="hover-scale"
+              style={getNavLinkStyle}
+            >
+              <BookOpenCheck size={18} />
+              TRAVAIL D'APUREMENT
+            </NavLink>
 
-          <button
-            onClick={() => setActiveTab('CORRECTIONS')}
-            className="hover-scale"
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              border: 'none',
-              borderRadius: 12,
-              background: activeTab === 'CORRECTIONS' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
-              color: activeTab === 'CORRECTIONS' ? 'white' : 'var(--text-muted)',
-              fontWeight: 800,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: activeTab === 'CORRECTIONS' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
-            }}
-          >
-            <History size={18} />
-            CARTES DÉCHARGÉES
-          </button>
-        </div>
+            <NavLink
+              to="/apurement/cartes-dechargees"
+              className="hover-scale"
+              style={getNavLinkStyle}
+            >
+              <History size={18} />
+              CARTES DÉCHARGÉES
+            </NavLink>
+          </div>
+        )}
       </div>
 
       {/* Contenu Principal */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {activeTab === 'OVERVIEW' && <ApurementOverview />}
-        {activeTab === 'APUREMENT' && <InventaireApurement />}
-        {activeTab === 'CORRECTIONS' && <ApurementCorrections />}
+        <Outlet />
       </div>
     </div>
   );
 }
+
+const getNavLinkStyle = ({ isActive }: { isActive: boolean }): React.CSSProperties => ({
+  flex: 1,
+  padding: '12px 16px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 8,
+  border: 'none',
+  borderRadius: 12,
+  background: isActive ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+  color: isActive ? 'white' : 'var(--text-muted)',
+  fontWeight: 800,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  transition: 'all 0.2s',
+  boxShadow: isActive ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
+});

@@ -188,13 +188,20 @@ test.describe.serial('QA Terrain — Portail dédié OPERATEUR_APUREMENT (/apure
     await window.screenshot({ path: join(SHOT_DIR, 'agent13-apu-01-login-redirect.png') });
   });
 
-  test('3. OPERATEUR_APUREMENT : sidebar réduite à "Apurement Historique" + "Mon Profil" uniquement', async () => {
+  test('3. OPERATEUR_APUREMENT : sidebar réduite aux 3 vues du portail (Vue d\'ensemble/Travail d\'apurement/Cartes déchargées) + Mon Profil', async () => {
+    // Depuis la migration des onglets internes d'ApurementLayout.tsx vers de vraies routes
+    // (App.tsx, cf. e2e/specs/_agent13_sidebar_4roles_migration.e2e.spec.ts pour la couverture
+    // complète de ce changement), la sidebar OPERATEUR_APUREMENT liste les 3 vues directement au
+    // lieu d'un lien unique "Apurement Historique" (libellé désormais réservé au raccourci
+    // ADMIN_CENTRE/SUPER ADMIN/ADMINISTRATEUR_SITE vers ce même portail).
     const { window } = env;
     const navItems = window.locator('.nav-item');
-    await expect(navItems).toHaveCount(2, { timeout: 10000 });
+    await expect(navItems).toHaveCount(4, { timeout: 10000 });
     const labels = await navItems.allTextContents();
     console.log(`[agent13][SIDEBAR] Entrées visibles pour OPERATEUR_APUREMENT : ${JSON.stringify(labels)}`);
-    expect(labels.some((l) => l.includes('Apurement Historique'))).toBe(true);
+    expect(labels.some((l) => l.includes("Vue d'ensemble"))).toBe(true);
+    expect(labels.some((l) => l.includes("Travail d'apurement"))).toBe(true);
+    expect(labels.some((l) => l.includes('Cartes déchargées'))).toBe(true);
     expect(labels.some((l) => l.includes('Mon Profil'))).toBe(true);
     // Aucune entrée d'administration ne doit fuiter (Agents, Infrastructures, Tableau de bord...).
     expect(labels.some((l) => /Agents|Infrastructures|Tableau de bord|Importation|Exportation/.test(l))).toBe(false);

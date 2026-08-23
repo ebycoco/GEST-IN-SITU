@@ -19,6 +19,9 @@ import SaisiePage from './pages/SaisiePage';
 import AdminQueuePage from './pages/AdminQueuePage';
 import InventaireLayout from './pages/inventaire/InventaireLayout';
 import ApurementLayout from './pages/apurement/ApurementLayout';
+import ApurementOverview from './pages/apurement/ApurementOverview';
+import ApurementCorrections from './pages/apurement/ApurementCorrections';
+import InventaireApurement from './pages/inventaire/InventaireApurement';
 import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect, useState } from 'react';
@@ -158,7 +161,11 @@ export default function App() {
             <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE']}><InventaireLayout /></ProtectedRoute>} />
 
             {/* Portail dédié Opérateur Apurement (émargement rétroactif des cahiers historiques) */}
-            <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><ApurementLayout /></ProtectedRoute>} />
+            <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><ApurementLayout /></ProtectedRoute>}>
+              <Route index element={<ApurementOverview />} />
+              <Route path="travail" element={<InventaireApurement />} />
+              <Route path="cartes-dechargees" element={<ApurementCorrections />} />
+            </Route>
 
             {/* Routes Agent de Qualité & Admin */}
             <Route path="agent-qualite" element={<ProtectedRoute requiredRoles={['OPERATEUR_QUALITE', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentQualiteLayout /></ProtectedRoute>}>

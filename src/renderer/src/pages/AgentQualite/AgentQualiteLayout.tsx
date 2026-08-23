@@ -251,35 +251,39 @@ export default function AgentQualiteLayout() {
           </div>
         )}
 
-        {/* Sous-navigation Modulaire */}
-        <div style={{ 
-          display: 'flex', 
-          gap: 8, 
-          overflowX: 'auto', 
-          paddingBottom: 4,
-          pointerEvents: isFetchingQuery ? 'none' : 'auto',
-          opacity: isFetchingQuery ? 0.6 : 1,
-          transition: 'opacity 0.2s ease-in-out'
-        }}>
-          <NavLink to="/agent-qualite" end className="tab-link" style={() => getNavLinkStyle({ isActive: isOverview })}>
-            <LayoutDashboard size={16} /> Vue d'ensemble
-          </NavLink>
-          <NavLink to="/agent-qualite/doublons" className="tab-link" style={getNavLinkStyle}>
-            <Users size={16} /> Doublons
-          </NavLink>
-          <NavLink to="/agent-qualite/manquants" className="tab-link" style={getNavLinkStyle}>
-            <Fingerprint size={16} /> Données Manquantes
-          </NavLink>
-          <NavLink to="/agent-qualite/invalides" className="tab-link" style={getNavLinkStyle}>
-            <Calendar size={16} /> Dates Invalides ou Absentes
-          </NavLink>
-          <NavLink to="/agent-qualite/anomalies-brutes" className="tab-link" style={getNavLinkStyle}>
-            <AlertTriangle size={16} /> Autres Anomalies
-          </NavLink>
-          <NavLink to="/agent-qualite/recherche-universelle" className="tab-link" style={getNavLinkStyle}>
-            <Search size={16} /> Recherche Universelle
-          </NavLink>
-        </div>
+        {/* Sous-navigation Modulaire — masquée pour OPERATEUR_QUALITE (navigation désormais via
+            la sidebar, cf. Sidebar.tsx) ; reste affichée telle quelle pour SUPER ADMIN /
+            ADMINISTRATEUR_SITE qui partagent cette même route `/agent-qualite`. */}
+        {user?.role !== 'OPERATEUR_QUALITE' && (
+          <div style={{
+            display: 'flex',
+            gap: 8,
+            overflowX: 'auto',
+            paddingBottom: 4,
+            pointerEvents: isFetchingQuery ? 'none' : 'auto',
+            opacity: isFetchingQuery ? 0.6 : 1,
+            transition: 'opacity 0.2s ease-in-out'
+          }}>
+            <NavLink to="/agent-qualite" end className="tab-link" style={() => getNavLinkStyle({ isActive: isOverview })}>
+              <LayoutDashboard size={16} /> Vue d'ensemble
+            </NavLink>
+            <NavLink to="/agent-qualite/doublons" className="tab-link" style={getNavLinkStyle}>
+              <Users size={16} /> Doublons
+            </NavLink>
+            <NavLink to="/agent-qualite/manquants" className="tab-link" style={getNavLinkStyle}>
+              <Fingerprint size={16} /> Données Manquantes
+            </NavLink>
+            <NavLink to="/agent-qualite/invalides" className="tab-link" style={getNavLinkStyle}>
+              <Calendar size={16} /> Dates Invalides ou Absentes
+            </NavLink>
+            <NavLink to="/agent-qualite/anomalies-brutes" className="tab-link" style={getNavLinkStyle}>
+              <AlertTriangle size={16} /> Autres Anomalies
+            </NavLink>
+            <NavLink to="/agent-qualite/recherche-universelle" className="tab-link" style={getNavLinkStyle}>
+              <Search size={16} /> Recherche Universelle
+            </NavLink>
+          </div>
+        )}
       </div>
 
       {/* Contenu Principal (Outlet) */}

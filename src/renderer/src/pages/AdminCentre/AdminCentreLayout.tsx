@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import {
-  Building2, Database, Globe, RefreshCw,
-  LayoutDashboard, CreditCard, Search, BarChart2, Clock, FileText, Users
-} from 'lucide-react';
+import { Outlet } from 'react-router-dom';
+import { Building2, Database, Globe, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
 
@@ -215,30 +212,6 @@ export default function AdminCentreLayout() {
           </div>
         </div>
 
-        {/* Navigation Modulaire */}
-        <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          <NavLink to="/admin-centre" end className="tab-link" style={getNavLinkStyle}>
-            <LayoutDashboard size={16} /> Tableau de Bord
-          </NavLink>
-          <NavLink to="/admin-centre/cartes" className="tab-link" style={getNavLinkStyle}>
-            <CreditCard size={16} /> Cartes CMU
-          </NavLink>
-          <NavLink to="/admin-centre/recherche" className="tab-link" style={getNavLinkStyle}>
-            <Search size={16} /> Recherche CMU
-          </NavLink>
-          <NavLink to="/admin-centre/retraits" className="tab-link" style={getNavLinkStyle}>
-            <BarChart2 size={16} /> Suivi des Retraits
-          </NavLink>
-          <NavLink to="/admin-centre/queue" className="tab-link" style={getNavLinkStyle}>
-            <Clock size={16} /> File d'attente
-          </NavLink>
-          <NavLink to="/admin-centre/logs" className="tab-link" style={getNavLinkStyle}>
-            <FileText size={16} /> Journaux
-          </NavLink>
-          <NavLink to="/admin-centre/equipe" className="tab-link" style={getNavLinkStyle}>
-            <Users size={16} /> Mon équipe
-          </NavLink>
-        </div>
       </div>
 
       {/* Contenu de la sous-page */}
@@ -262,28 +235,3 @@ const syncBtnStyle = {
   color: 'white',
   whiteSpace: 'nowrap' as any
 };
-
-const navLinkStyle = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '10px 16px',
-  borderRadius: 8,
-  color: 'var(--text-muted)',
-  textDecoration: 'none',
-  fontWeight: 600,
-  fontSize: 14,
-  transition: 'all 0.2s ease',
-  backgroundColor: 'rgba(255,255,255,0.02)',
-  border: '1px solid rgba(255,255,255,0.05)'
-};
-
-const getNavLinkStyle = ({ isActive }: { isActive: boolean }) => ({
-  ...navLinkStyle,
-  ...(isActive ? {
-    color: 'var(--accent-orange, #f39c12)',
-    backgroundColor: 'rgba(243, 156, 18, 0.1)',
-    border: '1px solid rgba(243, 156, 18, 0.3)'
-  } : {}),
-  whiteSpace: 'nowrap' as any
-});
