@@ -5373,7 +5373,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la récupération.");
       }
-      const pulledCount = await runDownstream(Number(siteId));
+      // notifyGranular = false : ce pull manuel affiche déjà son propre toast de confirmation
+      // côté renderer (VerificationSearchPage/useForceSyncActions) — voir downstream.ts pour
+      // le détail de la régression P1 corrigée (notifications empilées).
+      const pulledCount = await runDownstream(Number(siteId), false, false);
 
       // Rapatriement des entrées t_logs CRUD cross-poste (liste blanche CRUD_SYNC_WHITELIST,
       // voir src/main/utils/audit.ts). Isolé dans son propre try/catch : un échec ici ne doit
@@ -5531,7 +5534,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         `Lancement d'une synchronisation forcée (sans cache) pour le site ID ${siteId}.`
       );
 
-      const pulledCount = await runDownstream(Number(siteId), true);
+      // notifyGranular = false : ce pull manuel forcé affiche déjà son propre toast de
+      // confirmation côté renderer (SiteAdminView "Actualiser" / useForceSyncActions) — voir
+      // downstream.ts pour le détail de la régression P1 corrigée (notifications empilées).
+      const pulledCount = await runDownstream(Number(siteId), true, false);
 
       // Rapatriement des entrées t_logs CRUD cross-poste — mêmes garanties d'isolation que
       // pour sync:pullSiteCards ci-dessus (échec non-bloquant, cloisonnement site_id interne).

@@ -89,7 +89,7 @@ export async function getPendingCardsCount(siteId: number): Promise<number> {
  * Conformément à la Section 9, cette opération s'exécute par lots (chunks) de 500 maximum,
  * libérant périodiquement la RAM et le thread principal via un délai d'attente asynchrone.
  */
-export async function runDownstream(siteId: number, force: boolean = false): Promise<number> {
+export async function runDownstream(siteId: number, force: boolean = false, notifyGranular: boolean = true): Promise<number> {
   if (!siteId || isNaN(Number(siteId))) {
     log.warn("[SYNC] runDownstream appelé sans siteId valide. Synchronisation des cartes ignorée.");
     return 0;
@@ -354,16 +354,25 @@ export async function runDownstream(siteId: number, force: boolean = false): Pro
     // 'sync:users-synced' dans outbox.service.ts) : sous le seuil, le renderer affiche une
     // notification par carte (libellés ci-dessous) ; au-dessus (pull massif, bootstrap,
     // forceFullPull), `cards` est vide et le renderer bascule sur le résumé agrégé via `count`.
-    // Émis pour les 3 appelants de runDownstream (cycle auto 2h, cycle court cartes, pull
-    // manuel sync:pullSiteCards, sync:forceFullPull) de façon uniforme, exactement comme
-    // 'sync:updated-data' ci-dessus.
-    const isGranular = totalMerged <= CARDS_NOTIFICATION_THRESHOLD;
-    BrowserWindow.getAllWindows().forEach(w =>
-      w.webContents.send('sync:cards-received', {
-        count: totalMerged,
-        cards: isGranular ? cardLabels : []
-      })
-    );
+    //
+    // Émis UNIQUEMENT si notifyGranular === true (paramètre, défaut true) : réservé aux 2
+    // appelants automatiques silencieux (cycle auto 2h triggerAutoDownstream, cycle court
+    // cartes triggerCardsShortSync — sync-engine.ts), qui n'affichent aucun toast de page
+    // propre et dépendent de ce canal pour informer l'utilisateur. Les pulls manuels
+    // (sync:pullSiteCards, sync:forceFullPull — handlers.ts) passent notifyGranular = false
+    // car ils affichent déjà leur propre toast de confirmation côté renderer : sans ce garde,
+    // un pull manuel de ≤5 cartes empilait jusqu'à 6 notifications (toast de page + jusqu'à 5
+    // toasts « carte récupérée » via 'sync:cards-received') — régression P1 relevée par
+    // agent-9-senior-auditor (2026-08-23).
+    if (notifyGranular) {
+      const isGranular = totalMerged <= CARDS_NOTIFICATION_THRESHOLD;
+      BrowserWindow.getAllWindows().forEach(w =>
+        w.webContents.send('sync:cards-received', {
+          count: totalMerged,
+          cards: isGranular ? cardLabels : []
+        })
+      );
+    }
     // Politique low-memory (§2) : libère explicitement la liste bornée après émission.
     cardLabels = [];
   }
