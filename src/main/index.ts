@@ -328,6 +328,23 @@ function checkPendingUpdateMarker(): void {
 
 app.whenReady().then(async () => {
   log.info('GEST-IN-SITU starting...');
+
+  // ─── AVERTISSEMENT : SESSION DEV CONNECTÉE À LA PRODUCTION SUPABASE ─────────
+  // Incident QA (août 2026) : un `npm run dev` "nu" (mode `is.dev` sans
+  // GEST_IN_SITU_E2E_DISABLE_SYNC=1) charge le `.env` de développement, qui
+  // pointe délibérément vers le vrai projet Supabase de PRODUCTION
+  // (comportement documenté et volontaire, electron.vite.config.ts:35-56 — ne
+  // pas modifier). Un agent/développeur de test qui l'ignore peut synchroniser
+  // par erreur avec des données réelles. Ce simple log rend le risque visible
+  // dès le démarrage, sans changer aucun comportement de connexion réseau.
+  if (is.dev && process.env.GEST_IN_SITU_E2E_DISABLE_SYNC !== '1') {
+    log.warn(
+      '⚠️ [DEV] Cette session de développement est connectée au projet Supabase de PRODUCTION réel (comportement voulu, electron.vite.config.ts). ' +
+      'Pour isoler cette session (aucune synchro réseau), relancer avec GEST_IN_SITU_E2E_DISABLE_SYNC=1.'
+    );
+  }
+  // ──────────────────────────────────────────────────────────────────────────────
+
   electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
   createSplashWindow();
 
