@@ -1,7 +1,7 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.17.0
 
-> **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.16.1, 19 août 2026).
-> Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
+> **Date :** 23 août 2026.
+> Contenu détaillé également repris dans `CHANGELOG.md` (section `[2.17.0] - 2026-08-23`).
 
 ### 🚀 Nouveautés & Ergonomie
 
@@ -17,7 +17,13 @@
 ### 🛠️ Corrections & Fiabilité
 
 - **Délivrance d'une carte non classée bloquée à tort par le cloisonnement centre pour `OPERATEUR_VERIFICATION`/`ADMIN_CENTRE`** : une carte sans rangement peut porter un `centre_id` d'import par défaut (ou `NULL`) différent de celui de l'opérateur qui la retrouve physiquement — le contrôle strict de cloisonnement (`delivrerCarte`) bloquait alors la délivrance même quand le site correspondait, empêchant l'opérateur de finaliser un retrait pourtant légitime. Le contrôle `centre_id` est désormais ignoré pour une carte non classée (le site suffit), à condition qu'un rangement d'urgence soit saisi — obligation déjà imposée côté client, désormais aussi vérifiée côté serveur (impossible à contourner via un appel IPC direct). Le bouton de délivrance de l'IHM (grisé à tort dans ce cas précis par un contrôle d'autorisation dupliqué et non aligné) a été corrigé en cohérence. La carte non classée délivrée est en prime rattachée au centre de l'opérateur `OPERATEUR_VERIFICATION`/`ADMIN_CENTRE` qui l'a retrouvée (ce rattachement automatique ne s'applique volontairement pas à `ADMINISTRATEUR_SITE`, dont le centre de session par défaut ne reflète pas le centre de travail réellement sélectionné à l'écran). La déclaration de doublon (`declarerDoublon`) bénéficie désormais de la même exception de cloisonnement pour une carte non classée (le site suffit), en cohérence avec la délivrance.
-- **Colonnes de traçabilité de la correction/annulation d'un émargement Apurement absentes du mapping de synchronisation Supabase** : ajoutées aux 4 points de mapping (`payload-mapper.ts`, `upstream.ts`, `upload-worker.js`, `download-worker.js`) ainsi qu'au schéma Supabase (migration `0003_apurement_correction_annulation.sql`, appliquée en dev/staging — application en production restant à faire). Sans ce correctif, la trace "qui a corrigé/quand/pourquoi" restait bloquée sur le poste d'origine.
+- **Colonnes de traçabilité de la correction/annulation d'un émargement Apurement absentes du mapping de synchronisation Supabase** : ajoutées aux 4 points de mapping (`payload-mapper.ts`, `upstream.ts`, `upload-worker.js`, `download-worker.js`) ainsi qu'au schéma Supabase (migration `0003_apurement_correction_annulation.sql`, appliquée en dev/staging puis en production — application en production confirmée par `agent-12-deploy-validator` via requête PostgREST live, HTTP 200, avant publication de cette version). Sans ce correctif, la trace "qui a corrigé/quand/pourquoi" restait bloquée sur le poste d'origine.
 - **Aucune isolation entre le chemin de base SQLite d'un lancement `npm run dev` et celui de l'application packagée en production** : un lancement dev utilise désormais un sous-dossier `userData/dev` distinct, sans impact sur le chemin de production existant. Détecté lors d'un test terrain vivant.
 - **L'auto-updater effectuait un appel réseau réel (GitHub) même en environnement de test isolé** (`GEST_IN_SITU_E2E_DISABLE_SYNC=1`) : garde ajoutée, symétrique à celle déjà en place sur le moteur de synchronisation Supabase.
 - **Mojibake (corruption d'encodage UTF-8) dans des messages d'erreur affichés aux agents terrain** (`handlers.ts`, ex. "Accès refusé…" affiché "AccÃ¨s refusÃ©…") : ~230 occurrences corrigées (messages `throw new Error` remontés en toast côté renderer, logs internes, commentaires), aucune logique touchée. Détecté par `agent-9-senior-auditor`.
+
+### ⚠️ Points de vigilance connus
+
+- **`SCHEMA_VERSION` passé de 68 à 69** : migration locale `migrateV69` (`src/main/database/schema.ts`) additive (`ALTER TABLE t_cartes ADD COLUMN`, colonnes de traçabilité correction/annulation d'un émargement Apurement), rétrocompatible et idempotente (vérifie la présence de chaque colonne avant ajout) — auto-appliquée sans intervention manuelle par chaque poste terrain à sa prochaine ouverture de l'application, sans risque de corruption des bases SQLite existantes. Migration Supabase associée (`0003_apurement_correction_annulation.sql`) confirmée appliquée en production par `agent-12-deploy-validator` (requête PostgREST live, HTTP 200) avant publication de cette version.
+
+Validé par `agent-12-deploy-validator` (GO officiel : technique/typage, sécurité/accès, BDD/purge, auto-updater, schéma Supabase prod) et `npx tsc --noEmit` : 0 erreur.
