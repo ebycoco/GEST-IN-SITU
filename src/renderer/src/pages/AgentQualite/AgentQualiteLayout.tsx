@@ -9,9 +9,14 @@ import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { CorrectionSidePanel } from '../../components/Quality/CorrectionSidePanel';
 import { IdentificationGuidee } from '../../components/Quality/IdentificationGuidee';
 import { useQualityUIStore } from '../../stores/qualityUIStore';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const location = useLocation();
@@ -73,7 +78,7 @@ export default function AgentQualiteLayout() {
   // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
   // Meme correctif que AgentVerificationLayout.tsx (cloudCartesCount === 0 ne couvrait
   // pas le cas -1, laissant le bouton actif alors que le cloud est injoignable).
-  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
+  const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount <= 0;
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
@@ -182,7 +187,7 @@ export default function AgentQualiteLayout() {
               }}
             >
               <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             <button

@@ -6,9 +6,14 @@ import { Database, Globe, LayoutDashboard, Search, AlertTriangle, ShieldCheck, R
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 
 export default function AgentVerificationLayout() {
   const { user, activeSiteId } = useAuthStore();
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
 
   useEffect(() => {
@@ -54,7 +59,7 @@ export default function AgentVerificationLayout() {
 
   // cloudCartesCount vaut -1 en sentinelle d'indisponibilite Supabase (voir
   // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
-  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
+  const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount <= 0;
 
   // ── Indicateur local "pull tout juste réussi" ──────────────────────────────
   // Contexte : après un pull réussi, src/main/sync/downstream.ts (moteur de synchro,
@@ -191,9 +196,9 @@ export default function AgentVerificationLayout() {
                 }}
               >
                 <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-                {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+                {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
               </button>
-              {justPulledSuccess && !isPullingCards && cloudCartesCount > 0 && (
+              {!autoDownstream && justPulledSuccess && !isPullingCards && cloudCartesCount > 0 && (
                 <span style={{ fontSize: 11, fontWeight: 600, color: '#4ade80', textAlign: 'center' }}>
                   ✅ À jour (dernière récupération réussie)
                 </span>

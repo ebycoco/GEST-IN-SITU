@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { useVerificationStats } from './hooks/useVerificationStats';
 import { useVerificationSearch } from './hooks/useVerificationSearch';
 import { useDeliveryFlow } from './hooks/useDeliveryFlow';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 
 // Components
 import { SearchForm } from './components/SearchForm';
@@ -24,6 +25,10 @@ export default function VerificationSearchPage() {
   const activeSiteId = useAuthStore((s) => s.activeSiteId);
   const isAdmin = user?.role === 'ADMINISTRATEUR_SITE' || user?.role === 'SUPER ADMIN';
   const isSyncAdmin = isAdmin || user?.role === 'ADMIN_CENTRE';
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
 
   const [cardsCount, setCardsCount] = useState<number | null>(null);
   const [isCountLoading, setIsCountLoading] = useState(true);
@@ -304,16 +309,16 @@ export default function VerificationSearchPage() {
         </p>
         {!isSyncAdmin && (
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-            <button 
-              onClick={handlePullSiteCards} 
-              disabled={isPullingCards || cloudCartesCount === 0}
-              className="btn-outline" 
-              style={{ 
-                padding: '12px 24px', 
-                borderRadius: 12, 
+            <button
+              onClick={handlePullSiteCards}
+              disabled={autoDownstream || isPullingCards || cloudCartesCount === 0}
+              className="btn-outline"
+              style={{
+                padding: '12px 24px',
+                borderRadius: 12,
                 fontWeight: 700,
-                cursor: (isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-                opacity: (isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
+                cursor: (autoDownstream || isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                opacity: (autoDownstream || isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '8px',
@@ -324,7 +329,7 @@ export default function VerificationSearchPage() {
               }}
             >
               <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             <button 

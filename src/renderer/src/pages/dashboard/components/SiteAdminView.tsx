@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { OnlineBadge } from '../../../components/OnlineBadge';
 import { StatsKpi, AgentPerformance, DetailedSyncStats } from '../../../../../shared/types';
+import { useAutoDownstreamPreference } from '../../../hooks/useAutoDownstreamPreference';
 
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -97,6 +98,10 @@ export function SiteAdminView({
   loading: isStatsLoading = false,
 }: SiteAdminViewProps) {
   const navigate = useNavigate();
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
   const [activeTab, setActiveTab] = useState<'system' | 'supervision'>('system');
   const [centres, setCentres] = React.useState<any[]>([]);
   const [selectedCentreId, setSelectedCentreId] = React.useState<string>('');
@@ -1108,16 +1113,16 @@ export function SiteAdminView({
                     )}
 
                     <div>
-                      <button 
-                        onClick={handlePullSiteCards} 
-                        disabled={isPullingCards || isBackgroundPulling || cloudCartesCount === 0}
-                        className="btn-outline" 
-                        style={{ 
-                          padding: '12px 24px', 
-                          borderRadius: 12, 
+                      <button
+                        onClick={handlePullSiteCards}
+                        disabled={autoDownstream || isPullingCards || isBackgroundPulling || cloudCartesCount === 0}
+                        className="btn-outline"
+                        style={{
+                          padding: '12px 24px',
+                          borderRadius: 12,
                           fontWeight: 700,
-                          cursor: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-                          opacity: (isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 0.5 : 1,
+                          cursor: (autoDownstream || isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+                          opacity: (autoDownstream || isPullingCards || isBackgroundPulling || cloudCartesCount === 0) ? 0.5 : 1,
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
@@ -1130,7 +1135,7 @@ export function SiteAdminView({
                         }}
                       >
                         <Database size={18} style={{ flexShrink: 0, animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
-                        {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : (cloudCartesCount > 0 ? `TÉLÉCHARGER ${cloudCartesCount.toLocaleString('fr')} CARTES DEPUIS LE CLOUD` : 'DONNÉES DISTANTES À JOUR (0 CARTE À TÉLÉCHARGER)')}
+                        {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : (autoDownstream ? 'RÉCUPÉRATION AUTOMATIQUE ACTIVE' : (cloudCartesCount > 0 ? `TÉLÉCHARGER ${cloudCartesCount.toLocaleString('fr')} CARTES DEPUIS LE CLOUD` : 'DONNÉES DISTANTES À JOUR (0 CARTE À TÉLÉCHARGER)'))}
                       </button>
                       <p style={{ margin: '6px 0 0 0', fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
                         Télécharge et fusionne avec votre base locale toutes les cartes modifiées ou enregistrées sur le Cloud pour ce site.

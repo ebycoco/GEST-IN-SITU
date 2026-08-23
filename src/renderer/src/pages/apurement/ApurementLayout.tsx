@@ -4,6 +4,7 @@ import { BookOpenCheck, Database, Globe, RefreshCw, LayoutDashboard, History } f
 import { useAuthStore } from '../../stores/authStore';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 
 /**
  * Portail dédié au rôle OPERATEUR_APUREMENT (également partagé, en lecture, par SUPER ADMIN /
@@ -40,6 +41,10 @@ export default function ApurementLayout() {
     handlePullSiteCards,
     handleStartBulkUpload
   } = useForceSyncActions(user, activeSiteId, loadStats);
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
 
   // Nombre de cartes réellement envoyables par le bouton "Envoyer les corrections" tel
   // qu'utilisé ci-dessous (allowProbable/allowInvalid/allowMissing tous à false). Distinct de
@@ -59,7 +64,7 @@ export default function ApurementLayout() {
 
   // cloudCartesCount vaut -1 en sentinelle d'indisponibilite Supabase (voir
   // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
-  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
+  const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount <= 0;
   const pushDisabled = isBulkUploading || conformeCartesCount === 0;
 
   // Badge purement informatif sur le bouton "Envoyer les corrections" : nombre de cartes
@@ -152,7 +157,7 @@ export default function ApurementLayout() {
               }}
             >
               <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards && !isBackgroundPulling ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             <button

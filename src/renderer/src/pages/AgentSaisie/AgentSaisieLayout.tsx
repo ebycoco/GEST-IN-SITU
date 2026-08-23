@@ -6,10 +6,15 @@ import { Database, Globe, FileText, History, LayoutDashboard, Send, Edit3 } from
 import { useAuthStore } from '../../stores/authStore';
 import { useForceSyncActions } from '../dashboard/hooks/useForceSyncActions';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 import { toast } from 'react-hot-toast';
 
 export default function AgentSaisieLayout() {
   const { user, activeSiteId } = useAuthStore();
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Télécharger depuis le Cloud" ci-dessous doit rester désactivé et masquer
+  // son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
   const [draftsCount, setDraftsCount] = useState<number>(0);
   const [isPublishing, setIsPublishing] = useState<boolean>(false);
@@ -75,7 +80,7 @@ export default function AgentSaisieLayout() {
   // sync:getCloudCartesCount cote main) : toute valeur <= 0 doit desactiver le bouton.
   // Meme correctif que AgentVerificationLayout.tsx / AgentQualiteLayout.tsx
   // (cloudCartesCount === 0 ne couvrait pas le cas -1, laissant le bouton actif hors-ligne).
-  const pullDisabled = isPullingCards || cloudCartesCount <= 0;
+  const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount <= 0;
   // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
   // donnée manquante) — distinct de dirtyCartesCount (brut) pour ne pas activer le bouton
   // sur des cartes que l'envoi rejettera silencieusement.
@@ -127,7 +132,7 @@ export default function AgentSaisieLayout() {
               }}
             >
               <Database size={18} style={{ animation: isPullingCards && !isBackgroundPulling ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards && !isBackgroundPulling ? 'TÉLÉCHARGEMENT EN COURS...' : `Télécharger depuis le Cloud${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards && !isBackgroundPulling ? 'TÉLÉCHARGEMENT EN COURS...' : `Télécharger depuis le Cloud${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
             <button

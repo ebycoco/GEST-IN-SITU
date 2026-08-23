@@ -1,5 +1,6 @@
 import React from 'react';
 import { OnlineBadge } from '../../../components/OnlineBadge';
+import { useAutoDownstreamPreference } from '../../../hooks/useAutoDownstreamPreference';
 
 import { Activity, Database, Globe, RefreshCw } from 'lucide-react';
 
@@ -30,6 +31,11 @@ export function OperatorView({
   loadStats,
   loading: isStatsLoading = false
 }: OperatorViewProps) {
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
+  // masquer son compteur — cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
+
   if (isStatsLoading && operatorTodayCount === undefined) {
     return (
       <div className="dashboard-premium animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', minHeight: 420 }}>
@@ -79,16 +85,16 @@ export function OperatorView({
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <button 
-          onClick={handlePullSiteCards} 
-          disabled={isPullingCards || cloudCartesCount === 0}
-          className="btn-outline" 
-          style={{ 
-            padding: '12px 24px', 
-            borderRadius: 12, 
+        <button
+          onClick={handlePullSiteCards}
+          disabled={autoDownstream || isPullingCards || cloudCartesCount === 0}
+          className="btn-outline"
+          style={{
+            padding: '12px 24px',
+            borderRadius: 12,
             fontWeight: 700,
-            cursor: (isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
-            opacity: (isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
+            cursor: (autoDownstream || isPullingCards || cloudCartesCount === 0) ? 'not-allowed' : 'pointer',
+            opacity: (autoDownstream || isPullingCards || cloudCartesCount === 0) ? 0.5 : 1,
             display: 'flex',
             alignItems: 'center',
             gap: '8px',
@@ -101,7 +107,7 @@ export function OperatorView({
           }}
         >
           <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
-          {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+          {isPullingCards ? 'RÉCUPÉRATION EN COURS...' : `RÉCUPÉRER LES CARTES DEPUIS LE CLOUD${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
         </button>
 
         <button 

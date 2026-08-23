@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { UserCircle, Shield, Mail, Phone, Lock, Save, AlertTriangle, Eye, EyeOff, FileText, Download, CloudDownload, AtSign } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { AUTO_DOWNSTREAM_CHANGED_EVENT } from '../hooks/useAutoDownstreamPreference';
 import toast from 'react-hot-toast';
 
 export default function ProfilePage() {
@@ -124,6 +125,10 @@ export default function ProfilePage() {
       const res = await window.api.sync.setAutoDownstream(newVal);
       if (res.success) {
         setAutoDownstream(newVal);
+        // Notifie les autres vues déjà montées (boutons manuels "Récupérer les cartes depuis
+        // le cloud") pour qu'elles re-lisent la préférence sans rechargement complet de la
+        // page — cf. useAutoDownstreamPreference.ts.
+        window.dispatchEvent(new CustomEvent(AUTO_DOWNSTREAM_CHANGED_EVENT));
         toast.success(`Récupération automatique ${newVal ? 'activée' : 'désactivée'}.`);
       } else {
         toast.error("Erreur lors de l'enregistrement de la préférence.");

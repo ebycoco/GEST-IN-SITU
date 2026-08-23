@@ -2,10 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { Building2, Database, Globe, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
+import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 import { toast } from 'react-hot-toast';
 
 export default function AdminCentreLayout() {
   const { user } = useAuthStore();
+  // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
+  // bouton manuel "Récupérer" ci-dessous doit rester désactivé et masquer son compteur —
+  // cf. useAutoDownstreamPreference.ts.
+  const autoDownstream = useAutoDownstreamPreference();
   const [centreName, setCentreName] = useState<string>('');
   
   // Sync States
@@ -135,7 +140,7 @@ export default function AdminCentreLayout() {
     }
   };
 
-  const pullDisabled = isPullingCards || cloudCartesCount === 0;
+  const pullDisabled = autoDownstream || isPullingCards || cloudCartesCount === 0;
   // Nombre réellement envoyable (conforme : pas de doublon, pas de date invalide, pas de
   // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
   // des cartes que l'envoi rejettera silencieusement.
@@ -182,7 +187,7 @@ export default function AdminCentreLayout() {
               style={{ ...syncBtnStyle, cursor: pullDisabled ? 'not-allowed' : 'pointer', opacity: pullDisabled ? 0.5 : 1 }}
             >
               <Database size={18} style={{ animation: isPullingCards ? 'spin 1.5s linear infinite' : 'none' }} />
-              {isPullingCards ? 'RÉCUPÉRATION...' : `RÉCUPÉRER${cloudCartesCount > 0 ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
+              {isPullingCards ? 'RÉCUPÉRATION...' : `RÉCUPÉRER${(!autoDownstream && cloudCartesCount > 0) ? ` (${cloudCartesCount.toLocaleString('fr')})` : ''}`}
             </button>
 
               <button
