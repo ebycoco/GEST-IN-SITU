@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useCacheStore } from '../../../stores/cacheStore';
 import { useAuthStore } from '../../../stores/authStore';
 
@@ -50,6 +50,15 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const [totalCloudCartesCount, setTotalCloudCartesCount] = useState<number>(0);
   const [detailedSyncStats, setDetailedSyncStats] = useState<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number } | null>(null);
   const [centreCardsCount, setCentreCardsCount] = useState<number | null>(null);
+  // Ref (pas de state, cf. CLAUDE.md §2 low-memory : simple flag, pas de re-render dédié) :
+  // mémorise si le dernier loadStats() exécuté portait un filtre centre "ad-hoc" via
+  // supervisionFilters?.centreId, pour un rôle qui n'est PAS structurellement centre-scopé
+  // (ADMIN_CENTRE reste un cas à part, déjà géré via insertedInMyCentre dans l'effet
+  // onCardsReceived ci-dessous, non concerné par ce flag). Sert de garde dans cet effet pour
+  // ne jamais incrémenter optimistiquement `stats.total` par-dessus une valeur actuellement
+  // scopée à un centre (au lieu du site complet) — corrige une incohérence confirmée par
+  // l'audit de non-régression sur le commit b4e917a.
+  const isStatsCentreFilteredRef = useRef<boolean>(false);
 
   const loadGlobalData = async (silent = false) => {
     try {
@@ -84,10 +93,15 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         useAuthStore.getState().setInitialDataProgress(20, 'Vérification des droits d\'accès...');
       }
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
-      const centreIdToUse = user?.role === 'ADMIN_CENTRE' 
-        ? user?.centre_id 
+      const centreIdToUse = user?.role === 'ADMIN_CENTRE'
+        ? user?.centre_id
         : (supervisionFilters?.centreId !== undefined ? supervisionFilters.centreId : undefined);
-      
+      // Mise à jour du flag de garde (voir déclaration du ref ci-dessus) : true uniquement
+      // pour un filtre centre "ad-hoc" (supervision) sur un rôle qui n'est pas structurellement
+      // centre-scopé. Reste à false pour tous les autres appelants de loadStats (comportement
+      // inchangé pour eux).
+      isStatsCentreFilteredRef.current = user?.role !== 'ADMIN_CENTRE' && supervisionFilters?.centreId !== undefined;
+
       const targetAgentId = supervisionFilters?.agentId;
       const targetDateStr = supervisionFilters?.dateStr;
 
@@ -283,7 +297,13 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       }
 
       const totalIncrement = user?.role === 'ADMIN_CENTRE' ? insertedInMyCentre : insertedCount;
-      if (totalIncrement > 0) {
+      // Garde anti-scope-incertain (cf. déclaration du ref plus haut) : si le dernier
+      // loadStats() affichait une vue filtrée par centre (supervision, rôle non
+      // structurellement centre-scopé), `stats.total` n'est PAS le total site — on
+      // n'incrémente pas plutôt que d'incrémenter une base dont le scope est incertain.
+      // Ne concerne pas ADMIN_CENTRE (totalIncrement utilise déjà insertedInMyCentre).
+      const skipTotalIncrement = user?.role !== 'ADMIN_CENTRE' && isStatsCentreFilteredRef.current;
+      if (totalIncrement > 0 && !skipTotalIncrement) {
         setStats((prev: any) => {
           const next = prev ? { ...prev, total: (prev.total ?? 0) + totalIncrement } : prev;
           // Mise à jour simultanée du cache renderer (risque de régression identifié : un
