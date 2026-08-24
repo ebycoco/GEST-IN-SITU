@@ -190,6 +190,12 @@ export function createSite(data: { nom: string; code: string; max_centres: numbe
     scheduleOutboxProcessing();
   }
 
+  insertAuditLog(
+    'SUPER ADMIN',
+    'VALIDATION',
+    `[CRÉATION SITE] Site "${data.nom}" (code: ${data.code}) créé avec admin "${data.admin.login}".`
+  );
+
   return siteResult;
 }
 
@@ -264,6 +270,12 @@ export function updateSite(id: number, data: { nom?: string; code?: string; max_
   if (networkMonitor.getState() === 'ONLINE') {
     scheduleOutboxProcessing();
   }
+
+  insertAuditLog(
+    'SUPER ADMIN',
+    'VALIDATION',
+    `[MODIFICATION SITE] Site ID ${id} modifié : ${Object.keys(data).join(', ')}.`
+  );
 
   return result;
 }
@@ -600,6 +612,12 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
     scheduleOutboxProcessing();
   }
 
+  insertAuditLog(
+    'ADMIN',
+    'VALIDATION',
+    `[CRÉATION CENTRE] Centre "${data.nom}" créé sur le site ID ${data.site_id}.`
+  );
+
   return result;
 }
 
@@ -679,6 +697,12 @@ export function updateCentre(id: number, data: { nom?: string; code?: string; li
   if (networkMonitor.getState() === 'ONLINE') {
     scheduleOutboxProcessing();
   }
+
+  insertAuditLog(
+    'ADMIN',
+    'VALIDATION',
+    `[MODIFICATION CENTRE] Centre ID ${id} modifié : ${Object.keys(data).join(', ')}.`
+  );
 
   return result;
 }

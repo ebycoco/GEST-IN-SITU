@@ -427,7 +427,9 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   
   const transaction = db.transaction(() => {
     // ── 0. Récupération du sync_id courant de l'utilisateur ──────────────────────
-    const user = db.prepare('SELECT sync_id FROM t_users WHERE id_user = ?').get(id) as { sync_id: string } | undefined;
+    // login inclus ici pour le message d'audit final : data.login n'est présent que si
+    // l'appel modifiait justement le login (rare), sinon le login réel doit être relu.
+    const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string; login: string } | undefined;
 
     let result = { changes: 0 };
     const outboxItems: Array<{ id: string; table: string; operation: 'INSERT' | 'UPDATE' | 'DELETE'; payload: Record<string, unknown> }> = [];
@@ -509,7 +511,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
       }
     }
 
-    return { result, outboxItems };
+    return { result, outboxItems, user };
   });
   const txResult = transaction();
 
@@ -525,7 +527,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   insertAuditLog(
     creator?.login || creator?.role || 'SYSTEM',
     'AGENT',
-    `[MODIFICATION] Agent ID ${id} (Login: ${data.login || 'Inconnu'}) mis à jour avec succès.`
+    `[MODIFICATION] Agent ID ${id} (Login: ${txResult.user?.login || (data.login as string | undefined) || 'Inconnu'}) mis à jour avec succès.`
   );
 
   return txResult.result;
@@ -681,6 +683,15 @@ export function resetAgentPassword(targetUserId: number, caller: { id_user: numb
   `).run(hash, targetUserId);
 
   logAction(caller.id_user, caller.role, 'RESET_PASSWORD', `Réinitialisation du mot de passe de l'agent ${target.login} (${targetUserId})`);
+
+  // Trace d'audit (audit_logs, distinct de t_logs ci-dessus — les deux mécanismes
+  // coexistent délibérément dans ce fichier, cf. deleteUser/hardDeleteUser pour
+  // insertAuditLog seul et les autres mutations pour logAction seul).
+  insertAuditLog(
+    caller.role,
+    'AGENT',
+    `[RÉINITIALISATION MOT DE PASSE] Agent ID ${targetUserId} (Login: ${target.login}) — mot de passe réinitialisé par ${caller.role} (ID ${caller.id_user}).`
+  );
 
   // ── 2. Enfilage outbox UPDATE (remplacement du push Supabase direct) ───────
   // L'ancien push asynchrone Supabase était fragile (pas de réessai en cas
