@@ -292,6 +292,32 @@ export function deleteSite(id: number) {
     "SELECT sync_id, login, password_hash FROM t_users WHERE site_id = ? AND role = 'SUPER ADMIN'"
   ).all(id) as { sync_id: string | null; login: string; password_hash: string }[];
 
+  // ── Entités cascadées : sync_id des centres et agents du site, avant leur suppression
+  // physique plus bas — nécessaire pour le nettoyage outbox cascade (bug P0 confirmé par
+  // audit terrain agent-13 : sans cette lecture préalable, les sync_id des centres/agents
+  // supprimés seraient perdus, empêchant toute annulation/DELETE outbox ciblée sur eux).
+  const siteCentres = db.prepare(
+    'SELECT sync_id FROM t_centres WHERE site_id = ?'
+  ).all(id) as { sync_id: string | null }[];
+
+  const siteAgents = db.prepare(
+    "SELECT id_user, sync_id FROM t_users WHERE site_id = ? AND role != 'SUPER ADMIN'"
+  ).all(id) as { id_user: number; sync_id: string | null }[];
+
+  // Rôles multiples (t_user_roles) de ces agents — table cascadée automatiquement en local
+  // via FOREIGN KEY ... ON DELETE CASCADE (schema.ts), mais dont les entrées t_outbox
+  // (indexées par `${userSyncId}_${role}`, jamais par le sync_id agent seul) ne le sont pas.
+  const siteAgentRoles: { id_user: number; role: string }[] = siteAgents.length > 0
+    ? db.prepare(
+        `SELECT id_user, role FROM t_user_roles WHERE id_user IN (${siteAgents.map(() => '?').join(',')})`
+      ).all(...siteAgents.map(a => a.id_user)) as { id_user: number; role: string }[]
+    : [];
+
+  // Déclaré ici (avant la transaction) pour être mutable depuis l'intérieur de la
+  // transaction (nettoyage outbox cascade, étape 8 ci-dessous) ET depuis le bloc
+  // d'enfilage site/SUPER ADMIN existant après la transaction (inchangé).
+  let anyEnqueued = false;
+
   const transaction = db.transaction(() => {
     // 1. Delete Cards
     const cartesCount = db.prepare('DELETE FROM t_cartes WHERE site_id = ?').run(id).changes;
@@ -326,6 +352,46 @@ export function deleteSite(id: number) {
     // 7. Finally Delete Site
     const res = db.prepare('DELETE FROM t_sites WHERE id = ?').run(id);
 
+    // 8. Nettoyage cascade de l'Outbox pour les entités cascadées supprimées ci-dessus
+    // (centres, agents, rôles multiples). Bug P0 confirmé par audit terrain (agent-13) :
+    // sans ce nettoyage, ces lignes t_outbox restaient PENDING avec leurs opérations
+    // d'origine (INSERT centre, INSERT/UPDATE agents, INSERT/DELETE/INSERT t_user_roles)
+    // et auraient été rejouées vers Supabase à la prochaine reconnexion réseau —
+    // reconstituant potentiellement des entités "purgées irréversiblement" en local, ou
+    // générant des erreurs de contrainte FK en boucle dans l'outbox. Placé dans la même
+    // transaction que le reste de deleteSite() (garantie d'atomicité) : enqueueOutbox/
+    // cancelPendingInsert utilisent le même connecteur SQLite singleton (getDatabase())
+    // que le reste de ce fichier, donc leurs écritures dans t_outbox sont couvertes par
+    // le même COMMIT/ROLLBACK que la purge locale ci-dessus.
+    for (const c of siteCentres) {
+      if (!c.sync_id) continue;
+      const wasLocalOnly = cancelPendingInsert(c.sync_id, 't_centres');
+      if (!wasLocalOnly) {
+        enqueueOutbox(c.sync_id, 't_centres', 'DELETE', { sync_id: c.sync_id });
+      }
+      anyEnqueued = true;
+    }
+
+    for (const a of siteAgents) {
+      if (!a.sync_id) continue;
+      const wasLocalOnly = cancelPendingInsert(a.sync_id, 't_users');
+      if (!wasLocalOnly) {
+        enqueueOutbox(a.sync_id, 't_users', 'DELETE', { sync_id: a.sync_id });
+      }
+
+      // Rôles multiples : annulation ciblée des INSERT encore PENDING (indexés par
+      // `${userSyncId}_${role}`), puis un DELETE global (`${userSyncId}_roles_del`)
+      // toujours enfilé en complément — idempotent côté Supabase même si aucun rôle
+      // n'avait encore été synchronisé. Même convention que updateUser()/createUser()
+      // dans users.queries.ts pour la mise à jour des rôles multiples.
+      const rolesForAgent = siteAgentRoles.filter(r => r.id_user === a.id_user);
+      for (const r of rolesForAgent) {
+        cancelPendingInsert(`${a.sync_id}_${r.role}`, 't_user_roles');
+      }
+      enqueueOutbox(`${a.sync_id}_roles_del`, 't_user_roles', 'DELETE', { sync_id: a.sync_id });
+      anyEnqueued = true;
+    }
+
     insertAuditLog(
       'SUPER ADMIN',
       'VALIDATION',
@@ -341,7 +407,9 @@ export function deleteSite(id: number) {
   }
 
   // ── Enfilage outbox (hors transaction SQLite) ─────────────────────────────
-  let anyEnqueued = false;
+  // anyEnqueued est déclaré avant la transaction (cf. plus haut) : déjà potentiellement
+  // à `true` ici si le nettoyage cascade (étape 8, à l'intérieur de la transaction) a
+  // enfilé au moins une entrée pour un centre/agent du site.
   if (siteSyncId) {
     // Si un INSERT était encore PENDING (création non synchronisée), on l'annule.
     // Dans ce cas, aucun DELETE n'est enfié car Supabase ne connaît pas encore l'entité.
