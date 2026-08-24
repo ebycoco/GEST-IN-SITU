@@ -8,11 +8,14 @@ fi
 
 cd "$CLAUDE_PROJECT_DIR" || exit 0
 FAILURES=""
+CHANGED=$(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached HEAD 2>/dev/null)
 
-# 1. TypeScript
-TSC_OUTPUT=$(npx tsc --noEmit 2>&1)
-if [ $? -ne 0 ]; then
-  FAILURES="${FAILURES}--- Erreurs TypeScript (tsc --noEmit) ---\n${TSC_OUTPUT}\n\n"
+# 1. TypeScript - seulement si des fichiers .ts/.tsx ont changé
+if echo "$CHANGED" | grep -qE '\.tsx?$'; then
+  TSC_OUTPUT=$(npx tsc --noEmit 2>&1)
+  if [ $? -ne 0 ]; then
+    FAILURES="${FAILURES}--- Erreurs TypeScript (tsc --noEmit) ---\n${TSC_OUTPUT}\n\n"
+  fi
 fi
 
 # 2. Tests Python (pytest) - uniquement si le projet a reellement une suite pytest
@@ -25,7 +28,6 @@ if [ -f "pytest.ini" ] || [ -f "pyproject.toml" ]; then
 fi
 
 # 3. Playwright e2e - seulement si des fichiers sensibles ont changé
-CHANGED=$(git diff --name-only HEAD 2>/dev/null; git diff --name-only --cached HEAD 2>/dev/null)
 if echo "$CHANGED" | grep -qE '^(src/main/|e2e/|src/preload/)'; then
   E2E_OUTPUT=$(env -u ELECTRON_RUN_AS_NODE npx playwright test 2>&1)
   if [ $? -ne 0 ]; then
