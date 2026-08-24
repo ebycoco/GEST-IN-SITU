@@ -549,8 +549,14 @@ export default function SitesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {centres.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => (
-                    <tr key={c.sync_id || c.id} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', transition: 'background 0.2s ease' }}>
+                  {centres.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage).map(c => {
+                    // Un centre n'a pas son propre statut d'activité en base : son état
+                    // opérationnel réel dépend de celui de son site parent (is_active),
+                    // déjà disponible dans l'état `sites` de ce composant.
+                    const parentSite = sites.find(s => s.id === c.site_id);
+                    const isCentreOperational = parentSite ? !!parentSite.is_active : true;
+                    return (
+                    <tr key={c.sync_id || c.id} className={!isCentreOperational ? 'row-inactive' : ''} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)', transition: 'background 0.2s ease' }}>
                       <td style={{ textAlign: 'center', padding: '16px' }}>
                         <span style={{ display: 'inline-block', padding: '5px 12px', borderRadius: 8, background: 'rgba(255, 255, 255, 0.06)', border: '1px solid rgba(255, 255, 255, 0.1)', fontFamily: 'monospace', fontWeight: 800, fontSize: 12, color: 'white', letterSpacing: '0.04em' }}>
                           ID: #{c.id}
@@ -590,10 +596,16 @@ export default function SitesPage() {
                         </div>
                       </td>
                       <td style={{ textAlign: 'center', padding: '16px' }}>
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '5px 12px', borderRadius: 20, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>
-                          <div className="pulse-dot" style={{ background: '#10b981' }} />
-                          OPÉRATIONNEL
-                        </div>
+                        {isCentreOperational ? (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(16, 185, 129, 0.12)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.25)', padding: '5px 12px', borderRadius: 20, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>
+                            <div className="pulse-dot" style={{ background: '#10b981' }} />
+                            OPÉRATIONNEL
+                          </div>
+                        ) : (
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'rgba(239, 68, 68, 0.12)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.25)', padding: '5px 12px', borderRadius: 20, fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }} title="Le site auquel ce centre est rattaché a son accès révoqué">
+                            SITE RÉVOQUÉ
+                          </div>
+                        )}
                       </td>
                       <td style={{ textAlign: 'right', padding: '16px' }}>
                         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
@@ -622,7 +634,8 @@ export default function SitesPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               </div>
