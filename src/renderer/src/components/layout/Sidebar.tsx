@@ -6,7 +6,7 @@ import {
   PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck,
   Fingerprint, Calendar, AlertTriangle, History
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import iconLogo from '../../assets/icon.png';
 
 
@@ -39,21 +39,45 @@ export default function Sidebar() {
     }
   }, []);
 
-  useEffect(() => {
-    if (window.api?.hierarchy?.getSites) {
-      window.api.hierarchy.getSites()
-        .then((data) => {
-          setSites(data);
-          setSitesLoaded(true);
-        })
-        .catch((err) => {
-          console.error(err);
-          setSitesLoaded(true); // Marquer comme chargé même en cas d'erreur pour ne pas rester bloqué
-        });
-    } else {
+  // Fetch de la liste des sites, extrait en fonction réutilisable (montage + refresh sur événement).
+  // Deps volontairement vides : on relit activeSiteId via useAuthStore.getState() au moment de
+  // l'exécution plutôt qu'en dépendance, pour garder une référence de fonction stable et éviter
+  // un refetch à chaque changement de site actif (uniquement au montage ou sur app:data-updated).
+  const fetchSites = useCallback(() => {
+    if (!window.api?.hierarchy?.getSites) {
       setSitesLoaded(true); // API absente (ex: dev sans contexte Electron)
+      return;
     }
+    window.api.hierarchy.getSites()
+      .then((data) => {
+        setSites(data);
+        setSitesLoaded(true);
+        // Contexte "site actif" fantôme : si le site précédemment sélectionné n'existe plus
+        // dans la liste fraîchement reçue (ex: supprimé par un SUPER ADMIN), on réinitialise
+        // pour retomber sur la vue globale multi-site plutôt que de rester bloqué dessus.
+        const { activeSiteId: currentActiveSiteId, setActiveSiteId: setStoreActiveSiteId } = useAuthStore.getState();
+        if (currentActiveSiteId && !data.some((s: any) => s.id === currentActiveSiteId)) {
+          setStoreActiveSiteId(null);
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        setSitesLoaded(true); // Marquer comme chargé même en cas d'erreur pour ne pas rester bloqué
+      });
   }, []);
+
+  useEffect(() => {
+    fetchSites();
+  }, [fetchSites]);
+
+  // Rafraîchit la liste des sites quand une mutation survient ailleurs dans l'app (ex: création/
+  // suppression de site depuis SitesPage), sans nécessiter un remount complet de la Sidebar.
+  // Convention projet : événement DOM léger 'app:data-updated', déjà utilisé dans une quinzaine
+  // d'endroits du renderer. Listener nettoyé au démontage (politique Low-Memory §2).
+  useEffect(() => {
+    window.addEventListener('app:data-updated', fetchSites);
+    return () => window.removeEventListener('app:data-updated', fetchSites);
+  }, [fetchSites]);
 
   useEffect(() => {
     const on = () => setIsOnline(true);

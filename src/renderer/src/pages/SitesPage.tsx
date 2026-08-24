@@ -136,6 +136,9 @@ export default function SitesPage() {
         is_permanent: false
       });
       await loadData();
+      // Notifie les autres composants montés (ex: Sidebar) qu'un site a été créé,
+      // pour qu'ils puissent rafraîchir leur propre état local sans remount complet.
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(err.message);
     }
@@ -185,6 +188,8 @@ export default function SitesPage() {
       setShowCentreModal(false);
       setCentreFormData({ nom: '', numero: '', lieu: '', site_id: '', prefixe_rangement: '' });
       await loadData();
+      // Même cause racine que les sites : notifie les autres composants montés.
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la création du centre');
     }
@@ -221,6 +226,7 @@ export default function SitesPage() {
       toast.success('Centre modifié avec succès');
       setEditingCentre(null);
       await loadData();
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Erreur lors de la modification du centre');
     }
@@ -241,6 +247,7 @@ export default function SitesPage() {
       await window.api.hierarchy.deleteCentre(id);
       toast.success("Centre supprimé avec succès");
       await loadData();
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(err.message || "Erreur lors de la suppression du centre");
     }
@@ -285,6 +292,9 @@ export default function SitesPage() {
       setConfirmModal(null);
       setAdminPassword('');
       await loadData();
+      // Couvre les 4 branches (DELETE/BAN/ACTIVATE/UPDATE) qui convergent toutes ici :
+      // notifie les autres composants montés (ex: Sidebar) qu'un site a été modifié/supprimé.
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Une erreur est survenue lors de l\'opération');
     } finally {
