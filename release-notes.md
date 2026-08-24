@@ -1,7 +1,6 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.18.0 (24 août 2026)
 
-> **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.17.0, 23 août 2026).
-> Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
+> **Statut :** figé par agent-11-release-manager en amont de `npm run build:win` (voir `CLAUDE.md` §8). Contenu identique au brouillon cumulé depuis la précédente release (v2.17.0, 23 août 2026) ; retouches de forme mineures uniquement.
 
 ### 🚀 Nouveautés & Ergonomie
 
