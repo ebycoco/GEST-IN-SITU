@@ -28,7 +28,8 @@ import {
   waitForNetworkOnline,
   createCrossPosteUser,
   cleanupLocalCrossPosteUsers,
-  cleanupCloudCrossPosteUsers
+  cleanupCloudCrossPosteUsers,
+  readConfirmModalMessage
 } from './_session-refresh-shared';
 
 const RUN_ID = Date.now();
@@ -38,6 +39,11 @@ const syncIdControl = `qa-terrain-crossposte-control-${RUN_ID}`;
 test.describe.serial('Session Cloud RÉELLE — Scénario 4/4 : contrôle négatif, aucune action admin (agent-13, commits 6c5df9f -> dcd0bb7)', () => {
   let envA: E2EEnvironment;
   let dbPathA: string;
+  // Message affiché par le modal de confirmation React (GlobalConfirmModal.tsx) — remplace
+  // l'ancienne capture de l'alert() natif via window.on('dialog', ...), qui ne se déclenche
+  // plus jamais depuis la migration de App.tsx vers confirmService.confirm(). Mis à jour à
+  // chaque itération de la boucle de polling via readConfirmModalMessage(). Doit rester null
+  // pendant tout ce scénario (contrôle négatif, aucune action admin).
   let capturedDialogMessage: string | null = null;
   let anyTestFailed = false;
 
@@ -61,12 +67,6 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 4/4 : contrôle négat
 
     const pwdHash = hashPassword(QA_PWD);
     await createCrossPosteUser(dbPathA, siteId, centreId, loginControl, 'OPERATEUR_VERIFICATION', syncIdControl, pwdHash);
-
-    envA.window.on('dialog', async (dialog) => {
-      capturedDialogMessage = dialog.message();
-      console.log(`[DIALOG][Poste A] alert() capturé (INATTENDU — contrôle négatif) : "${capturedDialogMessage}"`);
-      await dialog.accept();
-    });
 
     const stateA = await waitForNetworkOnline(envA.window, 90_000);
     console.log(`[SETUP] État réseau Poste A = "${stateA}" (attendu ONLINE).`);
@@ -94,6 +94,7 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 4/4 : contrôle négat
     let regression = false;
     while (Date.now() < deadline) {
       await window.waitForTimeout(15_000);
+      capturedDialogMessage = await readConfirmModalMessage(window);
       if (capturedDialogMessage || window.url().includes('#/login')) { regression = true; break; }
     }
     console.log(`[SC4] Après ${Math.round((Date.now() - startWait) / 1000)}s -> regression=${regression}, dialog="${capturedDialogMessage}", url="${window.url()}".`);

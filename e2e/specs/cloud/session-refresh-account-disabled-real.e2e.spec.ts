@@ -34,7 +34,8 @@ import {
   createCrossPosteUser,
   simulateAdminDisable,
   cleanupLocalCrossPosteUsers,
-  cleanupCloudCrossPosteUsers
+  cleanupCloudCrossPosteUsers,
+  readConfirmModalMessage
 } from './_session-refresh-shared';
 
 const RUN_ID = Date.now();
@@ -44,6 +45,10 @@ const syncIdDisabled = `qa-terrain-crossposte-disabled-${RUN_ID}`;
 test.describe.serial('Session Cloud RÉELLE — Scénario 2/4 : compte désactivé en session active (agent-13, commits 6c5df9f -> dcd0bb7)', () => {
   let envA: E2EEnvironment;
   let dbPathA: string;
+  // Message affiché par le modal de confirmation React (GlobalConfirmModal.tsx) — remplace
+  // l'ancienne capture de l'alert() natif via window.on('dialog', ...), qui ne se déclenche
+  // plus jamais depuis la migration de App.tsx vers confirmService.confirm(). Mis à jour à
+  // chaque itération de la boucle de polling via readConfirmModalMessage().
   let capturedDialogMessage: string | null = null;
   let anyTestFailed = false;
 
@@ -68,12 +73,6 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 2/4 : compte désactiv
     const pwdHash = hashPassword(QA_PWD);
     await createCrossPosteUser(dbPathA, siteId, centreId, loginDisabled, 'OPERATEUR_VERIFICATION', syncIdDisabled, pwdHash);
 
-    envA.window.on('dialog', async (dialog) => {
-      capturedDialogMessage = dialog.message();
-      console.log(`[DIALOG][Poste A] alert() capturé : "${capturedDialogMessage}"`);
-      await dialog.accept();
-    });
-
     const stateA = await waitForNetworkOnline(envA.window, 90_000);
     console.log(`[SETUP] État réseau Poste A = "${stateA}" (attendu ONLINE).`);
     expect(stateA).toBe('ONLINE');
@@ -96,8 +95,15 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 2/4 : compte désactiv
     const deadline = startWait + 250_000;
     let detected = false;
     while (Date.now() < deadline) {
+      capturedDialogMessage = await readConfirmModalMessage(window);
       if (capturedDialogMessage || window.url().includes('#/login')) { detected = true; break; }
       await window.waitForTimeout(8000);
+    }
+    // Marge courte : le modal React et la redirection #/login proviennent du même handler
+    // synchrone (App.tsx) mais peuvent apparaître à un tick de rendu près l'un de l'autre.
+    if (!capturedDialogMessage) {
+      await window.waitForTimeout(500);
+      capturedDialogMessage = await readConfirmModalMessage(window);
     }
     console.log(`[SC2] Détection après ${Math.round((Date.now() - startWait) / 1000)}s -> detected=${detected}, dialog="${capturedDialogMessage}", url="${window.url()}".`);
 

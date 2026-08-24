@@ -85,6 +85,28 @@ export async function waitForNetworkOnline(window: Page, timeoutMs: number): Pro
 }
 
 /**
+ * Lit le message actuellement affiché par le modal de confirmation React
+ * (GlobalConfirmModal.tsx, piloté par confirmService) — remplace l'ancienne interception de
+ * l'alert() natif (window.on('dialog', ...)) : un modal React ne déclenche jamais cet event
+ * Playwright, donc ce chemin de détection a dû être migré en lecture DOM pour les 4 specs
+ * session-refresh-*-real (auth:session-expired affiche désormais ce modal plutôt qu'un
+ * alert() bloquant, cf. App.tsx).
+ *
+ * Un seul modal peut être ouvert à la fois (état singleton côté confirmService), donc ce
+ * sélecteur texte suffit sans ambiguïté. Retourne null si aucun modal n'est actuellement
+ * affiché — permet le même usage en polling que l'ancienne variable capturedDialogMessage
+ * (mis à jour à chaque itération d'une boucle d'attente).
+ */
+export async function readConfirmModalMessage(window: Page): Promise<string | null> {
+  const modal = window.locator('.animate-scale-up');
+  if ((await modal.count()) === 0) return null;
+  const titleText = (await modal.locator('h3').first().textContent().catch(() => null)) ?? '';
+  const messageText = (await modal.locator('p').first().textContent().catch(() => null)) ?? '';
+  const combined = `${titleText} ${messageText}`.trim();
+  return combined.length > 0 ? combined : null;
+}
+
+/**
  * Crée un compte de test QA_TERRAIN_ localement (Poste A uniquement — voir
  * adaptation ci-dessus) ET upserte une ligne COMPLÈTE correspondante sur
  * Supabase (mêmes colonnes que le payload réel de `updateUser()`).

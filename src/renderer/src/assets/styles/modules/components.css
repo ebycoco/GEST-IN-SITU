@@ -320,3 +320,15 @@
   0% { transform: scale(0.95); opacity: 0; }
   100% { transform: scale(1); opacity: 1; }
 }
+
+/* Classe utilisée par GlobalConfirmModal.tsx (et par MaintenancePage.tsx, SiteAdminView.tsx,
+   LogsPage.tsx) mais absente de tout fichier CSS jusqu'ici (no-op silencieux). Même
+   durée/timing-function que .animate-scale-in ci-dessus, par cohérence. */
+.animate-scale-up {
+  animation: scaleUp 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+@keyframes scaleUp {
+  0% { transform: scale(0.95); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}

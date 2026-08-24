@@ -26,6 +26,7 @@ import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
 import { useEffect, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
+import { confirmService } from './components/confirmService';
 import UpdateReadyBanner from './components/UpdateReadyBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import AgentsPresencePage from './pages/AgentsPresencePage';
@@ -89,12 +90,29 @@ export default function App() {
       // Message différencié selon la cause réelle de la fermeture de session (cf. payload.reason
       // émis par sync-engine.ts). Repli sur le message historique (legacy/tests, cas où l'event
       // est émis sans payload) pour ne pas casser le test e2e existant qui vérifie ce sous-texte.
+      // confirmService.confirm() n'est volontairement pas awaité : rien d'autre ne s'exécute
+      // après dans ce callback, comme c'était déjà le cas avec alert() (bloquant) auparavant.
       if (payload?.reason === 'revoked') {
-        alert('Votre rôle a été modifié par un administrateur. Veuillez vous reconnecter.');
+        confirmService.confirm({
+          title: 'Rôle modifié',
+          message: 'Votre rôle a été modifié par un administrateur. Merci de vous reconnecter pour continuer.',
+          isAlert: true,
+          isDanger: true
+        });
       } else if (payload?.reason === 'disabled') {
-        alert('Votre compte a été désactivé par un administrateur.');
+        confirmService.confirm({
+          title: 'Compte désactivé',
+          message: "Votre compte a été désactivé par un administrateur. Veuillez contacter votre administrateur si vous pensez qu'il s'agit d'une erreur.",
+          isAlert: true,
+          isDanger: true
+        });
       } else {
-        alert("Votre session a été fermée car ce compte s'est connecté sur une autre machine.");
+        confirmService.confirm({
+          title: 'Session fermée',
+          message: "Votre session a été fermée car ce compte s'est connecté sur une autre machine.",
+          isAlert: true,
+          isDanger: true
+        });
       }
     });
 

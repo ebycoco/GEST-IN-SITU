@@ -34,7 +34,8 @@ import {
   createCrossPosteUser,
   simulateAdminRoleChange,
   cleanupLocalCrossPosteUsers,
-  cleanupCloudCrossPosteUsers
+  cleanupCloudCrossPosteUsers,
+  readConfirmModalMessage
 } from './_session-refresh-shared';
 
 const RUN_ID = Date.now();
@@ -44,6 +45,11 @@ const syncIdRoleAdded = `qa-terrain-crossposte-roleadd-${RUN_ID}`;
 test.describe.serial('Session Cloud RÉELLE — Scénario 3/4 : rôle ajouté en session active, sans déconnexion (agent-13, commits 6c5df9f -> dcd0bb7)', () => {
   let envA: E2EEnvironment;
   let dbPathA: string;
+  // Message affiché par le modal de confirmation React (GlobalConfirmModal.tsx) — remplace
+  // l'ancienne capture de l'alert() natif via window.on('dialog', ...), qui ne se déclenche
+  // plus jamais depuis la migration de App.tsx vers confirmService.confirm(). Mis à jour à
+  // chaque itération de la boucle de polling via readConfirmModalMessage(). Doit rester null
+  // pendant tout ce scénario (aucune déconnexion attendue).
   let capturedDialogMessage: string | null = null;
   let anyTestFailed = false;
 
@@ -67,12 +73,6 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 3/4 : rôle ajouté en
 
     const pwdHash = hashPassword(QA_PWD);
     await createCrossPosteUser(dbPathA, siteId, centreId, loginRoleAdded, 'OPERATEUR_VERIFICATION', syncIdRoleAdded, pwdHash);
-
-    envA.window.on('dialog', async (dialog) => {
-      capturedDialogMessage = dialog.message();
-      console.log(`[DIALOG][Poste A] alert() capturé (INATTENDU pour ce scénario) : "${capturedDialogMessage}"`);
-      await dialog.accept();
-    });
 
     const stateA = await waitForNetworkOnline(envA.window, 90_000);
     console.log(`[SETUP] État réseau Poste A = "${stateA}" (attendu ONLINE).`);
@@ -106,6 +106,7 @@ test.describe.serial('Session Cloud RÉELLE — Scénario 3/4 : rôle ajouté en
     while (Date.now() < deadline) {
       snap = await window.evaluate(async () => (window as any).api.auth.getSessionSnapshot());
       if (snap?.roles?.includes('ADMIN_CENTRE')) { rolesUpdated = true; break; }
+      capturedDialogMessage = await readConfirmModalMessage(window);
       if (capturedDialogMessage || window.url().includes('#/login')) break; // déconnexion inattendue -> sort, signalé ci-dessous
       await window.waitForTimeout(8000);
     }
