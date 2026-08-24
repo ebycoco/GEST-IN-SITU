@@ -19,7 +19,7 @@ import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxActionableCount } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
@@ -127,6 +127,21 @@ function registerVerifyPasswordAttempt(key: string, success: boolean): void {
     log.warn(`[SECURITY] Verrouillage anti-bruteforce déclenché pour '${key}' après ${entry.count} échecs de vérification de mot de passe.`);
   }
 }
+
+/**
+ * Correctif P1 (plan d'impact validé — fenêtre de course suppression hiérarchie / outbox) :
+ * bornes du poll sur `isOutboxProcessing()` avant une suppression destructrice de site/centre
+ * (hierarchy:deleteSite, handleDeleteCentreLogic). Même style que OUTBOX_LOCK_MAX_RETRIES /
+ * OUTBOX_LOCK_RETRY_DELAY_MS (sync:startBulk, plus bas dans ce fichier), adapté à ce cas :
+ * attendre qu'un cycle processOutboxPending() déjà en vol se termine avant de déclencher
+ * cancelPendingInsert() en cascade, pour éviter qu'un upsert Supabase réussisse juste après
+ * coup et laisse une ligne fantôme orpheline côté cloud (cf. outbox.service.ts, isOutboxProcessing).
+ * 20 × 500ms = 10s max — largement suffisant pour un lot OUTBOX_BATCH_SIZE=50 en conditions
+ * réseau normales, sans jamais bloquer indéfiniment (log d'avertissement si dépassé, la
+ * suppression se poursuit ensuite).
+ */
+const OUTBOX_DELETE_LOCK_MAX_RETRIES = 20;
+const OUTBOX_DELETE_LOCK_RETRY_DELAY_MS = 500;
 
 // Variables globales pour le suivi anti-fuite (en mémoire)
 const rechercheHistoriqueConsultations: Map<string, { id_carte: number; timestamp: number }[]> = new Map();
@@ -3646,7 +3661,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
       throw new Error("Accès refusé. Seul le SUPER ADMIN peut supprimer un site.");
     }
-    try { return queries.deleteSite(id); }
+    try {
+      // Correctif P1 (plan d'impact validé) : attendre la fin d'un éventuel cycle
+      // processOutboxPending() déjà en vol avant la suppression destructrice — évite
+      // que cancelPendingInsert() (déclenché en cascade par queries.deleteSite) supprime
+      // une entrée t_outbox PENDING pendant qu'un upsert Supabase est déjà en réseau pour
+      // cette même entrée (cf. isOutboxProcessing(), outbox.service.ts).
+      for (let i = 0; i < OUTBOX_DELETE_LOCK_MAX_RETRIES && isOutboxProcessing(); i++) {
+        await new Promise((resolve) => setTimeout(resolve, OUTBOX_DELETE_LOCK_RETRY_DELAY_MS));
+      }
+      if (isOutboxProcessing()) {
+        log.warn(`[hierarchy:deleteSite] Suppression du site ${id} lancée alors qu'un traitement outbox est toujours en cours après ${OUTBOX_DELETE_LOCK_MAX_RETRIES} tentatives (verrou persistant ?).`);
+      }
+      // Point critique : AUCUN await entre la vérification isOutboxProcessing() ci-dessus
+      // et l'appel destructeur ci-dessous — Node.js étant mono-thread, cela garantit
+      // qu'aucun nouveau processOutboxPending() ne peut démarrer entre les deux.
+      return queries.deleteSite(id);
+    }
     catch (e) { log.error('IPC Error: hierarchy:deleteSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:resetAdminPassword', async (_, siteId, pass) => {
@@ -3906,6 +3937,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       }
 
+      // Correctif P1 (plan d'impact validé) : attendre la fin d'un éventuel cycle
+      // processOutboxPending() déjà en vol avant la suppression destructrice — évite
+      // que cancelPendingInsert() (déclenché en cascade par queries.deleteCentre) supprime
+      // une entrée t_outbox PENDING pendant qu'un upsert Supabase est déjà en réseau pour
+      // cette même entrée (cf. isOutboxProcessing(), outbox.service.ts). N'interfère pas
+      // avec le DELETE Supabase fire-and-forget ci-dessus (portée différente : celui-ci
+      // vise le centre lui-même, pas les entrées t_outbox en file).
+      for (let i = 0; i < OUTBOX_DELETE_LOCK_MAX_RETRIES && isOutboxProcessing(); i++) {
+        await new Promise((resolve) => setTimeout(resolve, OUTBOX_DELETE_LOCK_RETRY_DELAY_MS));
+      }
+      if (isOutboxProcessing()) {
+        log.warn(`[handleDeleteCentreLogic] Suppression du centre ${id} lancée alors qu'un traitement outbox est toujours en cours après ${OUTBOX_DELETE_LOCK_MAX_RETRIES} tentatives (verrou persistant ?).`);
+      }
+      // Point critique : AUCUN await entre la vérification isOutboxProcessing() ci-dessus
+      // et l'appel destructeur ci-dessous — Node.js étant mono-thread, cela garantit
+      // qu'aucun nouveau processOutboxPending() ne peut démarrer entre les deux.
       const res = await queries.deleteCentre(id);
 
       logAudit(

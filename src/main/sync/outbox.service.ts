@@ -558,6 +558,22 @@ export function getOutboxActionableCount(tableName?: string): number {
   }
 }
 
+/**
+ * Indique si `processOutboxPending` est actuellement en cours d'exécution
+ * (verrou anti-concurrence `_isProcessing`, en lecture seule).
+ *
+ * Usage : permettre à un appelant externe (ex: handlers IPC de suppression de
+ * hiérarchie `hierarchy:deleteSite` / `handleDeleteCentreLogic`) d'attendre la
+ * fin d'un cycle d'envoi en cours avant une opération destructrice locale,
+ * afin d'éviter la fenêtre de course où `cancelPendingInsert()` supprimerait
+ * une entrée t_outbox PENDING pendant qu'un appel réseau Supabase est déjà en
+ * vol pour cette même entrée (upsert qui aboutirait après coup en ligne
+ * fantôme orpheline côté cloud, jamais nettoyée).
+ */
+export function isOutboxProcessing(): boolean {
+  return _isProcessing;
+}
+
 // ─── Helpers privés ──────────────────────────────────────────────────────────
 
 /** Verrou interne anti-concurrence du worker outbox. */
