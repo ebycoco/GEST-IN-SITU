@@ -139,8 +139,8 @@ export function createSite(data: { nom: string; code: string; max_centres: numbe
   const transaction = db.transaction(() => {
     // ── 1. Insertion locale immédiate (toujours, online ET offline) ──────────
     const siteResult = db.prepare(`
-      INSERT INTO t_sites (nom, code, is_active, max_centres, sync_id, expiry_date, is_permanent)
-      VALUES (?, ?, 1, ?, ?, ?, ?)
+      INSERT INTO t_sites (nom, code, is_active, max_centres, sync_id, expiry_date, is_permanent, is_dirty)
+      VALUES (?, ?, 1, ?, ?, ?, ?, 1)
     `).run(data.nom, data.code, data.max_centres, siteSyncId, data.expiry_date || null, data.is_permanent || 0);
 
     const siteId = siteResult.lastInsertRowid as number;
@@ -582,6 +582,10 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
   if (hasColumn('prefixe_rangement') && data.prefixe_rangement !== undefined) {
     columns.push('prefixe_rangement');
     values.push(data.prefixe_rangement || null);
+  }
+  if (hasColumn('is_dirty')) {
+    columns.push('is_dirty');
+    values.push(1);
   }
 
   const placeholders = columns.map(() => '?').join(', ');
