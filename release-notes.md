@@ -12,8 +12,13 @@
 - Correction d'une faille sur le nettoyage des données temporaires d'import : accessible sans vérification de rôle ni de site, même lacune que celle déjà corrigée sur le nettoyage des incohérences qualité.
 - Correction de quatre lacunes RBAC supplémentaires (moins critiques) : synchronisation globale forcée accessible à un rôle autre que SUPER ADMIN, résumé des sites exposant les identifiants d'administrateurs de tous les sites, purge des logs système protégée par mot de passe mais pas par rôle, et modification de la configuration système sans aucune vérification.
 
+## 🚀 Nouveautés & Ergonomie
+
+- Ajout d'un sélecteur de rôle actif dans la barre supérieure : un utilisateur possédant plusieurs rôles peut désormais basculer instantanément entre ses rôles accordés (ex. opérateur d'apurement ↔ opérateur de vérification) sans se déconnecter ni ressaisir ses identifiants. Une confirmation est demandée avant chaque bascule, puis l'application redirige automatiquement vers l'interface du rôle choisi.
+
 ## 🛠️ Corrections & Fiabilité
 
+- Journal d'audit : la traçabilité des changements de rôle actif (`ROLE_SWITCH`) enregistre désormais correctement le rôle réellement actif juste avant chaque bascule, au lieu d'afficher à tort le rôle de connexion initial dès la deuxième bascule d'une même session.
 - Suppression d'un site : les entrées de la file de synchronisation (outbox) des centres, agents et rôles rattachés au site supprimé sont désormais correctement nettoyées, évitant qu'ils ne soient recréés côté cloud lors de la prochaine synchronisation.
 - Suppression d'un site ou d'un centre : élimination d'une fenêtre de course avec la synchronisation en cours qui pouvait, dans de rares cas, laisser une entité supprimée localement réapparaître depuis le cloud lors d'une synchronisation ultérieure.
 - Contexte multi-site (SUPER ADMIN) : le sélecteur de site de la barre latérale se met désormais à jour immédiatement après création d'un site (sans nécessiter de reconnexion), et revient automatiquement à la vue globale si le site actuellement sélectionné vient d'être supprimé.

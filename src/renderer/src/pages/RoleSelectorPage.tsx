@@ -4,7 +4,7 @@ import { Shield, ChevronRight, LogOut } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 
-const ROLE_META: Record<string, { label: string; description: string; color: string; icon: string }> = {
+export const ROLE_META: Record<string, { label: string; description: string; color: string; icon: string }> = {
   'SUPER ADMIN':            { label: 'Super Administrateur',         description: 'Accès total au système',                       color: '#a78bfa', icon: '👑' },
   'ADMINISTRATEUR_SITE':    { label: 'Administrateur de Site',       description: 'Gestion globale du site',                      color: '#60a5fa', icon: '🏛️' },
   'ADMIN_CENTRE':           { label: 'Administrateur de Centre',     description: 'Gestion locale du centre',                     color: '#34d399', icon: '🏢' },

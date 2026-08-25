@@ -344,8 +344,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         throw new Error("Accès refusé : ce rôle ne fait pas partie des rôles attribués à ce compte.");
       }
 
+      // Capture du rôle actif AVANT mutation : getSecureCurrentUser() renvoie une référence
+      // partagée sur l'objet singleton `secureCurrentUser` (pas une copie), et setActiveRole()
+      // mute `role` sur ce même objet en place (session-heartbeat.ts). Sans cette capture
+      // préalable, lire `secureUser.role` après l'appel à setActiveRole() renverrait déjà le
+      // NOUVEAU rôle (requestedRole), faussant la transition journalisée dans ROLE_SWITCH.
+      const previousActiveRole = secureUser.role;
       setActiveRole(requestedRole);
-      queries.insertAuditLog(secureUser.login, 'ROLE_SWITCH', `${secureUser.loginRole ?? secureUser.role} → ${requestedRole}`);
+      queries.insertAuditLog(secureUser.login, 'ROLE_SWITCH', `${previousActiveRole} → ${requestedRole}`);
 
       // Correctif P1 (audit agent-9) : le gating "Envoi Automatique" des cartes
       // (SyncEngine.cardsAutoUpstreamEnabled / miroir outbox.service.ts) n'était mis à

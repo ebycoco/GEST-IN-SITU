@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
 import SyncWidget from '../SyncWidget';
+import RoleSwitcher from './RoleSwitcher';
 
 function ConsultantPerimeter() {
   const user = useAuthStore((s) => s.user);
@@ -384,6 +385,8 @@ export default function TopBar() {
             )
           )}
         </button>
+
+        <RoleSwitcher />
 
         <button className="topbar-icon-btn" title="Paramètres" onClick={() => navigate('/profile')}>
           <Settings size={16} />
