@@ -467,7 +467,8 @@ class SyncEngine extends EventEmitter {
       const refreshResult = refreshSecureCurrentUser();
       log.info(
         `[SyncEngine][UserSync] refreshSecureCurrentUser — changed=${refreshResult.changed}, ` +
-        `revoked=${refreshResult.revoked}, disabled=${refreshResult.disabled} (site ${siteId}).`
+        `revoked=${refreshResult.revoked}, disabled=${refreshResult.disabled}, ` +
+        `siteSuspended=${refreshResult.siteSuspended}, licenseExpired=${refreshResult.licenseExpired} (site ${siteId}).`
       );
 
       // ── Invalidation fail-closed AVANT notification (sécurité) ────────────
@@ -481,12 +482,18 @@ class SyncEngine extends EventEmitter {
       // fail-closed réel, plus un fail-open reposant sur le seul aller-retour renderer.
       // La notification renderer ci-dessous reste best-effort (UX : afficher le message et
       // rediriger vers /login) mais n'est plus le SEUL rempart de sécurité.
-      if (refreshResult.revoked || refreshResult.disabled) {
+      if (refreshResult.revoked || refreshResult.disabled || refreshResult.siteSuspended || refreshResult.licenseExpired) {
         await stopSessionHeartbeat();
         this.stopUserAccountsSyncTimer();
         this.stopAutoDownstreamTimer();
         this.notifyRenderer('auth:session-expired', {
-          reason: refreshResult.revoked ? 'revoked' : 'disabled'
+          reason: refreshResult.revoked
+            ? 'revoked'
+            : refreshResult.disabled
+            ? 'disabled'
+            : refreshResult.siteSuspended
+            ? 'site_suspended'
+            : 'license_expired'
         });
       } else if (refreshResult.changed) {
         this.notifyRenderer('auth:session-updated', { roles: getCurrentGrantedRoles() ?? [] });

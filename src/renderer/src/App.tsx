@@ -106,6 +106,20 @@ export default function App() {
           isAlert: true,
           isDanger: true
         });
+      } else if (payload?.reason === 'site_suspended') {
+        confirmService.confirm({
+          title: 'Accès suspendu',
+          message: "L'accès de votre site a été suspendu par le Super Administrateur. Veuillez le contacter pour plus d'informations.",
+          isAlert: true,
+          isDanger: true
+        });
+      } else if (payload?.reason === 'license_expired') {
+        confirmService.confirm({
+          title: 'Licence expirée',
+          message: "La licence de votre site a expiré. Veuillez contacter le Super Administrateur pour la renouveler.",
+          isAlert: true,
+          isDanger: true
+        });
       } else {
         confirmService.confirm({
           title: 'Session fermée',

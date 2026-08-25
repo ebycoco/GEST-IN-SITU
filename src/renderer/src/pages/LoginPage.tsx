@@ -164,22 +164,36 @@ export default function LoginPage() {
       return;
     }
     
-    const success = await doLogin(login.trim(), password.trim());
-    if (success) {
-      const user = useAuthStore.getState().user;
-      // Log diagnostic de connexion (multi-rôle ou mono-rôle)
-      const roles = user?.roles ?? (user?.role ? [user.role] : []);
-      console.info(`[LOGIN] Connexion réussie. Login: ${user?.login} | Rôles disponibles: ${roles.join(', ')}`);
+    try {
+      const success = await doLogin(login.trim(), password.trim());
+      if (success) {
+        const user = useAuthStore.getState().user;
+        // Log diagnostic de connexion (multi-rôle ou mono-rôle)
+        const roles = user?.roles ?? (user?.role ? [user.role] : []);
+        console.info(`[LOGIN] Connexion réussie. Login: ${user?.login} | Rôles disponibles: ${roles.join(', ')}`);
 
-      if (roles.length > 1) {
-        // Multi-rôle → page dédiée de sélection
-        toast.success('Bienvenue ! Sélectionnez votre rôle pour cette session.');
-        navigate('/role-selector');
+        if (roles.length > 1) {
+          // Multi-rôle → page dédiée de sélection
+          toast.success('Bienvenue ! Sélectionnez votre rôle pour cette session.');
+          navigate('/role-selector');
+        } else {
+          proceedToDashboard(user);
+        }
       } else {
-        proceedToDashboard(user);
+        toast.error('Identifiants incorrects');
       }
-    } else {
-      toast.error('Identifiants incorrects');
+    } catch (error: any) {
+      // authStore.login() repropage explicitement les erreurs levées par authenticateUser()
+      // (cf. handler IPC auth:login) — distinguer les causes licence/site des autres erreurs
+      // pour éviter le message trompeur "Identifiants incorrects" quand le mot de passe est
+      // pourtant correct.
+      if (error?.message === 'LICENCE_EXPIREE') {
+        toast.error("La licence de votre site a expiré. Veuillez contacter le Super Administrateur.");
+      } else if (error?.message === 'SITE_SUSPENDU') {
+        toast.error("L'accès de votre site a été suspendu. Veuillez contacter le Super Administrateur.");
+      } else {
+        toast.error("Erreur de connexion. Veuillez réessayer.");
+      }
     }
   };
 

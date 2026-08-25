@@ -281,6 +281,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (e.message === 'SESSION_ACTIVE') {
         throw new Error('SESSION_ACTIVE');
       }
+      if (e.message === 'LICENCE_EXPIREE') {
+        throw new Error('LICENCE_EXPIREE');
+      }
+      if (e.message === 'SITE_SUSPENDU') {
+        throw new Error('SITE_SUSPENDU');
+      }
       return null;
     }
   });

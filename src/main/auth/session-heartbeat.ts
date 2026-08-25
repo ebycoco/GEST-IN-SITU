@@ -180,21 +180,31 @@ export function setActiveRole(role: string): boolean {
  *    ici (un changement de rôle actif reste l'exclusivité de setActiveRole(), validée par le
  *    handler IPC `auth:setActiveRole`).
  *
- * @returns `{ changed, revoked, disabled }` — à charge de l'appelant (étape IPC ultérieure,
- *   hors périmètre ici) de décider d'une notification renderer / déconnexion forcée.
+ * @returns `{ changed, revoked, disabled, siteSuspended, licenseExpired }` — à charge de
+ *   l'appelant (étape IPC ultérieure, hors périmètre ici) de décider d'une notification
+ *   renderer / déconnexion forcée.
  *   `changed` n'est jamais signalé sur le tout premier appel post-login (établissement de la
  *   référence `secureCurrentGrantedRoles`), pour éviter un faux-positif.
+ *   `siteSuspended`/`licenseExpired` répliquent fidèlement la même vérification que
+ *   `authenticateUser()` (users.queries.ts), appliquée ici à une session déjà ouverte : lecture
+ *   seule sur `t_sites`, aucune mutation des champs de cantonnement de `secureCurrentUser`.
  */
-export function refreshSecureCurrentUser(): { changed: boolean; revoked: boolean; disabled: boolean } {
+export function refreshSecureCurrentUser(): {
+  changed: boolean;
+  revoked: boolean;
+  disabled: boolean;
+  siteSuspended: boolean;
+  licenseExpired: boolean;
+} {
   // No-op : aucune session active.
   if (!secureCurrentUser) {
-    return { changed: false, revoked: false, disabled: false };
+    return { changed: false, revoked: false, disabled: false, siteSuspended: false, licenseExpired: false };
   }
 
   const db = getDatabase();
   if (!db) {
     // Base indisponible (cas limite) : rien de frais à comparer, on ne mute rien.
-    return { changed: false, revoked: false, disabled: false };
+    return { changed: false, revoked: false, disabled: false, siteSuspended: false, licenseExpired: false };
   }
 
   const row = db.prepare(
@@ -206,11 +216,36 @@ export function refreshSecureCurrentUser(): { changed: boolean; revoked: boolean
   // Compte introuvable en local (suppression) : traité par prudence comme désactivé, sans
   // muter les champs de cantonnement (cf. invariant ci-dessus).
   if (!row) {
-    return { changed: false, revoked: false, disabled: true };
+    return { changed: false, revoked: false, disabled: true, siteSuspended: false, licenseExpired: false };
   }
 
   if (row.statut_actif !== 1) {
-    return { changed: false, revoked: false, disabled: true };
+    return { changed: false, revoked: false, disabled: true, siteSuspended: false, licenseExpired: false };
+  }
+
+  // VERIFICATION SITE ACTIF ET LICENCE — même logique exacte que authenticateUser()
+  // (users.queries.ts:106-116), répliquée ici en lecture seule pour une session déjà ouverte.
+  // Aucune mutation des champs de cantonnement (site_id/centre_id/role/loginRole).
+  if (secureCurrentUser.role !== 'SUPER ADMIN' && secureCurrentUser.site_id) {
+    const site = db.prepare(
+      'SELECT is_active, expiry_date, is_permanent FROM t_sites WHERE id = ?'
+    ).get(secureCurrentUser.site_id) as
+      | { is_active: number; expiry_date: string | null; is_permanent: number }
+      | undefined;
+
+    if (site) {
+      if (site.is_active === 0) {
+        return { changed: false, revoked: false, disabled: false, siteSuspended: true, licenseExpired: false };
+      }
+
+      if (site.is_permanent !== 1 && site.expiry_date) {
+        const now = new Date();
+        const expiry = new Date(site.expiry_date);
+        if (now > expiry) {
+          return { changed: false, revoked: false, disabled: false, siteSuspended: false, licenseExpired: true };
+        }
+      }
+    }
   }
 
   const freshGrantedRoles = resolveGrantedRoles(secureCurrentUser.id_user, row.role);
@@ -218,7 +253,7 @@ export function refreshSecureCurrentUser(): { changed: boolean; revoked: boolean
   // Le rôle ACTIF de la session (mutable via setActiveRole, cf. commentaire de ce fichier)
   // n'est plus autorisé -> révocation, sans mutation des champs de cantonnement.
   if (!freshGrantedRoles.includes(secureCurrentUser.role)) {
-    return { changed: false, revoked: true, disabled: false };
+    return { changed: false, revoked: true, disabled: false, siteSuspended: false, licenseExpired: false };
   }
 
   // Détection de changement : comparaison au dernier snapshot connu des rôles accordés.
@@ -240,5 +275,5 @@ export function refreshSecureCurrentUser(): { changed: boolean; revoked: boolean
   if (secureCurrentUser.prenom_user !== undefined) secureCurrentUser.prenom_user = row.prenom_user;
   secureCurrentGrantedRoles = freshGrantedRoles;
 
-  return { changed: rolesChanged || nameChanged, revoked: false, disabled: false };
+  return { changed: rolesChanged || nameChanged, revoked: false, disabled: false, siteSuspended: false, licenseExpired: false };
 }

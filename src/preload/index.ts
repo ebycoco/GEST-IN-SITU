@@ -26,7 +26,7 @@ const api = {
       ipcRenderer.invoke('auth:updateSelfProfile', userId, data),
     registerSuperAdmin: (data: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('auth:registerSuperAdmin', data),
-    onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' }) => void) => {
+    onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' | 'site_suspended' | 'license_expired' }) => void) => {
       const listener = (_: any, payload?: { reason?: 'revoked' | 'disabled' }) => callback(payload);
       ipcRenderer.on('auth:session-expired', listener);
       return () => ipcRenderer.removeListener('auth:session-expired', listener);
