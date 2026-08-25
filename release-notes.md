@@ -18,6 +18,7 @@
 
 ## 🛠️ Corrections & Fiabilité
 
+- Import de cartes (Centre de Migration) : une ligne totalement vide du fichier importé (nom, prénom, date de naissance, numéro de sécu, lieu de naissance, contact, lieu d'enrôlement, statut et date de délivrance tous vides) n'est désormais plus importée du tout, au lieu de créer une "carte fantôme" avec un rangement automatiquement mis à "non classé". Les imports partiels légitimes (au moins une donnée réelle renseignée) restent inchangés.
 - Journal d'audit : la traçabilité des changements de rôle actif (`ROLE_SWITCH`) enregistre désormais correctement le rôle réellement actif juste avant chaque bascule, au lieu d'afficher à tort le rôle de connexion initial dès la deuxième bascule d'une même session.
 - Suppression d'un site : les entrées de la file de synchronisation (outbox) des centres, agents et rôles rattachés au site supprimé sont désormais correctement nettoyées, évitant qu'ils ne soient recréés côté cloud lors de la prochaine synchronisation.
 - Suppression d'un site ou d'un centre : élimination d'une fenêtre de course avec la synchronisation en cours qui pouvait, dans de rares cas, laisser une entité supprimée localement réapparaître depuis le cloud lors d'une synchronisation ultérieure.

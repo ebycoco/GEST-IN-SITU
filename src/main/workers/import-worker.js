@@ -18,6 +18,10 @@ async function run() {
   // invalides), par opposition aux anomalies STATUT_INCONNU qui restent importées malgré
   // l'anomalie tracée. Sert à ne pas gonfler artificiellement le compteur "duplicates".
   var totalExcludedFromBatch = 0;
+  // Lignes totalement vides (hors `rangement`) ignorées avant tout traitement — voir garde
+  // juste avant `resolveRouting()` plus bas. Ne touche aucun autre compteur ni le contrat
+  // postMessage({ type: 'done' }), uniquement tracé dans le log [IMPORT DIAGNOSTIC] final.
+  var totalSkippedEmpty = 0;
   const { dbPath, filePath, agent, totalEstimate, siteId, routingTable, excludedRowIndices } = workerData;
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -629,6 +633,22 @@ async function run() {
         // ============================================================
         var rawStatut = removeAccents((getCol(cols, colMap, 'statut', 'etat') || '').trim());
 
+        // Lecture anticipée pour le contrôle de ligne vide (num_secu et date_delivrance ne sont
+        // sinon lus qu'à l'intérieur de branches conditionnelles plus bas dans la boucle).
+        var numSecuRaw = (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim();
+        var dateDelivranceRaw = (getCol(cols, colMap, 'date_delivrance') || '').trim();
+
+        // Ligne totalement vide (hors `rangement`, qui reçoit un défaut automatique et ne doit
+        // donc jamais servir de preuve de contenu réel) : ignorée avant tout traitement, sans
+        // jamais être insérée (ni t_cartes, ni t_import_anomalies). Incrément manuel de lineCount
+        // avant `continue`, comme pour une ligne exclue par l'utilisateur (cf. commentaire plus haut
+        // sur excludedSet), afin de préserver l'alignement des index de lignes suivantes.
+        if (!noms && !prenoms && !ddn && !numSecuRaw && !lieuN && !contact && !lieuE && !rawStatut && !dateDelivranceRaw) {
+          totalSkippedEmpty++;
+          lineCount++;
+          continue;
+        }
+
         var finalStatut       = 'EN STOCK';
         var nomRetirant       = null;
         var numRetirant       = null;
@@ -1093,7 +1113,8 @@ Seuil Auto-Checkpoint : ${walAutoCheckpoint} pages (~${(walAutoCheckpoint * 4096
   console.log(`[IMPORT DIAGNOSTIC] Après import :
 Temps total : ${durationSeconds} s
 Nombre transactions : ${totalTransactions}
-Lignes traitées : ${processedRows}`);
+Lignes traitées : ${processedRows}
+Lignes vides ignorées : ${totalSkippedEmpty}`);
 
   parentPort.postMessage({ type: 'progress', value: 100 });
   parentPort.postMessage({
