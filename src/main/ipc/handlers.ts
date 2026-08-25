@@ -2883,6 +2883,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     });
   });
 
+  // EXPORT - S\u00E9curit\u00E9 (P0, audit RBAC) : les 4 handlers d'export ci-dessous exposaient
+  // queries.getExportRows() sans aucune v\u00E9rification de r\u00F4le ni cantonnement site forc\u00E9.
+  // getExportRows() ne filtre par site_id QUE si filters.site_id est renseign\u00E9 (base
+  // WHERE 1=1) : un appel IPC direct (hors route React /export) sans ce param\u00E8tre, ou
+  // avec un site_id forg\u00E9, exposait les cartes de tous les sites (donn\u00E9es nominatives
+  // sensibles : num_secu, contact, noms, prenoms, date_de_naissance) \u00E0 tout compte
+  // authentifi\u00E9 quel que soit son r\u00F4le. assertExportAccess() restaure : (1) un contr\u00F4le
+  // de r\u00F4le (SUPER ADMIN / ADMINISTRATEUR_SITE uniquement) et (2) un cantonnement
+  // site_id forc\u00E9 au site de l'utilisateur pour tout r\u00F4le non-SUPER-ADMIN, en \u00E9crasant
+  // toute valeur re\u00E7ue du client. Le cas SUPER ADMIN sans site actif (export "tous
+  // sites", cf. ExportPage.tsx) reste volontairement pr\u00E9serv\u00E9 : filters.site_id n'est
+  // alors pas forc\u00E9.
+  function assertExportAccess(filters?: Record<string, string>): Record<string, string> {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) throw new Error("Session invalide.");
+    if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      log.warn(`[SECURITY] Acc\u00E8s export refus\u00E9 pour l'utilisateur ID ${secureUser.id_user} (r\u00F4le non autoris\u00E9)`);
+      throw new Error("Acc\u00E8s refus\u00E9 pour cette op\u00E9ration.");
+    }
+    const scopedFilters = { ...(filters || {}) };
+    if (secureUser.role !== 'SUPER ADMIN') {
+      scopedFilters.site_id = String(secureUser.site_id);
+    }
+    return scopedFilters;
+  }
+
   // EXPORT - CSV with save dialog
   ipcMain.handle('export:csv', async (_, filters?: Record<string, string>) => {
     const result = await dialog.showSaveDialog(mainWindow, {
@@ -2896,7 +2922,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (result.canceled || !result.filePath) return { success: false, reason: 'cancelled' };
 
     try {
-      const rows = queries.getExportRows(filters) as Record<string, unknown>[];
+      const scopedFilters = assertExportAccess(filters);
+      const rows = queries.getExportRows(scopedFilters) as Record<string, unknown>[];
       if (rows.length === 0) return { success: false, reason: 'no_data' };
 
       const headers = Object.keys(rows[0]);
@@ -2911,7 +2938,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const { writeFileSync } = await import('fs');
       writeFileSync(result.filePath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
 
-      if (filters?.incremental === 'true') {
+      if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
         queries.marquerCartesExporte(ids);
       }
@@ -2937,7 +2964,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (result.canceled || !result.filePath) return { success: false, reason: 'cancelled' };
 
     try {
-      const rows = queries.getExportRows(filters) as Record<string, unknown>[];
+      const scopedFilters = assertExportAccess(filters);
+      const rows = queries.getExportRows(scopedFilters) as Record<string, unknown>[];
       if (rows.length === 0) return { success: false, reason: 'no_data' };
 
       const exceljsModule = await import('exceljs');
@@ -2966,7 +2994,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       await workbook.xlsx.writeFile(result.filePath);
 
-      if (filters?.incremental === 'true') {
+      if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
         queries.marquerCartesExporte(ids);
       }
@@ -2992,6 +3020,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (result.canceled || !result.filePath) return { success: false, reason: 'cancelled' };
 
     try {
+      const scopedFilters = assertExportAccess(filters);
       const sendProgress = async (val: number) => {
         if (!mainWindow.isDestroyed()) {
           mainWindow.webContents.send('export:pdf-progress', val);
@@ -3000,7 +3029,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       };
 
       await sendProgress(10);
-      const rows = queries.getExportRows(filters) as Record<string, unknown>[];
+      const rows = queries.getExportRows(scopedFilters) as Record<string, unknown>[];
       if (rows.length === 0) return { success: false, reason: 'no_data' };
 
       await sendProgress(30);
@@ -3022,14 +3051,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       doc.setTextColor(30, 41, 59); // slate-800
       doc.text("LISTE DE CONTRÔLE ET D'ÉMARGEMENT - CARTES CMU", 14, 18);
 
-      const selectedStatut = filters?.statut || 'TOUS';
-      const selectedRangement = filters?.rangement || 'ALL';
-      
+      const selectedStatut = scopedFilters?.statut || 'TOUS';
+      const selectedRangement = scopedFilters?.rangement || 'ALL';
+
       let siteName = 'TOUS LES SITES';
-      if (filters?.site_id) {
+      if (scopedFilters?.site_id) {
         const db = getDatabase();
         if (db) {
-          const siteRow = db.prepare("SELECT nom FROM t_sites WHERE id = ?").get(Number(filters.site_id)) as { nom: string } | undefined;
+          const siteRow = db.prepare("SELECT nom FROM t_sites WHERE id = ?").get(Number(scopedFilters.site_id)) as { nom: string } | undefined;
           if (siteRow) siteName = siteRow.nom;
         }
       }
@@ -3116,7 +3145,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const fs = await import('fs');
       await fs.promises.writeFile(result.filePath, Buffer.from(buffer));
 
-      if (filters?.incremental === 'true') {
+      if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
         queries.marquerCartesExporte(ids);
       }
@@ -3136,7 +3165,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // renvoyait auparavant la nomenclature des rangements de tous les sites.
   ipcMain.handle('cartes:getRangements', (_, siteId?: number) => queries.getDistinctRangements(resolveScopedSiteId(siteId)));
   ipcMain.handle('export:marquerExporte', (_, ids: number[]) => queries.marquerCartesExporte(ids));
-  ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(filters));
+  ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(assertExportAccess(filters)));
 
   // EXPORT - Centralized generateFile with Audit & Alerts
   ipcMain.handle('export:generateFile', async (event, format: 'csv' | 'excel' | 'pdf', filters?: Record<string, string>) => {
