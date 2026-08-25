@@ -894,6 +894,9 @@ async function run() {
   const CHUNK_SIZE = 10000;
   let totalUpdated = 0;
   let totalInserted = 0;
+  // Diagnostic uniquement (Niveau 1, cf. completeChunkStmt plus bas) — n'entre jamais dans le
+  // contrat postMessage({type:'done'}) ni dans le calcul de "duplicates".
+  let totalCompleted = 0;
 
   // ============================================================
   // MISSION 3 — FusionnerImportVersCartes : Sécurisation SQL absolue
@@ -940,6 +943,68 @@ async function run() {
     'FROM t_import_temp ' +
     'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
     'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id)'
+  );
+
+  // ============================================================
+  // NIVEAU 1 — CompléterCartesExistantes (plan "Complétion des cartes
+  // existantes via réimport", section Niveau 1) : pour une ligne réimportée
+  // dont cle_doublon+site_id correspond DÉJÀ à une carte existante (rien n'a
+  // changé dans les 5 champs de la clé), compléter automatiquement 3
+  // colonnes hors-clé (num_secu, lieu_enrolement, rangement) UNIQUEMENT si
+  // elles sont actuellement vides/placeholder en base. Ne JAMAIS écraser une
+  // valeur déjà réellement renseignée.
+  //
+  // Requête STRICTEMENT INDÉPENDANTE de updateChunkStmt ci-dessus :
+  //   - Aucune condition sur t_cartes.statut, ni écriture de la colonne
+  //     statut — s'applique que la carte soit EN STOCK, DELIVRE ou ANNULE.
+  //     La « RÈGLE DE SÉCURITÉ ABSOLUE » de updateChunkStmt reste intacte
+  //     et n'est ni lue ni modifiée ici.
+  //
+  // Détection "vide/placeholder" (par colonne) :
+  //   - num_secu        : réplique exactement le motif de
+  //                       getSansNumSecuPage() (cartes.queries.ts:1351) —
+  //                       NULL, chaîne vide, ou préfixée par '-' (tirets
+  //                       placeholder type '-'/'--').
+  //   - lieu_enrolement : NULL ou chaîne vide après TRIM (aucune notion de
+  //                       placeholder dédiée pour cette colonne à ce jour).
+  //   - rangement       : NULL, chaîne vide après TRIM, ou le littéral
+  //                       'NON CLASSE' posé par resolveRouting() (ligne
+  //                       ~97/109) quand la colonne source est vide.
+  //
+  // La clause WHERE n'exécute la mise à jour (updated_at=@now, is_dirty=1)
+  // que si AU MOINS UNE des 3 colonnes est à la fois (a) effectivement
+  // vide/placeholder côté t_cartes ET (b) réellement renseignée côté
+  // t_import_temp (donc apporte une vraie valeur exploitable). Sans le
+  // volet (b), une carte dont un champ reste vide des DEUX côtés (base ET
+  // fichier réimporté) déclenchait quand même l'UPDATE — réaffectation
+  // vide→vide, mais is_dirty=1 et enfilage t_outbox inutiles (bug P1 audit
+  // statique, corrigé ici). Ce garde-fou (b) évite cela pour ne jamais
+  // marquer inutilement une carte "dirty" (donc renvoyée vers Supabase via
+  // t_outbox, cf. touchedCardsStmt plus bas) quand rien ne changerait
+  // réellement.
+  // ============================================================
+  const completeChunkStmt = db.prepare(
+    'UPDATE t_cartes ' +
+    'SET num_secu = CASE ' +
+    "      WHEN (t_cartes.num_secu IS NULL OR t_cartes.num_secu = '' OR t_cartes.num_secu LIKE '-%') " +
+    '      THEN t_import_temp.num_secu ' +
+    '      ELSE t_cartes.num_secu ' +
+    '    END, ' +
+    "    lieu_enrolement = COALESCE(NULLIF(TRIM(t_cartes.lieu_enrolement), ''), t_import_temp.lieu_enrolement), " +
+    "    rangement       = COALESCE(NULLIF(NULLIF(TRIM(t_cartes.rangement), ''), 'NON CLASSE'), t_import_temp.rangement), " +
+    '    updated_at      = @now, is_dirty = 1 ' +
+    'FROM t_import_temp ' +
+    'WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon ' +
+    '  AND t_cartes.site_id     = t_import_temp.site_id ' +
+    '  AND t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
+    '  AND (' +
+    "    ((t_cartes.num_secu IS NULL OR t_cartes.num_secu = '' OR t_cartes.num_secu LIKE '-%') " +
+    "      AND NOT (t_import_temp.num_secu IS NULL OR t_import_temp.num_secu = '' OR t_import_temp.num_secu LIKE '-%')) " +
+    "    OR ((t_cartes.lieu_enrolement IS NULL OR TRIM(t_cartes.lieu_enrolement) = '') " +
+    "      AND t_import_temp.lieu_enrolement IS NOT NULL AND TRIM(t_import_temp.lieu_enrolement) != '') " +
+    "    OR ((t_cartes.rangement IS NULL OR TRIM(t_cartes.rangement) = '' OR t_cartes.rangement = 'NON CLASSE') " +
+    "      AND t_import_temp.rangement IS NOT NULL AND TRIM(t_import_temp.rangement) != '' AND t_import_temp.rangement != 'NON CLASSE')" +
+    '  )'
   );
 
   // Enfilage Outbox des cartes fusionnées par ce chunk (voir chunkTx plus bas) : sélectionne
@@ -1020,6 +1085,11 @@ async function run() {
       let chunkInsertMs = 0;
       let chunkUChanges = 0;
       let chunkIChanges = 0;
+      // Diagnostic uniquement (Niveau 1) : ce compteur n'alimente jamais totalUpdated ni le
+      // contrat postMessage({type:'done'}) plus bas — il ne fait que documenter, dans le log
+      // [FUSION DIAGNOSTIC], combien de cartes ont été complétées par ce chunk, sans modifier
+      // le calcul existant de "duplicates" (processedRows - totalInserted - totalUpdated - ...).
+      let chunkCChanges = 0;
 
       // 8. Taille du fichier .wal avant le COMMIT
       let walSizeBefore = getWalSize();
@@ -1032,6 +1102,14 @@ async function run() {
         chunkUpdateMs = performance.now() - uStart;
         chunkUChanges = uRes.changes;
 
+        // NIVEAU 1 — Complétion des 3 colonnes hors-clé sur les cartes déjà existantes
+        // (voir définition de completeChunkStmt ci-dessus). Exécutée avant insertChunkStmt
+        // pour ne porter QUE sur des cartes déjà présentes avant cet import (les cartes que
+        // insertChunkStmt s'apprête à créer dans ce même chunk ont déjà les bonnes valeurs
+        // dès la création, cf. commentaire sur insertChunkStmt — inutile de les repasser ici).
+        const cRes = completeChunkStmt.run({ now: now, startId: startId, endId: endId });
+        chunkCChanges = cRes.changes;
+
         // 4. Temps du INSERT & 5. Nombre réel
         let iStart = performance.now();
         const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
@@ -1040,7 +1118,11 @@ async function run() {
 
         // Enfilage Outbox (même transaction de chunk) : les cartes importées suivent
         // désormais le circuit standard t_outbox au lieu d'être poussées en direct par
-        // upload-worker.js (voir filtre NOT EXISTS ajouté dans ce dernier).
+        // upload-worker.js (voir filtre NOT EXISTS ajouté dans ce dernier). touchedCardsStmt
+        // rejoint t_cartes/t_import_temp sur cle_doublon+site_id (indépendant de la requête
+        // qui a effectué la modification) et filtre sur updated_at=@now : il capture donc
+        // aussi bien les cartes touchées par updateChunkStmt que celles touchées uniquement
+        // par completeChunkStmt (Niveau 1), sans aucune adaptation nécessaire.
         const touchedCards = touchedCardsStmt.all({ now: now, startId: startId, endId: endId });
         for (const card of touchedCards) {
           outboxUpsertStmt.run({ id: card.sync_id, payload: JSON.stringify(card) });
@@ -1061,11 +1143,12 @@ async function run() {
 
       totalUpdated += chunkUChanges;
       totalInserted += chunkIChanges;
+      totalCompleted += chunkCChanges;
       totalUpdateMs += chunkUpdateMs;
       totalInsertMs += chunkInsertMs;
       totalCommitMs += commitAndCheckpointMs;
 
-      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
+      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | COMPLETE(N1): ${chunkCChanges} lig | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
 
       totalTransactions++;
       chunkIndex++;
@@ -1080,6 +1163,7 @@ async function run() {
     console.log(`[FUSION DIAGNOSTIC] === BILAN DE LA FUSION ===
 Temps Total (49+ transactions) : ${fusionTotalMs.toFixed(2)}ms
 Total UPDATE : ${totalUpdateMs.toFixed(2)}ms (${totalUpdated} lignes)
+Total COMPLETE (Niveau 1, diagnostic) : ${totalCompleted} lignes
 Total INSERT : ${totalInsertMs.toFixed(2)}ms (${totalInserted} lignes)
 Total COMMIT & Auto-Checkpoint WAL : ${totalCommitMs.toFixed(2)}ms
 Total Attente Entre Chunks : ${totalBetweenMs.toFixed(2)}ms

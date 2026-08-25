@@ -14,6 +14,7 @@
 
 ## 🚀 Nouveautés & Ergonomie
 
+- Import de cartes (Centre de Migration) : réimporter un fichier corrigé pour un site déjà importé complète désormais automatiquement le numéro de sécu, le lieu d'enrôlement et le rangement des cartes déjà existantes quand ces champs sont vides, sans jamais écraser une valeur déjà renseignée et sans jamais modifier le statut d'une carte déjà traitée sur le terrain (délivrée/déchargée).
 - Module Qualité → Données Manquantes : ajout d'un onglet "Sans Lieu Enrôl." permettant de compléter le lieu d'enrôlement d'une carte, seul champ qui n'avait jusqu'ici aucune voie de correction (ni automatique ni manuelle).
 - Ajout d'un sélecteur de rôle actif dans la barre supérieure : un utilisateur possédant plusieurs rôles peut désormais basculer instantanément entre ses rôles accordés (ex. opérateur d'apurement ↔ opérateur de vérification) sans se déconnecter ni ressaisir ses identifiants. Une confirmation est demandée avant chaque bascule, puis l'application redirige automatiquement vers l'interface du rôle choisi.
 
