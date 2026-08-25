@@ -10,6 +10,7 @@
 - Correction d'une faille sur les exports de cartes (CSV/Excel/PDF) : accessibles sans vérification de rôle, avec un filtrage par site optionnel, permettant potentiellement à n'importe quel compte authentifié d'exporter les données nominatives (dont le numéro CMU) de tous les sites au lieu du seul site autorisé.
 - Correction d'une faille sur la purge du journal d'audit : accessible sans vérification de rôle (seule protection : une confirmation visuelle côté interface, pas une barrière serveur), permettant potentiellement à n'importe quel compte authentifié d'effacer irréversiblement tout l'historique d'audit de l'application.
 - Correction d'une faille sur le nettoyage des données temporaires d'import : accessible sans vérification de rôle ni de site, même lacune que celle déjà corrigée sur le nettoyage des incohérences qualité.
+- Correction de quatre lacunes RBAC supplémentaires (moins critiques) : synchronisation globale forcée accessible à un rôle autre que SUPER ADMIN, résumé des sites exposant les identifiants d'administrateurs de tous les sites, purge des logs système protégée par mot de passe mais pas par rôle, et modification de la configuration système sans aucune vérification.
 
 ## 🛠️ Corrections & Fiabilité
 

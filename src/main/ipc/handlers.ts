@@ -3673,7 +3673,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: hierarchy:getSites', e); throw e; }
   });
   ipcMain.handle('hierarchy:getSitesSummary', async () => {
-    try { return queries.getSitesSummary(); }
+    // Sécurité (P1-2) : même pattern que hierarchy:getSites juste au-dessus (P0-1). Avant ce
+    // correctif, AUCUNE vérification n'existait : tout compte authentifié recevait le résumé
+    // (compteurs + login de l'ADMINISTRATEUR_SITE) de tous les sites, tous confondus.
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) {
+        throw new Error("Session invalide.");
+      }
+      const summary = queries.getSitesSummary() as any[];
+      if (secureUser.role === 'SUPER ADMIN') return summary;
+      return summary.filter((s) => s.id === secureUser.site_id);
+    }
     catch (e) { log.error('IPC Error: hierarchy:getSitesSummary', e); throw e; }
   });
   ipcMain.handle('hierarchy:createSite', async (_, data) => {
@@ -4053,6 +4064,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // CONFIG
   ipcMain.handle('config:get', (_, key) => queries.getConfig(key));
   ipcMain.handle('config:set', async (_, key, value) => {
+    // Sécurité (P1-4) : canal orphelin côté renderer actuellement (aucun appelant confirmé
+    // par grep sur src/renderer), mais reste invocable directement et écrit dans t_config
+    // (config globale, non cantonnée par site). Garde de rôle ajoutée par précaution.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN peut modifier la configuration système.");
+    }
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
     const res = await queries.setConfig(key, value);
     setImmediate(() => {
@@ -4873,6 +4891,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('maintenance:clearLogs', async (_, password, currentUser) => {
     const userLogin = currentUser?.login || getCurrentUserLogin();
     try {
+      // Sécurité (P1-3) : garde de rôle EN PLUS de la vérification par mot de passe
+      // ci-dessous (ne remplace pas cette dernière). Avant ce correctif, connaître SON
+      // PROPRE mot de passe suffisait à purger t_logs pour n'importe quel compte
+      // authentifié — la page /maintenance est pourtant réservée au SUPER ADMIN côté UI.
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+        throw new Error("Accès refusé. Seul le SUPER ADMIN peut purger les logs système.");
+      }
       if (!userLogin) {
         throw new Error("Utilisateur non connecté.");
       }
@@ -5404,8 +5430,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // SUPER ADMIN — Synchronisation Forcée Globale
   ipcMain.handle('sync:forceGlobal', async (_, currentUser) => {
     try {
+      // Sécurité (P1-1) : deux appelants légitimes à distinguer.
+      // 1. Session active (dashboard SUPER ADMIN/ADMINISTRATEUR_SITE, GovernanceView.tsx) :
+      //    seul SUPER ADMIN peut réellement déclencher cette synchro tous-sites — dérivé de
+      //    getSecureCurrentUser(), jamais du paramètre client `currentUser` (falsifiable).
+      // 2. Aucune session (bootstrap LoginPage.tsx, premier lancement, avant toute connexion) :
+      //    autorisé UNIQUEMENT si c'est un vrai premier lancement — même critère que le handler
+      //    existant `app:checkFirstLaunch` (t_users vide), pour rester cohérent avec la
+      //    détection déjà en place ailleurs dans ce fichier plutôt que d'inventer un nouveau
+      //    critère. Avant ce correctif, AUCUNE vérification n'existait : tout compte
+      //    authentifié pouvait marquer is_dirty=1 sur tous les sites via ce canal.
+      const secureUser = getSecureCurrentUser();
+      if (secureUser) {
+        if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+          throw new Error("Accès refusé. Seul le SUPER ADMIN peut lancer une synchronisation globale.");
+        }
+      } else {
+        const db = getDatabase();
+        const row = db ? (db.prepare('SELECT COUNT(*) as count FROM t_users').get() as { count: number } | undefined) : undefined;
+        const count = row ? row.count : 0;
+        if (count > 0) {
+          throw new Error("Accès refusé. Session invalide.");
+        }
+      }
+
       queries.insertAuditLog(
-        currentUser?.login || 'SUPER ADMIN',
+        secureUser?.login || 'SYSTEM',
         'VALIDATION',
         "Lancement d'une synchronisation globale forcée Supabase par le Super Admin."
       );
