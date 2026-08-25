@@ -6,6 +6,7 @@
 ## 🚨 Sécurité
 
 - Correction d'une faille de contrôle d'accès sur la réinitialisation du mot de passe d'un administrateur de site : cette action, censée être réservée au SUPER ADMIN, était accessible sans aucune vérification de rôle, permettant potentiellement à n'importe quel compte authentifié de réinitialiser le mot de passe de l'administrateur d'un site quelconque.
+- Correction d'une faille similaire sur le nettoyage des incohérences qualité (cartes sans numéro de sécu/sans rangement) : accessible sans vérification de rôle ni de site, permettant potentiellement à n'importe quel compte authentifié de supprimer en masse des données d'un site autre que le sien.
 
 ## 🛠️ Corrections & Fiabilité
 

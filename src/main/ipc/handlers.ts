@@ -2647,6 +2647,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
     const { type_incoherence, site_id } = payload;
     try {
+      // Sécurité (P0) : sans ce garde, site_id venait intégralement du payload client
+      // sans aucune vérification de rôle ni de cantonnement — même pattern que les
+      // handlers voisins import:getAnomalies/clearAnomalies/etc. juste au-dessus.
+      assertQualiteAccessOnSite(site_id);
       const db = getDatabase();
       if (!db) throw new Error('Base de données indisponible');
 
