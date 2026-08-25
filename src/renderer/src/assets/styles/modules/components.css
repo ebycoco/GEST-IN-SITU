@@ -275,6 +275,17 @@
   font-weight: 700;
 }
 
+/* Bouton déclencheur du RoleSwitcher : contenu double (icône du rôle + chevron),
+   plus large que le carré 36x36 générique de .topbar-icon-btn pour ne jamais déborder.
+   Ajoutée en complément de .topbar-icon-btn (jamais en remplacement) — ne pas fusionner
+   dans .topbar-icon-btn, classe partagée par les boutons Notifications/Paramètres. */
+.role-switcher-trigger {
+  width: auto;
+  min-width: 36px;
+  padding: 0 8px;
+  gap: 3px;
+}
+
 /* --- RESPONSIVE WRAPPERS & DIALOG CONSTRAINTS --- */
 .table-responsive-wrapper {
   width: 100%;

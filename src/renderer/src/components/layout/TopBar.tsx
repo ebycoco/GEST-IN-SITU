@@ -386,7 +386,10 @@ export default function TopBar() {
           )}
         </button>
 
-        <RoleSwitcher />
+        <RoleSwitcher
+          isNotificationsOpen={showNotifications}
+          onOpen={() => setShowNotifications(false)}
+        />
 
         <button className="topbar-icon-btn" title="Paramètres" onClick={() => navigate('/profile')}>
           <Settings size={16} />

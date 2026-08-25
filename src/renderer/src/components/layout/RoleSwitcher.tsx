@@ -6,7 +6,14 @@ import { useAuthStore } from '../../stores/authStore';
 import { ROLE_META } from '../../pages/RoleSelectorPage';
 import { confirmService } from '../confirmService';
 
-export default function RoleSwitcher() {
+interface RoleSwitcherProps {
+  /** État du dropdown Notifications de TopBar — fermeture croisée : s'il s'ouvre, on se referme. */
+  isNotificationsOpen?: boolean;
+  /** Notifie TopBar qu'on vient de s'ouvrir, pour qu'il referme son propre dropdown Notifications. */
+  onOpen?: () => void;
+}
+
+export default function RoleSwitcher({ isNotificationsOpen = false, onOpen }: RoleSwitcherProps) {
   const [isOpen, setIsOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
@@ -26,6 +33,12 @@ export default function RoleSwitcher() {
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
+
+  // Fermeture croisée : si le dropdown Notifications de TopBar s'ouvre pendant que
+  // celui-ci est ouvert, on se referme pour ne jamais avoir les deux affichés ensemble.
+  useEffect(() => {
+    if (isNotificationsOpen) setIsOpen(false);
+  }, [isNotificationsOpen]);
 
   const roles = user?.roles ?? (user?.role ? [user.role] : []);
   if (!user || roles.length <= 1) return null;
@@ -55,10 +68,16 @@ export default function RoleSwitcher() {
   return (
     <div ref={ref} style={{ position: 'relative' }}>
       <button
-        className="topbar-icon-btn"
+        className="topbar-icon-btn role-switcher-trigger"
         title="Changer de rôle actif"
-        onClick={() => setIsOpen(!isOpen)}
-        style={{ color: currentMeta.color, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}
+        onClick={() => {
+          setIsOpen((prev) => {
+            const next = !prev;
+            if (next) onOpen?.();
+            return next;
+          });
+        }}
+        style={{ color: currentMeta.color }}
       >
         <span style={{ fontSize: 14, lineHeight: 1 }}>{currentMeta.icon}</span>
         <ChevronDown size={12} />
