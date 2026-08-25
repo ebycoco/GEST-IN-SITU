@@ -543,6 +543,12 @@ export function resetSiteAdminPassword(siteId: number, newPasswordPlain: string)
     }
   }
 
+  insertAuditLog(
+    'SUPER ADMIN',
+    'VALIDATION',
+    `[RÉINITIALISATION MOT DE PASSE ADMIN SITE] Site ID ${siteId} — mot de passe de l'administrateur réinitialisé (${result.changes} compte(s) affecté(s)).`
+  );
+
   return result;
 }
 

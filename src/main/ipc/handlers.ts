@@ -3681,6 +3681,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: hierarchy:deleteSite', e); throw e; }
   });
   ipcMain.handle('hierarchy:resetAdminPassword', async (_, siteId, pass) => {
+    // Sécurité (P0-1) : SUPER ADMIN uniquement, dérivé de la session serveur réelle.
+    // Avant ce correctif, AUCUNE vérification n'existait sur ce handler — réinitialisation
+    // du mot de passe de l'administrateur de N'IMPORTE QUEL site accessible à tout compte
+    // authentifié, quel que soit son rôle ou son site. Business : GovernanceView.tsx
+    // (dashboard/index.tsx, isGovernanceView) n'est rendu que pour SUPER ADMIN — aucune
+    // régression pour l'UI légitime.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN peut réinitialiser le mot de passe d'un administrateur de site.");
+    }
     try { return queries.resetSiteAdminPassword(siteId, pass); }
     catch (e) { log.error('IPC Error: hierarchy:resetAdminPassword', e); throw e; }
   });

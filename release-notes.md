@@ -3,6 +3,10 @@
 > **Statut :** brouillon cumulatif, alimenté à chaque commit depuis la dernière release (v2.18.0, 24 août 2026).
 > Sera figé en `# GEST-IN-SITU — Release vX.Y.Z` par agent-11-release-manager au prochain `npm run build:win` (voir `CLAUDE.md` §8).
 
+## 🚨 Sécurité
+
+- Correction d'une faille de contrôle d'accès sur la réinitialisation du mot de passe d'un administrateur de site : cette action, censée être réservée au SUPER ADMIN, était accessible sans aucune vérification de rôle, permettant potentiellement à n'importe quel compte authentifié de réinitialiser le mot de passe de l'administrateur d'un site quelconque.
+
 ## 🛠️ Corrections & Fiabilité
 
 - Suppression d'un site : les entrées de la file de synchronisation (outbox) des centres, agents et rôles rattachés au site supprimé sont désormais correctement nettoyées, évitant qu'ils ne soient recréés côté cloud lors de la prochaine synchronisation.
