@@ -1913,6 +1913,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getSansLieuNaissancePage(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getSansLieuNaissancePage', e); throw e; }
   });
+  ipcMain.handle('cartes:getSansLieuEnrolementPage', async (_, siteId, offset, limit, query) => {
+    // Sécurité (aligné sur les handlers voisins ci-dessus) : même garde RBAC + cantonnement
+    // site (resolveScopedSiteId dérive du rôle actif via getSecureCurrentUser(), cf. CLAUDE.md §3).
+    // Périmètre exclusif au portail Qualité (MissingDataView.tsx, route /agent-qualite/*).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getSansLieuEnrolementPage : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try { return queries.getSansLieuEnrolementPage(resolveScopedSiteId(siteId), offset, limit, query); }
+    catch (e) { log.error('IPC Error: cartes:getSansLieuEnrolementPage', e); throw e; }
+  });
   ipcMain.handle('cartes:updateQuickFields', async (_, id, fields) => {
     // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle (ni rôle, ni site).
     // Vérification identique dans l'esprit à qualite:corrigerFormat (même famille d'action :
@@ -2550,7 +2562,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const { id_carte, champ_corrige, valeur_avant, valeur_apres } = payload;
 
     // Whitelist de sécurité : seuls ces champs peuvent être modifiés via ce canal
-    const CHAMPS_AUTORISES = ['date_de_naissance', 'num_secu', 'rangement', 'noms', 'prenoms', 'contact', 'lieu_de_naissance'];
+    const CHAMPS_AUTORISES = ['date_de_naissance', 'num_secu', 'rangement', 'noms', 'prenoms', 'contact', 'lieu_de_naissance', 'lieu_enrolement'];
     if (!CHAMPS_AUTORISES.includes(champ_corrige)) {
       log.error(`[SÉCURITÉ] Tentative de modification d'un champ non autorisé : '${champ_corrige}' par ${userLogin}`);
       throw new Error(`Champ non autorisé : ${champ_corrige}`);

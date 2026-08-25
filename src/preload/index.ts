@@ -150,9 +150,11 @@ const api = {
       ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query, filters),
     getSansContactPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
       ipcRenderer.invoke('cartes:getSansContactPage', siteId, offset, limit, query),
-    getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
+    getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> =>
       ipcRenderer.invoke('cartes:getSansLieuNaissancePage', siteId, offset, limit, query),
-    updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string }): Promise<any> => 
+    getSansLieuEnrolementPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> =>
+      ipcRenderer.invoke('cartes:getSansLieuEnrolementPage', siteId, offset, limit, query),
+    updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, lieu_enrolement?: string }): Promise<any> =>
       ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
     searchQuickLogistique: (siteId: number, critere: string): Promise<Partial<ICarte>[]> => 
       ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere),

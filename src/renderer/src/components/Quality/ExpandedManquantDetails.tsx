@@ -11,6 +11,7 @@ export interface IManquantRecord {
   lieu_de_naissance?: string;
   num_secu?: string;
   rangement?: string;
+  lieu_enrolement?: string;
   [key: string]: any;
 }
 
@@ -285,6 +286,41 @@ export function ExpandedManquantDetails({ record, isResolving, onSaveField, colo
                 className="btn btn-secondary"
                 style={{ padding: '2px 8px', fontSize: 11, border: '1px solid rgba(46,213,115,0.4)', color: '#2ed573', background: 'rgba(46,213,115,0.08)' }}
                 onClick={(e) => { e.stopPropagation(); startEdit('rangement', record.rangement || ''); }}
+              >
+                <Edit3 size={10} style={{ marginRight: 3 }} />Modifier
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* LIEU D'ENROLEMENT */}
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+            <MapPin size={11} /> Lieu d'enrôlement
+          </div>
+          {editingField === 'lieu_enrolement' ? (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input
+                type="text"
+                className="form-input"
+                placeholder="Lieu d'enrôlement..."
+                style={{ width: 140, height: 32, background: '#0a0e1a', color: 'white', border: '1px solid var(--border-color)', fontSize: 13 }}
+                value={editValue}
+                onChange={(e) => setEditValue(e.target.value.toUpperCase())}
+                autoFocus
+              />
+              <button className="btn btn-primary" style={{ padding: '4px 10px' }} onClick={() => handleSave('lieu_enrolement')} disabled={isResolving}>
+                {isResolving ? <RefreshCw size={12} className="animate-spin" /> : <Save size={12} />}
+              </button>
+              <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={cancelEdit}>✕</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
+              <span>{record.lieu_enrolement || <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}</span>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '2px 8px', fontSize: 11, border: '1px solid rgba(56,189,248,0.4)', color: '#38bdf8', background: 'rgba(56,189,248,0.08)' }}
+                onClick={(e) => { e.stopPropagation(); startEdit('lieu_enrolement', record.lieu_enrolement || ''); }}
               >
                 <Edit3 size={10} style={{ marginRight: 3 }} />Modifier
               </button>

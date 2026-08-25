@@ -1459,6 +1459,7 @@ export function updateQuickFields(id: number, fields: {
   lieu_de_naissance?: string;
   date_de_naissance?: string;
   sexe?: string;
+  lieu_enrolement?: string;
 }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
@@ -1498,6 +1499,12 @@ export function updateQuickFields(id: number, fields: {
     sets.push('sexe = ?');
     params.push(fields.sexe.trim().toUpperCase());
   }
+  if (fields.lieu_enrolement !== undefined) {
+    sets.push('lieu_enrolement = ?');
+    // Même normalisation que lieu_de_naissance (removeAccents) et que le worker d'import
+    // (import-worker.js:629) qui applique déjà removeAccents() sur ce champ à l'ingestion.
+    params.push(removeAccents(fields.lieu_enrolement));
+  }
 
   params.push(id);
   const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
@@ -1531,6 +1538,28 @@ export function getSansContactPage(siteId: number, offset: number, limit: number
 export function getSansLieuNaissancePage(siteId: number, offset: number, limit: number, query?: string) {
   const db = getDatabase()!;
   let where = "WHERE site_id = ? AND is_dirty != -1 AND (lieu_de_naissance IS NULL OR lieu_de_naissance = '')";
+  const params: any[] = [siteId];
+
+  if (query && query.trim()) {
+    const tokens = query.trim().split(/\\s+/);
+    tokens.forEach(t => {
+      where += " AND ((COALESCE(noms, '') || ' ' || COALESCE(prenoms, '')) LIKE ? OR (COALESCE(prenoms, '') || ' ' || COALESCE(noms, '')) LIKE ? OR num_secu LIKE ?)";
+      const q = `%${t}%`;
+      params.push(q, q, q);
+    });
+  }
+
+  const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
+  const total = getCachedCount(db, countQuery, params) || 0;
+
+  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+
+  return { rows, total };
+}
+
+export function getSansLieuEnrolementPage(siteId: number, offset: number, limit: number, query?: string) {
+  const db = getDatabase()!;
+  let where = "WHERE site_id = ? AND is_dirty != -1 AND (lieu_enrolement IS NULL OR lieu_enrolement = '')";
   const params: any[] = [siteId];
 
   if (query && query.trim()) {

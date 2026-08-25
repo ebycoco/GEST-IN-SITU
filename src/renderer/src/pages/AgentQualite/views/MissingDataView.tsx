@@ -11,7 +11,7 @@ import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { ExpandedManquantDetails } from '../../../components/Quality/ExpandedManquantDetails';
 import { useDebounce } from '../../../hooks/useDebounce';
 
-type MissingTab = 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM' | 'SANS_CONTACT' | 'SANS_LIEU' | 'SANS_DATE';
+type MissingTab = 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM' | 'SANS_CONTACT' | 'SANS_LIEU' | 'SANS_DATE' | 'SANS_LIEU_ENROLEMENT';
 
 export default function MissingDataView() {
   const { user, activeSiteId } = useAuthStore();
@@ -50,6 +50,8 @@ export default function MissingDataView() {
         res = await window.api.cartes.getSansContactPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       } else if (activeTab === 'SANS_LIEU') {
         res = await window.api.cartes.getSansLieuNaissancePage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
+      } else if (activeTab === 'SANS_LIEU_ENROLEMENT') {
+        res = await window.api.cartes.getSansLieuEnrolementPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       } else if (activeTab === 'SANS_DATE') {
         res = await window.api.cartes.getDatesVidesPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       } else {
@@ -80,7 +82,7 @@ export default function MissingDataView() {
   // n'en dépend que pour décider de refermer ou non le champ en édition — les erreurs
   // de validation (toast.error ci-dessous) ne lèvent jamais d'exception, donc un
   // simple try/catch côté enfant ne suffisait pas à détecter l'échec.
-  const handleSaveField = async (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance', providedValue: string): Promise<boolean> => {
+  const handleSaveField = async (card: any, field: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance' | 'lieu_enrolement', providedValue: string): Promise<boolean> => {
     if (!providedValue.trim()) { toast.error('La valeur ne peut pas être vide.'); return false; }
     if (field === 'num_secu' && providedValue.trim().length !== 13) { toast.error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.'); return false; }
     if (field === 'contact') {
@@ -128,7 +130,7 @@ export default function MissingDataView() {
 
   // Configuration par onglet
   const tabConfig: Record<MissingTab, {
-    fieldName: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance';
+    fieldName: 'num_secu' | 'rangement' | 'noms' | 'prenoms' | 'contact' | 'lieu_de_naissance' | 'date_de_naissance' | 'lieu_enrolement';
     placeholder: string;
     maxLength: number;
     inputMode?: 'numeric' | 'text';
@@ -142,6 +144,7 @@ export default function MissingDataView() {
     SANS_CONTACT:    { fieldName: 'contact',            placeholder: 'Ex: 0708090010',    maxLength: 10,  inputMode: 'numeric', columnLabel: 'Contact (10 chiffres CI)',  emptyLabel: 'Manquant' },
     SANS_LIEU:       { fieldName: 'lieu_de_naissance',  placeholder: 'Ex: ABIDJAN',       maxLength: 100, inputMode: 'text',   columnLabel: 'Lieu de naissance',         emptyLabel: 'Manquant' },
     SANS_DATE:       { fieldName: 'date_de_naissance',  placeholder: 'Ex: 1990-01-01',    maxLength: 10,  inputMode: 'text',   columnLabel: 'Saisie Date (AAAA-MM-JJ)',  emptyLabel: 'Manquante' },
+    SANS_LIEU_ENROLEMENT: { fieldName: 'lieu_enrolement', placeholder: 'Ex: ABOBO',       maxLength: 100, inputMode: 'text',   columnLabel: "Lieu d'enrôlement",         emptyLabel: 'Manquant' },
   };
 
   const cfg = tabConfig[activeTab];
@@ -166,6 +169,7 @@ export default function MissingDataView() {
           <button onClick={() => setActiveTab('SANS_DATE')}    style={tabStyle('SANS_DATE',    '#f43f5e', 'rgba(244,63,94,0.1)')}><Calendar size={14} /> Date Vide</button>
           <button onClick={() => setActiveTab('SANS_CONTACT')} style={tabStyle('SANS_CONTACT', '#f59e0b', 'rgba(245,158,11,0.1)')}> <Phone size={14} /> Sans Contact</button>
           <button onClick={() => setActiveTab('SANS_LIEU')}    style={tabStyle('SANS_LIEU',    '#a78bfa', 'rgba(167,139,250,0.1)')}><MapPin size={14} /> Sans Lieu Naiss.</button>
+          <button onClick={() => setActiveTab('SANS_LIEU_ENROLEMENT')} style={tabStyle('SANS_LIEU_ENROLEMENT', '#38bdf8', 'rgba(56,189,248,0.1)')}><MapPin size={14} /> Sans Lieu Enrôl.</button>
         </div>
       </div>
 

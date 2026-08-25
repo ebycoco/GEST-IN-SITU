@@ -14,6 +14,7 @@
 
 ## 🚀 Nouveautés & Ergonomie
 
+- Module Qualité → Données Manquantes : ajout d'un onglet "Sans Lieu Enrôl." permettant de compléter le lieu d'enrôlement d'une carte, seul champ qui n'avait jusqu'ici aucune voie de correction (ni automatique ni manuelle).
 - Ajout d'un sélecteur de rôle actif dans la barre supérieure : un utilisateur possédant plusieurs rôles peut désormais basculer instantanément entre ses rôles accordés (ex. opérateur d'apurement ↔ opérateur de vérification) sans se déconnecter ni ressaisir ses identifiants. Une confirmation est demandée avant chaque bascule, puis l'application redirige automatiquement vers l'interface du rôle choisi.
 
 ## 🛠️ Corrections & Fiabilité

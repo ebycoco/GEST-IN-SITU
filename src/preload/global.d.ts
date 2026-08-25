@@ -89,7 +89,8 @@ declare global {
         getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
         getSansContactPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
-        updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, noms?: string, prenoms?: string, contact?: string, lieu_de_naissance?: string, date_de_naissance?: string, sexe?: string }) => Promise<any>;
+        getSansLieuEnrolementPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
+        updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, noms?: string, prenoms?: string, contact?: string, lieu_de_naissance?: string, date_de_naissance?: string, sexe?: string, lieu_enrolement?: string }) => Promise<any>;
         searchQuickLogistique: (siteId: number, critere: string) => Promise<any[]>;
         updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }) => Promise<any>;
         searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
