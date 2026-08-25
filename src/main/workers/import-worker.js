@@ -836,6 +836,10 @@ async function run() {
   db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_cle_site ON t_cartes(cle_doublon, site_id);');
   // Index sur la table temporaire
   db.exec("CREATE INDEX IF NOT EXISTS idx_import_temp_cle_flex ON t_import_temp(cle_doublon_flex);");
+  // NIVEAU 2 — Index de secours sur num_secu, nécessaires au précalcul de correspondance
+  // de secours (t_niveau2_*, cf. plus bas, juste avant la boucle de fusion par chunk).
+  db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_site_num_secu ON t_cartes(site_id, num_secu);');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_import_temp_site_num_secu ON t_import_temp(site_id, num_secu);');
 
   // Garde anti-doublon intra-fichier : si le CSV contient plusieurs lignes strictement
   // identiques (même cle_doublon+site_id), un simple NOT EXISTS contre t_cartes ne les
@@ -883,6 +887,73 @@ async function run() {
     console.error('[CSV WORKER] Échec du comptage des doublons probables:', err);
   }
 
+  // NIVEAU 2 — CorrespondanceDeSecoursNumSecu : précalculé ICI, EN UNE SEULE FOIS pour tout
+  // l'import, AVANT toute mutation de cet import (même raison documentée ci-dessus pour
+  // probableDuplicatesCount) — sans cela, une carte insérée/modifiée par un chunk antérieur
+  // fausserait l'unicité du num_secu pour un chunk postérieur. Objectif : quand une ligne
+  // réimportée ne correspond PLUS à une carte existante via cle_doublon (un des 5 champs de
+  // la clé était vide et vient d'être renseigné), tenter un rattachement de secours via
+  // num_secu si celui-ci est valide (13 chiffres) et strictement unique à la fois côté carte
+  // existante ET côté ligne réimportée sur ce même site. Les tables TEMP résident en mémoire
+  // (pragma temp_store = MEMORY déjà actif ci-dessus) et sont détruites automatiquement à
+  // db.close() — aucun nettoyage explicite requis en fin d'import.
+  let niveau2MatchCount = 0;
+  try {
+    const GLOB_13_DIGITS = "[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]";
+
+    // Cartes existantes dont le num_secu (13 chiffres) est unique sur le site, et qui n'ont
+    // déjà AUCUNE correspondance exacte via cle_doublon dans cet import (sinon Niveau 0/1
+    // s'en chargent déjà normalement).
+    db.exec('DROP TABLE IF EXISTS t_niveau2_cartes_secu;');
+    db.exec(`
+      CREATE TEMP TABLE t_niveau2_cartes_secu AS
+      SELECT c.site_id AS site_id, c.num_secu AS num_secu, MIN(c.id_carte) AS id_carte, COUNT(*) AS cnt
+      FROM t_cartes c
+      WHERE c.site_id IN (SELECT DISTINCT site_id FROM t_import_temp)
+        AND c.num_secu GLOB '${GLOB_13_DIGITS}'
+        AND NOT EXISTS (
+          SELECT 1 FROM t_import_temp t WHERE t.cle_doublon = c.cle_doublon AND t.site_id = c.site_id
+        )
+      GROUP BY c.site_id, c.num_secu
+      HAVING COUNT(*) = 1;
+    `);
+    db.exec('CREATE UNIQUE INDEX idx_n2_cartes_secu ON t_niveau2_cartes_secu(site_id, num_secu);');
+
+    // Lignes réimportées dont le num_secu (13 chiffres) est unique sur le site parmi les
+    // lignes n'ayant elles-mêmes aucune correspondance exacte via cle_doublon.
+    db.exec('DROP TABLE IF EXISTS t_niveau2_temp_secu;');
+    db.exec(`
+      CREATE TEMP TABLE t_niveau2_temp_secu AS
+      SELECT t.site_id AS site_id, t.num_secu AS num_secu, MIN(t.id_tmp) AS id_tmp, COUNT(*) AS cnt
+      FROM t_import_temp t
+      WHERE t.num_secu GLOB '${GLOB_13_DIGITS}'
+        AND NOT EXISTS (
+          SELECT 1 FROM t_cartes c WHERE c.cle_doublon = t.cle_doublon AND c.site_id = t.site_id
+        )
+      GROUP BY t.site_id, t.num_secu
+      HAVING COUNT(*) = 1;
+    `);
+    db.exec('CREATE UNIQUE INDEX idx_n2_temp_secu ON t_niveau2_temp_secu(site_id, num_secu);');
+
+    // Jointure finale : une ligne temp ↔ une carte, chacune strictement unique sur son num_secu.
+    db.exec('DROP TABLE IF EXISTS t_niveau2_matches;');
+    db.exec(`
+      CREATE TEMP TABLE t_niveau2_matches AS
+      SELECT ts.id_tmp AS id_tmp, cs.id_carte AS id_carte
+      FROM t_niveau2_temp_secu ts
+      JOIN t_niveau2_cartes_secu cs ON cs.site_id = ts.site_id AND cs.num_secu = ts.num_secu;
+    `);
+    db.exec('CREATE UNIQUE INDEX idx_n2_matches_tmp ON t_niveau2_matches(id_tmp);');
+    db.exec('CREATE INDEX idx_n2_matches_carte ON t_niveau2_matches(id_carte);');
+
+    niveau2MatchCount = (db.prepare('SELECT COUNT(*) as c FROM t_niveau2_matches').get() || {}).c || 0;
+    console.log(`[CSV WORKER] Niveau 2 (correspondance de secours num_secu) : ${niveau2MatchCount} carte(s) candidate(s).`);
+  } catch (err) {
+    console.error('[CSV WORKER] Échec du précalcul Niveau 2 (num_secu), désactivé pour cet import :', err);
+    db.exec('DROP TABLE IF EXISTS t_niveau2_matches;');
+    db.exec('CREATE TEMP TABLE t_niveau2_matches (id_tmp INTEGER PRIMARY KEY, id_carte INTEGER);');
+  }
+
   // Fusion phase - transactions courtes par chunk pour éviter la saturation du WAL
   var now = new Date().toISOString();
 
@@ -897,6 +968,10 @@ async function run() {
   // Diagnostic uniquement (Niveau 1, cf. completeChunkStmt plus bas) — n'entre jamais dans le
   // contrat postMessage({type:'done'}) ni dans le calcul de "duplicates".
   let totalCompleted = 0;
+  // Diagnostic uniquement (Niveau 2, cf. completeChunkStmtN2 plus bas) — même statut que
+  // totalCompleted ci-dessus : n'entre jamais dans totalUpdated/totalInserted ni dans le
+  // contrat postMessage({type:'done'}).
+  let totalCompletedN2 = 0;
 
   // ============================================================
   // MISSION 3 — FusionnerImportVersCartes : Sécurisation SQL absolue
@@ -942,7 +1017,11 @@ async function run() {
     '@now, @now, 1 ' +
     'FROM t_import_temp ' +
     'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
-    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id)'
+    'AND NOT EXISTS (SELECT 1 FROM t_cartes WHERE t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id) ' +
+    // NIVEAU 2 — une ligne rattachée par correspondance de secours num_secu (cf.
+    // t_niveau2_matches et completeChunkStmtN2 plus bas) a déjà complété une carte
+    // existante : elle ne doit jamais en plus créer un doublon ici.
+    'AND NOT EXISTS (SELECT 1 FROM t_niveau2_matches m WHERE m.id_tmp = t_import_temp.id_tmp)'
   );
 
   // ============================================================
@@ -1007,6 +1086,57 @@ async function run() {
     '  )'
   );
 
+  // ============================================================
+  // NIVEAU 2 — CorrespondanceDeSecoursNumSecu : pour une ligne réimportée dont cle_doublon
+  // ne correspond PLUS à aucune carte existante (un des 5 champs de la clé était vide et
+  // vient d'être renseigné), mais dont le num_secu (13 chiffres) est strictement unique à la
+  // fois côté carte existante ET côté ligne réimportée sur ce site (cf. t_niveau2_matches,
+  // précalculé une seule fois pour tout l'import, avant la boucle de chunks). Complète les
+  // mêmes catégories de champs "vides/placeholder" que completeChunkStmt (Niveau 1), plus
+  // les 4 champs d'identité de la clé de doublon (noms, prenoms, date_de_naissance,
+  // lieu_de_naissance) et contact — jamais num_secu (déjà garanti valide côté carte par
+  // construction du matching), jamais statut. cle_doublon/cle_doublon_flex sont recalculées
+  // pour refléter les champs nouvellement complétés.
+  //
+  // NOTE : cle_doublon/cle_doublon_flex dupliquent volontairement la formule des colonnes
+  // SET correspondantes ci-dessus — SQLite évalue toutes les expressions d'un même
+  // UPDATE...SET contre l'état AVANT mise à jour, il est donc impossible de référencer une
+  // autre clause SET de la même instruction. Ce n'est pas une redite à "simplifier".
+  // ============================================================
+  const completeChunkStmtN2 = db.prepare(
+    'UPDATE t_cartes ' +
+    "SET noms              = COALESCE(NULLIF(TRIM(t_cartes.noms), ''), t_import_temp.noms), " +
+    "    prenoms           = COALESCE(NULLIF(TRIM(t_cartes.prenoms), ''), t_import_temp.prenoms), " +
+    "    date_de_naissance = COALESCE(NULLIF(TRIM(t_cartes.date_de_naissance), ''), t_import_temp.date_de_naissance), " +
+    "    lieu_de_naissance = COALESCE(NULLIF(TRIM(t_cartes.lieu_de_naissance), ''), t_import_temp.lieu_de_naissance), " +
+    "    contact           = COALESCE(NULLIF(TRIM(t_cartes.contact), ''), t_import_temp.contact), " +
+    "    lieu_enrolement   = COALESCE(NULLIF(TRIM(t_cartes.lieu_enrolement), ''), t_import_temp.lieu_enrolement), " +
+    "    rangement         = COALESCE(NULLIF(NULLIF(TRIM(t_cartes.rangement), ''), 'NON CLASSE'), t_import_temp.rangement), " +
+    "    cle_doublon       = COALESCE(NULLIF(TRIM(t_cartes.noms), ''), t_import_temp.noms) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.prenoms), ''), t_import_temp.prenoms) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.date_de_naissance), ''), t_import_temp.date_de_naissance) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.lieu_de_naissance), ''), t_import_temp.lieu_de_naissance) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.contact), ''), t_import_temp.contact), " +
+    "    cle_doublon_flex  = COALESCE(NULLIF(TRIM(t_cartes.noms), ''), t_import_temp.noms) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.prenoms), ''), t_import_temp.prenoms) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.date_de_naissance), ''), t_import_temp.date_de_naissance) || '|' || " +
+    "                        COALESCE(NULLIF(TRIM(t_cartes.contact), ''), t_import_temp.contact), " +
+    '    updated_at        = @now, is_dirty = 1 ' +
+    'FROM t_import_temp ' +
+    'JOIN t_niveau2_matches ON t_niveau2_matches.id_tmp = t_import_temp.id_tmp ' +
+    'WHERE t_cartes.id_carte = t_niveau2_matches.id_carte ' +
+    '  AND t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
+    '  AND (' +
+    "    ((t_cartes.noms IS NULL OR TRIM(t_cartes.noms) = '') AND t_import_temp.noms IS NOT NULL AND TRIM(t_import_temp.noms) != '') " +
+    "    OR ((t_cartes.prenoms IS NULL OR TRIM(t_cartes.prenoms) = '') AND t_import_temp.prenoms IS NOT NULL AND TRIM(t_import_temp.prenoms) != '') " +
+    "    OR ((t_cartes.date_de_naissance IS NULL OR TRIM(t_cartes.date_de_naissance) = '') AND t_import_temp.date_de_naissance IS NOT NULL AND TRIM(t_import_temp.date_de_naissance) != '') " +
+    "    OR ((t_cartes.lieu_de_naissance IS NULL OR TRIM(t_cartes.lieu_de_naissance) = '') AND t_import_temp.lieu_de_naissance IS NOT NULL AND TRIM(t_import_temp.lieu_de_naissance) != '') " +
+    "    OR ((t_cartes.contact IS NULL OR TRIM(t_cartes.contact) = '') AND t_import_temp.contact IS NOT NULL AND TRIM(t_import_temp.contact) != '') " +
+    "    OR ((t_cartes.lieu_enrolement IS NULL OR TRIM(t_cartes.lieu_enrolement) = '') AND t_import_temp.lieu_enrolement IS NOT NULL AND TRIM(t_import_temp.lieu_enrolement) != '') " +
+    "    OR ((t_cartes.rangement IS NULL OR TRIM(t_cartes.rangement) = '' OR t_cartes.rangement = 'NON CLASSE') AND t_import_temp.rangement IS NOT NULL AND TRIM(t_import_temp.rangement) != '' AND t_import_temp.rangement != 'NON CLASSE') " +
+    '  )'
+  );
+
   // Enfilage Outbox des cartes fusionnées par ce chunk (voir chunkTx plus bas) : sélectionne
   // les lignes t_cartes réellement touchées (jointure restreinte à la plage id_tmp de CE chunk,
   // et updated_at = @now pour exclure les lignes non modifiées par la garde métier du UPDATE
@@ -1016,6 +1146,20 @@ async function run() {
   const touchedCardsStmt = db.prepare(
     'SELECT t_cartes.* FROM t_cartes ' +
     'JOIN t_import_temp ON t_cartes.cle_doublon = t_import_temp.cle_doublon AND t_cartes.site_id = t_import_temp.site_id ' +
+    'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
+    '  AND t_cartes.updated_at = @now ' +
+    '  AND t_cartes.sync_id IS NOT NULL'
+  );
+
+  // NIVEAU 2 — Capture Outbox dédiée : les cartes touchées uniquement par
+  // completeChunkStmtN2 (rattachement de secours via num_secu) ne partagent PAS forcément
+  // cle_doublon avec la ligne t_import_temp qui les a déclenchées (c'est justement pour ça
+  // qu'elles sont passées par le Niveau 2), donc touchedCardsStmt ci-dessus — qui rejoint sur
+  // cle_doublon+site_id — ne les capterait pas. Jointure dédiée via t_niveau2_matches.
+  const touchedCardsStmtN2 = db.prepare(
+    'SELECT t_cartes.* FROM t_cartes ' +
+    'JOIN t_niveau2_matches ON t_niveau2_matches.id_carte = t_cartes.id_carte ' +
+    'JOIN t_import_temp ON t_import_temp.id_tmp = t_niveau2_matches.id_tmp ' +
     'WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId ' +
     '  AND t_cartes.updated_at = @now ' +
     '  AND t_cartes.sync_id IS NOT NULL'
@@ -1090,6 +1234,8 @@ async function run() {
       // [FUSION DIAGNOSTIC], combien de cartes ont été complétées par ce chunk, sans modifier
       // le calcul existant de "duplicates" (processedRows - totalInserted - totalUpdated - ...).
       let chunkCChanges = 0;
+      // Diagnostic uniquement (Niveau 2) : même statut que chunkCChanges ci-dessus.
+      let chunkC2Changes = 0;
 
       // 8. Taille du fichier .wal avant le COMMIT
       let walSizeBefore = getWalSize();
@@ -1110,6 +1256,13 @@ async function run() {
         const cRes = completeChunkStmt.run({ now: now, startId: startId, endId: endId });
         chunkCChanges = cRes.changes;
 
+        // NIVEAU 2 — Rattachement de secours via num_secu (voir définition de
+        // completeChunkStmtN2 ci-dessus). Exécutée après le Niveau 1 et avant
+        // insertChunkStmt : le garde NOT EXISTS ajouté à insertChunkStmt (t_niveau2_matches)
+        // empêche cette même ligne de créer un doublon juste après.
+        const c2Res = completeChunkStmtN2.run({ now: now, startId: startId, endId: endId });
+        chunkC2Changes = c2Res.changes;
+
         // 4. Temps du INSERT & 5. Nombre réel
         let iStart = performance.now();
         const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
@@ -1125,6 +1278,14 @@ async function run() {
         // par completeChunkStmt (Niveau 1), sans aucune adaptation nécessaire.
         const touchedCards = touchedCardsStmt.all({ now: now, startId: startId, endId: endId });
         for (const card of touchedCards) {
+          outboxUpsertStmt.run({ id: card.sync_id, payload: JSON.stringify(card) });
+        }
+
+        // NIVEAU 2 — capture Outbox dédiée (cf. touchedCardsStmtN2 ci-dessus) : les cartes
+        // touchées uniquement par completeChunkStmtN2 ne partagent pas cle_doublon avec leur
+        // ligne d'origine, donc touchedCardsStmt ci-dessus ne les aurait pas capturées.
+        const touchedCardsN2 = touchedCardsStmtN2.all({ now: now, startId: startId, endId: endId });
+        for (const card of touchedCardsN2) {
           outboxUpsertStmt.run({ id: card.sync_id, payload: JSON.stringify(card) });
         }
       });
@@ -1144,11 +1305,12 @@ async function run() {
       totalUpdated += chunkUChanges;
       totalInserted += chunkIChanges;
       totalCompleted += chunkCChanges;
+      totalCompletedN2 += chunkC2Changes;
       totalUpdateMs += chunkUpdateMs;
       totalInsertMs += chunkInsertMs;
       totalCommitMs += commitAndCheckpointMs;
 
-      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | COMPLETE(N1): ${chunkCChanges} lig | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
+      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | COMPLETE(N1): ${chunkCChanges} lig | COMPLETE(N2): ${chunkC2Changes} lig | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
 
       totalTransactions++;
       chunkIndex++;
@@ -1164,6 +1326,7 @@ async function run() {
 Temps Total (49+ transactions) : ${fusionTotalMs.toFixed(2)}ms
 Total UPDATE : ${totalUpdateMs.toFixed(2)}ms (${totalUpdated} lignes)
 Total COMPLETE (Niveau 1, diagnostic) : ${totalCompleted} lignes
+Total COMPLETE (Niveau 2 — num_secu, diagnostic) : ${totalCompletedN2} lignes
 Total INSERT : ${totalInsertMs.toFixed(2)}ms (${totalInserted} lignes)
 Total COMMIT & Auto-Checkpoint WAL : ${totalCommitMs.toFixed(2)}ms
 Total Attente Entre Chunks : ${totalBetweenMs.toFixed(2)}ms
