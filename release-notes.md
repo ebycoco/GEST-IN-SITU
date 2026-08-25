@@ -8,6 +8,8 @@
 - Correction d'une faille de contrôle d'accès sur la réinitialisation du mot de passe d'un administrateur de site : cette action, censée être réservée au SUPER ADMIN, était accessible sans aucune vérification de rôle, permettant potentiellement à n'importe quel compte authentifié de réinitialiser le mot de passe de l'administrateur d'un site quelconque.
 - Correction d'une faille similaire sur le nettoyage des incohérences qualité (cartes sans numéro de sécu/sans rangement) : accessible sans vérification de rôle ni de site, permettant potentiellement à n'importe quel compte authentifié de supprimer en masse des données d'un site autre que le sien.
 - Correction d'une faille sur les exports de cartes (CSV/Excel/PDF) : accessibles sans vérification de rôle, avec un filtrage par site optionnel, permettant potentiellement à n'importe quel compte authentifié d'exporter les données nominatives (dont le numéro CMU) de tous les sites au lieu du seul site autorisé.
+- Correction d'une faille sur la purge du journal d'audit : accessible sans vérification de rôle (seule protection : une confirmation visuelle côté interface, pas une barrière serveur), permettant potentiellement à n'importe quel compte authentifié d'effacer irréversiblement tout l'historique d'audit de l'application.
+- Correction d'une faille sur le nettoyage des données temporaires d'import : accessible sans vérification de rôle ni de site, même lacune que celle déjà corrigée sur le nettoyage des incohérences qualité.
 
 ## 🛠️ Corrections & Fiabilité
 

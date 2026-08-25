@@ -2355,6 +2355,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     if (siteId === undefined || siteId === null) {
       throw new Error('siteId requis pour nettoyer la table temporaire d\'import.');
     }
+    // Sécurité (P0) : cantonnement rôle/site manquant par omission — les handlers voisins
+    // (import:getAnomalies, clearAnomalies, etc.) appellent tous assertQualiteAccessOnSite,
+    // pas celui-ci. assertQualiteAccessOnSite est définie juste après ce handler ; JS/TS
+    // hoiste les déclarations de fonction, donc l'appel ici est valide.
+    assertQualiteAccessOnSite(Number(siteId));
     return queries.clearImportTemp(Number(siteId));
   });
 
@@ -3591,6 +3596,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
 
   ipcMain.handle('logs:purge', async (_, payload?: { periode_purge?: string }) => {
+    // Sécurité (P0) : SUPER ADMIN ou ADMINISTRATEUR_SITE uniquement, dérivé de la session
+    // serveur réelle (getSecureCurrentUser()) — jamais d'un rôle client falsifiable. Avant ce
+    // correctif, aucune vérification serveur n'existait ; seule protection : un dialog natif
+    // côté renderer, qui n'est pas une barrière de sécurité. Reflète l'intention métier déjà
+    // présente côté UI (LogsPage.tsx : bouton visible seulement pour ces deux rôles).
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+      throw new Error("Accès refusé. Seul le SUPER ADMIN ou l'ADMINISTRATEUR_SITE peut purger le journal d'audit.");
+    }
+
     const agent = getCurrentUserLogin() || 'system';
     const periode_purge = payload?.periode_purge || 'Toute la période';
 
