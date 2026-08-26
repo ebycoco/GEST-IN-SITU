@@ -32,3 +32,7 @@ dist-e2e-cloud/
 # Fichier de crash généré par bash.exe (Git Bash/MSYS2) en cas d'échec de fork() —
 # artefact de l'environnement Windows local, sans rapport avec le projet.
 bash.exe.stackdump
+
+# Copie temporaire horodatée d'electron.vite.config.ts régénérée par electron-vite
+# à chaque dev/build — artefact sans valeur propre, jamais à committer.
+electron.vite.config.*.mjs
