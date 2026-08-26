@@ -4,6 +4,21 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.20.0] - 2026-08-26
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Bannière d'alerte préventive d'expiration de licence de site** : affichée automatiquement à tous les utilisateurs connectés sur un site dont la licence approche de son expiration (3 jours ou moins), quel que soit leur poste, avec la date exacte d'expiration. Fermable, mais réapparaît périodiquement (toutes les 5 minutes, toutes les minutes pour l'administrateur du site) tant que la licence n'est pas renouvelée. Repose sur un nouveau canal IPC dédié et remplace l'ancien avertissement ponctuel qui ne s'affichait qu'une seule fois à la connexion.
+
+### 🛠️ Corrections & Fiabilité
+
+- **Écran de connexion : les erreurs (identifiant/mot de passe incorrect, licence de site expirée, accès au site suspendu) s'affichent désormais dans une fenêtre modale explicite** au lieu d'une simple notification temporaire facilement manquée, avec réinitialisation automatique du champ mot de passe après une erreur de saisie.
+- **Corrige un bug empêchant l'affichage du bon message d'erreur à la connexion (licence expirée / accès suspendu)** : l'enveloppe technique ajoutée par Electron autour du message d'erreur du processus principal faisait échouer sa détection côté interface, ce qui provoquait à tort l'affichage d'un message générique "Erreur de connexion".
+
+Aucune migration de schéma ce cycle (`SCHEMA_VERSION` inchangé, reste à 69). Validé par `agent-12-deploy-validator` (GO officiel) et `npx tsc --noEmit` : 0 erreur.
+
+---
+
 ## [2.19.0] - 2026-08-26
 
 ### 🚨 Sécurité
