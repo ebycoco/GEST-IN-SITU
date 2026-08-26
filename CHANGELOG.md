@@ -4,6 +4,39 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.19.0] - 2026-08-26
+
+### 🚨 Sécurité
+
+- **Réinitialisation du mot de passe d'un administrateur de site sans aucune vérification de rôle** : cette action, censée être réservée au SUPER ADMIN, était accessible sans aucune vérification côté serveur, permettant potentiellement à n'importe quel compte authentifié de réinitialiser le mot de passe de l'administrateur d'un site quelconque.
+- **Nettoyage des incohérences qualité (cartes sans numéro de sécu/sans rangement) accessible sans vérification de rôle ni de site** : permettant potentiellement à n'importe quel compte authentifié de supprimer en masse des données d'un site autre que le sien.
+- **Exports de cartes (CSV/Excel/PDF) accessibles sans vérification de rôle**, avec un filtrage par site optionnel : permettant potentiellement à n'importe quel compte authentifié d'exporter les données nominatives (dont le numéro CMU) de tous les sites au lieu du seul site autorisé.
+- **Purge du journal d'audit accessible sans vérification de rôle** (seule protection : une confirmation visuelle côté interface, pas une barrière serveur) : permettant potentiellement à n'importe quel compte authentifié d'effacer irréversiblement tout l'historique d'audit de l'application.
+- **Nettoyage des données temporaires d'import accessible sans vérification de rôle ni de site**, même lacune que celle corrigée sur le nettoyage des incohérences qualité.
+- **Quatre lacunes RBAC supplémentaires (moins critiques) corrigées** : synchronisation globale forcée accessible à un rôle autre que SUPER ADMIN, résumé des sites exposant les identifiants d'administrateurs de tous les sites, purge des logs système protégée par mot de passe mais pas par rôle, et modification de la configuration système sans aucune vérification.
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Complétion automatique des cartes existantes au réimport (Centre de Migration)** : réimporter un fichier corrigé pour un site déjà importé complète désormais automatiquement les champs manquants des cartes déjà existantes (numéro de sécu, lieu d'enrôlement, rangement, et — quand le numéro de sécu permet une identification fiable et non ambiguë — nom, prénom, date de naissance, lieu de naissance, contact), sans jamais écraser une valeur déjà renseignée et sans jamais modifier le statut d'une carte déjà traitée sur le terrain (délivrée/déchargée).
+- **Module Qualité → Données Manquantes : nouvel onglet "Sans Lieu Enrôl."** permettant de compléter le lieu d'enrôlement d'une carte, seul champ qui n'avait jusqu'ici aucune voie de correction (ni automatique ni manuelle).
+- **Sélecteur de rôle actif dans la barre supérieure** : un utilisateur possédant plusieurs rôles peut désormais basculer instantanément entre ses rôles accordés (ex. opérateur d'apurement ↔ opérateur de vérification) sans se déconnecter ni ressaisir ses identifiants. Une confirmation est demandée avant chaque bascule, puis l'application redirige automatiquement vers l'interface du rôle choisi.
+
+### 🛠️ Corrections & Fiabilité
+
+- **Import de cartes (Centre de Migration) : les lignes totalement vides ne créent plus de "carte fantôme"** : une ligne où nom, prénom, date de naissance, numéro de sécu, lieu de naissance, contact, lieu d'enrôlement, statut et date de délivrance sont tous vides n'est désormais plus importée du tout, au lieu de créer une carte avec un rangement automatiquement mis à "non classé". Les imports partiels légitimes (au moins une donnée réelle renseignée) restent inchangés.
+- **Journal d'audit : traçabilité des changements de rôle actif (`ROLE_SWITCH`) corrigée** : enregistre désormais correctement le rôle réellement actif juste avant chaque bascule, au lieu d'afficher à tort le rôle de connexion initial dès la deuxième bascule d'une même session.
+- **Suppression d'un site : nettoyage de l'outbox des centres/agents/rôles rattachés** : évite qu'ils ne soient recréés côté cloud lors de la prochaine synchronisation.
+- **Suppression d'un site ou d'un centre : élimination d'une fenêtre de course avec la synchronisation en cours**, qui pouvait, dans de rares cas, laisser une entité supprimée localement réapparaître depuis le cloud lors d'une synchronisation ultérieure.
+- **Contexte multi-site (SUPER ADMIN)** : le sélecteur de site de la barre latérale se met désormais à jour immédiatement après création d'un site (sans nécessiter de reconnexion), et revient automatiquement à la vue globale si le site actuellement sélectionné vient d'être supprimé.
+- **Journal d'audit : traçabilité complétée sur Sites/Centres et mutations d'agent** : la création/modification d'un site ou d'un centre est désormais tracée (auparavant seule la suppression l'était), et la réinitialisation du mot de passe d'un agent y apparaît également. Corrige aussi une entrée d'audit qui affichait "Login: Inconnu" lors de la modification d'un agent.
+- **Compteur "à synchroniser" de la page Infrastructures** : un centre nouvellement créé y apparaît désormais correctement, au lieu d'être ignoré tant qu'aucune autre modification ne le touche.
+- **Badge de statut d'un centre rattaché à un site révoqué** : affiche désormais "SITE RÉVOQUÉ" au lieu du badge "OPÉRATIONNEL" affiché à tort quel que soit l'état réel du site.
+- **Licence de site expirée ou accès suspendu : blocage désormais appliqué aux sessions déjà ouvertes** : une session déjà ouverte est fermée automatiquement (dans les 3 minutes) avec un message explicite, au lieu de continuer à fonctionner indéfiniment. Une nouvelle tentative de connexion affiche également le motif réel ("licence expirée" / "accès suspendu") au lieu du message générique "Identifiants incorrects".
+
+Aucune migration de schéma ce cycle (`SCHEMA_VERSION` inchangé, reste à 69). Validé par `agent-12-deploy-validator` (GO officiel) et `npx tsc --noEmit` : 0 erreur.
+
+---
+
 ## [2.18.0] - 2026-08-24
 
 ### 🚀 Nouveautés & Ergonomie
