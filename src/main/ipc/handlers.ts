@@ -229,9 +229,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const user = await queries.authenticateUser(login, password);
-      if (user && user.warning) {
-        event.sender.send('auth:warning', user.warning);
-      }
       if (user && user.sessionToken) {
         startSessionHeartbeat(user, user.sessionToken);
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion réussie de l'utilisateur ${user.login}.`);

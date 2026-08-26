@@ -102,7 +102,6 @@ export async function authenticateUser(login: string, password: string): Promise
   if (!valid) return null;
 
   // VERIFICATION SITE ACTIF ET LICENCE
-  let warningMessage: string | undefined = undefined;
   if (user.role !== 'SUPER ADMIN' && user.site_id) {
     if (user.site_is_active === 0) {
       throw new Error('SITE_SUSPENDU');
@@ -113,13 +112,6 @@ export async function authenticateUser(login: string, password: string): Promise
       const expiry = new Date(user.site_expiry_date);
       if (now > expiry) {
         throw new Error('LICENCE_EXPIREE');
-      }
-
-      // Calcul des jours restants
-      const timeDiff = expiry.getTime() - now.getTime();
-      const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
-      if (daysDiff <= 30) {
-        warningMessage = `Votre licence expire dans ${daysDiff} jour(s) (${expiry.toLocaleDateString('fr-FR')}). Veuillez contacter le Super Administrateur.`;
       }
     }
   }
@@ -171,8 +163,7 @@ export async function authenticateUser(login: string, password: string): Promise
     prenom_user: user.prenom_user,
     site_id: user.site_id,
     centre_id: user.centre_id,
-    sessionToken: token,
-    warning: warningMessage
+    sessionToken: token
   };
 }
 

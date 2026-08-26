@@ -14,7 +14,7 @@ declare global {
         onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' | 'site_suspended' | 'license_expired' }) => void) => () => void;
         onSessionUpdated: (callback: (payload: { roles: string[] }) => void) => () => void;
         getSessionSnapshot: () => Promise<any>;
-        onAuthWarning: (callback: (warningMessage: string) => void) => () => void;
+        onLicenseExpiryWarning: (callback: (payload: { message: string; expiryDate: string; daysLeft: number; reappearMs: number }) => void) => () => void;
         isPreloadingUsers: () => Promise<boolean>;
         onPreloadStatus: (callback: (isPreloading: boolean) => void) => () => void;
       };

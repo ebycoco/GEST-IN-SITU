@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { Shield, Eye, EyeOff, Loader, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { confirmService } from '../components/confirmService';
 
 export default function LoginPage() {
   const [login, setLogin] = useState('');
@@ -180,17 +181,36 @@ export default function LoginPage() {
           proceedToDashboard(user);
         }
       } else {
-        toast.error('Identifiants incorrects');
+        await confirmService.confirm({
+          title: 'Connexion échouée',
+          message: 'Identifiant ou mot de passe incorrect',
+          isAlert: true,
+          isDanger: true
+        });
+        setPassword('');
       }
     } catch (error: any) {
       // authStore.login() repropage explicitement les erreurs levées par authenticateUser()
       // (cf. handler IPC auth:login) — distinguer les causes licence/site des autres erreurs
       // pour éviter le message trompeur "Identifiants incorrects" quand le mot de passe est
       // pourtant correct.
-      if (error?.message === 'LICENCE_EXPIREE') {
-        toast.error("La licence de votre site a expiré. Veuillez contacter le Super Administrateur.");
-      } else if (error?.message === 'SITE_SUSPENDU') {
-        toast.error("L'accès de votre site a été suspendu. Veuillez contacter le Super Administrateur.");
+      // ipcRenderer.invoke enveloppe l'erreur du Main Process : error.message vaut en réalité
+      // "Error invoking remote method 'auth:login': Error: LICENCE_EXPIREE" — .includes() (et non
+      // ===) est donc requis pour détecter correctement ce cas.
+      if (error?.message?.includes('LICENCE_EXPIREE')) {
+        await confirmService.confirm({
+          title: 'Licence expirée',
+          message: 'La licence de votre site a expiré. Veuillez contacter le super administrateur.',
+          isAlert: true,
+          isDanger: true
+        });
+      } else if (error?.message?.includes('SITE_SUSPENDU')) {
+        await confirmService.confirm({
+          title: 'Accès suspendu',
+          message: "L'accès de votre site a été suspendu. Veuillez contacter le Super Administrateur.",
+          isAlert: true,
+          isDanger: true
+        });
       } else {
         toast.error("Erreur de connexion. Veuillez réessayer.");
       }

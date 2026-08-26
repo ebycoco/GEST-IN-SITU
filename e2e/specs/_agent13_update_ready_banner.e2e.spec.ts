@@ -233,52 +233,64 @@ test.describe.serial('QA Terrain — Bandeau persistant "Mise à jour prête" (a
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Scénario 6 — Non-régression : onAuthWarning (toast) + collision visuelle
-  // avec Toaster (haut-droit) et barre hors-ligne (TopBar, haut). Le bandeau
-  // est bas-centre : aucune collision géométrique attendue avec ces deux
-  // éléments (tous deux ancrés en haut de l'écran).
+  // Scénario 6 — Non-régression : bannière 'license:expiryWarning'
+  // (LicenseExpiryBanner.tsx, haut-centre) + collision visuelle avec le
+  // bandeau de mise à jour (bas-centre). Remplace l'ancien scénario qui
+  // testait le toast 'auth:warning' (onAuthWarning) — canal et mécanisme
+  // intégralement retirés (voir src/main/database/queries/users.queries.ts
+  // authenticateUser(), src/main/ipc/handlers.ts, src/preload/index.ts) au
+  // profit de cette nouvelle bannière flottante non bloquante, poussée par
+  // le tick de src/main/auth/session-heartbeat.ts.
   // ═══════════════════════════════════════════════════════════════════════
-  test('6. Non-régression — toast onAuthWarning fonctionne, aucune collision visuelle avec le bandeau', async () => {
+  test('6. Non-régression — bannière license:expiryWarning fonctionne, aucune collision visuelle avec le bandeau de mise à jour', async () => {
     const { window } = env;
 
-    // Re-déclenche le bandeau pour le faire coexister avec un toast.
+    // Re-déclenche le bandeau de mise à jour pour le faire coexister avec la
+    // bannière d'expiration de licence.
     await sendUpdateDownloaded();
     await expect(bannerLocator(window)).toBeVisible({ timeout: 10000 });
 
-    await env.app.evaluate(({ BrowserWindow }) => {
+    const licenseMessage =
+      'ZZTEST — Attention, votre licence expire le 01 janv. 2099. Veuillez contacter le super administrateur pour procéder au renouvellement.';
+    await env.app.evaluate(({ BrowserWindow }, msg) => {
       const win = BrowserWindow.getAllWindows()[0];
-      win.webContents.send('auth:warning', 'ZZTEST — avertissement de session simulé (agent-13)');
-    });
+      win.webContents.send('license:expiryWarning', {
+        message: msg,
+        expiryDate: '2099-01-01',
+        daysLeft: 3,
+        reappearMs: 60000
+      });
+    }, licenseMessage);
 
-    await expect(window.getByText('ZZTEST — avertissement de session simulé (agent-13)')).toBeVisible({
-      timeout: 10000
-    });
-    // Le bandeau doit toujours être là, sans interférence.
+    await expect(window.getByText(licenseMessage)).toBeVisible({ timeout: 10000 });
+    // Le bandeau de mise à jour doit toujours être là, sans interférence.
     await expect(bannerLocator(window)).toBeVisible();
 
-    await window.screenshot({ path: join(SHOT_DIR, 'agent13-update-banner-06-coexist-with-toast.png') });
+    await window.screenshot({ path: join(SHOT_DIR, 'agent13-update-banner-06-coexist-with-license-banner.png') });
 
-    // Vérification géométrique explicite : pas de chevauchement entre le
-    // toast (Toaster, top-right) et la carte du bandeau (bottom-center).
-    const bannerBox = await window
+    // Vérification géométrique explicite : pas de chevauchement entre la
+    // bannière de licence (haut-centre, LicenseExpiryBanner.tsx) et la carte
+    // du bandeau de mise à jour (bas-centre).
+    const updateBannerBox = await window
       .locator('.premium-card.premium-glass.animate-slide-up')
       .first()
       .boundingBox();
-    const toastBox = await window
-      .getByText('ZZTEST — avertissement de session simulé (agent-13)')
-      .first()
-      .boundingBox();
-    if (bannerBox && toastBox) {
+    const licenseBannerBox = await window.getByText(licenseMessage).first().boundingBox();
+    if (updateBannerBox && licenseBannerBox) {
       const overlap =
-        bannerBox.x < toastBox.x + toastBox.width &&
-        bannerBox.x + bannerBox.width > toastBox.x &&
-        bannerBox.y < toastBox.y + toastBox.height &&
-        bannerBox.y + bannerBox.height > toastBox.y;
-      console.log(`[agent13][UPDATE-BANNER] chevauchement bandeau/toast détecté = ${overlap} (attendu: false)`);
+        updateBannerBox.x < licenseBannerBox.x + licenseBannerBox.width &&
+        updateBannerBox.x + updateBannerBox.width > licenseBannerBox.x &&
+        updateBannerBox.y < licenseBannerBox.y + licenseBannerBox.height &&
+        updateBannerBox.y + updateBannerBox.height > licenseBannerBox.y;
+      console.log(
+        `[agent13][UPDATE-BANNER] chevauchement bandeau maj/licence détecté = ${overlap} (attendu: false)`
+      );
       expect(overlap).toBe(false);
     }
 
-    // Nettoyage de session pour la suite : acquitte le bandeau.
+    // Nettoyage de session pour la suite : acquitte les deux bandeaux.
+    await window.getByRole('button', { name: "Fermer l'alerte de licence" }).click();
+    await expect(window.getByText(licenseMessage)).toHaveCount(0, { timeout: 5000 });
     await window.getByRole('button', { name: "J'ai compris" }).click();
     await expect(bannerLocator(window)).toHaveCount(0, { timeout: 5000 });
   });

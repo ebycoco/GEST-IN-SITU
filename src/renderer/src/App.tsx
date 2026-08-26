@@ -24,10 +24,11 @@ import ApurementCorrections from './pages/apurement/ApurementCorrections';
 import InventaireApurement from './pages/inventaire/InventaireApurement';
 import RetraitsPage from './pages/RetraitsPage';
 import { useAuthStore } from './stores/authStore';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import { confirmService } from './components/confirmService';
 import UpdateReadyBanner from './components/UpdateReadyBanner';
+import LicenseExpiryBanner from './components/LicenseExpiryBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import AgentsPresencePage from './pages/AgentsPresencePage';
 import MaintenancePage from './pages/MaintenancePage';
@@ -71,19 +72,28 @@ export default function App() {
   const checkAuth = useAuthStore(s => s.checkAuth);
   const [updateReady, setUpdateReady] = useState(false);
 
+  // Bannière préventive d'expiration de licence de site (canal IPC
+  // 'license:expiryWarning', émis par le tick de src/main/auth/session-heartbeat.ts).
+  // Remplace intégralement l'ancien mécanisme 'auth:warning' (toast unique au login).
+  const [licenseWarning, setLicenseWarning] = useState<{ message: string; reappearMs: number } | null>(null);
+  const [licenseWarningVisible, setLicenseWarningVisible] = useState(false);
+  // Ref (pas de state) : le timeout de réapparition ne doit jamais déclencher de re-render
+  // à sa seule création/annulation — seul son callback (setLicenseWarningVisible) doit re-render.
+  const licenseWarningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     checkAuth();
 
-    const unsubWarning = window.api?.auth?.onAuthWarning?.((msg: string) => {
-      import('react-hot-toast').then(({ toast }) => {
-        toast(msg, {
-          icon: '⚠️',
-          duration: 10000,
-        });
-      });
+    const unsubLicenseExpiryWarning = window.api?.auth?.onLicenseExpiryWarning?.((payload) => {
+      // Réarmement défensif : un nouveau push (tick suivant) annule tout minuteur de
+      // réapparition déjà programmé, pour éviter un double affichage décalé.
+      if (licenseWarningTimeoutRef.current) {
+        clearTimeout(licenseWarningTimeoutRef.current);
+        licenseWarningTimeoutRef.current = null;
+      }
+      setLicenseWarning({ message: payload.message, reappearMs: payload.reappearMs });
+      setLicenseWarningVisible(true);
     });
-
-
 
     const unsubSessionExpired = window.api?.auth?.onSessionExpired?.((payload) => {
       useAuthStore.getState().logout();
@@ -141,18 +151,44 @@ export default function App() {
     });
 
     return () => {
-      if (unsubWarning) unsubWarning();
+      if (unsubLicenseExpiryWarning) unsubLicenseExpiryWarning();
       if (unsubSessionExpired) unsubSessionExpired();
       if (unsubSessionUpdated) unsubSessionUpdated();
       if (unsubUpdateDownloaded) unsubUpdateDownloaded();
+      // Nettoyage systématique du minuteur de réapparition au démontage (cf. low-memory-patterns).
+      if (licenseWarningTimeoutRef.current) {
+        clearTimeout(licenseWarningTimeoutRef.current);
+        licenseWarningTimeoutRef.current = null;
+      }
     };
   }, [checkAuth]);
+
+  // Fermeture par l'utilisateur : masque la bannière puis réarme un minuteur de réapparition
+  // (jamais setInterval) cadencé par `reappearMs` reçu du main (60s ADMINISTRATEUR_SITE,
+  // 5 min sinon — décidé côté session-heartbeat.ts). clearTimeout systématique avant tout
+  // réarmement pour ne jamais empiler plusieurs minuteurs.
+  const handleLicenseWarningClose = () => {
+    setLicenseWarningVisible(false);
+    if (licenseWarningTimeoutRef.current) {
+      clearTimeout(licenseWarningTimeoutRef.current);
+      licenseWarningTimeoutRef.current = null;
+    }
+    const reappearMs = licenseWarning?.reappearMs ?? 5 * 60 * 1000;
+    licenseWarningTimeoutRef.current = setTimeout(() => {
+      setLicenseWarningVisible(true);
+    }, reappearMs);
+  };
 
   return (
     <>
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
       <UpdateReadyBanner visible={updateReady} onAcknowledge={() => setUpdateReady(false)} />
+      <LicenseExpiryBanner
+        message={licenseWarning?.message ?? ''}
+        visible={licenseWarningVisible && !!licenseWarning}
+        onClose={handleLicenseWarningClose}
+      />
       <HashRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />

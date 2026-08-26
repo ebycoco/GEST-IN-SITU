@@ -20,6 +20,75 @@ let secureCurrentUser: any = null;
  */
 let secureCurrentGrantedRoles: string[] | null = null;
 
+/**
+ * Bannière préventive d'expiration de licence de site (canal IPC
+ * 'license:expiryWarning', consommé par LicenseExpiryBanner.tsx côté
+ * renderer). Remplace intégralement l'ancien mécanisme `auth:warning`
+ * (toast unique au login, seuil ≤30 jours, calculé jusqu'ici dans
+ * authenticateUser() — users.queries.ts, retiré nettement, sans repli).
+ *
+ * Seuil : ≤ 3 jours avant `t_sites.expiry_date` (jamais négatif : un site
+ * déjà expiré relève de `refreshSecureCurrentUser()`/licenseExpired, hors
+ * périmètre ici). Exclusions : site `is_permanent = 1`, rôle SUPER ADMIN,
+ * ou `site_id` absent — même garde que l'ancien code retiré de
+ * users.queries.ts.
+ *
+ * Cadence de réapparition (après fermeture par l'utilisateur, gérée côté
+ * renderer via `reappearMs`) : décidée ici à partir du rôle ACTIF de la
+ * session (`user.role`, mutable via setActiveRole) — 60s pour
+ * ADMINISTRATEUR_SITE, 5 min pour tout autre rôle concerné.
+ *
+ * Réutilisation stricte du tick périodique déjà existant de ce fichier
+ * (politique Low-Memory CLAUDE.md §2 — aucun nouveau timer créé) : appelée
+ * à la fois au tout début de startSessionHeartbeat() (premier affichage
+ * sans attendre le prochain tick) et à chaque tick de heartbeatInterval.
+ *
+ * Bloc STRICTEMENT ADDITIF et isolé : lecture seule sur t_sites, aucune
+ * mutation de secureCurrentUser ni interaction avec refreshSecureCurrentUser()
+ * (léger doublon de calcul de date assumé plutôt que de toucher à ce code de
+ * sécurité déjà validé — cf. tests/session-heartbeat-license-site.test.ts).
+ *
+ * @param user - Référence utilisateur courante (role/site_id) : soit
+ *   secureUserCopy (premier appel, avant assignation à secureCurrentUser),
+ *   soit getSecureCurrentUser() (tick périodique, rôle actif à jour via
+ *   setActiveRole()).
+ */
+function checkAndPushLicenseExpiryWarning(user: any): void {
+  if (!user || user.role === 'SUPER ADMIN' || !user.site_id) return;
+
+  const db = getDatabase();
+  if (!db) return;
+
+  try {
+    const site = db.prepare(
+      'SELECT expiry_date, is_permanent FROM t_sites WHERE id = ?'
+    ).get(user.site_id) as { expiry_date: string | null; is_permanent: number } | undefined;
+
+    if (!site || site.is_permanent === 1 || !site.expiry_date) return;
+
+    const now = new Date();
+    const expiry = new Date(site.expiry_date);
+    const timeDiff = expiry.getTime() - now.getTime();
+    const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
+
+    // Hors fenêtre (trop tôt, ou déjà expiré — cf. commentaire ci-dessus).
+    if (daysLeft < 0 || daysLeft > 3) return;
+
+    const formattedDate = expiry.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+    const message = `Attention, votre licence expire le ${formattedDate}. Veuillez contacter le super administrateur pour procéder au renouvellement.`;
+    const reappearMs = user.role === 'ADMINISTRATEUR_SITE' ? 60 * 1000 : 5 * 60 * 1000;
+
+    BrowserWindow.getAllWindows().forEach(w => w.webContents.send('license:expiryWarning', {
+      message,
+      expiryDate: site.expiry_date,
+      daysLeft,
+      reappearMs
+    }));
+  } catch (e) {
+    log.warn("Erreur lors du calcul de la bannière d'expiration de licence:", e);
+  }
+}
+
 export function startSessionHeartbeat(user: any, sessionToken: string): void {
   // Nettoyer un intervalle existant
   stopSessionHeartbeat();
@@ -78,6 +147,10 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
 
   secureCurrentUser = secureUserCopy;
 
+  // Bannière licence (voir checkAndPushLicenseExpiryWarning ci-dessus) : premier affichage
+  // immédiat au login, sans attendre le prochain tick du setInterval ci-dessous.
+  checkAndPushLicenseExpiryWarning(secureUserCopy);
+
   log.info(`Démarrage du Heartbeat de session pour l'utilisateur : ${user.login}`);
 
   // Ping local toutes les 2 minutes (120 000 ms) pour la forme et traçabilité locale
@@ -91,6 +164,11 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
     // l'await. No-op silencieux si aucune session active ou si le sync_id n'a pas pu être
     // résolu ci-dessus (ex. ROOT failsafe).
     const activeUser = getSecureCurrentUser();
+
+    // Bannière licence (voir checkAndPushLicenseExpiryWarning ci-dessus) : réutilisation
+    // stricte de ce tick existant, indépendante de la présence agents ci-dessous.
+    checkAndPushLicenseExpiryWarning(activeUser);
+
     if (activeUser?.sync_id) {
       const presenceUser: PresenceUserRef = {
         sync_id: activeUser.sync_id,

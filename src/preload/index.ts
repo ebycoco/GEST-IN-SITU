@@ -42,10 +42,14 @@ const api = {
     },
     getSessionSnapshot: (): Promise<any> =>
       ipcRenderer.invoke('auth:getSessionSnapshot'),
-    onAuthWarning: (callback: (warningMessage: string) => void) => {
-      const listener = (_: any, warningMessage: string) => callback(warningMessage);
-      ipcRenderer.on('auth:warning', listener);
-      return () => ipcRenderer.removeListener('auth:warning', listener);
+    // Bannière préventive d'expiration de licence de site (≤3 jours avant
+    // t_sites.expiry_date) — remplace intégralement l'ancien 'auth:warning'
+    // (toast unique au login, seuil ≤30 jours). Émis par le tick périodique de
+    // src/main/auth/session-heartbeat.ts (voir checkAndPushLicenseExpiryWarning).
+    onLicenseExpiryWarning: (callback: (payload: { message: string; expiryDate: string; daysLeft: number; reappearMs: number }) => void) => {
+      const listener = (_: any, payload: { message: string; expiryDate: string; daysLeft: number; reappearMs: number }) => callback(payload);
+      ipcRenderer.on('license:expiryWarning', listener);
+      return () => ipcRenderer.removeListener('license:expiryWarning', listener);
     },
     isPreloadingUsers: (): Promise<boolean> => 
       ipcRenderer.invoke('auth:isPreloadingUsers'),
