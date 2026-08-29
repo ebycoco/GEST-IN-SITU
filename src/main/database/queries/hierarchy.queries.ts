@@ -136,6 +136,19 @@ export function createSite(data: { nom: string; code: string; max_centres: numbe
   // Un même UUID = une seule entrée dans t_outbox, même en cas de double appel.
   const siteSyncId = data.sync_id || uuidv4();
 
+  // ── 0. Vérification préalable de disponibilité du login admin ─────────────
+  // Sans ce contrôle, l'INSERT t_users plus bas (étape 2) échoue avec une
+  // SqliteError "UNIQUE constraint failed: t_users.login" brute qui remonte
+  // telle quelle jusqu'au renderer via l'IPC hierarchy:createSite (bug
+  // diagnostiqué agent-14-debugger). La transaction SQLite rollback bien
+  // proprement dans ce cas (aucune donnée orpheline), mais l'utilisateur ne
+  // reçoit aucun message exploitable. Vérification hors transaction : simple
+  // lecture, pas besoin d'atomicité avec l'INSERT qui suit.
+  const existingLogin = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(data.admin.login);
+  if (existingLogin) {
+    throw new Error(`Ce login ("${data.admin.login}") existe déjà. Choisissez un autre identifiant pour l'administrateur du site.`);
+  }
+
   const transaction = db.transaction(() => {
     // ── 1. Insertion locale immédiate (toujours, online ET offline) ──────────
     const siteResult = db.prepare(`
