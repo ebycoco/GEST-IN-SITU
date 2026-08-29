@@ -5179,6 +5179,31 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // pouvait afficher "0 carte envoyée" à l'utilisateur alors que ces cartes étaient en
       // réalité transmises (ou bloquées) par ce vidage — bug de confiance/diagnostic corrigé
       // ci-dessous (agent-4-db-sync, investigation symptôme "import + envoi cloud silencieux").
+      // ── Re-vérification réseau immédiate avant le vidage forcé ──────────────────────
+      // processOutboxPending() (appelé juste en dessous) refuse tout appel Supabase tant que
+      // networkMonitor.getState() !== 'ONLINE' (outbox.service.ts) — y compris pour cet appel
+      // forcé (forceCards=true ne contourne que le toggle "Envoi Automatique", jamais cette
+      // garde réseau, volontairement : processOutboxPending peut traiter jusqu'à 50 entrées
+      // par appel, et getSupabaseClient() n'a aucun timeout configuré — un bypass aveugle en
+      // offline réel bloquerait la boucle sur des appels sans expiration). Si l'état mis en
+      // cache par le NetworkMonitor est obsolète (faux négatif après une coupure transitoire,
+      // ou PERMANENT_OFFLINE atteint à tort au démarrage sur une connexion terrain lente), le
+      // clic explicite "Envoyer vers le cloud" doit forcer une vérification réelle immédiate
+      // avant de conclure à tort qu'il n'y a rien à transmettre. forcePing() ne fait RIEN si
+      // l'état est déjà PERMANENT_OFFLINE (garde interne de checkConnection(), network-
+      // monitor.ts) : il faut alors passer par retryConnection() (= networkMonitor.
+      // resetAndRetry()), seul chemin qui réarme isPermanentOffline avant de re-pinguer.
+      try {
+        if (networkMonitor.getState() === 'PERMANENT_OFFLINE') {
+          log.info('[sync:startBulk] Réseau en PERMANENT_OFFLINE — tentative de réarmement via retryConnection() avant le vidage forcé de t_outbox.');
+          await syncEngine.retryConnection();
+        } else {
+          await networkMonitor.forcePing();
+        }
+      } catch (pingErr: any) {
+        log.warn('[sync:startBulk] Échec de la re-vérification réseau pré-vidage (non-bloquant) :', pingErr?.message || pingErr);
+      }
+
       let outboxFlushProcessed = 0;
       let outboxFlushErrors = 0;
       let outboxFlushRemaining = 0;
@@ -5230,7 +5255,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         if (outboxFlushErrors > 0) parts.push(`${outboxFlushErrors} carte(s) en échec d'envoi (file d'attente).`);
         if (outboxFlushRemaining > 0) {
           const netState = networkMonitor.getState();
-          parts.push(`${outboxFlushRemaining} carte(s) encore en attente d'envoi (réseau : ${netState}).`);
+          if (netState === 'PERMANENT_OFFLINE') {
+            // Cause précise + action corrective explicite plutôt qu'un simple rappel de
+            // l'état brut — cet état bloque tout envoi tant qu'il n'est pas réarmé (cf.
+            // commentaire pré-vidage ci-dessus), l'utilisateur doit savoir quoi faire.
+            parts.push(`${outboxFlushRemaining} carte(s) non transmise(s) : la connexion au serveur a été jugée définitivement indisponible. Cliquez sur "Réessayer" dans le widget de synchronisation, puis relancez l'envoi.`);
+          } else {
+            parts.push(`${outboxFlushRemaining} carte(s) encore en attente d'envoi (réseau : ${netState}).`);
+          }
         }
         uploadResult.message = parts.join(' ');
       }

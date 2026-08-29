@@ -215,11 +215,16 @@ export class NetworkMonitor extends EventEmitter {
         redirect: 'manual'
       });
 
-      // R5: Timeout à 2 secondes (au lieu de 3) pour ne pas bloquer l'UI
+      // Timeout à 5 secondes (relevé de 2s — un délai trop court faisait compter comme
+      // "échec" une connexion terrain simplement lente/à latence élevée, ex. réseau
+      // mobile dégradé en Côte d'Ivoire, provoquant des bascules PERMANENT_OFFLINE à tort
+      // dès le démarrage — cf. investigation agent-4-db-sync sur le blocage silencieux de
+      // la synchro montante après import). MAX_BOOT_RETRIES reste inchangé (2, soit 3
+      // tentatives) : seule la marge par tentative est élargie, pas leur nombre.
       const timeout = setTimeout(() => {
         request.abort();
         resolve(false);
-      }, 2_000);
+      }, 5_000);
 
       request.on('response', (response) => {
         clearTimeout(timeout);

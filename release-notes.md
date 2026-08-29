@@ -7,6 +7,8 @@
 ## 🛠️ Corrections & Fiabilité
 
 - Modification de la date d'expiration de licence d'un site (SUPER ADMIN) : le changement ne se synchronisait jamais vers Supabase — il échouait silencieusement à cause d'un identifiant local erroné inclus dans la charge utile envoyée au cloud, et était néanmoins marqué à tort comme synchronisé. Corrigé, aligné sur le comportement déjà correct de la mise à jour d'un centre.
-- Import de cartes suivi d'un envoi vers le cloud : le nombre réel de cartes transmises (ou en échec) via la file d'attente de synchronisation n'était jamais remonté à l'utilisateur, pouvant afficher à tort "0 carte envoyée" alors que des cartes étaient en réalité traitées en arrière-plan. Le message affiché inclut désormais le nombre exact de cartes transmises/en échec/en attente, ainsi que l'état du réseau si un blocage persiste.
+- Import de cartes suivi d'un envoi vers le cloud : le nombre réel de cartes transmises (ou en échec) via la file d'attente de synchronisation n'était jamais remonté à l'utilisateur, pouvant afficher à tort "0 carte envoyée" alors que des cartes étaient en réalité traitées en arrière-plan. Le message affiché inclut désormais le nombre exact de cartes transmises/en échec/en attente, avec un message explicite indiquant la marche à suivre lorsque la connexion est jugée définitivement indisponible.
+- Réduit le risque qu'une connexion terrain lente (réseau mobile dégradé) soit détectée à tort comme totalement hors-ligne au démarrage de l'application : le délai accordé à chaque tentative de connexion est désormais plus tolérant.
+- Un envoi manuel vers le cloud (après un import) revérifie désormais réellement l'état de la connexion juste avant de transmettre, au lieu de se fier uniquement à un état mis en cache pouvant être obsolète.
 
 ## ⚡ Performances
