@@ -370,12 +370,39 @@ async function _upsertPresence(
 
     if (error) {
       if (error.code === '23503') {
-        // Violation FK t_user_presence_site_id_fkey (site_id orphelin) — dégradation propre :
-        // log unique et explicite, puis plus aucune retentative pour cette combinaison
-        // sync_id/site_id (cf. knownInvalidSiteIdPresence) plutôt qu'une erreur identique
-        // répétée indéfiniment à chaque tick du heartbeat (toutes les 2 min).
-        knownInvalidSiteIdPresence.add(invalidSiteKey);
-        log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}, site_id=${user.site_id ?? 'null'}) : site_id orphelin (contrainte FK violée). Ignoré pour cette combinaison tant que site_id ne change pas.`);
+        // Violation FK générique (23503) — le payload upserté porte TROIS colonnes sous FK
+        // Postgres distinctes (user_sync_id -> t_users, site_id -> t_sites, centre_id ->
+        // t_centres ; cf. supabase/migrations/0002_t_user_presence.sql:40-44). Le code seul
+        // ne dit pas laquelle a été violée : on inspecte error.details, qui porte le détail
+        // brut Postgres (convention standard : `Key (colonne)=(valeur) is not present in
+        // table "...".`). Structure du champ `details` (string toujours peuplé par
+        // PostgrestError) confirmée via Context7 /supabase/postgrest-js ; le contenu textuel
+        // exact reste une convention Postgres core non re-testée ici en conditions réelles
+        // (cf. repli ci-dessous si le format s'avérait différent).
+        const violatedColumn = /Key \(([a-zA-Z_]+)\)=/.exec(error.details ?? '')?.[1];
+
+        if (violatedColumn === 'site_id') {
+          // Cas historique (cf. knownInvalidSiteIdPresence ci-dessus) : dégradation propre,
+          // plus aucune retentative pour cette combinaison sync_id/site_id tant que site_id
+          // ne change pas, au lieu d'une erreur identique répétée à chaque tick (2 min).
+          knownInvalidSiteIdPresence.add(invalidSiteKey);
+          log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}, site_id=${user.site_id ?? 'null'}) : site_id orphelin (contrainte FK violée). Ignoré pour cette combinaison tant que site_id ne change pas.`);
+        } else if (violatedColumn === 'centre_id' || violatedColumn === 'user_sync_id') {
+          // Colonne fautive distincte de site_id : PAS de mise en cache. Contrairement à
+          // site_id (dont la correction est explicitement traquée par invalidSiteKey), rien
+          // ne garantit qu'une correction de centre_id/user_sync_id laisse site_id inchangé
+          // — un cache indexé sur site_id figerait ce cas à tort. La fréquence faible du
+          // heartbeat (toutes les 2 min) rend une nouvelle tentative au tick suivant
+          // acceptable plutôt que de risquer un blocage silencieux permanent.
+          log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}) : ${violatedColumn} orphelin (contrainte FK violée, colonne identifiée via error.details). Non mis en cache, nouvelle tentative au prochain tick.`);
+        } else {
+          // error.details absent ou de format imprévu : repli explicite sur l'ancien
+          // comportement (traité comme site_id orphelin) plutôt qu'un comportement
+          // silencieux incohérent — mais signalé distinctement dans le log pour ne pas
+          // masquer un diagnostic potentiellement faux.
+          knownInvalidSiteIdPresence.add(invalidSiteKey);
+          log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}, site_id=${user.site_id ?? 'null'}) : contrainte FK violée (23503), colonne fautive non identifiable depuis error.details ("${error.details ?? ''}"). Repli : traité comme site_id orphelin (comportement précédent).`);
+        }
       } else {
         log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} échoué (user_sync_id=${user.sync_id}) :`, error.message);
       }
