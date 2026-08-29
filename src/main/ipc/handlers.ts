@@ -5219,6 +5219,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         const OUTBOX_LOCK_RETRY_DELAY_MS = 300;
         let lockRetries = 0;
 
+        // Total de référence pour la progression émise pendant ce vidage forcé (bug UI
+        // confirmé : cette boucle est le SEUL chemin qui transmet réellement à Supabase les
+        // cartes fraîchement importées — voir commentaire "Porte de sortie garantie" plus
+        // haut — mais elle n'émettait jusqu'ici aucun événement 'sync:bulk-progress',
+        // laissant la barre du renderer bloquée à 0% pendant tout son déroulement alors que
+        // l'étape précédente (runBulkUpload, ci-dessus) avait déjà cessé d'émettre. Figé une
+        // seule fois avant la boucle : le dénominateur ne doit pas varier au fil du vidage.
+        const initialFlushTotal = getOutboxPendingCount('t_cartes');
+
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
           outboxFlushRemaining = remainingBefore;
@@ -5227,6 +5236,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           const { processed, errors } = await processOutboxPending(false, true);
           outboxFlushProcessed += processed;
           outboxFlushErrors += errors;
+
+          // Progression du vidage forcé vers le renderer, sur le même canal que
+          // runBulkUpload (cf. callback ci-dessus, ligne ~5140) — le renderer écoute déjà
+          // ce canal (useForceSyncActions.ts), aucune modification nécessaire de ce côté.
+          // Ne s'exécute que si le backlog initial était non nul (sinon rien à signaler,
+          // le `break` du haut de boucle suffit).
+          if (initialFlushTotal > 0 && mainWindow && !mainWindow.isDestroyed()) {
+            const remainingAfter = getOutboxPendingCount('t_cartes');
+            const flushProgress = Math.round(((initialFlushTotal - remainingAfter) / initialFlushTotal) * 100);
+            mainWindow.webContents.send('sync:bulk-progress', flushProgress);
+          }
 
           if (processed === 0 && errors === 0) {
             // Rien traité : soit le verrou _isProcessing était déjà pris par un autre
@@ -5246,6 +5266,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           lockRetries = 0;
         }
         outboxFlushRemaining = getOutboxPendingCount('t_cartes');
+
+        // Dernier événement garanti : si la boucle s'arrête avant d'avoir épuisé le backlog
+        // (plafond OUTBOX_FLUSH_MAX_ITERATIONS atteint, ou réseau redevenu indisponible en
+        // cours de route — cf. lockRetries ci-dessus), la barre ne doit pas rester figée à
+        // une valeur intermédiaire du dernier événement émis dans la boucle : on renvoie
+        // explicitement la progression réellement atteinte (100% si le backlog est vide).
+        if (initialFlushTotal > 0 && mainWindow && !mainWindow.isDestroyed()) {
+          const finalFlushProgress = Math.round(((initialFlushTotal - outboxFlushRemaining) / initialFlushTotal) * 100);
+          mainWindow.webContents.send('sync:bulk-progress', finalFlushProgress);
+        }
       } catch (outboxFlushErr: any) {
         log.warn('[sync:startBulk] Échec du vidage forcé de t_outbox (non-bloquant) :', outboxFlushErr?.message || outboxFlushErr);
       }
