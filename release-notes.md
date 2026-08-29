@@ -2,7 +2,7 @@
 
 ## 🚨 Sécurité
 
-- Purge de la base locale, réparation forcée et purge des cartes Cloud sont désormais refusées si une synchronisation ou un transfert vers le cloud est en cours, au lieu de pouvoir s'exécuter en même temps sur la même base de données.
+- Purge de la base locale, réparation forcée et purge des cartes Cloud sont désormais refusées si une synchronisation ou un transfert vers le cloud est en cours (et inversement, un transfert vers le cloud est refusé pendant une purge), au lieu de pouvoir s'exécuter en même temps sur la même base de données.
 
 ## 🚀 Nouveautés & Ergonomie
 

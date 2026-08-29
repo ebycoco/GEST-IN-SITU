@@ -5182,6 +5182,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       };
     }
 
+    // ── Verrou mutuel avec les opérations destructrices (purges) ─────────────
+    // Complète le check isCurrentlySyncing() ci-dessus : celui-ci ne couvre que isSyncing/
+    // isDownstreamRunning/isBulkUploading, jamais globalSyncLocked. Ce verrou global est posé
+    // par db:purge/db:emergency-purge/maintenance:clearCloudCartes (handlers.ts) pendant
+    // toute la durée d'une purge — sans ce contrôle ici, un transfert de masse manuel pouvait
+    // démarrer alors qu'une purge locale/Cloud est en train d'effacer/reconstruire la même
+    // base SQLite (P1 audit agent-9, suite du commit 58055e8). isGlobalSyncLocked() est
+    // l'accesseur public déjà exposé par SyncEngine (sync-engine.ts) à cet effet — aucun
+    // nouvel accesseur nécessaire.
+    if (syncEngine.isGlobalSyncLocked()) {
+      log.warn(`[sync:startBulk] Refusé : une opération de purge est en cours pour le site ${siteId}.`);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: 'Une purge de la base de données est en cours. Veuillez patienter avant de lancer cette opération.',
+        strictCount: 0,
+        probableCount: 0,
+        invalidCount: 0
+      };
+    }
+
     // ── Verrou mutuel avec les cycles périodiques ─────────────────────────────
     // Pose isBulkUploading pour TOUTE la durée réelle du transfert (runBulkUpload ET le
     // vidage forcé de t_outbox qui suit, jusqu'au bloc finally ci-dessous) — pas seulement
