@@ -18,5 +18,6 @@
 - Corrige une erreur bloquante lors de l'affichage du compteur de centres non synchronisés (canal de communication interne manquant).
 - Création d'un centre pour un site introuvable : affiche désormais un message clair au lieu de faire planter l'action.
 - Envoi vers le cloud après un import : la barre de progression restait bloquée à 0% pendant la transmission réelle des cartes importées (qui suivent un circuit différent des autres cartes). Elle progresse désormais correctement pendant toute la durée de l'envoi.
+- Un transfert de masse manuel vers le cloud pouvait tourner en même temps qu'un cycle de synchronisation automatique en arrière-plan, se gênant mutuellement sans qu'aucun message clair n'explique le blocage. Les deux s'excluent désormais correctement.
 
 ## ⚡ Performances

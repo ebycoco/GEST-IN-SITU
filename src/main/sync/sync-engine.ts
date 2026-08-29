@@ -443,6 +443,14 @@ class SyncEngine extends EventEmitter {
       return;
     }
 
+    // Même risque de collision SQLite qu'avec isDownstreamRunning ci-dessus : un transfert
+    // de masse manuel écrit lui aussi via une connexion indépendante (Worker Thread
+    // upload-worker.js) — cf. commentaire de isBulkUploading/beginBulkUpload.
+    if (this.isBulkUploading) {
+      log.info('[SyncEngine][UserSync] Ignoré : un transfert de masse manuel est en cours. Reprise au prochain tick.');
+      return;
+    }
+
     this.isUserSyncRunning = true;
     try {
       await syncUsersFromCloud(siteId);
@@ -528,6 +536,15 @@ class SyncEngine extends EventEmitter {
       return { success: false, message: 'Une synchronisation automatique (downstream) est déjà en cours.' };
     }
 
+    if (this.isBulkUploading) {
+      // Vérification explicite (message utilisateur honnête) plutôt que de laisser
+      // executeSyncCycle() ci-dessous absorber silencieusement l'appel via sa propre
+      // garde isBulkUploading (ligne 1009 et suivantes) — sans ce contrôle, forceSync()
+      // renverrait à tort "Synchronisation terminée avec succès" alors que rien ne
+      // se serait produit (cycle ignoré en interne).
+      return { success: false, message: 'Un transfert de masse manuel vers le Cloud est déjà en cours.' };
+    }
+
     log.info('[SyncEngine] Synchronisation manuelle forcée depuis l\'UI.');
 
     // ── RÉINITIALISATION DU TIMER DE 2 HEURES ──────────────────────────────
@@ -563,7 +580,7 @@ class SyncEngine extends EventEmitter {
   }
 
   public isCurrentlySyncing(): boolean {
-    return this.isSyncing || this.isDownstreamRunning;
+    return this.isSyncing || this.isDownstreamRunning || this.isBulkUploading;
   }
 
   // ── Verrou downstream manuel (pulls déclenchés depuis l'UI) ───────────────
@@ -604,6 +621,57 @@ class SyncEngine extends EventEmitter {
     this.isDownstreamRunning = false;
   }
 
+  // ── Verrou upload manuel (transfert de masse déclenché depuis l'UI) ───────
+
+  /**
+   * true = un transfert de masse manuel (bouton "Envoyer vers le cloud", IPC
+   * sync:startBulk) est en cours d'exécution — couvre TOUTE sa durée réelle
+   * (runBulkUpload ET le vidage forcé de t_outbox qui suit), pas seulement son
+   * lancement. Symétrique à isDownstreamRunning/beginManualDownstream ci-dessus :
+   * runBulkUpload ouvre lui aussi un Worker Thread avec sa propre connexion
+   * SQLite indépendante (upload-worker.js), et le vidage forcé qui suit écrit
+   * dans t_outbox/t_cartes via la connexion principale. Avant ce verrou, ce
+   * transfert manuel ne posait AUCUN état partagé pendant son exécution — un
+   * cycle périodique (upstream 30s-5min, downstream 2h, cycle court cartes
+   * ~75s, cycle comptes/rôles 3 min) pouvait démarrer sa propre écriture SQLite
+   * en parallèle, affamant le transfert manuel sur les verrous SQLite/
+   * _isProcessing (outbox.service.ts) sans jamais lui laisser émettre sa propre
+   * progression 'sync:bulk-progress' — modale "Transfert de masse... 0%" figée
+   * pendant que la synchro avançait réellement, juste par le chemin du cycle
+   * périodique concurrent (bug confirmé par agent-14-debugger).
+   */
+  private isBulkUploading = false;
+
+  /**
+   * A appeler par sync:startBulk (handlers.ts) dès l'acceptation du transfert
+   * (juste après le refus anti-concurrence existant sur isCurrentlySyncing()),
+   * AVANT tout appel à runBulkUpload — pour que sa durée complète (potentiel-
+   * lement plusieurs minutes) soit visible des autres gardes de concurrence,
+   * exactement comme beginManualDownstream() pour les pulls manuels.
+   *
+   * @returns false si un transfert de masse est déjà en cours — l'appelant
+   *   doit alors refuser l'opération plutôt que de démarrer un second Worker
+   *   concurrent.
+   */
+  public beginBulkUpload(): boolean {
+    if (this.isBulkUploading) {
+      return false;
+    }
+    this.isBulkUploading = true;
+    return true;
+  }
+
+  /**
+   * A appeler dans un bloc `finally`, systématiquement après tout transfert
+   * démarré via beginBulkUpload() — succès, échec, ou exception imprévue. Ne
+   * doit JAMAIS rester bloqué à `true` indéfiniment : un oubli bloquerait tous
+   * les cycles automatiques futurs (cf. garde étendue dans executeSyncCycle/
+   * triggerAutoDownstream/triggerCardsShortSync/triggerUserAccountsSync).
+   */
+  public endBulkUpload(): void {
+    this.isBulkUploading = false;
+  }
+
   // ── Verrou Global (Global Sync Lock) ──────────────────────────────────────
 
   /**
@@ -618,17 +686,17 @@ class SyncEngine extends EventEmitter {
 
   /**
    * Tente de poser le verrou global exclusif.
-   * Retourne false si le moteur est déjà actif (isSyncing, isDownstreamRunning
-   * ou globalSyncLocked), true si le verrou a été posé avec succès.
+   * Retourne false si le moteur est déjà actif (isSyncing, isDownstreamRunning,
+   * isBulkUploading ou globalSyncLocked), true si le verrou a été posé avec succès.
    *
    * @param reason - Description de l'opération qui pose le verrou (pour les logs).
    */
   public acquireGlobalSyncLock(reason: string): boolean {
-    if (this.isSyncing || this.isDownstreamRunning || this.globalSyncLocked) {
+    if (this.isSyncing || this.isDownstreamRunning || this.isBulkUploading || this.globalSyncLocked) {
       log.warn(
         `[SyncEngine][GlobalLock] REFUS — acquisition impossible pour '${reason}'. ` +
         `isSyncing=${this.isSyncing}, isDownstreamRunning=${this.isDownstreamRunning}, ` +
-        `globalSyncLocked=${this.globalSyncLocked}`
+        `isBulkUploading=${this.isBulkUploading}, globalSyncLocked=${this.globalSyncLocked}`
       );
       return false;
     }
@@ -771,6 +839,10 @@ class SyncEngine extends EventEmitter {
       log.info('[SyncEngine] Cycle upstream ignoré : un downstream automatique est en cours.');
       return;
     }
+    if (this.isBulkUploading) {
+      log.info('[SyncEngine] Cycle upstream ignoré : un transfert de masse manuel est en cours.');
+      return;
+    }
     // Vérification du verrou global (ex: purge cloud en cours)
     if (this.globalSyncLocked) {
       log.info('[SyncEngine] Cycle upstream ignoré : verrou global actif (opération destructrice en cours).');
@@ -795,6 +867,18 @@ class SyncEngine extends EventEmitter {
     // Vérification du verrou anti-concurrence
     if (this.isDownstreamRunning) {
       log.info('[SyncEngine][AutoDownstream] Ignoré : un downstream est déjà en cours.');
+      return;
+    }
+
+    // Vérification du transfert de masse manuel (bulk upload) — même risque de collision
+    // SQLite qu'avec isDownstreamRunning ci-dessus (Worker Thread indépendant sur le même
+    // fichier .db) — cf. commentaire de isBulkUploading/beginBulkUpload.
+    if (this.isBulkUploading) {
+      log.info('[SyncEngine][AutoDownstream] Ignoré : un transfert de masse manuel est en cours.');
+      this.notifyRenderer('sync:auto-downstream', {
+        phase: 'skipped',
+        reason: 'already-syncing'
+      } as AutoDownstreamEvent);
       return;
     }
 
@@ -955,6 +1039,10 @@ class SyncEngine extends EventEmitter {
       log.info('[SyncEngine][CardsShortSync] Ignoré : un downstream (auto/manuel/comptes) est déjà en cours.');
       return;
     }
+    if (this.isBulkUploading) {
+      log.info('[SyncEngine][CardsShortSync] Ignoré : un transfert de masse manuel est en cours.');
+      return;
+    }
     if (this.globalSyncLocked) {
       log.info('[SyncEngine][CardsShortSync] Ignoré : verrou global actif (opération destructrice en cours).');
       return;
@@ -982,7 +1070,7 @@ class SyncEngine extends EventEmitter {
       // Re-vérification post-await : le comptage ci-dessus a suspendu ce tick le temps d'un
       // aller-retour réseau, pendant lequel un autre déclenchement a pu démarrer et poser un
       // des verrous partagés.
-      if (this.isDownstreamRunning || this.globalSyncLocked || this.isSyncing) {
+      if (this.isDownstreamRunning || this.globalSyncLocked || this.isSyncing || this.isBulkUploading) {
         log.info('[SyncEngine][CardsShortSync] Concurrence détectée après le comptage léger — abandon, reprise au prochain tick.');
         return;
       }
@@ -1006,7 +1094,7 @@ class SyncEngine extends EventEmitter {
   // ── Cycle complet (Upload + Download) ────────────────────────────────────
 
   private async executeSyncCycle(): Promise<void> {
-    if (this.isSyncing || this.isDownstreamRunning) return;
+    if (this.isSyncing || this.isDownstreamRunning || this.isBulkUploading) return;
     this.isSyncing = true;
 
     log.info('[SyncEngine] --- Début du cycle de synchronisation Supabase ---');

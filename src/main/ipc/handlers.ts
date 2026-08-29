@@ -5118,6 +5118,33 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       };
     }
 
+    // ── Verrou mutuel avec les cycles périodiques ─────────────────────────────
+    // Pose isBulkUploading pour TOUTE la durée réelle du transfert (runBulkUpload ET le
+    // vidage forcé de t_outbox qui suit, jusqu'au bloc finally ci-dessous) — pas seulement
+    // au démarrage. Sans ce verrou, isCurrentlySyncing() ci-dessus ne capturait qu'un
+    // instantané au tout début de ce handler : un cycle périodique (upstream 30s-5min,
+    // downstream 2h, cycle court cartes ~75s, cycle comptes/rôles 3 min) pouvait démarrer
+    // EN PARALLÈLE quelques instants plus tard et tourner concurremment avec ce transfert
+    // manuel, l'affamant sur les verrous SQLite/_isProcessing (outbox.service.ts) sans
+    // jamais lui laisser émettre sa propre progression 'sync:bulk-progress' — modale
+    // "Transfert de masse... 0%" figée pendant que la synchro avançait réellement, juste
+    // par le chemin du cycle périodique concurrent (bug confirmé par agent-14-debugger).
+    // beginBulkUpload() ne peut échouer ici (aucun `await` entre le check ci-dessus et cet
+    // appel, donc pas de fenêtre de course sur le thread JS unique du process main) — le
+    // contrôle du retour reste défensif, même style que sync:forceFullPull/
+    // beginManualDownstream juste au-dessus dans ce fichier.
+    if (!syncEngine.beginBulkUpload()) {
+      log.warn(`[sync:startBulk] Refusé : un transfert de masse est déjà en cours pour le site ${siteId} (course évitée).`);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: 'Une synchronisation est déjà en cours. Veuillez patienter.',
+        strictCount: 0,
+        probableCount: 0,
+        invalidCount: 0
+      };
+    }
+
     try {
       const secureUser = getSecureCurrentUser();
       if (!secureUser) throw new Error("Session invalide.");
@@ -5346,6 +5373,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         JSON.stringify({ site_id: siteId, error: err.message || String(err) })
       );
       return { success: false, uploadedCount: 0, message: err.message || String(err), strictCount: 0, probableCount: 0, invalidCount: 0 };
+    } finally {
+      // Libération garantie du verrou mutuel posé plus haut (beginBulkUpload) — succès,
+      // erreur catchée ci-dessus, ou exception imprévue non catchée : dans tous les cas, ce
+      // bloc s'exécute et évite de bloquer indéfiniment tous les cycles périodiques futurs
+      // (cf. gardes isBulkUploading ajoutées dans sync-engine.ts).
+      syncEngine.endBulkUpload();
     }
   });
 
