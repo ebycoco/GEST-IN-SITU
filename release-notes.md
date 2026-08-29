@@ -2,6 +2,8 @@
 
 ## 🚨 Sécurité
 
+- Purge de la base locale, réparation forcée et purge des cartes Cloud sont désormais refusées si une synchronisation ou un transfert vers le cloud est en cours, au lieu de pouvoir s'exécuter en même temps sur la même base de données.
+
 ## 🚀 Nouveautés & Ergonomie
 
 - La bannière d'alerte d'expiration de licence adresse désormais une consigne différente selon le profil : l'administrateur du site est invité à contacter le super administrateur, tandis que les autres utilisateurs (opérateurs, etc.) sont invités à en informer l'administrateur de leur site.

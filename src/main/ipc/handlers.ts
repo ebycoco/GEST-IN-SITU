@@ -4144,17 +4144,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // Suspendre temporairement le sync engine pour éviter des écritures concurrentes
     // (SyncEngine) pendant la fenêtre où les triggers FTS5 sont absents (DROP/DELETE brut/
     // recréation) -- même correctif et même justification que db:emergency-purge ci-dessous.
+    // NOTE : pause()/resume() n'arrête QUE le timer syncTimer (upstream 30s-5min) — il ne
+    // touche ni cardsShortTimer, ni userSyncTimer, ni downstreamTimer, qui continuent de
+    // tick pendant la purge. acquireGlobalSyncLock() ci-dessous (posé après les vérifications
+    // RBAC) est le mécanisme réellement vérifié par TOUS les cycles périodiques (et par
+    // isBulkUploading) — les deux mécanismes sont complémentaires, pas redondants : conservés
+    // tous les deux (P1 audit agent-9, commit 58055e8 — acquireGlobalSyncLock()/
+    // releaseGlobalSyncLock() existaient déjà mais n'étaient appelés nulle part).
     syncEngine.pause();
+    let globalLockAcquired = false;
     try {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
         throw new Error("Accès refusé. Vous devez être administrateur pour purger la base de données.");
       }
-
-      // ─── LOG AVANT ACTION DESTRUCTRICE ──────────────────────────────────────
-      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de données locale pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
-      const purgeStartTime = performance.now();
-      // ───────────────────────────────────────────────────────────────────────────
 
       // Si l'utilisateur est administrateur de site, on vérifie que siteId correspond à son site_id
       // Sécurité (cloisonnement §3) : cantonnement dérivé du rôle ACTIF de la session serveur
@@ -4165,6 +4168,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           throw new Error("Accès refusé. Vous ne pouvez pas purger les données d'un autre site.");
         }
       }
+
+      // Verrou mutuel avec le SyncEngine (P1 audit agent-9) : refuse la purge si une
+      // synchronisation/un transfert de masse est en cours (isSyncing, isDownstreamRunning,
+      // isBulkUploading) ou si un autre verrou global est déjà posé — évite une purge
+      // pendant qu'un Worker Thread (upload-worker.js/download-worker.js) écrit encore sur
+      // la même base SQLite.
+      if (!syncEngine.acquireGlobalSyncLock('PURGE_LOCALE')) {
+        throw new Error("Une synchronisation ou un transfert vers le cloud est en cours. Veuillez patienter avant de lancer cette opération.");
+      }
+      globalLockAcquired = true;
+
+      // ─── LOG AVANT ACTION DESTRUCTRICE ──────────────────────────────────────
+      log.info(`[PURGE LOCALE] Initialisation de la purge de la base de données locale pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
+      const purgeStartTime = performance.now();
+      // ───────────────────────────────────────────────────────────────────────────
 
       queries.insertAuditLog(
         secureUser?.login || 'ADMIN',
@@ -4217,6 +4235,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.error(`[PURGE LOCALE] ÉCHEC CRITIQUE de la purge locale pour le site ID ${siteId} :`, e);
       throw e;
     } finally {
+      // Libération garantie du verrou global (succès, erreur catchée ci-dessus, ou exception
+      // imprévue) — UNIQUEMENT si réellement acquis plus haut (jamais si acquireGlobalSyncLock
+      // a refusé : on ne doit jamais lever un verrou détenu légitimement par une autre
+      // opération). Même garantie que le bloc finally ajouté à sync:startBulk (commit 58055e8).
+      if (globalLockAcquired) {
+        syncEngine.releaseGlobalSyncLock('PURGE_LOCALE');
+      }
       // Reprise garantie du sync engine (symétrique à db:emergency-purge ci-dessous).
       syncEngine.resume();
       log.info(`[PURGE LOCALE] Purge locale exécutée, synchronisation réactivée pour le site ID ${siteId}.`);
@@ -4229,11 +4254,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // même justification que db:purge ci-dessus.
     const secureUser = getSecureCurrentUser();
     // Suspendre temporairement le sync engine pour éviter des verrous SQLite concurrents (Database is locked)
+    // NOTE : pause()/resume() n'arrête QUE syncTimer (upstream 30s-5min) — voir commentaire
+    // détaillé équivalent dans db:purge ci-dessus. acquireGlobalSyncLock() ci-dessous couvre
+    // TOUS les cycles périodiques (y compris isBulkUploading) ; les deux sont conservés,
+    // complémentaires et non redondants (P1 audit agent-9, commit 58055e8).
     syncEngine.pause();
     // ─── LOG AVANT ACTION DESTRUCTRICE ──────────────────────────────────────
     log.info(`[MAINTENANCE] Initialisation de la réparation forcée (Emergency Purge) pour le site ID ${siteId} par l'utilisateur '${secureUser?.login}'.`);
     const repairStartTime = performance.now();
     // ────────────────────────────────────────────────────────────────────────
+    let globalLockAcquired = false;
     try {
       const userId = secureUser?.id_user;
       if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
@@ -4248,6 +4278,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           throw new Error("Accès refusé. Vous ne pouvez pas purger les données d'un autre site.");
         }
       }
+
+      // Verrou mutuel avec le SyncEngine (P1 audit agent-9) : refuse la réparation forcée si
+      // une synchronisation/un transfert de masse est en cours — même garde que db:purge.
+      if (!syncEngine.acquireGlobalSyncLock('PURGE_URGENCE')) {
+        throw new Error("Une synchronisation ou un transfert vers le cloud est en cours. Veuillez patienter avant de lancer cette opération.");
+      }
+      globalLockAcquired = true;
 
       // Gestion du throttle et buffer de la progression FTS5/Purge d'urgence
       const PURGE_THROTTLE_MS = 200;
@@ -4294,6 +4331,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.error(`[MAINTENANCE] ÉCHEC CRITIQUE de la réparation forcée pour le site ID ${siteId} :`, e);
       throw e;
     } finally {
+      // Libération garantie du verrou global — uniquement si réellement acquis plus haut
+      // (jamais si acquireGlobalSyncLock a refusé). Même garantie que sync:startBulk
+      // (commit 58055e8) et db:purge ci-dessus.
+      if (globalLockAcquired) {
+        syncEngine.releaseGlobalSyncLock('PURGE_URGENCE');
+      }
       // Reprise garantie du sync engine
       syncEngine.resume();
       log.info(`[MAINTENANCE] Réparation forcée exécutée, synchronisation réactivée pour le site ID ${siteId}.`);
@@ -4440,6 +4483,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // Sécurité : identité dérivée exclusivement de la session serveur (non falsifiable via IPC).
     const secureUser = getSecureCurrentUser();
     const userLogin = secureUser?.login || getCurrentUserLogin() || 'ADMIN';
+    // Verrou mutuel avec le SyncEngine (P1 audit agent-9, commit 58055e8) : acquireGlobalSyncLock()/
+    // releaseGlobalSyncLock() existaient déjà (documentées pour protéger "les opérations
+    // destructrices, ex: purge cloud") mais n'étaient appelées nulle part. Contrairement à
+    // db:purge/db:emergency-purge, ce handler n'appelait auparavant AUCUN mécanisme de
+    // protection (ni pause()/resume(), ni verrou) — la purge Supabase pouvait donc démarrer
+    // pendant qu'un transfert de masse (Worker Thread upload-worker.js) écrivait encore sur
+    // la même base SQLite locale.
+    let globalLockAcquired = false;
     try {
       if (confirmed !== true) {
         throw new Error("Confirmation explicite requise pour purger les cartes sur le Cloud.");
@@ -4463,6 +4514,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (!siteId || isNaN(Number(siteId))) {
         throw new Error("siteId obligatoire et valide requis pour la purge Cloud.");
       }
+
+      if (!syncEngine.acquireGlobalSyncLock('PURGE_CLOUD')) {
+        throw new Error("Une synchronisation ou un transfert vers le cloud est en cours. Veuillez patienter avant de lancer cette opération.");
+      }
+      globalLockAcquired = true;
 
       // Comptage du nombre de cartes locales associées à ce site pour donner un volume estimatif à l'audit
       const localCountRow = db.prepare("SELECT COUNT(*) as count FROM t_cartes WHERE site_id = ?").get(siteId) as { count: number } | undefined;
@@ -4618,6 +4674,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         JSON.stringify({ site_id: siteId, error: e.message || String(e) })
       );
       throw e;
+    } finally {
+      // Libération garantie du verrou global — uniquement si réellement acquis plus haut
+      // (jamais si acquireGlobalSyncLock a refusé). Même garantie que sync:startBulk
+      // (commit 58055e8) et db:purge/db:emergency-purge ci-dessus. Ce handler n'avait
+      // auparavant aucun bloc finally : ajouté ici spécifiquement pour cette libération.
+      if (globalLockAcquired) {
+        syncEngine.releaseGlobalSyncLock('PURGE_CLOUD');
+      }
     }
   });
 
