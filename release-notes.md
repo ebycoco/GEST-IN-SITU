@@ -13,5 +13,6 @@
 - Réduit le risque qu'une connexion terrain lente (réseau mobile dégradé) soit détectée à tort comme totalement hors-ligne au démarrage de l'application : le délai accordé à chaque tentative de connexion est désormais plus tolérant.
 - Un envoi manuel vers le cloud (après un import) revérifie désormais réellement l'état de la connexion juste avant de transmettre, au lieu de se fier uniquement à un état mis en cache pouvant être obsolète.
 - Création d'un site : choisir un identifiant déjà utilisé par un autre compte affiche désormais un message clair au lieu d'une erreur technique brute.
+- Corrige des erreurs répétées en arrière-plan liées au suivi de présence d'un compte SUPER ADMIN ou administrateur de site rattaché à un site orphelin (supprimé ou jamais synchronisé) — sans impact visible pour l'utilisateur, mais générait du bruit continu dans les journaux techniques.
 
 ## ⚡ Performances

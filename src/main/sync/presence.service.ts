@@ -81,6 +81,19 @@ const LAST_ACTION_LOOKBACK_HOURS = 24;
  */
 const LAST_ACTION_LOGS_LIMIT = 2000;
 
+/** Cache des combinaisons (sync_id, site_id) déjà connues pour violer la contrainte FK
+ * `t_user_presence_site_id_fkey` (site_id orphelin, ne référençant aucune ligne `t_sites`
+ * locale ni Supabase — bug confirmé par agent-14-debugger). Évite de retenter indéfiniment,
+ * à chaque tick du heartbeat (toutes les 2 min), un upsert voué à échouer : dès qu'une
+ * combinaison échoue avec le code Postgres 23503 (violation FK), elle n'est plus retentée
+ * tant que site_id ne change pas pour ce même utilisateur (ex: correction manuelle du
+ * compte). Clé = sync_id + site_id (pas sync_id seul) pour retenter automatiquement si
+ * site_id est corrigé. Non persisté (mémoire process uniquement, cf. D2 ci-dessus) :
+ * redémarrer l'application retente une fois, sans conséquence si l'anomalie persiste (juste
+ * un nouveau log, jamais de crash — cf. _upsertPresence).
+ */
+const knownInvalidSiteIdPresence = new Set<string>();
+
 // ─── Types publics ──────────────────────────────────────────────────────────
 
 /** Identité minimale d'un utilisateur, telle que fournie par l'appelant
@@ -124,6 +137,9 @@ export interface AgentPresenceRow {
  *
  * FIRE-AND-FORGET (cf. D2 en tête de fichier) : signature `void`, ne JAMAIS
  * `await`er cet appel. Toute erreur réseau/Supabase est catchée en interne.
+ *
+ * No-op silencieux si `user.role` n'est pas dans `PRESENCE_ROLES` (gating centralisé dans
+ * `_upsertPresence`, symétrique au filtre déjà appliqué en lecture par `getAgentsPresence`).
  */
 export function heartbeatPresence(user: PresenceUserRef): void {
   setImmediate(() => {
@@ -141,6 +157,10 @@ export function heartbeatPresence(user: PresenceUserRef): void {
  * FIRE-AND-FORGET (cf. D2 en tête de fichier) : signature `void`, ne JAMAIS
  * `await`er cet appel — notamment pas dans `authenticateUser()`, exécuté par
  * 100% des connexions. Toute erreur réseau/Supabase est catchée en interne.
+ *
+ * No-op silencieux si `user.role` n'est pas dans `PRESENCE_ROLES` (gating centralisé dans
+ * `_upsertPresence`, symétrique au filtre déjà appliqué en lecture par `getAgentsPresence`) —
+ * un SUPER ADMIN ou ADMINISTRATEUR_SITE se connectant n'écrit donc plus de ligne de présence.
  */
 export function recordPresenceLogin(user: PresenceUserRef): void {
   setImmediate(() => {
@@ -306,6 +326,23 @@ async function _upsertPresence(
   user: PresenceUserRef,
   opts: { includeLogin: boolean; isLogin?: boolean }
 ): Promise<void> {
+  // Gating de rôle — symétrique à getAgentsPresence() (roster lu filtré sur PRESENCE_ROLES) :
+  // écrire la présence d'un rôle déjà exclu de la lecture (SUPER ADMIN, ADMINISTRATEUR_SITE)
+  // est à la fois inutile (jamais consommé) et risqué — ces rôles ne sont pas des agents de
+  // terrain cantonnés à un site/centre au même titre, et rien ne garantit que leur site_id
+  // référence une ligne t_sites existante (ex: rôle transverse, site supprimé). Centralisé
+  // ici (plutôt que dans chaque appelant public) pour couvrir heartbeatPresence() ET
+  // recordPresenceLogin() — et tout futur appelant — d'un seul point, sans risquer de
+  // diverger entre plusieurs filtres dupliqués (bug confirmé par agent-14-debugger : deux
+  // comptes SUPER ADMIN/ADMINISTRATEUR_SITE à site_id orphelin en boucle d'erreur FK).
+  if (!(PRESENCE_ROLES as unknown as string[]).includes(user.role)) return;
+
+  // Garde défensive site_id — combinaison déjà connue pour violer la contrainte FK
+  // t_user_presence_site_id_fkey (cf. knownInvalidSiteIdPresence ci-dessus) : on évite de
+  // retenter un appel réseau voué à échouer à chaque tick.
+  const invalidSiteKey = `${user.sync_id}:${user.site_id ?? 'null'}`;
+  if (knownInvalidSiteIdPresence.has(invalidSiteKey)) return;
+
   if (networkMonitor.getState() !== 'ONLINE') return;
 
   const supabase = getSupabaseClient();
@@ -332,7 +369,16 @@ async function _upsertPresence(
       .upsert(payload, { onConflict: 'user_sync_id' });
 
     if (error) {
-      log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} échoué (user_sync_id=${user.sync_id}) :`, error.message);
+      if (error.code === '23503') {
+        // Violation FK t_user_presence_site_id_fkey (site_id orphelin) — dégradation propre :
+        // log unique et explicite, puis plus aucune retentative pour cette combinaison
+        // sync_id/site_id (cf. knownInvalidSiteIdPresence) plutôt qu'une erreur identique
+        // répétée indéfiniment à chaque tick du heartbeat (toutes les 2 min).
+        knownInvalidSiteIdPresence.add(invalidSiteKey);
+        log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}, site_id=${user.site_id ?? 'null'}) : site_id orphelin (contrainte FK violée). Ignoré pour cette combinaison tant que site_id ne change pas.`);
+      } else {
+        log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} échoué (user_sync_id=${user.sync_id}) :`, error.message);
+      }
     }
   } catch (err: any) {
     log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} exception (user_sync_id=${user.sync_id}) :`, err.message || err);
