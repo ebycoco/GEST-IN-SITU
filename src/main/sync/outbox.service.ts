@@ -305,9 +305,15 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
       try {
         payload = JSON.parse(entry.payload);
         
-        // Mappage strict des booléens pour PostgreSQL (Supabase)
+        // Mappage strict des booléens pour PostgreSQL (Supabase) — t_sites a un typage
+        // ASYMÉTRIQUE entre ses deux colonnes 0/1 (confirmé par supabase/migrations/
+        // 0001_baseline_schema.sql, ligne 46 et 51 — aucune migration ultérieure ne les
+        // modifie) : is_active est INTEGER (comme en local SQLite, donc AUCUNE coercion à
+        // appliquer — envoyer un booléen JS y provoquait "invalid input syntax for type
+        // integer: \"true\"", bug confirmé), alors que is_permanent est bien BOOLEAN (donc
+        // la coercion Boolean() reste nécessaire ici, symétrique à la coercion inverse déjà
+        // appliquée par downstream.ts : `is_permanent ? 1 : 0` au retour vers SQLite).
         if (entry.table_name === 't_sites') {
-          if (payload.is_active !== undefined) payload.is_active = Boolean(payload.is_active);
           if (payload.is_permanent !== undefined) payload.is_permanent = Boolean(payload.is_permanent);
         } else if (entry.table_name === 't_users') {
           if (payload.statut_actif !== undefined) {
