@@ -255,7 +255,7 @@ export function updateSite(id: number, data: { nom?: string; code?: string; max_
   // ── 2. Construction du payload réfléchissant l'état actuel après update ───────
   let updatedSite;
   try {
-    updatedSite = db.prepare('SELECT id, nom, code, max_centres, is_active, expiry_date, is_permanent FROM t_sites WHERE id = ?').get(id) as any;
+    updatedSite = db.prepare('SELECT nom, code, max_centres, is_active, expiry_date, is_permanent FROM t_sites WHERE id = ?').get(id) as any;
   } catch (err: any) {
     console.error("ERREUR SQL:", err);
     throw err;

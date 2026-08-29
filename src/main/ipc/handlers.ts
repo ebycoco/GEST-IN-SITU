@@ -5170,6 +5170,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // et s'arrêterait prématurément. On distingue donc ce cas : tant qu'il reste des
       // cartes PENDING ET qu'aucune progression n'a été faite, on retente une poignée de
       // fois (courte attente non bloquante pour l'event loop) avant d'abandonner.
+      // Compteurs du vidage forcé t_outbox — ce vidage est le SEUL chemin qui transmet
+      // réellement à Supabase les cartes déjà enfilées en amont par import-worker.js (voir
+      // commentaire "Porte de sortie garantie" ci-dessus) : upload-worker.js les exclut
+      // systématiquement de son propre scan (filtre NOT EXISTS sur t_outbox PENDING), donc
+      // uploadResult.uploadedCount (calculé plus haut par runBulkUpload) ne les compte JAMAIS.
+      // Sans agrégation explicite ici, un import suivi d'un clic "Envoyer vers le cloud"
+      // pouvait afficher "0 carte envoyée" à l'utilisateur alors que ces cartes étaient en
+      // réalité transmises (ou bloquées) par ce vidage — bug de confiance/diagnostic corrigé
+      // ci-dessous (agent-4-db-sync, investigation symptôme "import + envoi cloud silencieux").
+      let outboxFlushProcessed = 0;
+      let outboxFlushErrors = 0;
+      let outboxFlushRemaining = 0;
       try {
         const OUTBOX_FLUSH_MAX_ITERATIONS = 100;
         const OUTBOX_LOCK_MAX_RETRIES = 5;
@@ -5178,17 +5190,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
+          outboxFlushRemaining = remainingBefore;
           if (remainingBefore === 0) break;
 
           const { processed, errors } = await processOutboxPending(false, true);
+          outboxFlushProcessed += processed;
+          outboxFlushErrors += errors;
 
           if (processed === 0 && errors === 0) {
             // Rien traité : soit le verrou _isProcessing était déjà pris par un autre
-            // appel concurrent (cycle périodique, etc.), soit le backlog est réellement
-            // épuisé entre-temps. On retente un nombre borné de fois avant d'abandonner.
+            // appel concurrent (cycle périodique, etc.), soit le réseau n'est pas ONLINE
+            // (processOutboxPending renvoie {0,0} sans tenter Supabase dans ce cas — voir
+            // outbox.service.ts), soit le backlog est réellement épuisé entre-temps. On
+            // retente un nombre borné de fois avant d'abandonner.
             lockRetries++;
             if (lockRetries > OUTBOX_LOCK_MAX_RETRIES) {
-              log.warn(`[sync:startBulk] Vidage forcé de t_outbox interrompu après ${OUTBOX_LOCK_MAX_RETRIES} tentatives sans progression (verrou concurrent persistant ?). ${remainingBefore} carte(s) encore PENDING.`);
+              log.warn(`[sync:startBulk] Vidage forcé de t_outbox interrompu après ${OUTBOX_LOCK_MAX_RETRIES} tentatives sans progression (verrou concurrent persistant, ou réseau non-ONLINE : état actuel = ${networkMonitor.getState()}). ${remainingBefore} carte(s) encore PENDING.`);
               break;
             }
             await new Promise((resolve) => setTimeout(resolve, OUTBOX_LOCK_RETRY_DELAY_MS));
@@ -5197,8 +5214,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
           lockRetries = 0;
         }
+        outboxFlushRemaining = getOutboxPendingCount('t_cartes');
       } catch (outboxFlushErr: any) {
         log.warn('[sync:startBulk] Échec du vidage forcé de t_outbox (non-bloquant) :', outboxFlushErr?.message || outboxFlushErr);
+      }
+
+      // Agrégation dans la réponse renvoyée au Renderer : sans cela, les cartes transmises
+      // (ou bloquées) par le vidage forcé restaient invisibles de l'utilisateur.
+      if (outboxFlushProcessed > 0) {
+        uploadResult.uploadedCount += outboxFlushProcessed;
+      }
+      if (outboxFlushProcessed > 0 || outboxFlushErrors > 0 || outboxFlushRemaining > 0) {
+        const parts: string[] = [uploadResult.message];
+        if (outboxFlushProcessed > 0) parts.push(`${outboxFlushProcessed} carte(s) supplémentaire(s) transmise(s) via la file d'attente.`);
+        if (outboxFlushErrors > 0) parts.push(`${outboxFlushErrors} carte(s) en échec d'envoi (file d'attente).`);
+        if (outboxFlushRemaining > 0) {
+          const netState = networkMonitor.getState();
+          parts.push(`${outboxFlushRemaining} carte(s) encore en attente d'envoi (réseau : ${netState}).`);
+        }
+        uploadResult.message = parts.join(' ');
       }
 
       // 1. Calcul des anomalies restantes en local (qui n'ont pas pu être envoyées car exclues du filtre) via le Worker pour ne pas geler le Main Thread
