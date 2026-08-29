@@ -5336,14 +5336,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         // cartes fraîchement importées — voir commentaire "Porte de sortie garantie" plus
         // haut — mais elle n'émettait jusqu'ici aucun événement 'sync:bulk-progress',
         // laissant la barre du renderer bloquée à 0% pendant tout son déroulement alors que
-        // l'étape précédente (runBulkUpload, ci-dessus) avait déjà cessé d'émettre. Figé une
-        // seule fois avant la boucle : le dénominateur ne doit pas varier au fil du vidage.
-        const initialFlushTotal = getOutboxPendingCount('t_cartes');
+        // l'étape précédente (runBulkUpload, ci-dessus) avait déjà cessé d'émettre.
+        //
+        // Correctif (agent-14-debugger, investigation symptôme persistant "barre bloquée à
+        // 0% malgré cartes transmises en continu dans les logs") : un dénominateur figé UNE
+        // SEULE fois avant la boucle (`initialFlushTotal`) suppose à tort que le backlog
+        // t_cartes de t_outbox est statique pendant tout le vidage. Ce n'est pas garanti :
+        // aucun des appels `scheduleOutboxProcessing()` dispersés dans cartes.queries.ts /
+        // users.queries.ts / hierarchy.queries.ts / absence.queries.ts (déclenchés par toute
+        // sauvegarde de carte, y compris un import massif encore en cours d'écriture au
+        // moment du clic manuel) ne vérifie `syncEngine.isBulkUploading` — seuls les cycles
+        // périodiques internes du SyncEngine sont couverts par ce verrou (correctif du
+        // 58055e8/3c7dd83/7948919). Si le backlog continue de croître pendant la boucle,
+        // `remainingAfter` reste proche (voire dépasse) le total figé : la progression
+        // calculée reste bloquée à 0% (ou devient négative, alors clampée à "0%" par
+        // SiteAdminView.tsx) alors que processOutboxPending() transmet réellement des cartes
+        // en continu. On suit donc un total "pic" (`flushTotalPeak`) qui s'ajuste à la hausse
+        // dès que le backlog observé dépasse le total connu jusqu'ici, plutôt qu'un
+        // instantané figé — la progression reste monotone et ne peut plus rester bloquée à
+        // 0% tant que du travail réel est abattu, quelle que soit l'évolution du backlog.
+        let flushTotalPeak = getOutboxPendingCount('t_cartes');
 
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
           outboxFlushRemaining = remainingBefore;
           if (remainingBefore === 0) break;
+          if (remainingBefore > flushTotalPeak) flushTotalPeak = remainingBefore;
 
           const { processed, errors } = await processOutboxPending(false, true);
           outboxFlushProcessed += processed;
@@ -5352,11 +5370,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           // Progression du vidage forcé vers le renderer, sur le même canal que
           // runBulkUpload (cf. callback ci-dessus, ligne ~5140) — le renderer écoute déjà
           // ce canal (useForceSyncActions.ts), aucune modification nécessaire de ce côté.
-          // Ne s'exécute que si le backlog initial était non nul (sinon rien à signaler,
-          // le `break` du haut de boucle suffit).
-          if (initialFlushTotal > 0 && mainWindow && !mainWindow.isDestroyed()) {
+          // Ne s'exécute que si un backlog a été observé (sinon rien à signaler, le `break`
+          // du haut de boucle suffit).
+          if (flushTotalPeak > 0 && mainWindow && !mainWindow.isDestroyed()) {
             const remainingAfter = getOutboxPendingCount('t_cartes');
-            const flushProgress = Math.round(((initialFlushTotal - remainingAfter) / initialFlushTotal) * 100);
+            if (remainingAfter > flushTotalPeak) flushTotalPeak = remainingAfter;
+            const flushProgress = Math.round(((flushTotalPeak - remainingAfter) / flushTotalPeak) * 100);
             mainWindow.webContents.send('sync:bulk-progress', flushProgress);
           }
 
@@ -5378,14 +5397,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           lockRetries = 0;
         }
         outboxFlushRemaining = getOutboxPendingCount('t_cartes');
+        if (outboxFlushRemaining > flushTotalPeak) flushTotalPeak = outboxFlushRemaining;
 
         // Dernier événement garanti : si la boucle s'arrête avant d'avoir épuisé le backlog
         // (plafond OUTBOX_FLUSH_MAX_ITERATIONS atteint, ou réseau redevenu indisponible en
         // cours de route — cf. lockRetries ci-dessus), la barre ne doit pas rester figée à
         // une valeur intermédiaire du dernier événement émis dans la boucle : on renvoie
-        // explicitement la progression réellement atteinte (100% si le backlog est vide).
-        if (initialFlushTotal > 0 && mainWindow && !mainWindow.isDestroyed()) {
-          const finalFlushProgress = Math.round(((initialFlushTotal - outboxFlushRemaining) / initialFlushTotal) * 100);
+        // explicitement la progression réellement atteinte (100% si le backlog est vide),
+        // calculée sur le total "pic" le plus large observé (flushTotalPeak) plutôt qu'un
+        // instantané initial potentiellement dépassé par un backlog encore croissant.
+        if (flushTotalPeak > 0 && mainWindow && !mainWindow.isDestroyed()) {
+          const finalFlushProgress = Math.round(((flushTotalPeak - outboxFlushRemaining) / flushTotalPeak) * 100);
           mainWindow.webContents.send('sync:bulk-progress', finalFlushProgress);
         }
       } catch (outboxFlushErr: any) {

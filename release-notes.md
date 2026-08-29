@@ -19,7 +19,7 @@
 - Corrige un bug empêchant toute création ou modification de site de se synchroniser vers Supabase (échec systématique en boucle, "invalid input syntax for type integer") : une conversion de type appliquée à tort sur le statut actif/inactif du site.
 - Corrige une erreur bloquante lors de l'affichage du compteur de centres non synchronisés (canal de communication interne manquant).
 - Création d'un centre pour un site introuvable : affiche désormais un message clair au lieu de faire planter l'action.
-- Envoi vers le cloud après un import : la barre de progression restait bloquée à 0% pendant la transmission réelle des cartes importées (qui suivent un circuit différent des autres cartes). Elle progresse désormais correctement pendant toute la durée de l'envoi.
+- Envoi vers le cloud après un import : la barre de progression pouvait rester bloquée à 0% pendant la transmission réelle des cartes (notamment si de nouvelles cartes continuaient d'arriver dans la file d'attente pendant l'envoi, ex. import encore en cours). Elle reflète désormais correctement l'avancement réel tout au long du transfert.
 - Un transfert de masse manuel vers le cloud pouvait tourner en même temps qu'un cycle de synchronisation automatique en arrière-plan, se gênant mutuellement sans qu'aucun message clair n'explique le blocage. Les deux s'excluent désormais correctement.
 
 ## ⚡ Performances
