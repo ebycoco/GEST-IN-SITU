@@ -75,7 +75,9 @@ function checkAndPushLicenseExpiryWarning(user: any): void {
     if (daysLeft < 0 || daysLeft > 3) return;
 
     const formattedDate = expiry.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
-    const message = `Attention, votre licence expire le ${formattedDate}. Veuillez contacter le super administrateur pour procéder au renouvellement.`;
+    const message = user.role === 'ADMINISTRATEUR_SITE'
+      ? `Attention, votre licence expire le ${formattedDate}. Veuillez contacter le super administrateur pour procéder au renouvellement.`
+      : `Attention, votre licence expire le ${formattedDate}. Veuillez en informer l'administrateur du site pour le renouvellement.`;
     const reappearMs = user.role === 'ADMINISTRATEUR_SITE' ? 60 * 1000 : 5 * 60 * 1000;
 
     BrowserWindow.getAllWindows().forEach(w => w.webContents.send('license:expiryWarning', {

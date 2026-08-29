@@ -4,6 +4,8 @@
 
 ## 🚀 Nouveautés & Ergonomie
 
+- La bannière d'alerte d'expiration de licence adresse désormais une consigne différente selon le profil : l'administrateur du site est invité à contacter le super administrateur, tandis que les autres utilisateurs (opérateurs, etc.) sont invités à en informer l'administrateur de leur site.
+
 ## 🛠️ Corrections & Fiabilité
 
 - Modification de la date d'expiration de licence d'un site (SUPER ADMIN) : le changement ne se synchronisait jamais vers Supabase — il échouait silencieusement à cause d'un identifiant local erroné inclus dans la charge utile envoyée au cloud, et était néanmoins marqué à tort comme synchronisé. Corrigé, aligné sur le comportement déjà correct de la mise à jour d'un centre.
