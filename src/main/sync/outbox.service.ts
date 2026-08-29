@@ -197,9 +197,19 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  *   toute carte PENDING dans t_outbox, quel que soit l'état du toggle "Envoi Automatique".
  *   Automatique (périodique ou immédiat post-sauvegarde) = respecte le toggle (défaut
  *   `false`). Manuel explicite = l'ignore toujours (`true`).
+ * @param onEntryProcessed - Callback optionnel invoqué de façon SYNCHRONE juste après
+ *   chaque entrée ayant définitivement quitté le statut PENDING au cours de ce lot
+ *   (succès → SYNCED, ou échec définitif → ERROR — jamais pour une entrée conservée en
+ *   PENDING pour nouvelle tentative : erreur réseau transitoire, dépendance parente encore
+ *   PENDING, etc.). Fournit { tableName, success } sans requête SQL supplémentaire — le
+ *   compteur "cartes restantes" reste entièrement à la charge de l'appelant (mémoire locale),
+ *   conformément à la politique Low-Memory (CLAUDE.md §2). Par défaut undefined (aucun effet,
+ *   aucun coût) — seul l'appel manuel sync:startBulk (handlers.ts) fournit ce callback ; les
+ *   3 autres appelants (sync-engine.ts cycles périodiques, planification différée interne
+ *   post-mutation) n'ont aucune UI à alimenter et restent inchangés.
  * @returns Objet { processed, errors } indiquant les résultats du traitement.
  */
-export async function processOutboxPending(fromPeriodicCycle: boolean = false, forceCards: boolean = false): Promise<{ processed: number; errors: number }> {
+export async function processOutboxPending(fromPeriodicCycle: boolean = false, forceCards: boolean = false, onEntryProcessed?: (result: { tableName: string; success: boolean }) => void): Promise<{ processed: number; errors: number }> {
   // Verrou anti-concurrence léger (flag module-level)
   if (_isProcessing) {
     log.info('[OutboxService] processOutboxPending ignoré : traitement déjà en cours.');
@@ -268,6 +278,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         if (parent && parent.status === 'ERROR') {
           _markOutboxError(db, entry.id, entry.attempts + 1, "Action parente en échec définitif. Opération suspendue.");
           errors++;
+          onEntryProcessed?.({ tableName: entry.table_name, success: false });
           continue;
         } else if (parent && parent.status === 'PENDING') {
           continue; // Parent pas encore prêt, on reporte à plus tard sans erreur
@@ -295,6 +306,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         _markOutboxError(db, entry.id, newAttempts, `Nombre maximum de tentatives (${MAX_OUTBOX_ATTEMPTS}) atteint.`);
         log.error(`[OutboxService] Entrée ${entry.id} (${entry.table_name}) basculée en ERROR après ${MAX_OUTBOX_ATTEMPTS} tentatives.`);
         errors++;
+        onEntryProcessed?.({ tableName: entry.table_name, success: false });
         continue;
       }
 
@@ -326,6 +338,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         _markOutboxError(db, entry.id, newAttempts, `Payload JSON invalide : ${parseErr.message}`);
         log.error(`[OutboxService] Payload invalide pour l'entrée ${entry.id} :`, parseErr.message);
         errors++;
+        onEntryProcessed?.({ tableName: entry.table_name, success: false });
         continue;
       }
 
@@ -342,6 +355,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
             _markOutboxError(db, entry.id, newAttempts, 'Payload DELETE invalide : champ sync_id manquant.');
             log.error(`[OutboxService] Payload DELETE invalide pour ${entry.table_name} (id=${entry.id}).`);
             errors++;
+            onEntryProcessed?.({ tableName: entry.table_name, success: false });
             continue;
           }
           const deleteColumn = entry.table_name === 't_user_roles' ? 'user_sync_id' : 'sync_id';
@@ -381,6 +395,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
             _markOutboxError(db, entry.id, newAttempts, validationErr.message);
             log.error(`[OutboxService] Rejet local (validation) pour ${entry.table_name} (id=${entry.id}) : ${validationErr.message}`);
             errors++;
+            onEntryProcessed?.({ tableName: entry.table_name, success: false });
             continue;
           }
 
@@ -426,6 +441,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
             _markOutboxError(db, entry.id, newAttempts, supabaseError.message);
             log.error(`[OutboxService] Erreur définitive pour ${entry.table_name} (id=${entry.id}) : ${supabaseError.message}`);
             errors++;
+            onEntryProcessed?.({ tableName: entry.table_name, success: false });
           } else {
             log.warn(
               `[OutboxService] Erreur Supabase pour ${entry.table_name} (id=${entry.id}). ` +
@@ -454,6 +470,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
 
         log.info(`[OutboxService] ✓ ${entry.table_name} [${entry.operation}] synchronisé (id=${entry.id})`);
         processed++;
+        onEntryProcessed?.({ tableName: entry.table_name, success: true });
         if (entry.table_name === 't_users' && entry.operation !== 'DELETE') usersSyncedCount++;
 
       } catch (networkErr: any) {

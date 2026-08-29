@@ -5384,13 +5384,56 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         // 0% tant que du travail réel est abattu, quelle que soit l'évolution du backlog.
         let flushTotalPeak = getOutboxPendingCount('t_cartes');
 
+        // ── Granularité par carte pendant le vidage forcé ────────────────────────────
+        // processOutboxPending() (appelée juste en dessous) traite jusqu'à OUTBOX_BATCH_SIZE=50
+        // entrées séquentiellement en interne (appels réseau Supabase awaités un par un) sans
+        // jamais rendre la main entre deux — jusqu'ici, la seule progression émise l'était donc
+        // une fois par LOT de 50 (après l'await complet), laissant l'UI silencieuse plusieurs
+        // dizaines de secondes sur un réseau terrain lent alors que la console affichait déjà
+        // chaque carte synchronisée (log '[OutboxService] ✓ t_cartes ... synchronisé'). Le 3e
+        // paramètre optionnel onEntryProcessed (outbox.service.ts) notifie désormais CETTE boucle
+        // à chaque carte individuellement quittant PENDING (succès ou échec définitif), sans
+        // requête SQL supplémentaire (politique Low-Memory §2 CLAUDE.md) : le compteur de cartes
+        // restantes est tenu ici en mémoire (cardsRemainingLive), jamais par un nouveau
+        // getOutboxPendingCount('t_cartes') par carte. Throttle temporel (même pattern que
+        // PROGRESS_THROTTLE_MS d'upload-worker.js) pour éviter de saturer l'IPC sur un lot dense,
+        // SAUF pour la toute première mise à jour du lot, envoyée sans délai.
+        const CARD_FLUSH_PROGRESS_THROTTLE_MS = 400;
+        let lastCardFlushProgressSentAt = 0;
+        let cardFlushProgressEverSent = false;
+
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
           outboxFlushRemaining = remainingBefore;
           if (remainingBefore === 0) break;
           if (remainingBefore > flushTotalPeak) flushTotalPeak = remainingBefore;
 
-          const { processed, errors } = await processOutboxPending(false, true);
+          // Compteur en mémoire du nombre de cartes t_cartes encore PENDING, initialisé sur la
+          // valeur exacte lue en base (remainingBefore) puis décrémenté localement à chaque callback
+          // onEntryProcessed — jamais par une nouvelle requête SQL.
+          let cardsRemainingLive = remainingBefore;
+
+          const { processed, errors } = await processOutboxPending(false, true, (entryResult) => {
+            // Ne concerne que les cartes : un lot de 50 peut contenir des entrées d'autres tables
+            // (t_users, t_sites, ...) — la progression affichée reste exclusivement basée sur
+            // t_cartes, cohérent avec flushTotalPeak/remainingBefore/remainingAfter ci-dessous.
+            if (entryResult.tableName !== 't_cartes') return;
+            cardsRemainingLive = Math.max(0, cardsRemainingLive - 1);
+            if (flushTotalPeak <= 0 || !mainWindow || mainWindow.isDestroyed()) return;
+
+            const now = Date.now();
+            const isFirstUpdate = !cardFlushProgressEverSent;
+            if (!isFirstUpdate && (now - lastCardFlushProgressSentAt) < CARD_FLUSH_PROGRESS_THROTTLE_MS) return;
+            lastCardFlushProgressSentAt = now;
+            cardFlushProgressEverSent = true;
+
+            // Plafonné à 99% : cette estimation intra-lot ne doit jamais annoncer la complétion
+            // avant le recalcul officiel post-lot (remainingAfter, ci-dessous) basé sur un vrai
+            // COUNT(*) — seul ce dernier (ou le "dernier événement garanti" en fin de boucle) est
+            // autorisé à émettre 100%.
+            const liveProgress = Math.round(((flushTotalPeak - cardsRemainingLive) / flushTotalPeak) * 100);
+            mainWindow.webContents.send('sync:bulk-progress', Math.min(99, Math.max(0, liveProgress)));
+          });
           outboxFlushProcessed += processed;
           outboxFlushErrors += errors;
 
