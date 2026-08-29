@@ -2290,6 +2290,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getUnsyncedUsersCount(siteId); }
     catch (e) { log.error('IPC Error: stats:getUnsyncedUsersCount', e); throw e; }
   });
+  // Sécurité (cloisonnement §3) : siteId dérivé de la session serveur pour tout rôle
+  // non-SUPER ADMIN (resolveScopedSiteId), même politique que stats:getDetailedSyncStats.
+  ipcMain.handle('stats:getUnsyncedCentresCount', async (_, siteId: number) => {
+    try { return queries.getUnsyncedCentresCount(resolveScopedSiteId(siteId)); }
+    catch (e) { log.error('IPC Error: stats:getUnsyncedCentresCount', e); throw e; }
+  });
 
 
   // IMPORT - File selection

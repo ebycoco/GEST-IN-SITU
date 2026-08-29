@@ -15,5 +15,7 @@
 - Création d'un site : choisir un identifiant déjà utilisé par un autre compte affiche désormais un message clair au lieu d'une erreur technique brute.
 - Corrige des erreurs répétées en arrière-plan liées au suivi de présence d'un compte SUPER ADMIN ou administrateur de site rattaché à un site orphelin (supprimé ou jamais synchronisé) — sans impact visible pour l'utilisateur, mais générait du bruit continu dans les journaux techniques.
 - Corrige un bug empêchant toute création ou modification de site de se synchroniser vers Supabase (échec systématique en boucle, "invalid input syntax for type integer") : une conversion de type appliquée à tort sur le statut actif/inactif du site.
+- Corrige une erreur bloquante lors de l'affichage du compteur de centres non synchronisés (canal de communication interne manquant).
+- Création d'un centre pour un site introuvable : affiche désormais un message clair au lieu de faire planter l'action.
 
 ## ⚡ Performances

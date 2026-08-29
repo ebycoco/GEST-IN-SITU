@@ -569,7 +569,10 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
   const db = getDatabase()!;
 
   // Vérification du quota avant toute opération
-  const site = db.prepare('SELECT max_centres FROM t_sites WHERE id = ?').get(data.site_id) as { max_centres: number };
+  const site = db.prepare('SELECT max_centres FROM t_sites WHERE id = ?').get(data.site_id) as { max_centres: number } | undefined;
+  if (!site) {
+    throw new Error(`Site introuvable (id ${data.site_id}). Impossible de créer un centre.`);
+  }
   const count = db.prepare('SELECT COUNT(*) as count FROM t_centres WHERE site_id = ?').get(data.site_id) as { count: number };
 
   if (count.count >= site.max_centres) {
