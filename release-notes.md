@@ -21,5 +21,6 @@
 - Création d'un centre pour un site introuvable : affiche désormais un message clair au lieu de faire planter l'action.
 - Envoi vers le cloud après un import : la barre de progression pouvait rester bloquée à 0% pendant la transmission réelle des cartes (notamment si de nouvelles cartes continuaient d'arriver dans la file d'attente pendant l'envoi, ex. import encore en cours). Elle reflète désormais correctement l'avancement réel tout au long du transfert.
 - Un transfert de masse manuel vers le cloud pouvait tourner en même temps qu'un cycle de synchronisation automatique en arrière-plan, se gênant mutuellement sans qu'aucun message clair n'explique le blocage. Les deux s'excluent désormais correctement.
+- Réimport d'un fichier corrigé : une entrée récapitulative apparaît désormais dans le Journal d'activité (cartes créées/mises à jour/complétées par l'import), et une anomalie "Statut inconnu" précédemment signalée pour une carte est automatiquement effacée si ce même réimport corrige le problème pour cette carte.
 
 ## ⚡ Performances

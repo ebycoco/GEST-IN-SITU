@@ -205,6 +205,14 @@ async function run() {
     VALUES (@carte_id, @type_anomalie, @description, @noms, @prenoms, @date_de_naissance, @num_secu, @contact, @site_id, @erreur_message, @lieu_de_naissance, @rangement, @lieu_enrolement, @statut, @date_delivrance)
   `);
 
+  // Correctif 2 (résolution automatique des anomalies STATUT_INCONNU obsolètes) : plafond
+  // d'ID capturé AVANT que ce job insère ses propres anomalies (boucle plus bas via
+  // insertManyTx/insertAnomalyStmt). Garde-fou indispensable pour ne jamais auto-résoudre
+  // une anomalie que CE MÊME import vient de créer — seules les anomalies id <=
+  // anomalyWatermarkId (donc préexistantes) sont éligibles à la résolution.
+  const anomalyWatermarkRow = db.prepare('SELECT COALESCE(MAX(id), 0) as maxId FROM t_import_anomalies').get();
+  const anomalyWatermarkId = (anomalyWatermarkRow && anomalyWatermarkRow.maxId) || 0;
+
   const BATCH_SIZE = 10000;
   let totalTransactions = 0;
   const insertManyTx = db.transaction(function(items, anomalies) {
@@ -954,6 +962,21 @@ async function run() {
     db.exec('CREATE TEMP TABLE t_niveau2_matches (id_tmp INTEGER PRIMARY KEY, id_carte INTEGER);');
   }
 
+  // Correctif 2 (résolution automatique des anomalies STATUT_INCONNU obsolètes) : garde-fou
+  // de volumétrie. Si le nombre d'anomalies STATUT_INCONNU préexistantes (id <=
+  // anomalyWatermarkId, cf. plus haut) et éligibles sur ce site dépasse le seuil, la
+  // résolution est désactivée pour cet import entier (dégradation gracieuse, cohérente avec
+  // la doctrine Low-Memory — CLAUDE.md §2) plutôt que de risquer de dégrader le temps par
+  // chunk avec un EXISTS coûteux sur un trop grand volume.
+  const ANOMALY_RESOLUTION_MAX = 5000;
+  const anomalyCountRow = db.prepare(
+    "SELECT COUNT(*) as c FROM t_import_anomalies WHERE site_id = ? AND type_anomalie = 'STATUT_INCONNU' AND id <= ?"
+  ).get(siteId, anomalyWatermarkId);
+  const anomalyResolutionEnabled = ((anomalyCountRow && anomalyCountRow.c) || 0) <= ANOMALY_RESOLUTION_MAX;
+  if (!anomalyResolutionEnabled) {
+    console.warn(`[CSV WORKER] Résolution automatique des anomalies désactivée pour cet import : ${anomalyCountRow.c} anomalie(s) STATUT_INCONNU éligibles (seuil ${ANOMALY_RESOLUTION_MAX}).`);
+  }
+
   // Fusion phase - transactions courtes par chunk pour éviter la saturation du WAL
   var now = new Date().toISOString();
 
@@ -972,6 +995,10 @@ async function run() {
   // totalCompleted ci-dessus : n'entre jamais dans totalUpdated/totalInserted ni dans le
   // contrat postMessage({type:'done'}).
   let totalCompletedN2 = 0;
+  // Diagnostic uniquement (Correctif 2, cf. resolveAnomaliesStmt plus bas) — même statut que
+  // totalCompleted/totalCompletedN2 ci-dessus : n'entre jamais dans le contrat
+  // postMessage({type:'done'}).
+  let totalAnomaliesResolved = 0;
 
   // ============================================================
   // MISSION 3 — FusionnerImportVersCartes : Sécurisation SQL absolue
@@ -1137,6 +1164,41 @@ async function run() {
     '  )'
   );
 
+  // ============================================================
+  // Correctif 2 — RÉSOLUTION AUTOMATIQUE DES ANOMALIES STATUT_INCONNU OBSOLÈTES : périmètre
+  // volontairement restreint à STATUT_INCONNU (jamais DATE_INVALIDE, structurellement exclu
+  // car la clé de correspondance inclut date_de_naissance) et au Niveau 1 uniquement (le
+  // Niveau 2/completeChunkStmtN2 n'écrit jamais `statut`, cf. commentaire plus haut — aucune
+  // anomalie STATUT_INCONNU ne peut en être résolue). DELETE ensembliste par plage id_tmp,
+  // guardé par anomalyWatermarkId (jamais une anomalie créée par CE job) et par
+  // anomalyResolutionEnabled (garde-fou de volumétrie ci-dessus). Une anomalie n'est
+  // supprimée que si (a) la ligne réimportée correspond exactement à son identité ET (b) une
+  // carte avec le cle_doublon correspondant existe réellement en base (donc la fusion a bien
+  // abouti, pas seulement une ligne de passage dans t_import_temp).
+  // ============================================================
+  const resolveAnomaliesStmt = db.prepare(
+    "DELETE FROM t_import_anomalies " +
+    "WHERE type_anomalie = 'STATUT_INCONNU' " +
+    "  AND site_id = @siteId " +
+    "  AND id <= @anomalyWatermarkId " +
+    "  AND EXISTS (" +
+    "    SELECT 1 FROM t_import_temp " +
+    "    WHERE t_import_temp.id_tmp BETWEEN @startId AND @endId " +
+    "      AND t_import_temp.site_id = t_import_anomalies.site_id " +
+    "      AND t_import_temp.noms = t_import_anomalies.noms " +
+    "      AND t_import_temp.prenoms = t_import_anomalies.prenoms " +
+    "      AND t_import_temp.date_de_naissance = t_import_anomalies.date_de_naissance " +
+    "      AND t_import_temp.lieu_de_naissance = t_import_anomalies.lieu_de_naissance " +
+    "      AND t_import_temp.contact = t_import_anomalies.contact " +
+    "  ) " +
+    "  AND EXISTS (" +
+    "    SELECT 1 FROM t_cartes " +
+    "    WHERE t_cartes.site_id = t_import_anomalies.site_id " +
+    "      AND t_cartes.cle_doublon = t_import_anomalies.noms || '|' || t_import_anomalies.prenoms || '|' || " +
+    "          t_import_anomalies.date_de_naissance || '|' || t_import_anomalies.lieu_de_naissance || '|' || t_import_anomalies.contact " +
+    "  )"
+  );
+
   // Enfilage Outbox des cartes fusionnées par ce chunk (voir chunkTx plus bas) : sélectionne
   // les lignes t_cartes réellement touchées (jointure restreinte à la plage id_tmp de CE chunk,
   // et updated_at = @now pour exclure les lignes non modifiées par la garde métier du UPDATE
@@ -1236,6 +1298,9 @@ async function run() {
       let chunkCChanges = 0;
       // Diagnostic uniquement (Niveau 2) : même statut que chunkCChanges ci-dessus.
       let chunkC2Changes = 0;
+      // Diagnostic uniquement (Correctif 2 — résolution automatique des anomalies
+      // STATUT_INCONNU) : même statut que chunkCChanges/chunkC2Changes ci-dessus.
+      let chunkAChanges = 0;
 
       // 8. Taille du fichier .wal avant le COMMIT
       let walSizeBefore = getWalSize();
@@ -1268,6 +1333,16 @@ async function run() {
         const iRes = insertChunkStmt.run({ now: now, startId: startId, endId: endId });
         chunkInsertMs = performance.now() - iStart;
         chunkIChanges = iRes.changes;
+
+        // Correctif 2 — résolution automatique des anomalies STATUT_INCONNU obsolètes (voir
+        // définition de resolveAnomaliesStmt ci-dessus), guardée par le garde-fou de
+        // volumétrie anomalyResolutionEnabled calculé avant la boucle de chunks.
+        if (anomalyResolutionEnabled) {
+          const aRes = resolveAnomaliesStmt.run({
+            startId: startId, endId: endId, siteId: siteId, anomalyWatermarkId: anomalyWatermarkId
+          });
+          chunkAChanges = aRes.changes;
+        }
 
         // Enfilage Outbox (même transaction de chunk) : les cartes importées suivent
         // désormais le circuit standard t_outbox au lieu d'être poussées en direct par
@@ -1306,11 +1381,12 @@ async function run() {
       totalInserted += chunkIChanges;
       totalCompleted += chunkCChanges;
       totalCompletedN2 += chunkC2Changes;
+      totalAnomaliesResolved += chunkAChanges;
       totalUpdateMs += chunkUpdateMs;
       totalInsertMs += chunkInsertMs;
       totalCommitMs += commitAndCheckpointMs;
 
-      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | COMPLETE(N1): ${chunkCChanges} lig | COMPLETE(N2): ${chunkC2Changes} lig | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
+      console.log(`[FUSION DIAGNOSTIC] Chunk ${chunkIndex+1}/${totalChunks} | Tx_Total: ${chunkTotalMs.toFixed(2)}ms | UPDATE: ${chunkUChanges} lig (${chunkUpdateMs.toFixed(2)}ms) | COMPLETE(N1): ${chunkCChanges} lig | COMPLETE(N2): ${chunkC2Changes} lig | ANOMALIES_RESOLVED: ${chunkAChanges} lig | INSERT: ${chunkIChanges} lig (${chunkInsertMs.toFixed(2)}ms) | COMMIT/WAL: ${commitAndCheckpointMs.toFixed(2)}ms | WAL_Av: ${(walSizeBefore/1024/1024).toFixed(2)}MB | WAL_Ap: ${(walSizeAfter/1024/1024).toFixed(2)}MB | EntreTX: ${betweenTxMs.toFixed(2)}ms`);
 
       totalTransactions++;
       chunkIndex++;
@@ -1327,6 +1403,7 @@ Temps Total (49+ transactions) : ${fusionTotalMs.toFixed(2)}ms
 Total UPDATE : ${totalUpdateMs.toFixed(2)}ms (${totalUpdated} lignes)
 Total COMPLETE (Niveau 1, diagnostic) : ${totalCompleted} lignes
 Total COMPLETE (Niveau 2 — num_secu, diagnostic) : ${totalCompletedN2} lignes
+Total ANOMALIES STATUT_INCONNU résolues (diagnostic) : ${totalAnomaliesResolved} lignes
 Total INSERT : ${totalInsertMs.toFixed(2)}ms (${totalInserted} lignes)
 Total COMMIT & Auto-Checkpoint WAL : ${totalCommitMs.toFixed(2)}ms
 Total Attente Entre Chunks : ${totalBetweenMs.toFixed(2)}ms
@@ -1366,9 +1443,14 @@ Lignes vides ignorées : ${totalSkippedEmpty}`);
   parentPort.postMessage({ type: 'progress', value: 100 });
   parentPort.postMessage({
     type: 'done',
-    result: { 
-      updated: totalUpdated, 
+    result: {
+      updated: totalUpdated,
       inserted: totalInserted,
+      // Compteurs Niveau 1 / Niveau 2 déjà calculés ci-dessus (cf. totalCompleted/
+      // totalCompletedN2), exposés ici pour permettre à handlers.ts d'agréger un résumé
+      // t_logs complet (carte créée + mise à jour + complétée) — voir Correctif 1.
+      completed: totalCompleted,
+      completedN2: totalCompletedN2,
       rejected: totalRejected,
       // totalExcludedFromBatch (dates invalides) est soustrait car ces lignes ne rentrent jamais
       // dans t_import_temp et ne peuvent donc jamais contribuer à totalInserted/totalUpdated ;

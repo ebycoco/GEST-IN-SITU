@@ -1,4 +1,5 @@
 import { ipcMain, dialog, app, BrowserWindow, shell } from 'electron';
+import { v4 as uuidv4 } from 'uuid';
 
 import * as queries from '../database/queries';
 import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
@@ -2877,6 +2878,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             'IMPORT_CARTE',
             `Importation réussie de ${msg.result.inserted || 0} cartes. Doublons détectés : ${msg.result.duplicates || 0}.`
           );
+          // Correctif 1 (visibilité Journal d'activité) : une seule ligne t_logs agrégée par
+          // job d'import, résumant créations/mises à jour/complétions automatiques. Reste
+          // strictement locale (pas d'enqueueOutbox) — même modèle que downstream.ts:360-363
+          // (résumé SYNC_UPDATE). Les mutations t_cartes elles-mêmes sont déjà propagées
+          // carte-par-carte via t_outbox par le worker (outboxUpsertStmt) ; republier ce
+          // résumé serait redondant et échouerait côté mapCardPayload() (payload minimal,
+          // pas une carte complète).
+          try {
+            const totalTouched = (msg.result.inserted || 0) + (msg.result.updated || 0) +
+              (msg.result.completed || 0) + (msg.result.completedN2 || 0);
+            if (totalTouched > 0) {
+              const db = getDatabase()!;
+              db.prepare(`
+                INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+                VALUES (NULL, ?, 'IMPORT_MAJ_CARTES', ?, '{"read": false}', ?, 1, ?)
+              `).run(
+                agent || 'SYSTEM',
+                `Réimport : ${msg.result.inserted || 0} carte(s) créée(s), ${msg.result.updated || 0} mise(s) à jour, ` +
+                `${(msg.result.completed || 0) + (msg.result.completedN2 || 0)} complétée(s) automatiquement.`,
+                uuidv4(),
+                (siteId !== undefined && siteId !== null) ? Number(siteId) : null
+              );
+            }
+          } catch (err) {
+            log.error('Failed to record import t_logs summary:', err);
+          }
           decrement();
           syncEngine.resume();
           resolve(msg.result);
