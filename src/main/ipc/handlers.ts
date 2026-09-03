@@ -20,7 +20,7 @@ import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
@@ -5366,18 +5366,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         const OUTBOX_LOCK_RETRY_DELAY_MS = 300;
         let lockRetries = 0;
 
-        // ── Comptage de référence pour le correctif de sous-comptage (agent-9-senior-
-        // auditor, audit de non-régression du commit cb2699d) ──────────────────────────
-        // Le rerun automatique introduit par cb2699d dans processOutboxPending()
-        // (outbox.service.ts) traite quasi-instantanément (setImmediate) une dette armée
-        // par une collision de verrou _isProcessing — quasi-systématiquement plus vite que
-        // le délai OUTBOX_LOCK_RETRY_DELAY_MS (300ms) de CETTE boucle. Les cartes qu'il
-        // traite le sont donc AVANT le prochain appel local à processOutboxPending(), sans
-        // jamais passer par le callback onEntryProcessed de cette boucle (le rerun
-        // n'appelle processOutboxPending qu'avec 2 arguments, sans callback) : invisibles à
-        // l'accumulation `outboxFlushProcessed += processed` ci-dessous. Capturé sur la
-        // toute première itération (i === 0), avant tout traitement.
-        let outboxFlushInitialPending = 0;
+        // ── Comptage de référence "vérité base de données" (refonte — remplace 2 correctifs
+        // empilés précédents, cf. commentaire détaillé au point de calcul final plus bas dans
+        // ce bloc, autour de outboxFlushSyncedAfter/outboxFlushErrorAfter) ─────────────────
+        // Capturés une seule fois, avant tout traitement, un COUNT(*) direct par statut sur
+        // t_outbox (table_name='t_cartes') — jamais une accumulation via callback local :
+        // immunise structurellement le résultat final contre tout traitement survenant EN
+        // DEHORS de cette boucle (rerun automatique de cb2699d déclenché par une collision de
+        // verrou _isProcessing, ou tout autre appel concurrent légitime à
+        // processOutboxPending()).
+        const outboxFlushSyncedBefore = getOutboxCountByStatus('t_cartes', 'SYNCED');
+        const outboxFlushErrorBefore = getOutboxCountByStatus('t_cartes', 'ERROR');
 
         // Total de référence pour la progression émise pendant ce vidage forcé (bug UI
         // confirmé : cette boucle est le SEUL chemin qui transmet réellement à Supabase les
@@ -5426,7 +5425,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
           outboxFlushRemaining = remainingBefore;
-          if (i === 0) outboxFlushInitialPending = remainingBefore;
           if (remainingBefore === 0) break;
           if (remainingBefore > flushTotalPeak) flushTotalPeak = remainingBefore;
 
@@ -5456,8 +5454,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             const liveProgress = Math.round(((flushTotalPeak - cardsRemainingLive) / flushTotalPeak) * 100);
             mainWindow.webContents.send('sync:bulk-progress', Math.min(99, Math.max(0, liveProgress)));
           });
-          outboxFlushProcessed += processed;
-          outboxFlushErrors += errors;
+          // Note (refonte comptage) : `processed`/`errors` ci-dessus ne sont plus accumulés
+          // dans outboxFlushProcessed/outboxFlushErrors — ces deux variables sont désormais
+          // exclusivement dérivées d'un diff SQL avant/après toute la boucle (voir plus bas,
+          // outboxFlushSyncedAfter/outboxFlushErrorAfter). `processed`/`errors` locaux à cette
+          // itération ne servent plus qu'à la décision de retry ci-dessous (progression vs
+          // absence de progression sur ce lot précis).
 
           // Progression du vidage forcé vers le renderer, sur le même canal que
           // runBulkUpload (cf. callback ci-dessus, ligne ~5140) — le renderer écoute déjà
@@ -5491,31 +5493,48 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         outboxFlushRemaining = getOutboxPendingCount('t_cartes');
         if (outboxFlushRemaining > flushTotalPeak) flushTotalPeak = outboxFlushRemaining;
 
-        // ── Correctif sous-comptage rerun automatique (agent-9-senior-auditor, cf. commentaire
-        // outboxFlushInitialPending ci-dessus) ──────────────────────────────────────────────
-        // `outboxFlushProcessed` (accumulé ci-dessus via les seuls callbacks locaux de cette
-        // boucle) peut sous-compter les cartes en réalité traitées par un rerun automatique
-        // gagnant la course contre OUTBOX_LOCK_RETRY_DELAY_MS. On recalcule un nombre de
-        // référence par simple différence du COUNT(*) PENDING t_cartes avant/après l'ENSEMBLE
-        // de la boucle (déjà lus : outboxFlushInitialPending / outboxFlushRemaining) : toute
-        // carte ayant quitté PENDING pendant cette opération (succès SYNCED ou échec définitif
-        // ERROR) est comptée dans cette différence, qu'elle soit passée par le callback local
-        // ou par le rerun invisible. On en retranche `outboxFlushErrors` (connu avec certitude
-        // via les callbacks locaux, non affecté différemment par ce même bug côté comptage
-        // brut : une entrée en erreur locale quitte PENDING exactement comme une entrée en
-        // succès local) pour isoler la part "traitée avec succès" — le résultat ne peut
-        // qu'égaler ou dépasser l'accumulation locale, jamais la réduire (Math.max), pour ne
-        // jamais afficher moins que ce que cette boucle a elle-même constaté avec certitude.
-        // Limite assumée (fix volontairement non-invasif, cf. rapport d'audit) : si de
-        // nouvelles entrées t_cartes rejoignent PENDING pendant la fenêtre (autre mutation
-        // concurrente créant une nouvelle entrée outbox), la différence peut sous-estimer le
-        // nombre réel traité — jamais le surestimer.
-        const outboxFlushLeftPending = Math.max(0, outboxFlushInitialPending - outboxFlushRemaining);
-        const outboxFlushProcessedCorrected = Math.max(outboxFlushProcessed, outboxFlushLeftPending - outboxFlushErrors);
-        if (outboxFlushProcessedCorrected > outboxFlushProcessed) {
-          log.info(`[sync:startBulk] Rattrapage de comptage outbox : ${outboxFlushProcessedCorrected - outboxFlushProcessed} carte(s) supplémentaire(s) traitée(s) par un rerun automatique concurrent (invisible au callback local de cette boucle).`);
-        }
-        outboxFlushProcessed = outboxFlushProcessedCorrected;
+        // ── Refonte du comptage de résultat (remplace 2 correctifs empilés précédents) ────
+        // Historique : un 1er correctif comptait `outboxFlushProcessed`/`outboxFlushErrors`
+        // par accumulation locale via le callback `onEntryProcessed` de cette boucle — aveugle
+        // au rerun automatique introduit par cb2699d dans processOutboxPending()
+        // (outbox.service.ts, `_rerunRequested`/`_rerunForceCards`), qui traite des entrées
+        // t_cartes EN DEHORS de cette boucle sans jamais invoquer ce callback (il rappelle
+        // processOutboxPending avec seulement 2 arguments). Un 2e correctif a tenté de
+        // compenser par une différence du seul COUNT PENDING t_cartes avant/après la boucle,
+        // en retranchant `outboxFlushErrors` (toujours accumulé via callback) pour isoler la
+        // part "succès" — mais `outboxFlushErrors` souffrait du MÊME angle mort : une entrée
+        // traitée par le rerun et réellement passée en ERROR quitte PENDING exactement comme
+        // un succès, et se retrouvait donc comptée à tort comme "transmise avec succès".
+        //
+        // Nouveau design, structurellement immunisé : au lieu d'accumuler quoi que ce soit
+        // pendant la boucle, le résultat est mesuré par une VÉRITÉ DE BASE DE DONNÉES — un
+        // COUNT(*) direct sur t_outbox, scopé à table_name='t_cartes', PAR STATUT (SYNCED /
+        // ERROR séparément, jamais un seul agrégat PENDING), pris une fois avant le vidage
+        // (outboxFlushSyncedBefore/outboxFlushErrorBefore, capturés plus haut dans ce bloc) et
+        // une fois ici après que la boucle se soit arrêtée. Ce diff reste exact quelle que
+        // soit la SOURCE du traitement (cette boucle, le rerun automatique de cb2699d, ou tout
+        // autre appel concurrent à processOutboxPending) car SYNCED et ERROR ne sont écrits
+        // que par outbox.service.ts (_markOutboxError et le bloc db.transaction de succès) —
+        // aucun callback n'est impliqué, donc aucune fenêtre d'invisibilité possible par
+        // construction. Confirmé : aucune suppression physique de lignes t_outbox SYNCED/ERROR
+        // n'existe dans ce code base (seule cancelPendingInsert() supprime des lignes t_outbox,
+        // et uniquement des INSERT encore PENDING) — ce diff ne peut donc pas non plus être
+        // faussé par un nettoyage concurrent qui ferait disparaître des lignes déjà comptées.
+        //
+        // Limite résiduelle assumée (déjà notée par l'audit précédent, pas un défaut de
+        // conception comme les 2 correctifs remplacés ici) : du VRAI trafic concurrent sans
+        // rapport avec ce vidage (ex: une correction Qualité traitée par le cycle périodique en
+        // parallèle) qui ferait passer une carte t_cartes en SYNCED/ERROR pendant cette même
+        // fenêtre serait inclus dans ce diff — un très léger sur-comptage possible, inhérent à
+        // toute mesure scopée dans le temps plutôt que par identifiant d'entrée précis, sans
+        // commune mesure avec les 2 bugs corrigés (ceux-ci pouvaient sous-compter ou classer un
+        // échec réel comme un succès de façon systématique, pas seulement par coïncidence
+        // temporelle avec du trafic tiers légitime).
+        const outboxFlushSyncedAfter = getOutboxCountByStatus('t_cartes', 'SYNCED');
+        const outboxFlushErrorAfter = getOutboxCountByStatus('t_cartes', 'ERROR');
+        outboxFlushProcessed = Math.max(0, outboxFlushSyncedAfter - outboxFlushSyncedBefore);
+        outboxFlushErrors = Math.max(0, outboxFlushErrorAfter - outboxFlushErrorBefore);
+        log.info(`[sync:startBulk] Comptage vidage forcé (vérité BDD) : ${outboxFlushProcessed} transmise(s) avec succès, ${outboxFlushErrors} en échec (SYNCED ${outboxFlushSyncedBefore}→${outboxFlushSyncedAfter}, ERROR ${outboxFlushErrorBefore}→${outboxFlushErrorAfter}).`);
 
         // Dernier événement garanti : si la boucle s'arrête avant d'avoir épuisé le backlog
         // (plafond OUTBOX_FLUSH_MAX_ITERATIONS atteint, ou réseau redevenu indisponible en

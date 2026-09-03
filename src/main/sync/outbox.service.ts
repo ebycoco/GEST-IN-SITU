@@ -610,6 +610,40 @@ export function getOutboxPendingCount(tableName?: string): number {
 }
 
 /**
+ * Retourne le nombre d'entrées t_outbox pour une table et un statut donnés — un COUNT(*)
+ * direct, jamais une accumulation en mémoire. Complète `getOutboxPendingCount` (qui ne
+ * couvre que PENDING) pour permettre à un appelant de mesurer un résultat par différence
+ * "vérité base de données" avant/après une fenêtre de traitement, plutôt que par
+ * accumulation via le callback `onEntryProcessed` de `processOutboxPending` — cette
+ * dernière approche est structurellement aveugle à tout traitement survenant EN DEHORS de
+ * l'appelant (ex: le rerun automatique déclenché par `_rerunRequested`/`_rerunForceCards`
+ * ci-dessus lors d'une collision de verrou `_isProcessing`, qui ne fournit jamais de
+ * callback). Un diff `getOutboxCountByStatus(table, 'SYNCED')` avant/après reste exact quelle
+ * que soit la source du traitement, car SYNCED/ERROR ne sont écrits que par ce module
+ * (`_markOutboxError` et le bloc `db.transaction` de succès ci-dessus).
+ *
+ * Utilisé par `sync:startBulk` (handlers.ts) pour compter de façon fiable les cartes
+ * réellement transmises/en échec pendant le vidage forcé de t_outbox (voir commentaire
+ * détaillé au point d'usage — remplace 2 correctifs empilés précédents basés sur
+ * l'accumulation locale, tous deux défaillants face au rerun automatique).
+ *
+ * @param tableName - Table cible (ex: 't_cartes').
+ * @param status - Statut ciblé ('PENDING' | 'SYNCED' | 'ERROR').
+ */
+export function getOutboxCountByStatus(tableName: string, status: 'PENDING' | 'SYNCED' | 'ERROR'): number {
+  try {
+    const db = getDatabase();
+    if (!db) return 0;
+    const row = db.prepare(
+      `SELECT COUNT(*) as count FROM t_outbox WHERE status = ? AND table_name = ?`
+    ).get(status, tableName) as { count: number } | undefined;
+    return row ? row.count : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Retourne le nombre d'entrées "actionnables" dans t_outbox : PENDING (en attente d'un
  * prochain cycle d'envoi) ET ERROR (échec d'envoi après épuisement des tentatives
  * automatiques, cf. MAX_OUTBOX_ATTEMPTS). Fonction additive, distincte de
