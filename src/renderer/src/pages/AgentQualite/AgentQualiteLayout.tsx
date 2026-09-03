@@ -12,6 +12,7 @@ import { useQualityUIStore } from '../../stores/qualityUIStore';
 import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPreference';
 import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
 import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
+import { confirmService } from '../../components/confirmService';
 
 export default function AgentQualiteLayout() {
   const { user, activeSiteId } = useAuthStore();
@@ -95,6 +96,33 @@ export default function AgentQualiteLayout() {
     // plus bloquer l'envoi cloud une fois la date corrigée. Seuls les doublons
     // (forceProbable) et les dates invalides (forceInvalid) restent des blocages durs.
     const res = await handleStartBulkUpload(false, false, true, (detailedSyncStats?.modifiedCount || 0) > 0);
+    if (res && (res as any).success) {
+      refreshActionableCount();
+      refreshOutboxBacklogCount();
+    }
+  };
+
+  // Bouton de forçage affiché dans le bandeau "non conforme" ci-dessous (branche
+  // nonConformeCount > 0). Reprend exactement le comportement du bouton Admin "2E ÉTAPE :
+  // ENVOYER LES ANOMALIES" (SiteAdminView.tsx, handleStartBulkUploadClick(true, false, true))
+  // déjà en production : force l'envoi des doublons stricts/probables ET des données
+  // manquantes, mais jamais des dates invalides (forceInvalid reste à false). forceCount
+  // (issu de detailedSyncStats, déjà chargé — aucun appel IPC supplémentaire) sert uniquement
+  // à informer précisément l'utilisateur dans la confirmation avant l'envoi.
+  const handleForcePushClick = async () => {
+    const strictCount = detailedSyncStats?.strictCount || 0;
+    const probableCount = detailedSyncStats?.probableCount || 0;
+    const missingCount = detailedSyncStats?.missingCount || 0;
+    const forceCount = strictCount + probableCount + missingCount;
+    const isConfirmed = await confirmService.confirm({
+      title: "Forcer l'envoi malgré la non-conformité",
+      message: `Cette action va envoyer vers le cloud ${forceCount.toLocaleString('fr')} carte${forceCount > 1 ? 's' : ''} actuellement classée${forceCount > 1 ? 's' : ''} doublon strict/probable ou données manquantes, sans attendre leur résolution. Les dates invalides restent bloquées. Continuer ?`,
+      isDanger: true,
+      confirmText: "Forcer l'envoi"
+    });
+    if (!isConfirmed) return;
+
+    const res = await handleStartBulkUpload(true, false, true, (detailedSyncStats?.modifiedCount || 0) > 0);
     if (res && (res as any).success) {
       refreshActionableCount();
       refreshOutboxBacklogCount();
@@ -244,6 +272,7 @@ export default function AgentQualiteLayout() {
           <div style={{
             display: 'flex',
             alignItems: 'center',
+            flexWrap: 'wrap',
             gap: 10,
             padding: '10px 16px',
             borderRadius: 10,
@@ -260,7 +289,38 @@ export default function AgentQualiteLayout() {
                 {nonConformeCount > 0 && ` (${nonConformeCount.toLocaleString('fr')} autre${nonConformeCount > 1 ? 's' : ''} non conforme${nonConformeCount > 1 ? 's' : ''} — date invalide ou doublon à corriger avant envoi.)`}
               </>
             ) : (
-              `${dirtyCartesCount.toLocaleString('fr')} correction${dirtyCartesCount > 1 ? 's' : ''} en attente mais non conforme${dirtyCartesCount > 1 ? 's' : ''} (date invalide ou doublon) — corrigez ces fiches avant de pouvoir les envoyer.`
+              <>
+                <span>
+                  {`${dirtyCartesCount.toLocaleString('fr')} correction${dirtyCartesCount > 1 ? 's' : ''} en attente mais non conforme${dirtyCartesCount > 1 ? 's' : ''} (date invalide ou doublon) — corrigez ces fiches avant de pouvoir les envoyer.`}
+                </span>
+                {/* Forçage : ne pousse jamais les dates invalides (voir handleForcePushClick),
+                    seulement doublons stricts/probables et données manquantes — même portée
+                    que le bouton Admin "2E ÉTAPE" déjà en production sur SiteAdminView.tsx. */}
+                <button
+                  onClick={handleForcePushClick}
+                  disabled={isBulkUploading}
+                  className="btn"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '6px 14px',
+                    borderRadius: 8,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    background: 'rgba(249, 115, 22, 0.12)',
+                    border: '1px solid rgba(249, 115, 22, 0.4)',
+                    color: '#f97316',
+                    cursor: isBulkUploading ? 'not-allowed' : 'pointer',
+                    opacity: isBulkUploading ? 0.5 : 1,
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0
+                  }}
+                >
+                  <Globe size={14} />
+                  Forcer l'envoi malgré tout
+                </button>
+              </>
             )}
           </div>
         )}

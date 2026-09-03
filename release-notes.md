@@ -7,6 +7,7 @@
 ## 🚀 Nouveautés & Ergonomie
 
 - **Assistant d'identification guidée (portail Qualité) : les boutons d'action restent désormais visibles en pied de fenêtre** au lieu de défiler avec le contenu, notamment utile sur les petites résolutions terrain.
+- **Nouveau bouton "Forcer l'envoi malgré tout" dans le bandeau "corrections non conformes" du portail Qualité** : jusqu'ici, une carte corrigée (ex. rangement) mais restant classée doublon strict/probable ou données manquantes n'offrait aucun moyen de la transmettre au cloud sans attendre une résolution complète — l'agent devait patienter. Ce bouton reprend exactement le comportement déjà en production du bouton Admin "2E ÉTAPE : ENVOYER LES ANOMALIES" (force doublons stricts/probables et données manquantes, jamais les dates invalides), avec une confirmation explicite avant envoi indiquant le nombre exact de cartes concernées.
 
 ## 🛠️ Corrections & Fiabilité
 
