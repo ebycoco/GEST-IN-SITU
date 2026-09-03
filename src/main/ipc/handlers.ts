@@ -20,7 +20,7 @@ import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxErrorIds, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
@@ -5369,14 +5369,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         // ── Comptage de référence "vérité base de données" (refonte — remplace 2 correctifs
         // empilés précédents, cf. commentaire détaillé au point de calcul final plus bas dans
         // ce bloc, autour de outboxFlushSyncedAfter/outboxFlushErrorAfter) ─────────────────
-        // Capturés une seule fois, avant tout traitement, un COUNT(*) direct par statut sur
-        // t_outbox (table_name='t_cartes') — jamais une accumulation via callback local :
-        // immunise structurellement le résultat final contre tout traitement survenant EN
+        // Capturés une seule fois, avant tout traitement : un COUNT(*) direct pour SYNCED
+        // (bucket monotone — une ligne n'en sort jamais, cf. outbox.service.ts) et l'ENSEMBLE
+        // des id ERROR pour t_cartes (bucket NON monotone — voir commentaire détaillé de
+        // getOutboxErrorIds ci-dessus dans les imports / outbox.service.ts : une entrée peut
+        // en sortir via _promoteEligibleErrorsToPending() indépendamment de ce vidage forcé,
+        // ce qu'un simple COUNT(*) avant/après ne peut pas distinguer d'une absence réelle de
+        // nouvelle erreur — audit non-régression agent-9-senior-auditor, commit eb375d8).
+        // Immunise structurellement le résultat final contre tout traitement survenant EN
         // DEHORS de cette boucle (rerun automatique de cb2699d déclenché par une collision de
         // verrou _isProcessing, ou tout autre appel concurrent légitime à
         // processOutboxPending()).
         const outboxFlushSyncedBefore = getOutboxCountByStatus('t_cartes', 'SYNCED');
-        const outboxFlushErrorBefore = getOutboxCountByStatus('t_cartes', 'ERROR');
+        const outboxFlushErrorIdsBefore = getOutboxErrorIds('t_cartes');
 
         // Total de référence pour la progression émise pendant ce vidage forcé (bug UI
         // confirmé : cette boucle est le SEUL chemin qui transmet réellement à Supabase les
@@ -5507,34 +5512,48 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         // un succès, et se retrouvait donc comptée à tort comme "transmise avec succès".
         //
         // Nouveau design, structurellement immunisé : au lieu d'accumuler quoi que ce soit
-        // pendant la boucle, le résultat est mesuré par une VÉRITÉ DE BASE DE DONNÉES — un
-        // COUNT(*) direct sur t_outbox, scopé à table_name='t_cartes', PAR STATUT (SYNCED /
-        // ERROR séparément, jamais un seul agrégat PENDING), pris une fois avant le vidage
-        // (outboxFlushSyncedBefore/outboxFlushErrorBefore, capturés plus haut dans ce bloc) et
-        // une fois ici après que la boucle se soit arrêtée. Ce diff reste exact quelle que
-        // soit la SOURCE du traitement (cette boucle, le rerun automatique de cb2699d, ou tout
-        // autre appel concurrent à processOutboxPending) car SYNCED et ERROR ne sont écrits
-        // que par outbox.service.ts (_markOutboxError et le bloc db.transaction de succès) —
-        // aucun callback n'est impliqué, donc aucune fenêtre d'invisibilité possible par
-        // construction. Confirmé : aucune suppression physique de lignes t_outbox SYNCED/ERROR
-        // n'existe dans ce code base (seule cancelPendingInsert() supprime des lignes t_outbox,
-        // et uniquement des INSERT encore PENDING) — ce diff ne peut donc pas non plus être
-        // faussé par un nettoyage concurrent qui ferait disparaître des lignes déjà comptées.
+        // pendant la boucle, le résultat est mesuré par une VÉRITÉ DE BASE DE DONNÉES, pris
+        // une fois avant le vidage (outboxFlushSyncedBefore/outboxFlushErrorIdsBefore,
+        // capturés plus haut dans ce bloc) et une fois ici après que la boucle se soit
+        // arrêtée. SYNCED reste un simple COUNT(*) direct sur t_outbox scopé à
+        // table_name='t_cartes' (bucket monotone, une ligne n'en sort jamais). Ce diff reste
+        // exact quelle que soit la SOURCE du traitement (cette boucle, le rerun automatique de
+        // cb2699d, ou tout autre appel concurrent à processOutboxPending) car SYNCED n'est
+        // écrit que par outbox.service.ts (bloc db.transaction de succès) — aucun callback
+        // n'est impliqué, donc aucune fenêtre d'invisibilité possible par construction.
+        // Confirmé : aucune suppression physique de lignes t_outbox SYNCED n'existe dans ce
+        // code base (seule cancelPendingInsert() supprime des lignes t_outbox, et uniquement
+        // des INSERT encore PENDING) — ce diff ne peut donc pas non plus être faussé par un
+        // nettoyage concurrent qui ferait disparaître des lignes déjà comptées.
+        //
+        // ERROR, en revanche, n'est PAS un simple diff de COUNT(*) (défaut confirmé par
+        // agent-9-senior-auditor sur eb375d8, cf. commentaire de getOutboxErrorIds dans
+        // outbox.service.ts) : le bucket ERROR n'est pas monotone —
+        // _promoteEligibleErrorsToPending() (cycle périodique, indépendant de ce vidage) peut
+        // faire sortir une entrée d'ERROR pendant la même fenêtre qu'une autre y entre
+        // réellement, ce qui neutralise un simple diff de taille (ex: -1 puis +1 = 0). On
+        // calcule donc `outboxFlushErrors` comme la taille de la différence d'ENSEMBLES d'id
+        // (id présents dans "après" mais absents de "avant") — seules les entrées réellement
+        // NOUVELLES dans ERROR comptent, quel que soit un mouvement de sortie concurrent.
         //
         // Limite résiduelle assumée (déjà notée par l'audit précédent, pas un défaut de
-        // conception comme les 2 correctifs remplacés ici) : du VRAI trafic concurrent sans
+        // conception comme les correctifs remplacés ici) : du VRAI trafic concurrent sans
         // rapport avec ce vidage (ex: une correction Qualité traitée par le cycle périodique en
         // parallèle) qui ferait passer une carte t_cartes en SYNCED/ERROR pendant cette même
         // fenêtre serait inclus dans ce diff — un très léger sur-comptage possible, inhérent à
         // toute mesure scopée dans le temps plutôt que par identifiant d'entrée précis, sans
-        // commune mesure avec les 2 bugs corrigés (ceux-ci pouvaient sous-compter ou classer un
+        // commune mesure avec les bugs corrigés (ceux-ci pouvaient sous-compter ou classer un
         // échec réel comme un succès de façon systématique, pas seulement par coïncidence
         // temporelle avec du trafic tiers légitime).
         const outboxFlushSyncedAfter = getOutboxCountByStatus('t_cartes', 'SYNCED');
-        const outboxFlushErrorAfter = getOutboxCountByStatus('t_cartes', 'ERROR');
+        const outboxFlushErrorIdsAfter = getOutboxErrorIds('t_cartes');
         outboxFlushProcessed = Math.max(0, outboxFlushSyncedAfter - outboxFlushSyncedBefore);
-        outboxFlushErrors = Math.max(0, outboxFlushErrorAfter - outboxFlushErrorBefore);
-        log.info(`[sync:startBulk] Comptage vidage forcé (vérité BDD) : ${outboxFlushProcessed} transmise(s) avec succès, ${outboxFlushErrors} en échec (SYNCED ${outboxFlushSyncedBefore}→${outboxFlushSyncedAfter}, ERROR ${outboxFlushErrorBefore}→${outboxFlushErrorAfter}).`);
+        let outboxFlushNewErrorCount = 0;
+        for (const id of outboxFlushErrorIdsAfter) {
+          if (!outboxFlushErrorIdsBefore.has(id)) outboxFlushNewErrorCount++;
+        }
+        outboxFlushErrors = outboxFlushNewErrorCount;
+        log.info(`[sync:startBulk] Comptage vidage forcé (vérité BDD) : ${outboxFlushProcessed} transmise(s) avec succès, ${outboxFlushErrors} en échec (SYNCED ${outboxFlushSyncedBefore}→${outboxFlushSyncedAfter}, ERROR ids ${outboxFlushErrorIdsBefore.size}→${outboxFlushErrorIdsAfter.size}, nouvelles erreurs=${outboxFlushErrors}).`);
 
         // Dernier événement garanti : si la boucle s'arrête avant d'avoir épuisé le backlog
         // (plafond OUTBOX_FLUSH_MAX_ITERATIONS atteint, ou réseau redevenu indisponible en

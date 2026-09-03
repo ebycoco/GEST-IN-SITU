@@ -644,6 +644,38 @@ export function getOutboxCountByStatus(tableName: string, status: 'PENDING' | 'S
 }
 
 /**
+ * Retourne l'ENSEMBLE des `id` (TEXT PRIMARY KEY, cf. schema.ts) actuellement en statut
+ * ERROR pour une table donnée — jamais un simple compte.
+ *
+ * Corrige un défaut structurel de `getOutboxCountByStatus(table, 'ERROR')` utilisé en diff
+ * avant/après (voir point d'usage dans handlers.ts, sync:startBulk) : contrairement à SYNCED,
+ * le bucket ERROR n'est PAS monotone — `_promoteEligibleErrorsToPending()` ci-dessous (appelée
+ * à chaque cycle périodique, indépendamment du vidage forcé de t_outbox) peut faire sortir une
+ * entrée d'ERROR (promotion en PENDING, puis succès) pendant la même fenêtre qu'une AUTRE
+ * entrée y entre réellement. Un diff de COUNT(*) neutralise alors les deux mouvements (ex:
+ * -1 puis +1 = 0), masquant une carte réellement bloquée en échec dans le message affiché à
+ * l'agent (audit non-régression agent-9-senior-auditor, commit eb375d8).
+ *
+ * Un diff d'ENSEMBLES d'id (id présents "après" mais absents "avant") reste exact quel que
+ * soit ce mouvement de sortie concurrent : seules les entrées réellement NOUVELLES dans le
+ * bucket ERROR comptent comme "nouvelle erreur" pour la fenêtre observée.
+ *
+ * @param tableName - Table cible (ex: 't_cartes').
+ */
+export function getOutboxErrorIds(tableName: string): Set<string> {
+  try {
+    const db = getDatabase();
+    if (!db) return new Set();
+    const rows = db.prepare(
+      `SELECT id FROM t_outbox WHERE status = 'ERROR' AND table_name = ?`
+    ).all(tableName) as { id: string }[];
+    return new Set(rows.map((r) => r.id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
  * Retourne le nombre d'entrées "actionnables" dans t_outbox : PENDING (en attente d'un
  * prochain cycle d'envoi) ET ERROR (échec d'envoi après épuisement des tentatives
  * automatiques, cf. MAX_OUTBOX_ATTEMPTS). Fonction additive, distincte de
