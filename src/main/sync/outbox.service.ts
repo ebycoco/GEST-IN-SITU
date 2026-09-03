@@ -184,7 +184,11 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  * Thread Safety :
  *  - Cette fonction est appelée via setImmediate() par scheduleOutboxProcessing()
  *    pour ne jamais bloquer le thread UI d'Electron.
- *  - Un verrou interne `_isProcessing` prévient les exécutions concurrentes.
+ *  - Un verrou interne `_isProcessing` prévient les exécutions concurrentes. Un appel
+ *    reçu pendant que ce verrou est déjà pris n'est PAS perdu : il arme une dette
+ *    `_rerunRequested`/`_rerunForceCards`, consommée une seule fois dans le `finally`
+ *    pour déclencher un rerun immédiat (setImmediate) dès la libération du verrou — voir
+ *    les commentaires au point d'usage de ces deux flags, plus bas dans ce fichier.
  *
  * @param fromPeriodicCycle - `true` uniquement lorsque l'appel provient du cycle
  *   périodique de synchronisation (startSyncCycle) ou du retour réseau — jamais des
@@ -219,7 +223,23 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
 export async function processOutboxPending(fromPeriodicCycle: boolean = false, forceCards: boolean = false, onEntryProcessed?: (result: { tableName: string; success: boolean }) => void): Promise<{ processed: number; errors: number }> {
   // Verrou anti-concurrence léger (flag module-level)
   if (_isProcessing) {
-    log.info('[OutboxService] processOutboxPending ignoré : traitement déjà en cours.');
+    // ── Correctif course "entrée orpheline" (agent-13-qa-terrain-tester, e2e cloud) ──
+    // Ne jamais abandonner silencieusement cet appel : un lot déjà en cours d'exécution
+    // a figé sa liste d'entrées à traiter via le SELECT ... LIMIT fait en tête de la
+    // section critique ci-dessous (juste avant la boucle for), AVANT que l'entrée
+    // t_outbox motivant CET appel-ci n'existe forcément en base. Sans re-planification,
+    // une correction unitaire de carte (forceCards=true, ex: autoEnqueueCorrection())
+    // arrivée pendant qu'un traitement précédent tourne déjà (ex: juste après la
+    // création de cette même carte) pouvait rester PENDING indéfiniment : le cycle
+    // périodique respecte le toggle "Envoi Automatique" désactivé par défaut pour
+    // ADMINISTRATEUR_SITE et exclut donc t_cartes de son traitement automatique — aucun
+    // filet de sécurité ne rattrapait alors cette entrée. On mémorise donc la "dette"
+    // (et son besoin éventuel de forceCards, combiné en OR si plusieurs demandes
+    // divergent) pour la rejouer une seule fois dans le `finally` ci-dessous, juste
+    // après la libération du verrou par le traitement en cours.
+    _rerunRequested = true;
+    _rerunForceCards = _rerunForceCards || forceCards;
+    log.info(`[OutboxService] processOutboxPending ignoré : traitement déjà en cours. Re-run planifié après libération du verrou (forceCards cumulé=${_rerunForceCards}).`);
     return { processed: 0, errors: 0 };
   }
 
@@ -510,6 +530,35 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
   } finally {
     // Libérer le verrou dans TOUS les cas (succès ou exception)
     _isProcessing = false;
+
+    // ── Rejeu de la dette accumulée pendant ce traitement (voir commentaire du verrou
+    // ci-dessus) ────────────────────────────────────────────────────────────────────
+    // Consommation immédiate et unique : on capture puis on remet à zéro AVANT de
+    // planifier le nouvel appel, pour qu'une éventuelle nouvelle demande arrivant
+    // pendant l'exécution de ce rerun (setImmediate ci-dessous) reparte sur un flag
+    // propre plutôt que de s'agréger à une dette déjà en cours de traitement — sans
+    // quoi une dette consommée pourrait être "reconsommée" une seconde fois par erreur.
+    // Garantie anti-boucle infinie : ce bloc ne se déclenche QUE si une vraie collision
+    // a eu lieu pendant CE traitement précis (_rerunRequested mis à true uniquement par
+    // le branchement du verrou ci-dessus, jamais par ce `finally` lui-même) — une seule
+    // dette consommée => au plus UN rerun planifié ici. Si ce rerun ne rencontre lui-même
+    // aucune collision, _rerunRequested reste false à sa propre sortie et la chaîne
+    // s'arrête naturellement. Si du trafic outbox continue d'arriver en continu pendant
+    // ce rerun, une nouvelle dette pourra se former et déclencher un rerun suivant — ce
+    // n'est pas une boucle artificielle mais le reflet direct d'une demande réelle
+    // toujours en attente (même principe que le setImmediate() déjà utilisé par
+    // scheduleOutboxProcessing : événementiel, jamais un polling/timer actif).
+    if (_rerunRequested) {
+      const rerunForceCards = _rerunForceCards;
+      _rerunRequested = false;
+      _rerunForceCards = false;
+      log.info(`[OutboxService] Re-run planifié suite à collision de verrou pendant le traitement qui vient de se terminer (forceCards=${rerunForceCards}).`);
+      setImmediate(() => {
+        processOutboxPending(false, rerunForceCards).catch((err: any) => {
+          log.error('[OutboxService] Erreur non capturée dans le re-run planifié de processOutboxPending :', err);
+        });
+      });
+    }
   }
 }
 
@@ -613,6 +662,25 @@ export function isOutboxProcessing(): boolean {
 
 /** Verrou interne anti-concurrence du worker outbox. */
 let _isProcessing = false;
+
+/**
+ * Dette de re-run : positionnée à `true` par processOutboxPending() lorsqu'un appel est
+ * reçu alors que `_isProcessing` est déjà vrai (voir commentaire détaillé au point
+ * d'usage). Consommée une seule fois dans le `finally` de processOutboxPending, juste
+ * après la libération du verrou, pour garantir qu'aucune entrée t_outbox fraîchement
+ * enfilée pendant un traitement en cours ne reste orpheline (bug de course confirmé par
+ * agent-13-qa-terrain-tester, e2e cloud, 2 échecs/3 tentatives).
+ */
+let _rerunRequested = false;
+
+/**
+ * `forceCards` à utiliser pour le rerun planifié via `_rerunRequested`. Combiné en OR
+ * logique (jamais écrasé) si plusieurs appels divergents sur ce paramètre collisionnent
+ * avec le même traitement en cours — une seule demande avec forceCards=true suffit à
+ * exiger que le rerun ignore le gating "Envoi Automatique", même si une autre demande
+ * concurrente avait forceCards=false.
+ */
+let _rerunForceCards = false;
 
 /**
  * Marque une entrée outbox en statut ERROR avec le message d'erreur fourni.
