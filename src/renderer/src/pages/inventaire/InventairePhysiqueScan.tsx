@@ -15,6 +15,12 @@ export default function InventairePhysiqueScan() {
   
   const rangementRef = useRef<HTMLInputElement>(null);
   const scanRef = useRef<HTMLInputElement>(null);
+  // Debounce du dispatchEvent('app:data-updated') : évite de déclencher
+  // loadStats(true) (InventaireLayout.tsx, ~8 requêtes IPC/SQL/réseau dont
+  // 2 appels Supabase fire-and-forget) à CHAQUE scan lors d'une rafale au
+  // pistolet scanner. Un seul dispatch, ~900ms après le dernier scan de la
+  // rafale. N'affecte pas le feedback utilisateur immédiat (toast/refocus/liste).
+  const dataUpdatedDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Focus initial
   useEffect(() => {
@@ -24,6 +30,15 @@ export default function InventairePhysiqueScan() {
       scanRef.current.focus();
     }
   }, [isRangementLocked]);
+
+  // Nettoyage du timer de debounce au démontage (CLAUDE.md §2 — pas de timer résiduel)
+  useEffect(() => {
+    return () => {
+      if (dataUpdatedDebounceRef.current) {
+        clearTimeout(dataUpdatedDebounceRef.current);
+      }
+    };
+  }, []);
 
   const handleLockRangement = (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,7 +73,15 @@ export default function InventairePhysiqueScan() {
         // Notifie InventaireLayout.tsx pour recalculer dirtyCartesCount/conformeCartesCount
         // (updateCarteRangementAndStatusRapid marque is_dirty=1, cf. cartes.queries.ts) — même
         // pattern que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
-        window.dispatchEvent(new CustomEvent('app:data-updated'));
+        // Debounce ~900ms : lors d'une rafale de scans consécutifs, un seul dispatch part
+        // après le dernier scan, au lieu d'un rafraîchissement lourd à chaque scan individuel.
+        if (dataUpdatedDebounceRef.current) {
+          clearTimeout(dataUpdatedDebounceRef.current);
+        }
+        dataUpdatedDebounceRef.current = setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('app:data-updated'));
+          dataUpdatedDebounceRef.current = null;
+        }, 900);
       } else {
         setScannedCards(prev => [{ erreur: result.message || 'Non trouvé', scan: scannnedValue, success: false }, ...prev].slice(0, 15));
         toast.error(`Erreur: ${result.message}`);

@@ -28,3 +28,5 @@
 - **Sur le portail de recherche/vérification (SUPER ADMIN/ADMIN_CENTRE), le compteur du bouton "Envoyer les cartes vers le cloud" pouvait rester jusqu'à 30 secondes en retard après une délivrance** : la page n'écoutait pas le signal de mise à jour déjà émis par la délivrance et attendait le prochain cycle de sondage périodique. Elle recalcule désormais ce compteur immédiatement après chaque délivrance réussie.
 
 ## ⚡ Performances
+
+- **Débounce du rafraîchissement des statistiques du layout après un scan d'inventaire physique** : le correctif précédent notifiant `InventaireLayout.tsx` après chaque scan réussi (`app:data-updated`) déclenchait un rafraîchissement complet (~8 requêtes IPC/SQL/réseau, dont 2 appels Supabase fire-and-forget) à chaque scan individuel — problème révélé par un audit de non-régression (agent-9-senior-auditor) sur une rafale de scans consécutifs au pistolet scanner, usage normal de ce flux. Le signal n'est désormais émis qu'une seule fois, ~900ms après le dernier scan de la rafale, sans retarder le feedback utilisateur immédiat (toast, refocus, liste locale).
