@@ -5366,6 +5366,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         const OUTBOX_LOCK_RETRY_DELAY_MS = 300;
         let lockRetries = 0;
 
+        // ── Comptage de référence pour le correctif de sous-comptage (agent-9-senior-
+        // auditor, audit de non-régression du commit cb2699d) ──────────────────────────
+        // Le rerun automatique introduit par cb2699d dans processOutboxPending()
+        // (outbox.service.ts) traite quasi-instantanément (setImmediate) une dette armée
+        // par une collision de verrou _isProcessing — quasi-systématiquement plus vite que
+        // le délai OUTBOX_LOCK_RETRY_DELAY_MS (300ms) de CETTE boucle. Les cartes qu'il
+        // traite le sont donc AVANT le prochain appel local à processOutboxPending(), sans
+        // jamais passer par le callback onEntryProcessed de cette boucle (le rerun
+        // n'appelle processOutboxPending qu'avec 2 arguments, sans callback) : invisibles à
+        // l'accumulation `outboxFlushProcessed += processed` ci-dessous. Capturé sur la
+        // toute première itération (i === 0), avant tout traitement.
+        let outboxFlushInitialPending = 0;
+
         // Total de référence pour la progression émise pendant ce vidage forcé (bug UI
         // confirmé : cette boucle est le SEUL chemin qui transmet réellement à Supabase les
         // cartes fraîchement importées — voir commentaire "Porte de sortie garantie" plus
@@ -5413,6 +5426,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         for (let i = 0; i < OUTBOX_FLUSH_MAX_ITERATIONS; i++) {
           const remainingBefore = getOutboxPendingCount('t_cartes');
           outboxFlushRemaining = remainingBefore;
+          if (i === 0) outboxFlushInitialPending = remainingBefore;
           if (remainingBefore === 0) break;
           if (remainingBefore > flushTotalPeak) flushTotalPeak = remainingBefore;
 
@@ -5476,6 +5490,32 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
         outboxFlushRemaining = getOutboxPendingCount('t_cartes');
         if (outboxFlushRemaining > flushTotalPeak) flushTotalPeak = outboxFlushRemaining;
+
+        // ── Correctif sous-comptage rerun automatique (agent-9-senior-auditor, cf. commentaire
+        // outboxFlushInitialPending ci-dessus) ──────────────────────────────────────────────
+        // `outboxFlushProcessed` (accumulé ci-dessus via les seuls callbacks locaux de cette
+        // boucle) peut sous-compter les cartes en réalité traitées par un rerun automatique
+        // gagnant la course contre OUTBOX_LOCK_RETRY_DELAY_MS. On recalcule un nombre de
+        // référence par simple différence du COUNT(*) PENDING t_cartes avant/après l'ENSEMBLE
+        // de la boucle (déjà lus : outboxFlushInitialPending / outboxFlushRemaining) : toute
+        // carte ayant quitté PENDING pendant cette opération (succès SYNCED ou échec définitif
+        // ERROR) est comptée dans cette différence, qu'elle soit passée par le callback local
+        // ou par le rerun invisible. On en retranche `outboxFlushErrors` (connu avec certitude
+        // via les callbacks locaux, non affecté différemment par ce même bug côté comptage
+        // brut : une entrée en erreur locale quitte PENDING exactement comme une entrée en
+        // succès local) pour isoler la part "traitée avec succès" — le résultat ne peut
+        // qu'égaler ou dépasser l'accumulation locale, jamais la réduire (Math.max), pour ne
+        // jamais afficher moins que ce que cette boucle a elle-même constaté avec certitude.
+        // Limite assumée (fix volontairement non-invasif, cf. rapport d'audit) : si de
+        // nouvelles entrées t_cartes rejoignent PENDING pendant la fenêtre (autre mutation
+        // concurrente créant une nouvelle entrée outbox), la différence peut sous-estimer le
+        // nombre réel traité — jamais le surestimer.
+        const outboxFlushLeftPending = Math.max(0, outboxFlushInitialPending - outboxFlushRemaining);
+        const outboxFlushProcessedCorrected = Math.max(outboxFlushProcessed, outboxFlushLeftPending - outboxFlushErrors);
+        if (outboxFlushProcessedCorrected > outboxFlushProcessed) {
+          log.info(`[sync:startBulk] Rattrapage de comptage outbox : ${outboxFlushProcessedCorrected - outboxFlushProcessed} carte(s) supplémentaire(s) traitée(s) par un rerun automatique concurrent (invisible au callback local de cette boucle).`);
+        }
+        outboxFlushProcessed = outboxFlushProcessedCorrected;
 
         // Dernier événement garanti : si la boucle s'arrête avant d'avoir épuisé le backlog
         // (plafond OUTBOX_FLUSH_MAX_ITERATIONS atteint, ou réseau redevenu indisponible en
