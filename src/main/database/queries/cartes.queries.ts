@@ -45,7 +45,11 @@ function autoEnqueueCorrection(id_carte: number): void {
     mapCardPayload(card);
     enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', card);
     if (networkMonitor.getState() === 'ONLINE') {
-      scheduleOutboxProcessing();
+      // forceCards=true : ce helper ne traite QUE des corrections unitaires (jamais un
+      // import massif — le worker d'import a son propre chemin d'écriture direct, distinct
+      // de autoEnqueueCorrection), donc l'envoi immédiat doit être forcé indépendamment du
+      // toggle "Envoi Automatique" du compte, qui ne doit protéger que les imports massifs.
+      scheduleOutboxProcessing(true);
     }
   } catch (e: any) {
     log.warn(`[AutoSync] Carte ${id_carte} non enfilée automatiquement après correction : ${e.message || e}`);

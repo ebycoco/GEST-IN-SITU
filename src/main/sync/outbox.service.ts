@@ -512,10 +512,15 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
  * Utilise setImmediate() pour sortir du call-stack courant et exécuter
  * le traitement dans la prochaine itération de la boucle d'événements Node.js,
  * protégeant ainsi le thread UI d'Electron contre tout gel.
+ *
+ * @param forceCards - Répercuté tel quel sur `processOutboxPending` (voir sa doc) :
+ *   par défaut `false` (comportement inchangé, respecte le toggle "Envoi Automatique"
+ *   pour t_cartes). Seul un appelant explicite qui doit garantir l'envoi immédiat d'une
+ *   correction unitaire de carte, indépendamment de ce toggle, doit passer `true`.
  */
-export function scheduleOutboxProcessing(): void {
+export function scheduleOutboxProcessing(forceCards: boolean = false): void {
   setImmediate(() => {
-    processOutboxPending().catch((err: any) => {
+    processOutboxPending(false, forceCards).catch((err: any) => {
       log.error('[OutboxService] Erreur non capturée dans processOutboxPending :', err);
     });
   });
