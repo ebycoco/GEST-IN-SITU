@@ -52,6 +52,20 @@ export default function AgentQualiteLayout() {
     window.addEventListener('app:data-updated', handleDataUpdated);
     return () => window.removeEventListener('app:data-updated', handleDataUpdated);
   }, [loadStats]);
+
+  // Complète le listener 'app:data-updated' ci-dessus : celui-ci ne capture que l'état AVANT
+  // l'envoi automatique (déclenché au moment de la sauvegarde d'une correction), pas l'état
+  // réel une fois l'envoi auto terminé (quelques centaines de ms plus tard). Le bouton "Envoyer
+  // les corrections" se cache déjà correctement dans ce cas car usePushButtonVisibility écoute
+  // 'sync:onStatusChanged' (cf. usePushButtonVisibility.ts:91-98), mais le bandeau informatif
+  // ci-dessous (piloté par conformeCartesCount, dérivé de dirtyCartesCount) restait figé sur son
+  // texte obsolète faute d'écouter le même événement. Même pattern d'abonnement/désabonnement
+  // que usePushButtonVisibility.ts (nettoyage systématique du listener IPC, CLAUDE.md §2).
+  useEffect(() => {
+    if (!window.api?.sync?.onStatusChanged) return undefined;
+    const unsubscribe = window.api.sync.onStatusChanged(() => { loadStats(true); });
+    return () => unsubscribe();
+  }, [loadStats]);
   const {
     isPullingCards,
     isBackgroundPulling,
