@@ -589,7 +589,10 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
       if (!wasLocalOnly) {
         enqueueOutbox(carte.sync_id, 't_cartes', 'DELETE', { sync_id: carte.sync_id });
         if (networkMonitor.getState() === 'ONLINE') {
-          scheduleOutboxProcessing();
+          // forceCards=true : suppression unitaire d'une carte (une seule par appel), jamais
+          // un import massif — doit échapper au toggle "Envoi Automatique" (même principe que
+          // autoEnqueueCorrection() plus haut).
+          scheduleOutboxProcessing(true);
         }
       } else {
         // Si la carte n'a jamais été synchronisée (local uniquement), suppression physique immédiate
@@ -723,7 +726,10 @@ export function delivrerCarte(
       const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
+        // forceCards=true : délivrance unitaire d'une carte (une seule par appel), jamais un
+        // import massif — doit échapper au toggle "Envoi Automatique" (même principe que
+        // autoEnqueueCorrection() plus haut).
+        scheduleOutboxProcessing(true);
       }
     }
 
@@ -840,7 +846,10 @@ export function declarerDoublon(
       const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
+        // forceCards=true : déclaration de doublon unitaire (une seule carte par appel),
+        // jamais un import massif — doit échapper au toggle "Envoi Automatique" (même
+        // principe que autoEnqueueCorrection() plus haut).
+        scheduleOutboxProcessing(true);
       }
     }
 
@@ -934,7 +943,10 @@ export function annulerDeclarationDoublon(
       const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
+        // forceCards=true : annulation de déclaration de doublon unitaire (une seule carte par
+        // appel), jamais un import massif — doit échapper au toggle "Envoi Automatique" (même
+        // principe que autoEnqueueCorrection() plus haut).
+        scheduleOutboxProcessing(true);
       }
     }
 
@@ -1030,7 +1042,10 @@ export function transfererCarte(
   if (updatedCarte?.sync_id) {
     enqueueOutbox(updatedCarte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
     if (networkMonitor.getState() === 'ONLINE') {
-      scheduleOutboxProcessing();
+      // forceCards=true : transfert unitaire d'une carte (une seule par appel), jamais un
+      // import massif — doit échapper au toggle "Envoi Automatique" (même principe que
+      // autoEnqueueCorrection() plus haut).
+      scheduleOutboxProcessing(true);
     }
   }
 

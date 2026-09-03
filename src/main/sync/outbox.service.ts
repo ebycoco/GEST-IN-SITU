@@ -198,7 +198,11 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  *   d'une correction unitaire de carte via autoEnqueueCorrection() (cartes.queries.ts,
  *   portail Qualité/panneau de correction) — une mutation ponctuelle, jamais un import
  *   massif, qui doit donc échapper au toggle indépendamment d'un clic utilisateur sur ce
- *   bouton précis. Automatique (périodique ou immédiat post-sauvegarde d'import) = respecte
+ *   bouton précis. D'autres appelants de cartes.queries.ts réalisant chacun une mutation
+ *   unitaire de carte (une seule carte par invocation, jamais un lot) suivent le même
+ *   principe — voir le commentaire dédié au-dessus de chaque appel concerné dans ce fichier
+ *   plutôt qu'une énumération ici, pour éviter que cette liste se désynchronise du code au
+ *   fil des évolutions. Automatique (périodique ou immédiat post-sauvegarde d'import) = respecte
  *   le toggle (défaut `false`). Manuel explicite ou correction unitaire = l'ignore (`true`).
  * @param onEntryProcessed - Callback optionnel invoqué de façon SYNCHRONE juste après
  *   chaque entrée ayant définitivement quitté le statut PENDING au cours de ce lot
