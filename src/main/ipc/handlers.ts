@@ -12,7 +12,7 @@ import { Worker } from 'worker_threads';
 import { networkMonitor } from '../sync/network-monitor';
 import { syncEngine } from '../sync/sync-engine';
 import { runBulkUpload, cancelBulkUpload } from '../sync/bulk-uploader';
-import { runDownstream, runLogsDownstream } from '../sync/downstream';
+import { runDownstream, runLogsDownstream, SiteNotFoundError } from '../sync/downstream';
 import { getSupabaseClient } from '../sync/supabase-client';
 import { startSessionHeartbeat, stopSessionHeartbeat, getCurrentUserLogin, getSecureCurrentUser, setActiveRole, getCurrentGrantedRoles } from '../auth/session-heartbeat';
 import { logAudit, CRUD_SYNC_WHITELIST } from '../utils/audit';
@@ -2440,9 +2440,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('import:updateAnomalyField', (_, id: number, field: string, value: string) => {
     try {
       const db = getDatabase()!;
-      const allowedFields = ['noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'contact', 'num_secu'];
+      const allowedFields = ['noms', 'prenoms', 'date_de_naissance', 'lieu_de_naissance', 'contact', 'num_secu', 'rangement'];
       if (!allowedFields.includes(field)) {
         throw new Error(`Champ non autorisé: ${field}`);
+      }
+      // Revalidation serveur des formats (même regex que qualite:corrigerFormat) : ne pas se
+      // reposer uniquement sur la validation du formulaire client (ExpandedAnomalyDetails).
+      if (field === 'num_secu' && value && !/^\d{13}$/.test(value)) {
+        throw new Error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.');
+      }
+      if (field === 'contact' && value && !/^\d{10}$/.test(value)) {
+        throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
       }
       const anomaly = db.prepare('SELECT site_id FROM t_import_anomalies WHERE id = ?').get(Number(id)) as { site_id?: number } | undefined;
       assertQualiteAccessOnSite(anomaly?.site_id);
@@ -5900,12 +5908,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return { success: true, count: pulledCount };
     } catch (error: any) {
       log.error(`Erreur lors de la récupération des cartes pour le site ${siteId}:`, error);
+      // Distinction explicite "site introuvable côté cloud" (correctif bug production
+      // 2026-08-30, cf. SiteNotFoundError dans downstream.ts) : jusqu'ici ce cas remontait
+      // en { success: true, count: 0 }, strictement indiscernable pour le renderer du cas
+      // légitime "déjà à jour" — d'où le toast trompeur affiché à l'utilisateur.
+      const isSiteNotFound = error instanceof SiteNotFoundError;
       logAudit(
         userLogin,
         'SYNC_DOWN_FAILURE',
-        JSON.stringify({ site_id: siteId, error: error.message || String(error) })
+        JSON.stringify({ site_id: siteId, error: error.message || String(error), code: isSiteNotFound ? 'SITE_NOT_FOUND' : undefined })
       );
-      return { success: false, message: error.message || String(error) };
+      return {
+        success: false,
+        code: isSiteNotFound ? 'SITE_NOT_FOUND' : undefined,
+        message: isSiteNotFound
+          ? 'Site introuvable côté cloud — contactez le SUPER ADMIN.'
+          : (error.message || String(error))
+      };
     } finally {
       syncEngine.endManualDownstream();
     }

@@ -140,6 +140,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Numéro de Sécurité Sociale</label>
             <input type="text" value={formData.num_secu || ''} onChange={e => handleChange('num_secu', e.target.value)}
+              maxLength={13} inputMode="numeric"
               style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white' }} />
           </div>
 
@@ -174,6 +175,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Contact</label>
             <input type="text" value={formData.contact || ''} onChange={e => handleChange('contact', e.target.value)}
+              maxLength={10} inputMode="numeric"
               style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border-color)', padding: '10px 14px', borderRadius: 8, color: 'white' }} />
           </div>
 

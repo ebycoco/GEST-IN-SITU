@@ -350,7 +350,24 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       throw new Error("Date de délivrance invalide. Format attendu : AAAA-MM-JJ.");
     }
   }
-  
+
+  // Revalidation serveur des formats sensibles (P0-2) : ne pas se reposer uniquement sur la
+  // validation du formulaire client (CorrectionSidePanel). Mêmes regex que qualite:corrigerFormat
+  // (handlers.ts) pour rester cohérent — appliquée avant toute écriture, pour les deux branches
+  // ci-dessous (standard et transfert d'anomalie).
+  if ('num_secu' in data) {
+    const numSecu = data.num_secu as string | null | undefined;
+    if (numSecu && !/^\d{13}$/.test(numSecu)) {
+      throw new Error('Le numéro de sécurité sociale doit faire exactement 13 chiffres.');
+    }
+  }
+  if ('contact' in data) {
+    const contact = data.contact as string | null | undefined;
+    if (contact && !/^\d{10}$/.test(contact)) {
+      throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
+    }
+  }
+
   const isAnomaly = data._recordType === 'En Anomalie' || data._recordType === 'AnomalieImport';
 
   if (isAnomaly) {
@@ -359,6 +376,13 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       const anomaly = db.prepare('SELECT * FROM t_import_anomalies WHERE id = ?').get(id) as any;
       if (!anomaly) {
         throw new Error("Anomalie introuvable ou déjà corrigée.");
+      }
+
+      // Cloisonnement site (P0-1) : une anomalie n'appartenant pas au site de l'utilisateur
+      // (hors SUPER ADMIN) ne doit jamais pouvoir être transférée vers t_cartes par ce canal.
+      // Même logique que la vérification déjà appliquée par qualite:fusionnerDoublons (handlers.ts).
+      if (currentUser && currentUser.role !== 'SUPER ADMIN' && anomaly.site_id !== currentUser.site_id) {
+        throw new Error("Accès refusé : cette anomalie n'appartient pas à votre site.");
       }
 
       // 2. Fusionner avec les nouvelles données
@@ -545,27 +569,34 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
     `[SUPPRESSION] Par ${currentUser?.login || 'ADMIN'} sur t_cartes (ID: ${id})`
   );
 
-  // 2. Marquer la carte en pending_delete local (is_dirty = -1) au lieu de la supprimer physiquement
-  const result = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id);
-  if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
-  }
-
-  // 3. Enfilage Outbox DELETE
-  if (carte.sync_id) {
-    const wasLocalOnly = cancelPendingInsert(carte.sync_id, 't_cartes');
-    if (!wasLocalOnly) {
-      enqueueOutbox(carte.sync_id, 't_cartes', 'DELETE', { sync_id: carte.sync_id });
-      if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
-      }
-    } else {
-      // Si la carte n'a jamais été synchronisée (local uniquement), suppression physique immédiate
-      db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id);
+  // 2. Marquer la carte en pending_delete local (is_dirty = -1) au lieu de la supprimer
+  // physiquement, et enfiler l'outbox DELETE correspondant dans la même transaction SQLite
+  // (P2-2) : l'UPDATE is_dirty et l'enfilage t_outbox doivent réussir ou échouer ensemble,
+  // à l'image du pattern déjà utilisé dans qualite:fusionnerDoublons (handlers.ts).
+  const tx = db.transaction(() => {
+    const res = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id);
+    if (res.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
     }
-  }
 
-  return result;
+    // 3. Enfilage Outbox DELETE
+    if (carte.sync_id) {
+      const wasLocalOnly = cancelPendingInsert(carte.sync_id, 't_cartes');
+      if (!wasLocalOnly) {
+        enqueueOutbox(carte.sync_id, 't_cartes', 'DELETE', { sync_id: carte.sync_id });
+        if (networkMonitor.getState() === 'ONLINE') {
+          scheduleOutboxProcessing();
+        }
+      } else {
+        // Si la carte n'a jamais été synchronisée (local uniquement), suppression physique immédiate
+        db.prepare('DELETE FROM t_cartes WHERE id_carte = ?').run(id);
+      }
+    }
+
+    return res;
+  });
+
+  return tx();
 }
 
 export function delivrerCarte(
@@ -1213,12 +1244,20 @@ export function updateDateDeNaissance(id: number, newDate: string) {
       );
 
       db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
+
+      // Écriture atomique (P2-2) : l'enfilage outbox de la carte tout juste transférée fait
+      // désormais partie de la même transaction SQLite que l'INSERT/DELETE ci-dessus, au lieu
+      // d'être exécuté après coup — même exigence que le pattern qualite:fusionnerDoublons.
+      // autoEnqueueCorrection avale déjà ses propres erreurs en interne (voir sa doc : une
+      // donnée encore invalide ne doit pas bloquer le transfert, la carte reste is_dirty=1),
+      // donc cet appel ne peut pas provoquer de rollback inattendu de la transaction.
+      autoEnqueueCorrection(Number(insertRes.lastInsertRowid));
+
       return insertRes;
     });
 
     const res = runTx();
     console.log(`[CORRECTION DIAGNOSTIC] ✨ Anomalie ID ${id} corrigée. Carte transférée avec succès vers t_cartes et purgée de la DLQ.`);
-    autoEnqueueCorrection(Number(res.lastInsertRowid));
     return res;
   }
 

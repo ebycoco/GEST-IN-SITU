@@ -109,11 +109,6 @@ export function IdentificationGuidee({ isOpen, onClose, siteId, initialName, onS
                       placeholder="Ex: ABOBO" />
                   </div>
                 </div>
-
-                <button onClick={handleSearch} disabled={isSearching || !queryNoms.trim()}
-                  style={{ marginTop: 8, background: 'var(--accent-primary)', color: 'black', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: (isSearching || !queryNoms.trim()) ? 0.7 : 1 }}>
-                  {isSearching ? 'Recherche en cours...' : 'Lancer la recherche globale'}
-                </button>
               </div>
             )}
 
@@ -161,12 +156,26 @@ export function IdentificationGuidee({ isOpen, onClose, siteId, initialName, onS
                 <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 14 }}>
                   Vous pouvez maintenant procéder à la résolution de l'anomalie en vous basant sur la carte sélectionnée.
                 </p>
-                <button onClick={onClose} style={{ marginTop: 24, background: 'var(--accent-primary)', color: 'black', border: 'none', padding: '10px 24px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>
-                  Terminer
-                </button>
               </div>
             )}
           </div>
+
+          {/* Footer fixe : boutons d'action, hors du flux scrollable du body (gabarit modal-adaptatif-terrain) */}
+          {step === 1 && (
+            <div style={{ padding: '16px 24px', borderTop: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.2)' }}>
+              <button onClick={handleSearch} disabled={isSearching || !queryNoms.trim()}
+                style={{ width: '100%', background: 'var(--accent-primary)', color: 'black', border: 'none', padding: '12px', borderRadius: 8, fontWeight: 700, fontSize: 14, cursor: 'pointer', opacity: (isSearching || !queryNoms.trim()) ? 0.7 : 1 }}>
+                {isSearching ? 'Recherche en cours...' : 'Lancer la recherche globale'}
+              </button>
+            </div>
+          )}
+          {step === 3 && (
+            <div style={{ padding: '16px 24px', borderTop: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.2)', display: 'flex', justifyContent: 'center' }}>
+              <button onClick={onClose} style={{ background: 'var(--accent-primary)', color: 'black', border: 'none', padding: '10px 24px', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>
+                Terminer
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </>
