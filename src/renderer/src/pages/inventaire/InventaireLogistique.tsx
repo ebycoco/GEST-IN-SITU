@@ -85,6 +85,10 @@ export default function InventaireLogistique() {
       });
       toast.success('Rangement mis à jour avec succès.');
       resetState();
+      // Notifie InventaireLayout.tsx pour recalculer dirtyCartesCount/conformeCartesCount, qui
+      // pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même pattern
+      // que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(`Erreur : ${err.message || err}`);
     } finally {

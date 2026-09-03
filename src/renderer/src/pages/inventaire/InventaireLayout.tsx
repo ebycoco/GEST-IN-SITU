@@ -24,6 +24,32 @@ export default function InventaireLayout() {
     handlePullSiteCards,
     handleStartBulkUpload
   } = useForceSyncActions(user, activeSiteId, loadStats);
+
+  // Ce layout n'avait aucun listener sur les corrections effectuées par les vues enfants
+  // (InventaireApurement.tsx, InventaireLogistique.tsx, InventairePhysiqueScan.tsx), qui
+  // dispatchent désormais 'app:data-updated' après chaque correction réussie — même bug que
+  // celui corrigé sur AgentQualiteLayout.tsx (dirtyCartesCount/conformeCartesCount/
+  // detailedSyncStats, qui pilotent le bouton "Envoyer les corrections", ne se recalculaient
+  // jamais après une correction). silent=true : pas d'overlay de chargement pour un événement
+  // de fond (même pattern qu'AgentQualiteLayout.tsx).
+  useEffect(() => {
+    const handleDataUpdated = () => { loadStats(true); };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [loadStats]);
+
+  // Filet de sécurité par polling léger (même pattern que usePushButtonVisibility.ts:81-86 et
+  // AgentQualiteLayout.tsx) : couvre le cas d'un envoi automatique déclenché en tâche de fond
+  // sans qu'aucun événement 'app:data-updated' ne soit émis côté renderer. Actif uniquement
+  // tant que dirtyCartesCount > 0 — politique Low-Memory CLAUDE.md §2. Nettoyage systématique
+  // de l'intervalle au démontage/changement de dépendance.
+  useEffect(() => {
+    if (dirtyCartesCount <= 0) return undefined;
+    const REFRESH_INTERVAL_MS = 90000;
+    const interval = setInterval(() => { loadStats(true); }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [dirtyCartesCount, loadStats]);
+
   // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
   // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
   // masquer son compteur — cf. useAutoDownstreamPreference.ts.

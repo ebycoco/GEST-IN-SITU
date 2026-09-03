@@ -95,6 +95,11 @@ export default function ApurementCorrections() {
     setCorrectionCarte(null);
     setAnnulationCarte(null);
     loadList();
+    // Notifie ApurementLayout.tsx (et InventaireLayout.tsx, portails partageant le même
+    // événement) pour recalculer dirtyCartesCount/conformeCartesCount, qui pilotent l'état
+    // enabled/disabled du bouton "Envoyer les corrections" — même pattern que
+    // MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
+    window.dispatchEvent(new CustomEvent('app:data-updated'));
   };
 
   return (

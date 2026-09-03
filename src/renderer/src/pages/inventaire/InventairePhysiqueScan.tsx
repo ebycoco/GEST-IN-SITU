@@ -55,6 +55,10 @@ export default function InventairePhysiqueScan() {
         
         // Jouer un petit son de succès si possible, ou simple toast discret
         toast.success(`Ajouté : ${result.carte.noms}`, { duration: 1000 });
+        // Notifie InventaireLayout.tsx pour recalculer dirtyCartesCount/conformeCartesCount
+        // (updateCarteRangementAndStatusRapid marque is_dirty=1, cf. cartes.queries.ts) — même
+        // pattern que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
+        window.dispatchEvent(new CustomEvent('app:data-updated'));
       } else {
         setScannedCards(prev => [{ erreur: result.message || 'Non trouvé', scan: scannnedValue, success: false }, ...prev].slice(0, 15));
         toast.error(`Erreur: ${result.message}`);

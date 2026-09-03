@@ -66,6 +66,21 @@ export default function AgentQualiteLayout() {
     const unsubscribe = window.api.sync.onStatusChanged(() => { loadStats(true); });
     return () => unsubscribe();
   }, [loadStats]);
+
+  // Filet de sécurité par polling léger (même pattern que usePushButtonVisibility.ts:81-86,
+  // REFRESH_INTERVAL_MS = 90000) : couvre le cas restant non capturé par les deux useEffect
+  // ci-dessus — un envoi automatique déclenché en tâche de fond (hors changement d'état
+  // réseau, hors action métier locale ponctuelle) qui met à jour is_dirty en base sans
+  // qu'aucun événement 'app:data-updated' ni 'sync:onStatusChanged' ne soit émis côté
+  // renderer. Actif uniquement tant que dirtyCartesCount > 0 (rien à rafraîchir sinon) —
+  // politique Low-Memory CLAUDE.md §2. Nettoyage systématique de l'intervalle au démontage/
+  // changement de dépendance.
+  useEffect(() => {
+    if (dirtyCartesCount <= 0) return undefined;
+    const REFRESH_INTERVAL_MS = 90000;
+    const interval = setInterval(() => { loadStats(true); }, REFRESH_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [dirtyCartesCount, loadStats]);
   const {
     isPullingCards,
     isBackgroundPulling,

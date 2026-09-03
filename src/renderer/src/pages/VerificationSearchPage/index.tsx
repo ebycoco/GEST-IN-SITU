@@ -105,6 +105,18 @@ export default function VerificationSearchPage() {
     return () => clearInterval(interval);
   }, [user?.site_id]);
 
+  // Filet de rafraîchissement immédiat : handleDeliver (useDeliveryFlow.ts, hook partagé avec
+  // RechercheView.tsx — non modifié ici, cf. rapport final) dispatch déjà 'app:data-updated'
+  // après le succès d'une délivrance, mais cette page ne l'écoutait pas — dirtyCartesCount
+  // (qui pilote le bouton "Envoyer les cartes vers le cloud" via usePushButtonVisibility)
+  // restait donc figé jusqu'au prochain poll 30s (cf. useEffect ci-dessus). Écouter cet
+  // événement déjà émis évite de toucher useDeliveryFlow.ts (fichier partagé, hors périmètre).
+  useEffect(() => {
+    const handleDataUpdated = () => { fetchSyncStats(); };
+    window.addEventListener('app:data-updated', handleDataUpdated);
+    return () => window.removeEventListener('app:data-updated', handleDataUpdated);
+  }, [user?.site_id]);
+
   const handleStartBulkUpload = async () => {
     if (!user?.site_id) return;
     setIsBulkUploading(true);

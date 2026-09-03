@@ -182,6 +182,10 @@ export default function InventaireApurement() {
       });
       toast.success('Décharge historique enregistrée avec succès.');
       resetState();
+      // Notifie InventaireLayout.tsx/ApurementLayout.tsx pour recalculer dirtyCartesCount/
+      // conformeCartesCount, qui pilotent l'état enabled/disabled du bouton "Envoyer les
+      // corrections" — même pattern que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(`Erreur d'enregistrement : ${err.message || err}`);
     } finally {
@@ -222,6 +226,10 @@ export default function InventaireApurement() {
       await window.api.cartes.declarerDoublon(selectedCarte.id_carte, doublonMotif.trim());
       toast.success('Carte déclarée en doublon. Elle ne pourra plus être émargée.');
       resetState();
+      // Notifie InventaireLayout.tsx/ApurementLayout.tsx pour recalculer dirtyCartesCount/
+      // conformeCartesCount, qui pilotent l'état enabled/disabled du bouton "Envoyer les
+      // corrections" — même pattern que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
+      window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(`Erreur lors de la déclaration du doublon : ${err.message || err}`);
     } finally {
