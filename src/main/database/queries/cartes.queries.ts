@@ -2281,9 +2281,21 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
 
   tx();
 
+  const publishedCount = modifiedCartes.length - skippedInvalidDateCount;
+
   if (networkMonitor.getState() === 'ONLINE') {
-    scheduleOutboxProcessing();
+    // Seuil Low-Memory (CLAUDE.md §2) : une publication ponctuelle (≤ 5 cartes)
+    // est forcée en envoi immédiat comme les 10 autres mutations unitaires déjà
+    // corrigées (092c9ad/b317ae1/3f219a7), indépendamment du toggle "Envoi
+    // Automatique". Au-delà, on reste sur le comportement gaté par le toggle :
+    // c'est un lot, à protéger comme les traitements de volume.
+    const PUBLISH_DRAFTS_IMMEDIATE_THRESHOLD = 5;
+    if (publishedCount > 0 && publishedCount <= PUBLISH_DRAFTS_IMMEDIATE_THRESHOLD) {
+      scheduleOutboxProcessing(true);
+    } else {
+      scheduleOutboxProcessing();
+    }
   }
 
-  return { publishedCount: modifiedCartes.length - skippedInvalidDateCount, skippedInvalidDateCount };
+  return { publishedCount, skippedInvalidDateCount };
 }
