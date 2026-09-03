@@ -191,12 +191,15 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
  *   appels post-mutation immédiats via scheduleOutboxProcessing(), pour éviter tout
  *   effet de rafale de la promotion ERROR→PENDING sur des mutations rapprochées.
  *   Par défaut `false` (comportement inchangé pour tous les appelants existants).
- * @param forceCards - `true` UNIQUEMENT pour un déclenchement manuel explicite (bouton
- *   "Envoyer les corrections" → sync:startBulk) : ignore le gating `_cardsAutoUpstreamEnabled`
- *   pour cet appel précis, afin que ce bouton reste une porte de sortie garantie pour
- *   toute carte PENDING dans t_outbox, quel que soit l'état du toggle "Envoi Automatique".
- *   Automatique (périodique ou immédiat post-sauvegarde) = respecte le toggle (défaut
- *   `false`). Manuel explicite = l'ignore toujours (`true`).
+ * @param forceCards - `true` pour deux cas légitimes, tous deux distincts du gating normal
+ *   par le toggle "Envoi Automatique" (`_cardsAutoUpstreamEnabled`) : (1) un déclenchement
+ *   manuel explicite (bouton "Envoyer les corrections" → sync:startBulk), qui reste une
+ *   porte de sortie garantie pour toute carte PENDING dans t_outbox ; (2) l'envoi immédiat
+ *   d'une correction unitaire de carte via autoEnqueueCorrection() (cartes.queries.ts,
+ *   portail Qualité/panneau de correction) — une mutation ponctuelle, jamais un import
+ *   massif, qui doit donc échapper au toggle indépendamment d'un clic utilisateur sur ce
+ *   bouton précis. Automatique (périodique ou immédiat post-sauvegarde d'import) = respecte
+ *   le toggle (défaut `false`). Manuel explicite ou correction unitaire = l'ignore (`true`).
  * @param onEntryProcessed - Callback optionnel invoqué de façon SYNCHRONE juste après
  *   chaque entrée ayant définitivement quitté le statut PENDING au cours de ce lot
  *   (succès → SYNCED, ou échec définitif → ERROR — jamais pour une entrée conservée en

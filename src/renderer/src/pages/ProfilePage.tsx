@@ -588,7 +588,7 @@ export default function ProfilePage() {
               <div>
                 <h4 style={{ margin: 0, fontSize: 14, color: 'white', fontWeight: 600 }}>Envoi Automatique</h4>
                 <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.5 }}>
-                  Dès qu'une carte est modifiée, l'envoi vers le cloud se fait automatiquement dès que possible. Ce réglage est désactivé par défaut pour les administrateurs de site le temps de réaliser leurs imports (voir le rappel affiché sur l'écran Importation) — pensez à le réactiver une fois l'import terminé.
+                  Ce réglage protège spécifiquement vos imports massifs de cartes : il est désactivé par défaut pour les administrateurs de site le temps de réaliser un import (voir le rappel affiché sur l'écran Importation) — pensez à le réactiver une fois l'import terminé. Les corrections ponctuelles déjà validées (Qualité, panneau de correction, apurement, etc.) partent quant à elles toujours immédiatement vers le cloud, quel que soit l'état de ce réglage.
                 </p>
               </div>
               <label style={{ display: 'flex', alignItems: 'center', cursor: isLoadingUpstreamPref ? 'not-allowed' : 'pointer', opacity: isLoadingUpstreamPref ? 0.5 : 1 }}>

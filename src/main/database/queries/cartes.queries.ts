@@ -1758,7 +1758,10 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
     const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
     enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
     if (networkMonitor.getState() === 'ONLINE') {
-      scheduleOutboxProcessing();
+      // forceCards=true : correction/mutation unitaire (émargement rétroactif du cahier
+      // historique), jamais un import massif — doit échapper au toggle "Envoi Automatique"
+      // (même principe que autoEnqueueCorrection() plus haut).
+      scheduleOutboxProcessing(true);
     }
   }
 
@@ -1896,7 +1899,9 @@ export function corrigerApurementRetirant(
       const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
+        // forceCards=true : correction unitaire (retirant), jamais un import massif — doit
+        // échapper au toggle "Envoi Automatique" (même principe que autoEnqueueCorrection()).
+        scheduleOutboxProcessing(true);
       }
     }
 
@@ -2011,7 +2016,9 @@ export function annulerApurementDechargement(
       const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
       if (networkMonitor.getState() === 'ONLINE') {
-        scheduleOutboxProcessing();
+        // forceCards=true : annulation unitaire d'un émargement, jamais un import massif —
+        // doit échapper au toggle "Envoi Automatique" (même principe que autoEnqueueCorrection()).
+        scheduleOutboxProcessing(true);
       }
     }
 
@@ -2086,7 +2093,9 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
     const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(carte.id_carte) as any;
     enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
     if (networkMonitor.getState() === 'ONLINE') {
-      scheduleOutboxProcessing();
+      // forceCards=true : correction unitaire (scan d'inventaire physique), jamais un import
+      // massif — doit échapper au toggle "Envoi Automatique" (même principe que autoEnqueueCorrection()).
+      scheduleOutboxProcessing(true);
     }
   }
 
