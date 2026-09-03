@@ -8,6 +8,27 @@ import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { getSecureCurrentUser } from '../auth/session-heartbeat';
 
+// ─── Signal explicite "site introuvable côté cloud" (correctif bug production 2026-08-30) ──
+// Avant ce correctif, runDownstream()/syncUsersFromCloud() retournaient silencieusement 0
+// quand `t_sites` ne renvoyait aucune ligne pour le siteId demandé — strictement indiscernable
+// du cas légitime "aucune carte/utilisateur de neuf à télécharger". Un compte dont le
+// t_users.site_id référence un site supprimé/recréé (id changé côté Supabase, ex. ADJAME
+// 6 → 11) voyait donc afficher le toast trompeur "Vos données locales sont déjà à jour" au
+// lieu d'un message actionnable. Cette erreur dédiée est levée UNIQUEMENT pour ce cas précis
+// (site absent de t_sites) et propagée telle quelle par les appelants qui encapsulent déjà
+// ces fonctions dans un try/catch (sync-engine.ts, tous les cycles automatiques) — ils continuent de
+// l'absorber en warning sans crasher, exactement comme avant. Seul sync:pullSiteCards
+// (handlers.ts) l'intercepte explicitement pour enrichir sa réponse IPC d'un code
+// SITE_NOT_FOUND consommé par le renderer.
+export class SiteNotFoundError extends Error {
+  public readonly siteId: number;
+  constructor(siteId: number, cause?: string) {
+    super(`Site ${siteId} introuvable côté Supabase (t_sites)${cause ? ` : ${cause}` : ''}.`);
+    this.name = 'SiteNotFoundError';
+    this.siteId = siteId;
+  }
+}
+
 // ─── Garde de réentrance : preloadUsersFromCloud() ──────────────────────────
 // `syncEngine.init()` est déclenché depuis `mainWindow.on('ready-to-show', ...)`
 // (src/main/index.ts). Si cet événement Electron se déclenche plus d'une fois
@@ -122,7 +143,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
 
     if (siteError || !siteDataList || siteDataList.length === 0) {
       log.warn(`[SYNC] Site ${siteId} non trouvé ou erreur de requête.`, siteError ? siteError.message : "Aucune donnée");
-      return 0;
+      throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
 
@@ -155,6 +176,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
     }
     log.info(`[SYNC] Site ${siteId} ("${siteData.nom}") mis à jour localement avec succès.`);
   } catch (err: any) {
+    if (err instanceof SiteNotFoundError) throw err;
     log.error(`[SYNC] Exception lors de la synchronisation du site courant :`, err.message || err);
     return 0;
   }
@@ -639,7 +661,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
 
     if (siteError || !siteDataList || siteDataList.length === 0) {
       log.warn(`[syncUsersFromCloud] Site parent ${siteId} non trouvé ou erreur de requête.`, siteError ? siteError.message : "Aucune donnée");
-      return 0;
+      throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
 
@@ -667,6 +689,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     }
     log.info(`[syncUsersFromCloud] Site parent ${siteId} assuré localement.`);
   } catch (err: any) {
+    if (err instanceof SiteNotFoundError) throw err;
     log.error(`[syncUsersFromCloud] Exception lors de la sécurisation du site parent ${siteId} :`, err.message || err);
     return 0;
   }

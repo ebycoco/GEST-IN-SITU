@@ -111,6 +111,8 @@ export default function TeamActivityView() {
             : '✅ Vos données locales sont déjà à jour.',
           { id: toastId, duration: 4000 }
         );
+      } else if (res.code === 'SITE_NOT_FOUND') {
+        toast.error(`🚫 ${res.message || 'Site introuvable côté cloud — contactez le SUPER ADMIN.'}`, { id: toastId, duration: 10000 });
       } else {
         toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 6000 });
       }

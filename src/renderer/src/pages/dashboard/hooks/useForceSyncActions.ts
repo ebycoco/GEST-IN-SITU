@@ -283,6 +283,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         // de stats:get pourrait encore renvoyer les KPI d'AVANT le pull (même bug
         // P1 que le bouton "Actualiser", voir SiteAdminView.tsx).
         await loadStats(false, undefined, true);
+      } else if (toastId && res.code === 'SITE_NOT_FOUND') {
+        toast.error(`🚫 ${res.message || 'Site introuvable côté cloud — contactez le SUPER ADMIN.'}`, { id: toastId, duration: 10000 });
       } else if (toastId) {
         toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 8000 });
       }

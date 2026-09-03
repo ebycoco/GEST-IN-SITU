@@ -262,7 +262,7 @@ declare global {
         getUnreadList: (siteId?: number) => Promise<any[]>;
         markAsRead: (siteId?: number) => Promise<boolean>;
         markNotificationAsRead: (idLog: number) => Promise<boolean>;
-        pullSiteCards: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;
+        pullSiteCards: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string; code?: 'SITE_NOT_FOUND' }>;
         forceGlobal: () => Promise<{ success: boolean; counts: { sites: number; centres: number; users: number } }>;
         forceSite: (siteId: number) => Promise<{ success: boolean; counts: { cards: number; users: number }; errors: string[] }>;
         pullAgents: (siteId: number, currentUser?: any) => Promise<{ success: boolean; count: number; message?: string }>;

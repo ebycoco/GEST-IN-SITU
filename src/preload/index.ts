@@ -548,7 +548,7 @@ const api = {
       ipcRenderer.invoke('sync:forceGlobal'),
     forceSite: (siteId: number): Promise<{ success: boolean; counts: { cards: number; users: number }; errors: string[] }> => 
       ipcRenderer.invoke('sync:forceSite', siteId),
-    pullSiteCards: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
+    pullSiteCards: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string; code?: 'SITE_NOT_FOUND' }> =>
       ipcRenderer.invoke('sync:pullSiteCards', siteId, currentUser),
     pullAgents: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
       ipcRenderer.invoke('sync:pullAgents', siteId, currentUser),

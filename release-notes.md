@@ -14,5 +14,6 @@
 - **Champ "Rangement" désormais modifiable depuis l'onglet "Autres Anomalies" du portail Qualité** : la sauvegarde échouait systématiquement (champ non autorisé côté serveur) malgré sa présence dans l'interface.
 - **Validation de format (numéro de sécurité sociale, contact) désormais appliquée à la correction d'une anomalie brute** (onglet "Autres Anomalies"), alignée sur les autres circuits de correction du portail Qualité.
 - **Fiabilise l'enregistrement de certaines corrections de cartes qualité (suppression, transfert d'anomalie)** : la mise à jour de la base locale et son enfilage vers la synchronisation cloud s'exécutent désormais de façon atomique, réduisant le risque qu'une correction reste bloquée localement sans jamais être transmise en cas d'incident.
+- **Récupération manuelle des cartes depuis le cloud ("RÉCUPÉRER LES CARTES DEPUIS LE CLOUD") : un compte dont le site référence un identifiant introuvable côté Supabase affichait à tort "Vos données locales sont déjà à jour"** au lieu d'un message actionnable. Un message explicite ("Site introuvable côté cloud — contactez le SUPER ADMIN") s'affiche désormais dans ce cas précis.
 
 ## ⚡ Performances

@@ -98,6 +98,8 @@ export default function AdminCentreLayout() {
         // Force refresh des compteurs de conformité
         const detailedSyncStats = await window.api.stats.getDetailedSyncStats(user.site_id);
         if (detailedSyncStats) setDetailedSyncStats(detailedSyncStats);
+      } else if (res.code === 'SITE_NOT_FOUND') {
+        toast.error(`🚫 ${res.message || 'Site introuvable côté cloud — contactez le SUPER ADMIN.'}`, { id: toastId, duration: 10000 });
       } else {
         toast.error(`Échec de récupération : ${res.message || 'Erreur inconnue'}`, { id: toastId, duration: 6000 });
       }
