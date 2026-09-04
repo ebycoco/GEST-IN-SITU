@@ -760,6 +760,23 @@ export function delivrerCarte(
       throw new Error("Erreur lors de la mise à jour de la carte.");
     }
 
+    // t_logs (P2 audit non-régression) — CENTRE_CARTE_RECALCULE manquait ici alors que
+    // centre_id peut être recalculé ci-dessus (centreIdOverride) sur rangement d'urgence.
+    // Mêmes colonnes/action que updateQuickFields()/updateRangementEtFiche()/
+    // updateCarteRangementAndStatusRapid() ci-dessous. Dans la même transaction runTx (atomicité).
+    if (centreIdOverride !== null && centreIdOverride !== (carte.centre_id ?? null)) {
+      const detailMsg = `Centre recalculé pour la carte ID ${id} suite à délivrance avec rangement d'urgence : centre_id ${carte.centre_id ?? 'NULL'} -> ${centreIdOverride}, d'après le rangement "${data.rangement}".`;
+      const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: carte.centre_id ?? null, centre_id_apres: centreIdOverride, rangement: data.rangement });
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+        `).run(currentUser?.id_user || null, currentUser?.login || 'SYSTEM', detailMsg, valeurApres, uuidv4(), carte.site_id, centreIdOverride);
+      } catch (err) {
+        log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+      }
+    }
+
     // Synchroniser vers Supabase — on relit la ligne fraîchement mise à jour
     // (payload complet, avec site_id) : un payload minimal { sync_id } fait
     // systématiquement échouer mapCardPayload() côté outbox.service.ts ("site_id
@@ -1876,29 +1893,40 @@ export function updateQuickFields(id: number, fields: {
   }
 
   params.push(id);
-  const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
 
-  if (centreLogInfo) {
-    // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
-    const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement (correction qualité) : centre_id ${centreLogInfo.centreAvant ?? 'NULL'} -> ${centreLogInfo.centreApres}, d'après le rangement "${centreLogInfo.rangement}".`;
-    const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: centreLogInfo.centreAvant, centre_id_apres: centreLogInfo.centreApres, rangement: centreLogInfo.rangement });
-    try {
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
-        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
-      `).run(
-        currentUser?.id_user || null,
-        currentUser?.login || 'SYSTEM',
-        detailMsg,
-        valeurApres,
-        uuidv4(),
-        centreLogInfo.siteId,
-        centreLogInfo.centreApres
-      );
-    } catch (err) {
-      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+  // Atomicité (skill moteur-sync-offline-first / audit non-régression P1) : l'UPDATE et
+  // l'INSERT t_logs CENTRE_CARTE_RECALCULE doivent former une seule transaction SQLite.
+  // db.transaction() inconditionnel (aucun appelant connu de cette fonction n'est déjà dans
+  // une transaction, et better-sqlite3 gère nativement l'imbrication via savepoints si c'était
+  // le cas). autoEnqueueCorrection() reste hors transaction, comportement inchangé.
+  const runTx = db.transaction(() => {
+    const result = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+    if (centreLogInfo) {
+      // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
+      const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement (correction qualité) : centre_id ${centreLogInfo.centreAvant ?? 'NULL'} -> ${centreLogInfo.centreApres}, d'après le rangement "${centreLogInfo.rangement}".`;
+      const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: centreLogInfo.centreAvant, centre_id_apres: centreLogInfo.centreApres, rangement: centreLogInfo.rangement });
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+        `).run(
+          currentUser?.id_user || null,
+          currentUser?.login || 'SYSTEM',
+          detailMsg,
+          valeurApres,
+          uuidv4(),
+          centreLogInfo.siteId,
+          centreLogInfo.centreApres
+        );
+      } catch (err) {
+        log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+      }
     }
-  }
+
+    return result;
+  });
+  const res = runTx();
 
   autoEnqueueCorrection(id);
   return res;
@@ -2028,33 +2056,43 @@ export function updateRangementEtFiche(
   }
 
   params.push(id);
-  const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
 
-  if (carteAvant && centreChanged) {
-    // t_logs — mêmes colonnes que l'INSERT réel de corrigerCentreCarte() (cartes.queries.ts
-    // ~1187-1198). Action distincte ('CENTRE_CARTE_RECALCULE') pour ne pas confondre avec la
-    // correction manuelle ('CENTRE_CARTE_CORRIGE'). Pas d'enqueueOutbox dédié pour cette ligne
-    // t_logs elle-même (même choix que corrigerCentreCarte() : la mutation t_cartes elle-même
-    // est propagée via autoEnqueueCorrection() plus bas).
-    const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement : centre_id ${carteAvant.centre_id ?? 'NULL'} -> ${newCentreId}, d'après le rangement "${newRangement}".`;
-    const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: carteAvant.centre_id ?? null, centre_id_apres: newCentreId, rangement: newRangement });
-    try {
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
-        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
-      `).run(
-        currentUser?.id_user || null,
-        currentUser?.login || 'SYSTEM',
-        detailMsg,
-        valeurApres,
-        uuidv4(),
-        carteAvant.site_id,
-        newCentreId
-      );
-    } catch (err) {
-      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+  // Atomicité (skill moteur-sync-offline-first / audit non-régression P1) : l'UPDATE et
+  // l'INSERT t_logs CENTRE_CARTE_RECALCULE doivent former une seule transaction SQLite.
+  // db.transaction() inconditionnel (même raisonnement que updateQuickFields() ci-dessus).
+  // autoEnqueueCorrection() reste hors transaction, comportement inchangé.
+  const runTx = db.transaction(() => {
+    const result = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+    if (carteAvant && centreChanged) {
+      // t_logs — mêmes colonnes que l'INSERT réel de corrigerCentreCarte() (cartes.queries.ts
+      // ~1187-1198). Action distincte ('CENTRE_CARTE_RECALCULE') pour ne pas confondre avec la
+      // correction manuelle ('CENTRE_CARTE_CORRIGE'). Pas d'enqueueOutbox dédié pour cette ligne
+      // t_logs elle-même (même choix que corrigerCentreCarte() : la mutation t_cartes elle-même
+      // est propagée via autoEnqueueCorrection() plus bas).
+      const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement : centre_id ${carteAvant.centre_id ?? 'NULL'} -> ${newCentreId}, d'après le rangement "${newRangement}".`;
+      const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: carteAvant.centre_id ?? null, centre_id_apres: newCentreId, rangement: newRangement });
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+        `).run(
+          currentUser?.id_user || null,
+          currentUser?.login || 'SYSTEM',
+          detailMsg,
+          valeurApres,
+          uuidv4(),
+          carteAvant.site_id,
+          newCentreId
+        );
+      } catch (err) {
+        log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+      }
     }
-  }
+
+    return result;
+  });
+  const res = runTx();
 
   autoEnqueueCorrection(id);
   return res;
@@ -2474,43 +2512,52 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
     WHERE id_carte = ?
   `;
 
+  // Atomicité (skill moteur-sync-offline-first / audit non-régression P1) : l'UPDATE et
+  // l'INSERT t_logs CENTRE_CARTE_RECALCULE doivent former une seule transaction SQLite —
+  // fusionnée ici avec le garde-fou FTS5 déjà existant (retry sur l'ensemble de runTx(), même
+  // raisonnement que delivrerCarte() ci-dessus : en cas d'erreur, SQLite annule intégralement
+  // le premier essai, donc rejouer runTx() dans son ensemble est sûr, sans état partiel).
+  const runTx = db.transaction(() => {
+    db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
+
+    if (centreChanged) {
+      // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
+      const detailMsg = `Centre recalculé pour la carte ID ${carte.id_carte} suite à un scan d'inventaire (rangement "${targetRangement}") : centre_id ${carte.centre_id ?? 'NULL'} -> ${newCentreId}.`;
+      const valeurApres = JSON.stringify({ id_carte: carte.id_carte, centre_id_avant: carte.centre_id ?? null, centre_id_apres: newCentreId, rangement: targetRangement });
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+        `).run(
+          currentUser?.id_user || null,
+          currentUser?.login || 'SYSTEM',
+          detailMsg,
+          valeurApres,
+          uuidv4(),
+          carte.site_id,
+          newCentreId
+        );
+      } catch (err) {
+        log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+      }
+    }
+  });
+
   // Même garde-fou FTS5 que delivrerCarte()/transfererCarte()/updateCarte() (voir plus haut) :
   // cette UPDATE touche toujours `rangement`, donc déclenche systématiquement trg_cartes_au,
   // qui peut remonter "database disk image is malformed" en cas de corruption des shadow
   // tables FTS5 (incident confirmé sur ce chemin précis, cartes:inventairePhysiqueScan).
   try {
-    db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
+    runTx();
   } catch (err: any) {
     if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
       log.warn('[updateCarteRangementAndStatusRapid] FTS5 shadow tables corrompues. Suppression du trigger pour mise à jour sécurisée...');
       db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
-      db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
+      runTx();
       log.info('[updateCarteRangementAndStatusRapid] Mise à jour exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
       nuclearResetFts5();
     } else {
       throw err;
-    }
-  }
-
-  if (centreChanged) {
-    // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
-    const detailMsg = `Centre recalculé pour la carte ID ${carte.id_carte} suite à un scan d'inventaire (rangement "${targetRangement}") : centre_id ${carte.centre_id ?? 'NULL'} -> ${newCentreId}.`;
-    const valeurApres = JSON.stringify({ id_carte: carte.id_carte, centre_id_avant: carte.centre_id ?? null, centre_id_apres: newCentreId, rangement: targetRangement });
-    try {
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
-        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
-      `).run(
-        currentUser?.id_user || null,
-        currentUser?.login || 'SYSTEM',
-        detailMsg,
-        valeurApres,
-        uuidv4(),
-        carte.site_id,
-        newCentreId
-      );
-    } catch (err) {
-      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
     }
   }
 
