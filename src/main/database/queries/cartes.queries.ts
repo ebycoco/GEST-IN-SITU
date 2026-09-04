@@ -1059,6 +1059,8 @@ export function getCartesMalCentrees(siteId: number): Array<{
   noms: string;
   prenoms: string;
   num_secu: string | null;
+  date_de_naissance: string | null;
+  lieu_de_naissance: string | null;
   rangement: string;
   centre_id_actuel: number | null;
   nom_centre_actuel: string | null;
@@ -1096,8 +1098,11 @@ export function getCartesMalCentrees(siteId: number): Array<{
   // `isUnclassified` que delivrerCarte()/declarerDoublon() ci-dessus) ; le matching
   // longest-prefix reste ensuite fait en mémoire (TypeScript), même approche que la migration
   // V50 (volume analogue, pas d'optimisation supplémentaire nécessaire pour ce cycle).
+  // date_de_naissance/lieu_de_naissance (ajout additif) : uniquement pour permettre au renderer
+  // (InventaireCartesMalCentrees.tsx) de filtrer côté client sur ces 2 critères en plus du nom —
+  // ne change ni le WHERE ni l'algorithme de détection préfixe→centre ci-dessus.
   const rows = db.prepare(`
-    SELECT id_carte, noms, prenoms, num_secu, rangement, centre_id, statut
+    SELECT id_carte, noms, prenoms, num_secu, date_de_naissance, lieu_de_naissance, rangement, centre_id, statut
     FROM t_cartes
     WHERE site_id = ?
       AND rangement IS NOT NULL
@@ -1116,6 +1121,8 @@ export function getCartesMalCentrees(siteId: number): Array<{
       noms: row.noms,
       prenoms: row.prenoms,
       num_secu: row.num_secu,
+      date_de_naissance: row.date_de_naissance,
+      lieu_de_naissance: row.lieu_de_naissance,
       rangement: row.rangement,
       centre_id_actuel: row.centre_id ?? null,
       nom_centre_actuel: row.centre_id != null ? (centresById.get(row.centre_id) ?? null) : null,
@@ -1753,7 +1760,13 @@ export function getSansRangementPage(siteId: number, offset: number, limit: numb
     });
   }
   if (filters?.contact?.trim()) { where += " AND contact LIKE ?"; params.push(`%${filters.contact}%`); }
-  if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(filters.ddn.trim()); }
+  // normalizeDate (ajout additif) : filters.ddn arrive du renderer au format JJ/MM/AAAA (composant
+  // DateInput, cf. InventaireSansRangement.tsx) alors que date_de_naissance est stocké en base au
+  // format ISO AAAA-MM-JJ (même convention que searchQuickLogistique/searchCombinedInventaire
+  // ci-dessous dans ce fichier, qui appliquent déjà normalizeDate avant comparaison). Sans cette
+  // conversion, une égalité stricte sur une date JJ/MM/AAAA ne matcherait jamais rien. Comportement
+  // inchangé pour l'appelant historique (MissingDataView.tsx), qui ne renseigne jamais filters.ddn.
+  if (filters?.ddn?.trim())     { where += " AND date_de_naissance = ?"; params.push(normalizeDate(filters.ddn.trim())); }
   if (filters?.lieu?.trim())    { where += " AND lieu_de_naissance LIKE ?"; params.push(`%${filters.lieu}%`); }
 
   const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;

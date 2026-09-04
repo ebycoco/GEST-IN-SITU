@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Package, RefreshCw } from 'lucide-react';
+import { Package, RefreshCw, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import { PaginationInput } from '../../components/PaginationInput';
+import DateInput from '../../components/DateInput';
+import { useDebounce } from '../../hooks/useDebounce';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -24,6 +26,15 @@ interface CarteSansRangement {
  * portail Qualité (MissingDataView.tsx) — élargie de façon additive/non-cassante avec un
  * paramètre `sortOrder` optionnel ('oldest' ici : plus anciennes en premier, décision produit
  * validée), sans changer le comportement par défaut ('recent') pour l'appelant historique.
+ *
+ * 3 champs de recherche (reproduits à l'identique de InventaireLogistique.tsx, "CLASSEMENT
+ * LOGISTIQUE") : libre (Nom/Prénom, transmis en `query`) + Date/Lieu de naissance facultatifs
+ * (transmis en `filters: QualityFilters`, cf. quality.types.ts) — débounce 400ms avant rappel
+ * réseau (même ordre de grandeur que MissingDataView.tsx côté Qualité, portail qui partage cette
+ * même fonction backend). filters.ddn n'est envoyé qu'une fois la saisie complète (JJ/MM/AAAA,
+ * 10 caractères, masque géré par DateInput) pour éviter de filtrer sur une date partielle ; le
+ * backend normalise ensuite ce format vers l'ISO stocké en base (cf. commentaire ajouté dans
+ * getSansRangementPage()). Tout changement de critère recale currentPage à 1.
  * Écriture : queries.updateRangementEtFiche() (cartes.queries.ts:2044-2117) via le handler IPC
  * cartes:updateRangementEtFiche, réutilisée telle quelle (déjà transactionnelle, déjà ouverte à
  * OPERATEUR_LOGISTIQUE, recalcule déjà centre_id à partir du préfixe de rangement).
@@ -42,6 +53,14 @@ export default function InventaireSansRangement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
 
+  // 3 champs de recherche (cf. commentaire de tête) — débounce avant relance réseau.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterDateNaissance, setFilterDateNaissance] = useState('');
+  const [filterLieuNaissance, setFilterLieuNaissance] = useState('');
+  const debouncedSearchQuery = useDebounce(searchQuery, 400);
+  const debouncedFilterDateNaissance = useDebounce(filterDateNaissance, 400);
+  const debouncedFilterLieuNaissance = useDebounce(filterLieuNaissance, 400);
+
   const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
 
   const loadData = useCallback(async (silent = false) => {
@@ -49,7 +68,13 @@ export default function InventaireSansRangement() {
     try {
       if (!silent) setIsLoading(true);
       const offset = (currentPage - 1) * ITEMS_PER_PAGE;
-      const res = await window.api.cartes.getSansRangementPage(Number(siteIdToUse), offset, ITEMS_PER_PAGE, '', undefined, 'oldest');
+      // Date de Naissance : n'est envoyée qu'une fois complète (JJ/MM/AAAA, 10 car.) pour éviter
+      // de filtrer sur une date partielle pendant la saisie (masque géré par DateInput) — même
+      // garde que InventaireLogistique.tsx (searchQuickLogistique).
+      const ddnFilter = debouncedFilterDateNaissance.length === 10 ? debouncedFilterDateNaissance : undefined;
+      const lieuFilter = debouncedFilterLieuNaissance.trim() || undefined;
+      const filters = (ddnFilter || lieuFilter) ? { ddn: ddnFilter, lieu: lieuFilter } : undefined;
+      const res = await window.api.cartes.getSansRangementPage(Number(siteIdToUse), offset, ITEMS_PER_PAGE, debouncedSearchQuery, filters, 'oldest');
       const nextRows = (res?.rows || []) as CarteSansRangement[];
       const nextTotal = res?.total || 0;
       setRows(nextRows);
@@ -73,11 +98,18 @@ export default function InventaireSansRangement() {
     } finally {
       if (!silent) setIsLoading(false);
     }
-  }, [siteIdToUse, currentPage]);
+  }, [siteIdToUse, currentPage, debouncedSearchQuery, debouncedFilterDateNaissance, debouncedFilterLieuNaissance]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Recale sur la première page à chaque changement de critère de recherche (les 3 champs
+  // ci-dessus), même principe que MissingDataView.tsx (portail Qualité) sur cette même fonction
+  // backend — un ancien offset resterait sinon incohérent avec le nouveau total filtré.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearchQuery, debouncedFilterDateNaissance, debouncedFilterLieuNaissance]);
 
   // Rafraîchissement discret sur les corrections effectuées ailleurs dans le hub (même pattern
   // que InventaireCartesMalCentrees.tsx/InventaireOverview.tsx).
@@ -144,6 +176,52 @@ export default function InventaireSansRangement() {
         enregistrez directement depuis la liste, sans passer par la recherche individuelle de
         "CLASSEMENT LOGISTIQUE".
       </p>
+
+      {/* 3 CHAMPS DE RECHERCHE — reproduits à l'identique de InventaireLogistique.tsx
+          (CLASSEMENT LOGISTIQUE) : libre (Nom/Prénom) + Date/Lieu de naissance facultatifs. */}
+      <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rechercher une fiche (Nom et Prénom)</label>
+          <div style={{ position: 'relative' }}>
+            <Search size={18} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-purple)' }} />
+            <input
+              className="form-input"
+              style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, outline: 'none' }}
+              type="text"
+              placeholder="Saisir les critères..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value.toUpperCase())}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Date de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+            </label>
+            <DateInput
+              name="filterDateNaissance"
+              value={filterDateNaissance}
+              onChange={setFilterDateNaissance}
+              placeholder="JJ/MM/AAAA"
+              style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, padding: '0 16px', outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Lieu de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+            </label>
+            <input
+              className="form-input"
+              style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, padding: '0 16px', outline: 'none' }}
+              type="text"
+              placeholder="Ex: ABOBO"
+              value={filterLieuNaissance}
+              onChange={(e) => setFilterLieuNaissance(e.target.value.toUpperCase())}
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         {isLoading ? (

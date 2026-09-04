@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { MapPinOff, RefreshCw } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { MapPinOff, RefreshCw, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import { confirmService } from '../../components/confirmService';
 import { PaginationInput } from '../../components/PaginationInput';
+import DateInput from '../../components/DateInput';
+import { normalizeDate } from '../../../../shared/utils/date';
 
 // Pagination CÔTÉ RENDERER uniquement (slice d'un tableau déjà entièrement chargé en mémoire) —
 // pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts:1057-1129)
@@ -19,6 +21,8 @@ interface CarteMalCentree {
   noms: string;
   prenoms: string;
   num_secu: string | null;
+  date_de_naissance: string | null;
+  lieu_de_naissance: string | null;
   rangement: string;
   centre_id_actuel: number | null;
   nom_centre_actuel: string | null;
@@ -45,6 +49,13 @@ interface CarteMalCentree {
  * l'action "Corriger" reste affichée pour ces lignes (transparence : la carte est bien
  * mal-centrée, l'agent doit comprendre pourquoi elle reste bloquée) mais l'erreur serveur
  * explicite remonte via toast si l'agent tente quand même la correction.
+ *
+ * 3 champs de recherche (reproduits à l'identique de InventaireLogistique.tsx, "CLASSEMENT
+ * LOGISTIQUE") : libre (Nom/Prénom) + Date/Lieu de naissance facultatifs. Contrairement à
+ * InventaireSansRangement.tsx (recherche SQL paginée côté serveur), ce filtrage est fait
+ * intégralement CÔTÉ RENDERER sur `rows` déjà chargé en mémoire (getCartesMalCentrees() n'a pas
+ * de paramètre de recherche — pas de risque Low-Memory supplémentaire, volume déjà réduit par le
+ * pré-filtre SQL existant). `pagedRows` dérive de ce tableau filtré, pas de `rows` brut.
  */
 export default function InventaireCartesMalCentrees() {
   const { user, activeSiteId } = useAuthStore();
@@ -55,8 +66,41 @@ export default function InventaireCartesMalCentrees() {
   const [correctingId, setCorrectingId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
 
-  const totalPages = Math.max(1, Math.ceil(rows.length / ITEMS_PER_PAGE));
-  const pagedRows = rows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+  // 3 champs de recherche (cf. commentaire de tête) — filtrage 100% client-side sur `rows`.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterDateNaissance, setFilterDateNaissance] = useState('');
+  const [filterLieuNaissance, setFilterLieuNaissance] = useState('');
+
+  const filteredRows = useMemo(() => {
+    const q = searchQuery.trim().toUpperCase();
+    // Égalité stricte sur la date de naissance normalisée (même format ISO que le stockage
+    // t_cartes.date_de_naissance) — n'applique le filtre qu'une fois la saisie complète
+    // (JJ/MM/AAAA, 10 car.), même garde que InventaireLogistique.tsx/InventaireSansRangement.tsx.
+    const ddn = filterDateNaissance.length === 10 ? normalizeDate(filterDateNaissance) : '';
+    const lieu = filterLieuNaissance.trim().toUpperCase();
+
+    if (!q && !ddn && !lieu) return rows;
+
+    return rows.filter(r => {
+      if (q) {
+        const fullName = `${r.noms || ''} ${r.prenoms || ''}`.toUpperCase();
+        if (!fullName.includes(q)) return false;
+      }
+      if (ddn && (r.date_de_naissance || '') !== ddn) return false;
+      if (lieu && !(r.lieu_de_naissance || '').toUpperCase().includes(lieu)) return false;
+      return true;
+    });
+  }, [rows, searchQuery, filterDateNaissance, filterLieuNaissance]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / ITEMS_PER_PAGE));
+  const pagedRows = filteredRows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  // Recale sur la première page à chaque changement de critère de recherche — même principe que
+  // InventaireSansRangement.tsx (un ancien offset resterait sinon incohérent avec le nouveau total
+  // filtré).
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterDateNaissance, filterLieuNaissance]);
 
   const loadData = useCallback(async (silent = false) => {
     if (!siteIdToUse) { setRows([]); setCurrentPage(1); setIsLoading(false); return; }
@@ -142,13 +186,60 @@ export default function InventaireCartesMalCentrees() {
         la délivrance pour les agents du centre attendu.
       </p>
 
+      {/* 3 CHAMPS DE RECHERCHE — reproduits à l'identique de InventaireLogistique.tsx
+          (CLASSEMENT LOGISTIQUE) : libre (Nom/Prénom) + Date/Lieu de naissance facultatifs.
+          Filtrage 100% client-side (cf. commentaire de tête du composant). */}
+      <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rechercher une fiche (Nom et Prénom)</label>
+          <div style={{ position: 'relative' }}>
+            <Search size={18} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-purple)' }} />
+            <input
+              className="form-input"
+              style={{ width: '100%', paddingLeft: 42, borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, outline: 'none' }}
+              type="text"
+              placeholder="Saisir les critères..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value.toUpperCase())}
+            />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Date de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+            </label>
+            <DateInput
+              name="filterDateNaissance"
+              value={filterDateNaissance}
+              onChange={setFilterDateNaissance}
+              placeholder="JJ/MM/AAAA"
+              style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, padding: '0 16px', outline: 'none' }}
+            />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Lieu de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+            </label>
+            <input
+              className="form-input"
+              style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 44, padding: '0 16px', outline: 'none' }}
+              type="text"
+              placeholder="Ex: ABOBO"
+              value={filterLieuNaissance}
+              onChange={(e) => setFilterLieuNaissance(e.target.value.toUpperCase())}
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
         {isLoading ? (
           <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Chargement en cours...</div>
-        ) : rows.length === 0 ? (
+        ) : filteredRows.length === 0 ? (
           <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
             <MapPinOff size={48} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
-            Aucune carte mal-centrée détectée.
+            {rows.length === 0 ? 'Aucune carte mal-centrée détectée.' : 'Aucun résultat pour ces critères de recherche.'}
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -204,7 +295,7 @@ export default function InventaireCartesMalCentrees() {
         {totalPages > 1 && (
           <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
-              Affichage {((currentPage - 1) * ITEMS_PER_PAGE) + 1} à {Math.min(currentPage * ITEMS_PER_PAGE, rows.length)} sur {rows.length}
+              Affichage {((currentPage - 1) * ITEMS_PER_PAGE) + 1} à {Math.min(currentPage * ITEMS_PER_PAGE, filteredRows.length)} sur {filteredRows.length}
             </span>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <button className="btn btn-secondary" disabled={currentPage === 1 || isLoading} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
