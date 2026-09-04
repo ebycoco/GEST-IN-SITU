@@ -51,8 +51,19 @@ export default function InventaireSansRangement() {
       const offset = (currentPage - 1) * ITEMS_PER_PAGE;
       const res = await window.api.cartes.getSansRangementPage(Number(siteIdToUse), offset, ITEMS_PER_PAGE, '', undefined, 'oldest');
       const nextRows = (res?.rows || []) as CarteSansRangement[];
+      const nextTotal = res?.total || 0;
       setRows(nextRows);
-      setTotalItems(res?.total || 0);
+      setTotalItems(nextTotal);
+      // Auto-correction défensive : si l'offset demandé était devenu obsolète (ex. reload
+      // silencieux déclenché par app:data-updated avec un currentPage pas encore aligné sur le
+      // total réel — voir handleSave), la réponse serveur peut renvoyer rows:[] alors que total
+      // reste correct. On reclampe ici currentPage sur newTotalPages calculé depuis ce total
+      // fiable : si ça change la page, loadData (useCallback dépendant de currentPage) change de
+      // référence et l'effet de montage relance automatiquement une requête avec le bon offset.
+      // Sans ce garde-fou, la page resterait bloquée sur un offset vide malgré des cartes encore
+      // présentes en page 1 (bug corrigé par ce ticket).
+      const newTotalPages = Math.max(1, Math.ceil(nextTotal / ITEMS_PER_PAGE));
+      setCurrentPage(prev => Math.min(prev, newTotalPages));
       // Réinitialisation des valeurs éditées sur la page courante uniquement (Low-Memory §2 :
       // pas de rétention indéfinie de valeurs pour des lignes déjà quittées).
       setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
@@ -89,8 +100,20 @@ export default function InventaireSansRangement() {
       // Retrait local immédiat de la ligne traitée (pas d'attente d'un rechargement complet).
       setRows(prev => prev.filter(r => r.id_carte !== carte.id_carte));
       setTotalItems(prev => Math.max(0, prev - 1));
+      // Recale currentPage sur le nouveau total (ex. dernière carte de la page courante
+      // enregistrée) — même modèle que InventaireCartesMalCentrees.tsx (handleCorriger). Sans ce
+      // recalage, un offset obsolète survivrait jusqu'au prochain rechargement et pourrait
+      // afficher une page vide alors qu'il reste des cartes en page 1 (bug corrigé par ce ticket).
+      const newTotal = Math.max(0, totalItems - 1);
+      const newTotalPages = Math.max(1, Math.ceil(newTotal / ITEMS_PER_PAGE));
+      setCurrentPage(prev => Math.min(prev, newTotalPages));
       // Notifie le reste du hub (compteurs InventaireLayout.tsx, etc.) — même pattern que
-      // InventaireCartesMalCentrees.tsx/InventaireLogistique.tsx.
+      // InventaireCartesMalCentrees.tsx/InventaireLogistique.tsx. Le rechargement silencieux que
+      // ce dispatch provoque en interne (listener app:data-updated ci-dessus, loadData(true)) peut
+      // partir d'un offset encore basé sur l'ancien currentPage (closure figée avant ce commit
+      // React) : c'est le garde-fou posé dans loadData (clamp sur le total serveur reçu) qui
+      // absorbe ce cas plutôt qu'un ordre d'appel ici, un setState React ne changeant pas la
+      // valeur lue de façon synchrone par le code qui suit dans le même tick.
       window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
       toast.error(`Erreur : ${err.message || err}`);
