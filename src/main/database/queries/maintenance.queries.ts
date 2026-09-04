@@ -50,11 +50,32 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
     // Capture de l'ancien contenu FTS5 du site à purger AVANT suppression — nécessaire pour
     // reproduire ensuite manuellement les commandes 'delete' que le trigger AFTER DELETE
     // aurait émises (old.* n'est plus disponible une fois les lignes supprimées).
+    //
+    // CORRECTIF ANTI-FREEZE (lecture chunkée) : ce SELECT portait auparavant sur TOUTES les
+    // cartes du site en un seul bloc synchrone (jusqu'à 218 332 lignes en production) — seul
+    // point de cette fonction resté non chunké alors que toutes les étapes lourdes suivantes
+    // (anomalies, sync_queue/cartes, FTS5) le sont déjà. Ce bloc unique gelait le Main Thread
+    // Electron (donc tout l'IPC de l'appli) pendant toute sa durée, provoquant le freeze de la
+    // barre de progression vers 10% observé en production. Lecture désormais paginée par
+    // keyset sur id_carte (évite la dégradation d'un OFFSET élevé sur une grosse table), par
+    // lots de SELECT_BATCH_SIZE avec yield setImmediate entre chaque lot — résultat final
+    // (oldFtsCards) strictement identique en forme/contenu/ordre au SELECT unique remplacé.
     type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
-    const oldFtsCards = db.prepare(`
-      SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
-      FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
-    `).all(siteId) as FtsCard[];
+    const SELECT_BATCH_SIZE = 500;
+    const oldFtsCards: FtsCard[] = [];
+    {
+      const selectCardsBatch = db.prepare(`
+        SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
+        FROM t_cartes WHERE site_id = ? AND id_carte > ? ORDER BY id_carte ASC LIMIT ?
+      `);
+      let lastId = 0;
+      let batch: FtsCard[];
+      while ((batch = selectCardsBatch.all(siteId, lastId, SELECT_BATCH_SIZE) as FtsCard[]).length > 0) {
+        oldFtsCards.push(...batch);
+        lastId = batch[batch.length - 1].id_carte;
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    }
 
     if (progressCallback) progressCallback(15);
     await new Promise(resolve => setImmediate(resolve));
@@ -299,11 +320,29 @@ export async function emergencyPurge(
   // Capture de l'ancien contenu FTS5 du site à purger AVANT suppression — nécessaire pour
   // reproduire ensuite manuellement les commandes 'delete' que le trigger AFTER DELETE aurait
   // émises (old.* n'est plus disponible une fois les lignes supprimées).
+  //
+  // CORRECTIF ANTI-FREEZE (lecture chunkée) : même bug latent que purgeLocalDatabase (voir sa
+  // documentation détaillée ci-dessus) — ce SELECT unique portait sur TOUTES les cartes du site
+  // en un seul bloc synchrone, gelant le Main Thread Electron sur un site volumineux. Lecture
+  // désormais paginée par keyset sur id_carte, par lots de SELECT_BATCH_SIZE avec yield
+  // setImmediate entre chaque lot — résultat final (oldFtsCards) strictement identique en
+  // forme/contenu/ordre au SELECT unique remplacé.
   type FtsCard = { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; lieu_de_naissance: string; rangement: string };
-  const oldFtsCards = db.prepare(`
-    SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
-    FROM t_cartes WHERE site_id = ? ORDER BY id_carte ASC
-  `).all(siteId) as FtsCard[];
+  const SELECT_BATCH_SIZE = 500;
+  const oldFtsCards: FtsCard[] = [];
+  {
+    const selectCardsBatch = db.prepare(`
+      SELECT id_carte, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement
+      FROM t_cartes WHERE site_id = ? AND id_carte > ? ORDER BY id_carte ASC LIMIT ?
+    `);
+    let lastId = 0;
+    let batch: FtsCard[];
+    while ((batch = selectCardsBatch.all(siteId, lastId, SELECT_BATCH_SIZE) as FtsCard[]).length > 0) {
+      oldFtsCards.push(...batch);
+      lastId = batch[batch.length - 1].id_carte;
+      await new Promise(resolve => setImmediate(resolve));
+    }
+  }
 
   if (progressCallback) progressCallback(15);
   await new Promise(resolve => setImmediate(resolve));
