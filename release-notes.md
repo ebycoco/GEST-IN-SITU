@@ -3,6 +3,7 @@
 ## 🚨 Sécurité
 
 - **Correction d'une fuite de cloisonnement site sur le portail Qualité (transfert d'une anomalie d'import vers une carte)** : le panneau de correction global ne vérifiait jamais que l'anomalie corrigée appartenait bien au site de l'opérateur avant de créer la carte correspondante, permettant potentiellement de transférer des données d'un autre site.
+- **Le nouveau bouton "Resynchronisation complète" (page Monitoring Synchronisation) n'avait aucune vérification de rôle côté serveur** : la restriction Administrateur de Site/Super Admin n'existait que côté interface (bouton caché + confirmation par mot de passe), contournable par n'importe quel compte authentifié via un appel direct depuis la console développeur, permettant de déclencher l'opération de synchronisation la plus coûteuse du système sans y être autorisé. Une vérification de rôle serveur a été ajoutée, alignée sur le même contrôle déjà en place pour les autres synchronisations forcées sensibles.
 
 ## 🚀 Nouveautés & Ergonomie
 
