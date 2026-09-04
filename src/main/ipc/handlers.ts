@@ -1942,7 +1942,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
         }
       }
-      return queries.updateQuickFields(id, fields);
+      return queries.updateQuickFields(id, fields, secureUser);
     }
     catch (e) { log.error('IPC Error: cartes:updateQuickFields', e); throw e; }
   });
@@ -1975,7 +1975,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
         }
       }
-      return queries.updateRangementEtFiche(id, fields);
+      return queries.updateRangementEtFiche(id, fields, secureUser);
     }
     catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
   });
@@ -2699,7 +2699,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
                // Mais l'anomalie ayant été purgée, on met à jour la nouvelle carte
                const newCard = db.prepare('SELECT id_carte FROM t_cartes WHERE num_secu = ? AND noms = ? AND prenoms = ? ORDER BY id_carte DESC LIMIT 1').get(anomaly.num_secu, anomaly.noms, anomaly.prenoms) as any;
                if (newCard) {
-                 queries.updateQuickFields(newCard.id_carte, { [champ_corrige]: valeur_apres });
+                 queries.updateQuickFields(newCard.id_carte, { [champ_corrige]: valeur_apres }, secureUser);
                }
             }
           } else {
@@ -2708,7 +2708,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
             if (champ_corrige === 'date_de_naissance') {
               queries.updateDateDeNaissance(targetId, valeur_apres);
             } else {
-              queries.updateQuickFields(targetId, { [champ_corrige]: valeur_apres });
+              queries.updateQuickFields(targetId, { [champ_corrige]: valeur_apres }, secureUser);
             }
             // Suppression de l'anomalie traitée (updateDateDeNaissance ne le fait pas si carte_id existe)
             db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(anomaly.id);
@@ -2719,7 +2719,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           if (champ_corrige === 'date_de_naissance') {
             queries.updateDateDeNaissance(id_carte, valeur_apres);
           } else {
-            queries.updateQuickFields(id_carte, { [champ_corrige]: valeur_apres });
+            queries.updateQuickFields(id_carte, { [champ_corrige]: valeur_apres }, secureUser);
           }
         }
       })();

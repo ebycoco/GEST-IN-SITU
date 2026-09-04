@@ -57,6 +57,40 @@ function autoEnqueueCorrection(id_carte: number): void {
   }
 }
 
+/**
+ * Résout le centre_id attendu à partir d'un texte de rangement, par préfixe le plus long
+ * (`t_centres.prefixe_rangement`, longest-prefix-first — même règle que corrigerCentreCarte()
+ * ci-dessous). Retourne null si le rangement est vide/NON CLASSE ou si aucun préfixe ne matche
+ * (repli à la charge de l'appelant, jamais deviné ici).
+ *
+ * Portée strictement limitée aux points d'écriture normale du rangement (updateRangementEtFiche,
+ * updateCarteRangementAndStatusRapid, updateQuickFields) + delivrerCarte(). Ne remplace PAS et ne
+ * fusionne PAS avec getCartesMalCentrees()/corrigerCentreCarte() ni resolveRouting()
+ * (workers/import-worker.js) ni la version schema.ts V50, qui restent des implémentations isolées
+ * par décision produit antérieure (cf. commentaire cartes.queries.ts:981-985 ci-dessous).
+ */
+function resolveCentreIdFromPrefix(rangement: string, siteId: number): number | null {
+  const raw = (rangement || '').trim().toUpperCase();
+  if (!raw || raw === 'NON CLASSE') return null;
+
+  const centres = getCentresWithPrefixes(siteId) as any[];
+  const routingIndex: { centre_id: number; prefix: string }[] = [];
+  centres.forEach((c: any) => {
+    if (c.prefixe_rangement && String(c.prefixe_rangement).trim()) {
+      String(c.prefixe_rangement).split(',').forEach((p: string) => {
+        const cleanP = p.toUpperCase().trim();
+        if (cleanP) routingIndex.push({ centre_id: c.id, prefix: cleanP });
+      });
+    }
+  });
+  routingIndex.sort((a, b) => b.prefix.length - a.prefix.length); // longest-prefix-first, même règle que corrigerCentreCarte()
+
+  for (const r of routingIndex) {
+    if (raw.startsWith(r.prefix)) return r.centre_id;
+  }
+  return null;
+}
+
 /** Reset nucléaire de l'index FTS5 : DROP + CREATE + REBUILD pour réparer une corruption profonde */
 export function nuclearResetFts5(): void {
   setImmediate(() => {
@@ -673,12 +707,20 @@ export function delivrerCarte(
       );
     }
 
-    // Rattachement centre_id : une carte non classée délivrée avec un rangement d'urgence
-    // saisi se voit désormais affecter le centre de l'opérateur qui l'a physiquement retrouvée
-    // (elle n'en avait pas de fiable jusqu'ici) ; sinon centre_id reste inchangé (COALESCE).
-    const centreIdOverride = (isUnclassified && data.rangement && data.rangement.trim() !== '' && currentUser?.centre_id != null && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE'))
-      ? currentUser.centre_id
-      : null;
+    // Rattachement centre_id : une carte non classée délivrée avec un rangement d'urgence saisi
+    // se voit désormais affecter le centre déduit du PRÉFIXE de ce rangement (référentiel
+    // t_centres.prefixe_rangement, cf. resolveCentreIdFromPrefix() ci-dessus) — priorité au
+    // préfixe réellement saisi, repli sur le centre de l'opérateur connecté seulement si aucun
+    // préfixe ne matche (décision produit validée, changement de comportement assumé par rapport
+    // à l'ancien override systématique sur currentUser.centre_id). siteId dérivé de la carte
+    // (carte.site_id), jamais de l'utilisateur (cloisonnement §3). Sinon centre_id reste
+    // inchangé (COALESCE plus bas).
+    let centreIdOverride: number | null = null;
+    if (isUnclassified && data.rangement && data.rangement.trim() !== ''
+        && currentUser && (currentUser.role === 'OPERATEUR_VERIFICATION' || currentUser.role === 'ADMIN_CENTRE')) {
+      const centreFromPrefix = resolveCentreIdFromPrefix(data.rangement, carte.site_id);
+      centreIdOverride = centreFromPrefix ?? (currentUser.centre_id ?? null);
+    }
 
     const query = `
       UPDATE t_cartes SET
@@ -1767,19 +1809,39 @@ export function updateQuickFields(id: number, fields: {
   date_de_naissance?: string;
   sexe?: string;
   lieu_enrolement?: string;
-}) {
+}, currentUser?: { role?: string; site_id?: number; centre_id?: number; id_user?: number; login?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const sets: string[] = ['updated_at = ?', 'is_dirty = 1'];
   const params: any[] = [now];
+
+  // Recalcul centre_id — bloc `rangement` UNIQUEMENT (périmètre strict, ne touche aucun autre
+  // champ de cette fonction). Renseigné seulement si le centre_id change réellement.
+  let centreLogInfo: { siteId: number; centreAvant: number | null; centreApres: number; rangement: string } | null = null;
 
   if (fields.num_secu !== undefined) {
     sets.push('num_secu = ?');
     params.push(fields.num_secu.trim());
   }
   if (fields.rangement !== undefined) {
+    const newRangement = fields.rangement.trim().toUpperCase();
     sets.push('rangement = ?');
-    params.push(fields.rangement.trim().toUpperCase());
+    params.push(newRangement);
+
+    // Relecture préalable (site_id/centre_id) pour recalculer centre_id à partir du nouveau
+    // rangement — même règle que updateRangementEtFiche() (repli sur la valeur déjà en base si
+    // aucun préfixe ne matche). Cloisonnement §3 : siteId toujours dérivé de la carte relue ici,
+    // jamais de l'utilisateur courant.
+    const carteAvant = db.prepare('SELECT site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number; centre_id: number | null } | undefined;
+    if (carteAvant) {
+      const resolved = resolveCentreIdFromPrefix(newRangement, carteAvant.site_id);
+      const newCentreId = resolved ?? (carteAvant.centre_id ?? null);
+      sets.push('centre_id = ?');
+      params.push(newCentreId);
+      if (newCentreId !== (carteAvant.centre_id ?? null)) {
+        centreLogInfo = { siteId: carteAvant.site_id, centreAvant: carteAvant.centre_id ?? null, centreApres: newCentreId as number, rangement: newRangement };
+      }
+    }
   }
   if (fields.noms !== undefined) {
     sets.push('noms = ?');
@@ -1815,6 +1877,29 @@ export function updateQuickFields(id: number, fields: {
 
   params.push(id);
   const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+  if (centreLogInfo) {
+    // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
+    const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement (correction qualité) : centre_id ${centreLogInfo.centreAvant ?? 'NULL'} -> ${centreLogInfo.centreApres}, d'après le rangement "${centreLogInfo.rangement}".`;
+    const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: centreLogInfo.centreAvant, centre_id_apres: centreLogInfo.centreApres, rangement: centreLogInfo.rangement });
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+      `).run(
+        currentUser?.id_user || null,
+        currentUser?.login || 'SYSTEM',
+        detailMsg,
+        valeurApres,
+        uuidv4(),
+        centreLogInfo.siteId,
+        centreLogInfo.centreApres
+      );
+    } catch (err) {
+      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+    }
+  }
+
   autoEnqueueCorrection(id);
   return res;
 }
@@ -1910,11 +1995,32 @@ export function searchQuickLogistique(siteId: number, critere: string) {
   `).all(siteId, cleaned, cleaned, cleaned, searchPattern, searchPattern, searchPattern);
 }
 
-export function updateRangementEtFiche(id: number, fields: { rangement: string, num_secu?: string }) {
+export function updateRangementEtFiche(
+  id: number,
+  fields: { rangement: string, num_secu?: string },
+  currentUser?: { role?: string; site_id?: number; centre_id?: number; id_user?: number; login?: string }
+) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
+  const newRangement = fields.rangement.trim().toUpperCase();
+
+  // Relecture préalable (site_id/centre_id) pour recalculer centre_id à partir du nouveau
+  // rangement — cloisonnement §3 : le siteId utilisé pour resolveCentreIdFromPrefix est
+  // TOUJOURS celui de la carte relue ici, jamais celui de l'utilisateur courant.
+  const carteAvant = db.prepare('SELECT site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number; centre_id: number | null } | undefined;
+
   const sets: string[] = ['updated_at = ?', 'is_dirty = 1', 'rangement = ?'];
-  const params: any[] = [now, fields.rangement.trim().toUpperCase()];
+  const params: any[] = [now, newRangement];
+
+  let newCentreId: number | null = null;
+  let centreChanged = false;
+  if (carteAvant) {
+    const resolved = resolveCentreIdFromPrefix(newRangement, carteAvant.site_id);
+    newCentreId = resolved ?? (carteAvant.centre_id ?? null);
+    centreChanged = newCentreId !== (carteAvant.centre_id ?? null);
+    sets.push('centre_id = ?');
+    params.push(newCentreId);
+  }
 
   if (fields.num_secu !== undefined) {
     sets.push('num_secu = ?');
@@ -1923,6 +2029,33 @@ export function updateRangementEtFiche(id: number, fields: { rangement: string, 
 
   params.push(id);
   const res = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+  if (carteAvant && centreChanged) {
+    // t_logs — mêmes colonnes que l'INSERT réel de corrigerCentreCarte() (cartes.queries.ts
+    // ~1187-1198). Action distincte ('CENTRE_CARTE_RECALCULE') pour ne pas confondre avec la
+    // correction manuelle ('CENTRE_CARTE_CORRIGE'). Pas d'enqueueOutbox dédié pour cette ligne
+    // t_logs elle-même (même choix que corrigerCentreCarte() : la mutation t_cartes elle-même
+    // est propagée via autoEnqueueCorrection() plus bas).
+    const detailMsg = `Centre recalculé pour la carte ID ${id} suite à modification du rangement : centre_id ${carteAvant.centre_id ?? 'NULL'} -> ${newCentreId}, d'après le rangement "${newRangement}".`;
+    const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: carteAvant.centre_id ?? null, centre_id_apres: newCentreId, rangement: newRangement });
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+      `).run(
+        currentUser?.id_user || null,
+        currentUser?.login || 'SYSTEM',
+        detailMsg,
+        valeurApres,
+        uuidv4(),
+        carteAvant.site_id,
+        newCentreId
+      );
+    } catch (err) {
+      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
+    }
+  }
+
   autoEnqueueCorrection(id);
   return res;
 }
@@ -2305,7 +2438,7 @@ export function annulerApurementDechargement(
   }
 }
 
-export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string, currentUser?: { role: string; site_id?: number }) {
+export function updateCarteRangementAndStatusRapid(identifiant: string, rangement: string, currentUser?: { role: string; site_id?: number; centre_id?: number; id_user?: number; login?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const cleanedId = identifiant.trim().toUpperCase();
@@ -2314,19 +2447,28 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // Sécurité (cloisonnement §3) : pour tout rôle non-SUPER-ADMIN, la recherche par identifiant
   // (num_secu) est restreinte au site de l'appelant — absent avant ce correctif (seul appelant :
   // cartes:inventairePhysiqueScan, aucun autre consommateur trouvé dans le code).
+  // site_id/centre_id ajoutés à la SELECT pour permettre le recalcul de centre_id ci-dessous.
   const scoped = currentUser && currentUser.role !== 'SUPER ADMIN';
   const carte = scoped
-    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
-    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
+    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
+    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
 
   if (!carte) {
     return { success: false, message: "Carte introuvable avec cet identifiant." };
   }
 
+  // Recalcul centre_id à partir du nouveau rangement — même règle que updateRangementEtFiche()
+  // (repli sur la valeur déjà en base si aucun préfixe ne matche). Cloisonnement §3 : le siteId
+  // utilisé est toujours celui de la carte (carte.site_id), jamais celui de l'utilisateur.
+  const resolvedCentreId = resolveCentreIdFromPrefix(targetRangement, carte.site_id);
+  const newCentreId = resolvedCentreId ?? (carte.centre_id ?? null);
+  const centreChanged = newCentreId !== (carte.centre_id ?? null);
+
   const query = `
     UPDATE t_cartes
     SET statut = 'EN STOCK',
         rangement = ?,
+        centre_id = ?,
         updated_at = ?,
         is_dirty = 1
     WHERE id_carte = ?
@@ -2337,16 +2479,38 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // qui peut remonter "database disk image is malformed" en cas de corruption des shadow
   // tables FTS5 (incident confirmé sur ce chemin précis, cartes:inventairePhysiqueScan).
   try {
-    db.prepare(query).run(targetRangement, now, carte.id_carte);
+    db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
   } catch (err: any) {
     if (err.code === 'SQLITE_CORRUPT_VTAB' || (err.message && (err.message.includes('malformed') || err.message.includes('corrupt')))) {
       log.warn('[updateCarteRangementAndStatusRapid] FTS5 shadow tables corrompues. Suppression du trigger pour mise à jour sécurisée...');
       db.exec('DROP TRIGGER IF EXISTS trg_cartes_au;');
-      db.prepare(query).run(targetRangement, now, carte.id_carte);
+      db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
       log.info('[updateCarteRangementAndStatusRapid] Mise à jour exécutée sans FTS5. Reset nucléaire planifié en arrière-plan...');
       nuclearResetFts5();
     } else {
       throw err;
+    }
+  }
+
+  if (centreChanged) {
+    // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
+    const detailMsg = `Centre recalculé pour la carte ID ${carte.id_carte} suite à un scan d'inventaire (rangement "${targetRangement}") : centre_id ${carte.centre_id ?? 'NULL'} -> ${newCentreId}.`;
+    const valeurApres = JSON.stringify({ id_carte: carte.id_carte, centre_id_avant: carte.centre_id ?? null, centre_id_apres: newCentreId, rangement: targetRangement });
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+        VALUES (?, ?, 'CENTRE_CARTE_RECALCULE', ?, ?, ?, 1, ?, ?)
+      `).run(
+        currentUser?.id_user || null,
+        currentUser?.login || 'SYSTEM',
+        detailMsg,
+        valeurApres,
+        uuidv4(),
+        carte.site_id,
+        newCentreId
+      );
+    } catch (err) {
+      log.error('Failed to log CENTRE_CARTE_RECALCULE:', err);
     }
   }
 
@@ -2367,7 +2531,8 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
     success: true,
     carte: {
       ...carte,
-      rangement: targetRangement
+      rangement: targetRangement,
+      centre_id: newCentreId
     }
   };
 }
