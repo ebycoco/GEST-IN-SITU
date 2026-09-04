@@ -1946,17 +1946,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:updateQuickFields', e); throw e; }
   });
-  ipcMain.handle('cartes:searchQuickLogistique', async (_, siteId, critere) => {
+  ipcMain.handle('cartes:searchQuickLogistique', async (_, siteId, critere, dateNaissance, lieuNaissance) => {
     // Sécurité (cloisonnement §3) : aligné sur cartes:searchCombinedInventaire ci-dessous —
     // le site_id doit venir de la session serveur, jamais du renderer tel quel.
     // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
     // à InventaireLogistique.tsx (route "/inventaire", ProtectedRoute correspondante).
+    // dateNaissance/lieuNaissance : filtres facultatifs de levée de doute homonymes (AND),
+    // ajoutés sans changer le comportement quand ils sont absents.
     const secureUser = getSecureCurrentUser();
     if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
       log.warn('[SECURITY] Acces refuse a cartes:searchQuickLogistique : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
     }
-    try { return queries.searchQuickLogistique(resolveScopedSiteId(siteId), critere); }
+    try { return queries.searchQuickLogistique(resolveScopedSiteId(siteId), critere, dateNaissance, lieuNaissance); }
     catch (e) { log.error('IPC Error: cartes:searchQuickLogistique', e); throw e; }
   });
   ipcMain.handle('cartes:updateRangementEtFiche', async (_, id, fields) => {

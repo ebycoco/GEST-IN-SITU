@@ -160,8 +160,8 @@ const api = {
       ipcRenderer.invoke('cartes:getSansLieuEnrolementPage', siteId, offset, limit, query),
     updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, lieu_enrolement?: string }): Promise<any> =>
       ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
-    searchQuickLogistique: (siteId: number, critere: string): Promise<Partial<ICarte>[]> => 
-      ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere),
+    searchQuickLogistique: (siteId: number, critere: string, dateNaissance?: string, lieuNaissance?: string): Promise<Partial<ICarte>[]> =>
+      ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere, dateNaissance, lieuNaissance),
     updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }): Promise<any> =>
       ipcRenderer.invoke('cartes:updateRangementEtFiche', id, fields),
     getCartesMalCentrees: (siteId?: number): Promise<any[]> =>

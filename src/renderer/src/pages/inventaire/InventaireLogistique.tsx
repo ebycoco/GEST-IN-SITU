@@ -2,12 +2,17 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Search, MapPin, CheckCircle, Package, ArrowRight, ShieldAlert, AlertTriangle, Key } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
+import DateInput from '../../components/DateInput';
 
 export default function InventaireLogistique() {
   const { user } = useAuthStore();
   const siteId = user?.site_id || 1;
 
   const [searchQuery, setSearchQuery] = useState('');
+  // Filtres facultatifs de levée de doute homonymes (AND additionnels côté SQL,
+  // cf. queries.searchQuickLogistique) — n'affectent pas le comportement existant quand vides.
+  const [filterDateNaissance, setFilterDateNaissance] = useState('');
+  const [filterLieuNaissance, setFilterLieuNaissance] = useState('');
   const [results, setResults] = useState<any[]>([]);
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
   const [rangement, setRangement] = useState('');
@@ -17,6 +22,7 @@ export default function InventaireLogistique() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const rangementInputRef = useRef<HTMLInputElement>(null);
   const numSecuInputRef = useRef<HTMLInputElement>(null);
+  const lieuNaissanceInputRef = useRef<HTMLInputElement>(null);
 
   // Focus initial sur la recherche
   useEffect(() => {
@@ -25,13 +31,17 @@ export default function InventaireLogistique() {
     }
   }, []);
 
-  // Détection de la saisie de recherche (Temps Réel débouclé ou direct)
-  const handleSearchChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.toUpperCase();
-    setSearchQuery(val);
-    if (val.trim().length >= 2) {
+  // Recherche en temps réel : ré-exécutée à chaque changement du critère libre (Nom/Prénom,
+  // toujours actif en arrière-plan sur num_secu — cf. queries.searchQuickLogistique) ou des
+  // filtres facultatifs Date/Lieu de naissance, pour affiner sans casser le flux existant.
+  const runSearch = async (query: string, ddn: string, lieu: string) => {
+    if (query.trim().length >= 2) {
       try {
-        const data = await window.api.cartes.searchQuickLogistique(siteId, val);
+        // La Date de Naissance n'est envoyée qu'une fois complète (JJ/MM/AAAA, 10 car.) pour
+        // éviter de filtrer sur une date partielle pendant la saisie (masque géré par DateInput).
+        const ddnFilter = ddn.length === 10 ? ddn : undefined;
+        const lieuFilter = lieu.trim() || undefined;
+        const data = await window.api.cartes.searchQuickLogistique(siteId, query, ddnFilter, lieuFilter);
         setResults(data || []);
       } catch (err) {
         console.error('Failed logistique search:', err);
@@ -41,8 +51,32 @@ export default function InventaireLogistique() {
     }
   };
 
+  const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.toUpperCase();
+    setSearchQuery(val);
+    runSearch(val, filterDateNaissance, filterLieuNaissance);
+  };
+
+  const handleDateNaissanceFilterChange = (val: string) => {
+    setFilterDateNaissance(val);
+    runSearch(searchQuery, val, filterLieuNaissance);
+  };
+
+  const handleLieuNaissanceFilterChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.toUpperCase();
+    setFilterLieuNaissance(val);
+    runSearch(searchQuery, filterDateNaissance, val);
+  };
+
   // Raccourcis clavier globaux
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Les chiffres saisis dans les filtres facultatifs Date/Lieu de naissance ne doivent jamais
+    // être interceptés comme raccourci de sélection : ces champs servent justement à affiner la
+    // liste pendant qu'elle est affichée (results.length > 0), donc la saisie doit être préservée.
+    const target = e.target as HTMLInputElement;
+    if (target === lieuNaissanceInputRef.current || target?.name === 'filterDateNaissance') {
+      return;
+    }
     // Si des homonymes ou multiples résultats sont affichés et qu'aucune carte n'est encore sélectionnée
     if (results.length > 0 && !selectedCarte) {
       const num = parseInt(e.key);
@@ -101,6 +135,8 @@ export default function InventaireLogistique() {
     setRangement('');
     setNumSecu('');
     setSearchQuery('');
+    setFilterDateNaissance('');
+    setFilterLieuNaissance('');
     setResults([]);
     setTimeout(() => {
       if (searchInputRef.current) {
@@ -129,7 +165,7 @@ export default function InventaireLogistique() {
           /* SECTION RECHERCHE */
           <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rechercher une fiche (Nom, Prénom, DDN, Sécu)</label>
+              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Rechercher une fiche (Nom et Prénom)</label>
               <div style={{ position: 'relative' }}>
                 <Search size={20} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--accent-purple)' }} />
                 <input
@@ -140,6 +176,37 @@ export default function InventaireLogistique() {
                   placeholder="Saisir les critères..."
                   value={searchQuery}
                   onChange={handleSearchChange}
+                />
+              </div>
+            </div>
+
+            {/* FILTRES FACULTATIFS DE LEVÉE DE DOUTE HOMONYMES (Date/Lieu de naissance) —
+                affinent la recherche libre ci-dessus (AND côté SQL), sans obligation de saisie. */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Date de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+                </label>
+                <DateInput
+                  name="filterDateNaissance"
+                  value={filterDateNaissance}
+                  onChange={handleDateNaissanceFilterChange}
+                  placeholder="JJ/MM/AAAA"
+                  style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Lieu de Naissance <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span>
+                </label>
+                <input
+                  ref={lieuNaissanceInputRef}
+                  className="form-input"
+                  style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
+                  type="text"
+                  placeholder="Ex: ABOBO"
+                  value={filterLieuNaissance}
+                  onChange={handleLieuNaissanceFilterChange}
                 />
               </div>
             </div>

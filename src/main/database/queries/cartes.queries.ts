@@ -1999,28 +1999,46 @@ export function getSansLieuEnrolementPage(siteId: number, offset: number, limit:
   return { rows, total };
 }
 
-export function searchQuickLogistique(siteId: number, critere: string) {
+export function searchQuickLogistique(siteId: number, critere: string, dateNaissance?: string, lieuNaissance?: string) {
   const db = getDatabase()!;
   const cleaned = critere.trim();
   if (!cleaned) return [];
 
   const searchPattern = `%${cleaned}%`;
-  
-  return db.prepare(`
-    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique
-    FROM t_cartes
-    WHERE site_id = ? 
+
+  let where = `
+    WHERE site_id = ?
       AND (
-        UPPER(num_secu) = UPPER(?) 
-        OR contact = ? 
-        OR date_de_naissance = ? 
+        UPPER(num_secu) = UPPER(?)
+        OR contact = ?
+        OR date_de_naissance = ?
         OR (noms || ' ' || prenoms LIKE ?)
         OR (prenoms || ' ' || noms LIKE ?)
         OR lieu_de_naissance LIKE ?
       )
+  `;
+  const params: any[] = [siteId, cleaned, cleaned, cleaned, searchPattern, searchPattern, searchPattern];
+
+  // Filtres additionnels facultatifs (AND) : levée de doute homonymes sur le portail Logistique,
+  // même convention que searchCombinedInventaire (normalizeDate pour l'égalité stricte sur
+  // date_de_naissance, LIKE pour lieu_de_naissance) — n'altère pas la recherche libre ci-dessus
+  // quand ces champs sont vides/non fournis.
+  if (dateNaissance && dateNaissance.trim()) {
+    where += ' AND date_de_naissance = ?';
+    params.push(normalizeDate(dateNaissance.trim()));
+  }
+  if (lieuNaissance && lieuNaissance.trim()) {
+    where += ' AND lieu_de_naissance LIKE ?';
+    params.push(`%${lieuNaissance.trim()}%`);
+  }
+
+  return db.prepare(`
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique
+    FROM t_cartes
+    ${where}
     ORDER BY noms ASC, prenoms ASC, id_carte ASC
     LIMIT 20
-  `).all(siteId, cleaned, cleaned, cleaned, searchPattern, searchPattern, searchPattern);
+  `).all(...params);
 }
 
 export function updateRangementEtFiche(
