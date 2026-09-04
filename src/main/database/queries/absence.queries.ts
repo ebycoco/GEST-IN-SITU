@@ -27,7 +27,7 @@ export function signalerAbsence(id: number, agentLogin: string, agentInfo: strin
       UPDATE t_cartes SET statut_physique = 'ABSENT',
         agent_signalement_absence = @agentLogin, date_signalement_absence = @now,
         note_signalement_absence = @commentaire, escalade_niveau = 'CENTRE',
-        updated_at = @now, is_dirty = 1
+        updated_at = @now, action_at = @now, is_dirty = 1
     `;
     const params: any = { agentLogin, now, commentaire, id };
     
@@ -142,7 +142,7 @@ export function resoudreAbsence(id: number, data: { status: string; agent: strin
     const now = new Date().toISOString();
     let query = `
       UPDATE t_cartes 
-      SET statut_physique = @status, rangement = @rangement, escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
+      SET statut_physique = @status, rangement = @rangement, escalade_niveau = 'RESOLU', updated_at = @now, action_at = @now, is_dirty = 1
       WHERE id_carte = @id
     `;
     const params: any = { status: data.status, rangement: data.rangement ? data.rangement.toUpperCase().trim() : null, now, id };
@@ -232,7 +232,7 @@ export function declarerPerdue(id: number, currentUser?: { role: string; site_id
   const now = new Date().toISOString();
   let query = `
     UPDATE t_cartes
-    SET statut_physique = 'PERDUE', escalade_niveau = 'RESOLU', updated_at = @now, is_dirty = 1
+    SET statut_physique = 'PERDUE', escalade_niveau = 'RESOLU', updated_at = @now, action_at = @now, is_dirty = 1
     WHERE id_carte = @id
   `;
   const params: any = { now, id };
@@ -322,7 +322,7 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
     const now = new Date().toISOString();
     let updateQuery = `
       UPDATE t_cartes 
-      SET statut_physique = 'OK', statut = 'EN STOCK', rangement = @rangement, updated_at = @now, is_dirty = 1
+      SET statut_physique = 'OK', statut = 'EN STOCK', rangement = @rangement, updated_at = @now, action_at = @now, is_dirty = 1
       WHERE id_carte = @id
     `;
     const params: any = { now, id, rangement: nouveauRangement ? nouveauRangement.toUpperCase().trim() : null };
@@ -456,7 +456,7 @@ export function escaladerAuSite(id: number, currentUser?: { id_user?: number; lo
 
   let query = `
     UPDATE t_cartes
-    SET escalade_niveau = 'SITE', updated_at = @now, is_dirty = 1
+    SET escalade_niveau = 'SITE', updated_at = @now, action_at = @now, is_dirty = 1
     WHERE id_carte = @id AND statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE'
   `;
   const params: any = { now, id };

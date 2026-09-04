@@ -83,7 +83,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
       apurement_correction_par, apurement_correction_le, apurement_correction_motif,
       apurement_annulation_par, apurement_annulation_le, apurement_annulation_motif,
       site_id, centre_id, poste_id, qr_code_data, sync_id,
-      created_at, updated_at, synced_at, is_dirty
+      created_at, updated_at, action_at, synced_at, is_dirty
     ) VALUES (
       :noms, :prenoms, :date_de_naissance, :lieu_de_naissance, :num_secu,
       :lieu_enrolement, :contact, :rangement, :statut, :date_delivrance,
@@ -97,7 +97,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
       :apurement_correction_par, :apurement_correction_le, :apurement_correction_motif,
       :apurement_annulation_par, :apurement_annulation_le, :apurement_annulation_motif,
       :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
-      :created_at, :updated_at, :updated_at, 0
+      :created_at, :updated_at, :action_at, :updated_at, 0
     )
   `);
   const updateStmt = database.prepare(`
@@ -110,7 +110,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
         agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
         cle_doublon = :cle_doublon, cle_doublon_flex = :cle_doublon_flex,
         statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
-        qr_code_data = :qr_code_data, updated_at = :updated_at, synced_at = :updated_at,
+        qr_code_data = :qr_code_data, updated_at = :updated_at, action_at = :action_at, synced_at = :updated_at,
         agent_signalement_absence = :agent_signalement_absence,
         date_signalement_absence = :date_signalement_absence,
         note_signalement_absence = :note_signalement_absence,
@@ -135,6 +135,13 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
   // d'absence/escalade qui voyagent avec le statut) du cloud quand il est plus avancé,
   // sans toucher aux autres champs en cours de correction locale ni à is_dirty (la fiche
   // reste marquée à renvoyer pour ses propres modifications).
+  // action_at DÉLIBÉRÉMENT EXCLU de cette fusion partielle (contrairement à insertStmt et
+  // updateStmt ci-dessus) : cette fiche reste is_dirty=1 côté local, donc porteuse d'une
+  // action métier locale plus récente que ce que le cloud connaît. Adopter le action_at cloud
+  // ici écraserait la valeur d'action locale par une valeur potentiellement obsolète ou déjà
+  // polluée par un envoi antérieur — reproduirait, à un niveau supérieur, le bug d'origine
+  // (fix e3a7005) que action_at a précisément pour but de corriger. updated_at n'est pas non
+  // plus inclus ici pour la même raison (fusion partielle historique, comportement inchangé).
   const statusMergeStmt = database.prepare(`
     UPDATE t_cartes
     SET statut = :statut, date_delivrance = :date_delivrance,
@@ -258,7 +265,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
             qr_code_data: card.qr_code_data || null,
             sync_id: card.sync_id,
             created_at: card.created_at || new Date().toISOString(),
-            updated_at: card.updated_at || new Date().toISOString()
+            updated_at: card.updated_at || new Date().toISOString(),
+            action_at: card.action_at || null
           });
           processedCount++;
           insertedCount++;
@@ -361,7 +369,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
               centre_id: card.id_centre || card.centre_id || null,
               poste_id: card.id_poste || card.poste_id || null,
               qr_code_data: card.qr_code_data || null,
-              updated_at: card.updated_at || new Date().toISOString()
+              updated_at: card.updated_at || new Date().toISOString(),
+              action_at: card.action_at || null
             });
             processedCount++;
             updatedCount++;

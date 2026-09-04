@@ -338,10 +338,10 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
   const stmt = db.prepare(`
     INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
       lieu_enrolement, contact, rangement, statut, agent_saisie, centre_id, poste_id,
-      cle_doublon, cle_doublon_flex, sync_id, site_id, created_at, updated_at, is_dirty, created_by)
+      cle_doublon, cle_doublon_flex, sync_id, site_id, created_at, updated_at, action_at, is_dirty, created_by)
     VALUES (@noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @num_secu,
       @lieu_enrolement, @contact, @rangement, @statut, @agent_saisie, @centre_id, @poste_id,
-      @cle_doublon, @cle_doublon_flex, @sync_id, @site_id, @created_at, @updated_at, 1, @created_by)
+      @cle_doublon, @cle_doublon_flex, @sync_id, @site_id, @created_at, @updated_at, @action_at, 1, @created_by)
   `);
 
   const result = stmt.run({
@@ -363,6 +363,7 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
     site_id: siteIdToUse,
     created_at: now,
     updated_at: now,
+    action_at: now,
     created_by: data.created_by || null
   });
 
@@ -445,14 +446,14 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       // 3. Insérer dans t_cartes avec statut EN STOCK
       const stmt = db.prepare(`
         INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
-          lieu_enrolement, contact, rangement, statut, sync_id, site_id, cle_doublon, cle_doublon_flex, is_dirty, updated_at)
+          lieu_enrolement, contact, rangement, statut, sync_id, site_id, cle_doublon, cle_doublon_flex, is_dirty, updated_at, action_at)
         VALUES (@noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @num_secu,
-          @lieu_enrolement, @contact, @rangement, 'EN STOCK', @sync_id, @site_id, @cle_doublon, @cle_doublon_flex, 1, @updated_at)
+          @lieu_enrolement, @contact, @rangement, 'EN STOCK', @sync_id, @site_id, @cle_doublon, @cle_doublon_flex, 1, @updated_at, @action_at)
       `);
       stmt.run({
         noms, prenoms, date_de_naissance: ddn, lieu_de_naissance: lieuN,
         num_secu, lieu_enrolement, contact, rangement, sync_id: newSyncId,
-        site_id: siteId, cle_doublon: cleDbl, cle_doublon_flex: cleFlex, updated_at: now
+        site_id: siteId, cle_doublon: cleDbl, cle_doublon_flex: cleFlex, updated_at: now, action_at: now
       });
 
       // 4. Supprimer de t_import_anomalies
@@ -526,7 +527,7 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
   
   const fields = filteredKeys.map(k => `${k} = @${k}`).join(', ');
   
-  let query = `UPDATE t_cartes SET ${fields}, updated_at = @updated_at, is_dirty = 1 WHERE id_carte = @id`;
+  let query = `UPDATE t_cartes SET ${fields}, updated_at = @updated_at, action_at = @updated_at, is_dirty = 1 WHERE id_carte = @id`;
   const params: any = {};
   filteredKeys.forEach(k => {
     params[k] = data[k];
@@ -613,7 +614,7 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
   // (P2-2) : l'UPDATE is_dirty et l'enfilage t_outbox doivent réussir ou échouer ensemble,
   // à l'image du pattern déjà utilisé dans qualite:fusionnerDoublons (handlers.ts).
   const tx = db.transaction(() => {
-    const res = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now') WHERE id_carte = ?").run(id);
+    const res = db.prepare("UPDATE t_cartes SET is_dirty = -1, updated_at = datetime('now'), action_at = datetime('now') WHERE id_carte = ?").run(id);
     if (res.changes === 0) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
@@ -735,6 +736,7 @@ export function delivrerCarte(
         rangement = COALESCE(@rangement, rangement),
         centre_id = COALESCE(@centre_id_override, centre_id),
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -880,6 +882,7 @@ export function declarerDoublon(
         doublon_declare_le = @now,
         doublon_motif = @motif,
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -980,6 +983,7 @@ export function annulerDeclarationDoublon(
         doublon_annule_le = @now,
         doublon_motif_annulation = @motif_annulation,
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -1226,6 +1230,7 @@ export function corrigerCentreCarte(
       UPDATE t_cartes SET
         centre_id = @centre_id,
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -1315,6 +1320,7 @@ export function transfererCarte(
       centre_id = @centre_id,
       rangement = COALESCE(@rangement, rangement),
       updated_at = @now,
+      action_at = @now,
       updated_by = @updated_by,
       is_dirty = 1
     WHERE id_carte = @id AND statut = 'EN STOCK'
@@ -1414,10 +1420,10 @@ export function getDistinctRangements(siteId?: number) {
 export function marquerCartesExporte(ids: number[]) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  const stmt = db.prepare('UPDATE t_cartes SET is_exported = 1, is_dirty = 1, updated_at = ? WHERE id_carte = ?');
+  const stmt = db.prepare('UPDATE t_cartes SET is_exported = 1, is_dirty = 1, updated_at = ?, action_at = ? WHERE id_carte = ?');
   const runTx = db.transaction((idList: number[]) => {
     for (const id of idList) {
-      stmt.run(now, id);
+      stmt.run(now, now, id);
     }
   });
   runTx(ids);
@@ -1555,8 +1561,8 @@ export function updateDateDeNaissance(id: number, newDate: string) {
         INSERT INTO t_cartes (
           noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
           lieu_enrolement, contact, rangement, statut, agent_saisie,
-          cle_doublon, cle_doublon_flex, sync_id, site_id, created_at, updated_at, is_dirty, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+          cle_doublon, cle_doublon_flex, sync_id, site_id, created_at, updated_at, action_at, is_dirty, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
       `).run(
         noms,
         prenoms,
@@ -1572,6 +1578,7 @@ export function updateDateDeNaissance(id: number, newDate: string) {
         cleFlex,
         syncId,
         anomaly.site_id,
+        now,
         now,
         now,
         'CORRECTION'
@@ -1597,9 +1604,9 @@ export function updateDateDeNaissance(id: number, newDate: string) {
 
   const res = db.prepare(`
     UPDATE t_cartes
-    SET date_de_naissance = ?, updated_at = ?, is_dirty = 1
+    SET date_de_naissance = ?, updated_at = ?, action_at = ?, is_dirty = 1
     WHERE id_carte = ?
-  `).run(newDate, now, id);
+  `).run(newDate, now, now, id);
   autoEnqueueCorrection(id);
   return res;
 }
@@ -1846,8 +1853,8 @@ export function updateQuickFields(id: number, fields: {
 }, currentUser?: { role?: string; site_id?: number; centre_id?: number; id_user?: number; login?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
-  const sets: string[] = ['updated_at = ?', 'is_dirty = 1'];
-  const params: any[] = [now];
+  const sets: string[] = ['updated_at = ?', 'action_at = ?', 'is_dirty = 1'];
+  const params: any[] = [now, now];
 
   // Recalcul centre_id — bloc `rangement` UNIQUEMENT (périmètre strict, ne touche aucun autre
   // champ de cette fonction). Renseigné seulement si le centre_id change réellement.
@@ -2072,8 +2079,8 @@ export function updateRangementEtFiche(
   // TOUJOURS celui de la carte relue ici, jamais celui de l'utilisateur courant.
   const carteAvant = db.prepare('SELECT site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number; centre_id: number | null } | undefined;
 
-  const sets: string[] = ['updated_at = ?', 'is_dirty = 1', 'rangement = ?'];
-  const params: any[] = [now, newRangement];
+  const sets: string[] = ['updated_at = ?', 'action_at = ?', 'is_dirty = 1', 'rangement = ?'];
+  const params: any[] = [now, now, newRangement];
 
   let newCentreId: number | null = null;
   let centreChanged = false;
@@ -2209,6 +2216,7 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
         relation_retirant = ?,
         agent_distributeur = ?,
         updated_at = ?,
+        action_at = ?,
         is_dirty = 1
     WHERE id_carte = ?
   `).run(
@@ -2217,6 +2225,7 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
     fields.num_retirant.trim(),
     fields.relation_retirant.trim(),
     fields.agent_distributeur.trim(),
+    now,
     now,
     id
   );
@@ -2342,6 +2351,7 @@ export function corrigerApurementRetirant(
         apurement_correction_le = @now,
         apurement_correction_motif = @motif,
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -2463,6 +2473,7 @@ export function annulerApurementDechargement(
         apurement_annulation_le = @now,
         apurement_annulation_motif = @motif,
         updated_at = @now,
+        action_at = @now,
         updated_by = @updated_by,
         is_dirty = 1
       WHERE id_carte = @id
@@ -2543,6 +2554,7 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
         rangement = ?,
         centre_id = ?,
         updated_at = ?,
+        action_at = ?,
         is_dirty = 1
     WHERE id_carte = ?
   `;
@@ -2553,7 +2565,7 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // raisonnement que delivrerCarte() ci-dessus : en cas d'erreur, SQLite annule intégralement
   // le premier essai, donc rejouer runTx() dans son ensemble est sûr, sans état partiel).
   const runTx = db.transaction(() => {
-    db.prepare(query).run(targetRangement, newCentreId, now, carte.id_carte);
+    db.prepare(query).run(targetRangement, newCentreId, now, now, carte.id_carte);
 
     if (centreChanged) {
       // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
@@ -2748,7 +2760,7 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
   const tx = db.transaction(() => {
     const updateBrouillonStmt = db.prepare(`
       UPDATE t_cartes
-      SET statut = 'EN STOCK', updated_at = ?
+      SET statut = 'EN STOCK', updated_at = ?, action_at = ?
       WHERE id_carte = ? AND statut = 'BROUILLON'
     `);
 
@@ -2760,9 +2772,10 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
           skippedInvalidDateCount++;
           continue;
         }
-        updateBrouillonStmt.run(now, carte.id_carte);
+        updateBrouillonStmt.run(now, now, carte.id_carte);
         carte.statut = 'EN STOCK';
         carte.updated_at = now;
+        carte.action_at = now;
       }
 
       const updatedCarte = db.prepare('SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, lieu_enrolement, contact, rangement, statut, date_delivrance, agent_saisie, nom_retirant, num_retirant, agent_distributeur, centre_retrait, cle_doublon, cle_doublon_flex, statut_physique, site_id, centre_id, poste_id, qr_code_data, created_by FROM t_cartes WHERE id_carte = ?').get(carte.id_carte) as any;
@@ -2770,7 +2783,12 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
       enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', {
         sync_id: carte.sync_id,
         ...updatedCarte,
-        updated_at: carte.updated_at
+        updated_at: carte.updated_at,
+        // action_at : simple passager (carte est ici le résultat du SELECT * initial de
+        // modifiedCartes, éventuellement mis à jour ci-dessus pour les BROUILLON promus) —
+        // sans lui, mapCardPayload() enverrait action_at=null à l'envoi (outbox.service.ts),
+        // alors que la ligne locale porte déjà la bonne valeur.
+        action_at: carte.action_at
       });
     }
   });

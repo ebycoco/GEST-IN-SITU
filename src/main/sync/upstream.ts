@@ -87,7 +87,11 @@ function mapCardPayload(c: any): any {
     // payload-mapper.ts:mapCardPayload, pour garantir la détectabilité par le pull descendant
     // incrémental (curseur (updated_at, sync_id) > watermark) même en cas d'envoi différé.
     updated_at: new Date().toISOString(),
-    ...(c.updated_by !== undefined ? { updated_by: c.updated_by } : {})
+    ...(c.updated_by !== undefined ? { updated_by: c.updated_by } : {}),
+    // action_at : simple passager, jamais recalculé ici (contrairement à updated_at ci-dessus).
+    // Reflète la date réelle de l'action métier locale (posée par cartes.queries.ts/absence.queries.ts
+    // au moment de la mutation), copiée telle quelle vers Supabase — voir migration V70 (schema.ts).
+    action_at: c.action_at || null
   };
 }
 

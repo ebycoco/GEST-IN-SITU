@@ -1,0 +1,49 @@
+-- ============================================================
+-- 0004_action_at.sql
+-- GEST-IN-SITU : ajout de la colonne action_at sur t_cartes
+-- (horodatage d'action métier, distinct du watermark réseau updated_at)
+--
+-- Contexte (fix e3a7005) : updated_at sert désormais de pur horodatage
+-- d'envoi réseau sur tous les chemins d'envoi (watermark de pull
+-- incrémental + arbitrage LWW, comparaison (updated_at, sync_id) >
+-- (watermark, last_sync_id) dans src/main/workers/download-worker.js et la
+-- RPC Supabase fn_downstream_cartes_chunk), alors que plusieurs lectures
+-- métier locales (fenêtre de tolérance "jour même" des émargements
+-- Apurement, statistiques quotidiennes, affichages "Heure d'apurement"/
+-- "Résolue le") supposaient à tort qu'il reflétait la date réelle de
+-- l'action utilisateur.
+--
+-- action_at reçoit exactement la même valeur qu'updated_at à chaque
+-- écriture métier locale (même transaction), mais n'est JAMAIS recalculé
+-- par les mappings d'envoi réseau (payload-mapper.ts / upstream.ts /
+-- upload-worker.js) ni par la fusion downstream (download-worker.js) —
+-- contrairement à updated_at, qui continue de jouer exclusivement son rôle
+-- actuel de watermark/LWW, inchangé. Voir aussi la migration locale SQLite
+-- correspondante (V70 — src/main/database/schema.ts).
+--
+-- Colonne ajoutée (TIMESTAMPTZ nullable, pas de valeur par défaut, alignée
+-- sur le type de updated_at côté Supabase) :
+--   - action_at
+--
+-- Backfill non destructif inclus : action_at = updated_at pour les lignes
+-- existantes n'ayant pas encore de valeur. Valeur de départ approximative
+-- et limite connue/acceptée (pas un bug à corriger ici) : les cartes déjà
+-- envoyées via le bouton d'envoi massif depuis fin juillet 2026, ou via le
+-- correctif outbox récent (commit e3a7005), peuvent avoir un updated_at
+-- déjà pollué par l'heure d'envoi réseau plutôt que l'heure d'action
+-- réelle — ce backfill hérite donc de cette pollution pour ces lignes-là.
+--
+-- Idempotent (ADD COLUMN IF NOT EXISTS + backfill sur action_at IS NULL) :
+-- une exécution accidentelle sur un projet où la colonne existe déjà, ou
+-- une ré-exécution après un premier passage, est sans danger.
+--
+-- Application : ce fichier est PRÉPARÉ, PAS ENCORE APPLIQUÉ. Comme pour
+-- 0003, l'ordre reste dev/staging (zddibqgutigwxjwbojmn) PUIS production
+-- (itvyayakwgzvfqvdrgyv) — jamais un seul des deux, voir README.md. Geste
+-- explicite à valider par l'utilisateur (CLAUDE.md §8) ; aucun agent
+-- n'exécute ce fichier contre un projet Supabase réel.
+-- ============================================================
+
+ALTER TABLE public.t_cartes ADD COLUMN IF NOT EXISTS action_at TIMESTAMPTZ;
+
+UPDATE public.t_cartes SET action_at = updated_at WHERE action_at IS NULL;

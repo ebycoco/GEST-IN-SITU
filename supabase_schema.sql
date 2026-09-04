@@ -168,7 +168,15 @@ CREATE TABLE public.t_cartes (
     apurement_correction_motif  TEXT,
     apurement_annulation_par    TEXT,
     apurement_annulation_le     TEXT,
-    apurement_annulation_motif  TEXT
+    apurement_annulation_motif  TEXT,
+    -- Horodatage d'action métier, distinct du watermark réseau updated_at (voir
+    -- supabase/migrations/0004_action_at.sql — PRÉPARÉ, PAS ENCORE APPLIQUÉ sur
+    -- dev/staging ni production à la date de rédaction). Reçoit la même valeur
+    -- qu'updated_at à chaque écriture métier locale (même transaction), mais
+    -- n'est jamais recalculé par les mappings d'envoi réseau ni par la fusion
+    -- downstream — contrairement à updated_at, qui reste exclusivement le
+    -- watermark de synchro/arbitrage LWW (fix e3a7005).
+    action_at                   TIMESTAMPTZ
 );
 
 -- ============================================================

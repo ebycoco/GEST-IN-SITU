@@ -57,6 +57,10 @@ export function mapCardPayload(c: any): any {
     // incrémental (curseur (updated_at, sync_id) > watermark, RPC fn_downstream_cartes_chunk) doit
     // pouvoir détecter cette carte sur les autres postes, même si elle a été modifiée puis mise en
     // attente en t_outbox (Envoi Automatique désactivé) longtemps avant cet envoi effectif.
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
+    // action_at : simple passager, jamais recalculé ici (contrairement à updated_at ci-dessus).
+    // Reflète la date réelle de l'action métier locale (posée par cartes.queries.ts/absence.queries.ts
+    // au moment de la mutation), copiée telle quelle vers Supabase — voir migration V70 (schema.ts).
+    action_at: c.action_at || null
   };
 }

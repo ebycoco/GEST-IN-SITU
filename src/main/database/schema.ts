@@ -3,7 +3,7 @@ import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 
-export const SCHEMA_VERSION = 69;
+export const SCHEMA_VERSION = 70;
 
 export function runMigrations(db: Database.Database): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
@@ -457,6 +457,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number, isE
     if (currentVersion < 69) {
       log.info('Running migration v69: Adding apurement correction/cancellation tracking columns to t_cartes (corrigerApurementRetirant/annulerApurementDechargement)');
       migrateV69(db);
+    }
+
+    if (currentVersion < 70) {
+      log.info('Running migration v70: Adding action_at column to t_cartes (horodatage d\'action metier, distinct du watermark reseau updated_at)');
+      migrateV70(db);
     }
   } catch (seqError: any) {
     if (isEmergencyRetry) {
@@ -2024,6 +2029,12 @@ function migrateV27_safetyNet(db: Database.Database): void {
   // Correction/annulation d'un émargement Apurement (V69) — Opérateur Apurement.
   // Même justification que le bloc doublon ci-dessus : garanti sur le chemin
   // d'installation fraîche et la reconstruction d'urgence, en plus de migrateV69.
+  // action_at (V70) — horodatage d'action métier, distinct du watermark réseau updated_at.
+  // Même justification que les blocs doublon/apurement ci-dessus : garanti sur le chemin
+  // d'installation fraîche et la reconstruction d'urgence, en plus de migrateV70. Ne fait
+  // ici que garantir la colonne (safeAlter n'écrit pas de valeur) ; le backfill
+  // action_at = updated_at reste porté par migrateV70 uniquement.
+  safeAlter('t_cartes', 'action_at', 'TEXT');
   safeAlter('t_cartes', 'apurement_correction_par', 'TEXT');
   safeAlter('t_cartes', 'apurement_correction_le', 'TEXT');
   safeAlter('t_cartes', 'apurement_correction_motif', 'TEXT');
@@ -3855,6 +3866,55 @@ function migrateV69(db: Database.Database): void {
     log.info('[MIGRATION V69] Migration V69 terminée avec succès.');
   } catch (e: any) {
     log.error('[MIGRATION V69] Erreur :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V70 — Ajout de la colonne action_at à t_cartes (horodatage d'action métier,
+// distinct du watermark réseau updated_at)
+//
+// Contexte (fix e3a7005) : updated_at sert désormais de pur horodatage d'envoi réseau sur
+// tous les chemins d'envoi (watermark de pull incrémental + arbitrage LWW, comparaison
+// (updated_at, sync_id) > (watermark, last_sync_id) dans download-worker.js et la RPC
+// Supabase fn_downstream_cartes_chunk), alors que plusieurs lectures métier (fenêtre de
+// tolérance "jour même" des émargements Apurement, statistiques quotidiennes, affichages
+// "Heure d'apurement"/"Résolue le") supposaient à tort qu'il reflétait la date réelle de
+// l'action utilisateur. action_at reçoit exactement la même valeur qu'updated_at à chaque
+// écriture métier locale (même transaction), mais n'est JAMAIS recalculée par les mappings
+// d'envoi réseau ni par la fusion downstream — voir payload-mapper.ts / upstream.ts /
+// upload-worker.js / download-worker.js. updated_at continue de jouer exclusivement son rôle
+// actuel de watermark/LWW, inchangé.
+//
+// Pattern ALTER TABLE ADD COLUMN gardé par PRAGMA table_info, identique à migrateV67/V69 :
+// purement additif, aucune donnée existante modifiée, aucune contrainte CHECK supplémentaire
+// (idempotent, sûr à rejouer).
+//
+// Backfill non destructif : action_at = updated_at pour les lignes existantes. Valeur de
+// départ approximative et limite connue/acceptée (pas un bug à corriger ici) : les cartes déjà
+// envoyées via le bouton d'envoi massif depuis fin juillet 2026, ou via le correctif outbox
+// récent, ont potentiellement déjà un updated_at pollué par l'heure d'envoi réseau plutôt que
+// l'heure d'action réelle — ce backfill hérite donc de cette pollution pour ces lignes-là.
+// =====================================================
+function migrateV70(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V70] Ajout de la colonne action_at à t_cartes (horodatage d\'action métier, distinct du watermark réseau updated_at)...');
+    const tableInfo = db.pragma('table_info(t_cartes)') as { name: string }[];
+    const hasColumn = tableInfo.some(c => c.name === 'action_at');
+
+    if (!hasColumn) {
+      db.exec("ALTER TABLE t_cartes ADD COLUMN action_at TEXT;");
+      log.info('[MIGRATION V70] Colonne action_at ajoutee a t_cartes.');
+    } else {
+      log.info('[MIGRATION V70] Colonne action_at deja presente, migration ignoree.');
+    }
+
+    const backfill = db.prepare("UPDATE t_cartes SET action_at = updated_at WHERE action_at IS NULL").run();
+    log.info(`[MIGRATION V70] Backfill action_at = updated_at applique sur ${backfill.changes} ligne(s). ATTENTION : valeur de depart approximative, limite connue et acceptee (pas un bug a corriger ici) — les cartes deja envoyees via le bouton d'envoi massif depuis fin juillet 2026, ou via le correctif outbox recent (commit e3a7005), peuvent avoir un updated_at deja pollue par l'heure d'envoi reseau plutot que l'heure d'action reelle.`);
+
+    log.info('[MIGRATION V70] Migration V70 terminée avec succès.');
+  } catch (e: any) {
+    log.error('[MIGRATION V70] Erreur :', e.message);
     throw e;
   }
 }

@@ -274,7 +274,14 @@ async function run() {
         qr_code_data: c.qr_code_data || null,
         is_exported: c.is_exported || 0,
         created_by: c.created_by || null,
-        updated_at: pushedAt
+        updated_at: pushedAt,
+        // action_at : simple passager, jamais recalculé ici (contrairement à updated_at ci-dessus
+        // qui est réécrit à pushedAt). Reflète la date réelle de l'action métier locale (posée par
+        // cartes.queries.ts/absence.queries.ts au moment de la mutation) — voir migration V70
+        // (schema.ts). NE PAS l'aligner sur pushedAt dans l'UPDATE local ligne ~301 : contrairement
+        // à updated_at, action_at doit rester la valeur d'action locale d'origine, jamais réécrite
+        // par un envoi réseau réussi.
+        action_at: c.action_at || null
       }));
 
       try {
