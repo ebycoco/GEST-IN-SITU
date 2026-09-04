@@ -70,9 +70,14 @@ parentPort.on('message', (msg) => {
 
       if (tableCheck) {
         // dates_invalides (format de date invalide dans t_cartes ou DATE_INVALIDE dans t_import_anomalies)
+        // Correctif perf (agent-4-db-sync) : prédicat aligné sur le pattern GLOB déjà utilisé par
+        // getDetailedSyncStats plus bas dans ce même fichier, au lieu de TRIM()/LENGTH() — évite
+        // l'allocation TRIM() par ligne et harmonise la définition de "date invalide" entre les
+        // deux fonctions de ce worker. N'ajoute pas d'index : reste un scan du sous-ensemble déjà
+        // filtré par site_id/centre_id (andSite/andCentre, cloisonnement inchangé, CLAUDE.md §3).
         const rowInvalid = db.prepare(`
           SELECT COUNT(*) as count FROM (
-            SELECT id_carte FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND TRIM(date_de_naissance) != '' AND LENGTH(TRIM(date_de_naissance)) < 10) ${andSite} ${andCentre}
+            SELECT id_carte FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND date_de_naissance != '' AND date_de_naissance NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]') ${andSite} ${andCentre}
             UNION ALL
             SELECT id FROM t_import_anomalies WHERE type_anomalie = 'DATE_INVALIDE' ${andSite} ${andCentre}
           )
@@ -91,9 +96,9 @@ parentPort.on('message', (msg) => {
         `).get(params);
         autresAnomaliesCount = rowAutres ? rowAutres.count : 0;
       } else {
-        // Fallback s'il n'y a pas de table d'anomalies
+        // Fallback s'il n'y a pas de table d'anomalies (même correctif GLOB que ci-dessus)
         const rowInvalid = db.prepare(`
-          SELECT COUNT(*) as count FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND TRIM(date_de_naissance) != '' AND LENGTH(TRIM(date_de_naissance)) < 10) ${andSite} ${andCentre}
+          SELECT COUNT(*) as count FROM t_cartes WHERE (date_de_naissance IS NOT NULL AND date_de_naissance != '' AND date_de_naissance NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]') ${andSite} ${andCentre}
         `).get(params);
         anomaliesCount = rowInvalid ? rowInvalid.count : 0;
 
