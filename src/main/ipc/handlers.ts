@@ -1856,15 +1856,18 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try { return queries.getSansNumSecuPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
     catch (e) { log.error('IPC Error: cartes:getSansNumSecuPage', e); throw e; }
   });
-  ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query, filters) => {
-    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
-    // au portail Qualité (MissingDataView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
+  ipcMain.handle('cartes:getSansRangementPage', async (_, siteId, offset, limit, query, filters, sortOrder) => {
+    // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre partagé :
+    // portail Qualité (MissingDataView.tsx, route /agent-qualite/*) + nouvelle page "Sans
+    // rangement" du portail OPERATEUR_LOGISTIQUE (InventaireSansRangement.tsx, plan validé) —
+    // OPERATEUR_LOGISTIQUE ajouté ci-dessous (ajout pur, aucun rôle existant retiré).
+    // sortOrder ('recent'|'oldest', optionnel) simplement relayé vers la query.
     const secureUser = getSecureCurrentUser();
-    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE', 'OPERATEUR_LOGISTIQUE'])) {
       log.warn('[SECURITY] Acces refuse a cartes:getSansRangementPage : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
     }
-    try { return queries.getSansRangementPage(resolveScopedSiteId(siteId), offset, limit, query, filters); }
+    try { return queries.getSansRangementPage(resolveScopedSiteId(siteId), offset, limit, query, filters, sortOrder); }
     catch (e) { log.error('IPC Error: cartes:getSansRangementPage', e); throw e; }
   });
   ipcMain.handle('cartes:getSansNomPage', async (_, siteId, offset, limit, query, filters) => {

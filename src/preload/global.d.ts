@@ -88,7 +88,7 @@ declare global {
         getSansNumSecuPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
         getSansNomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
         getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
-        getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any) => Promise<{rows: any[], total: number}>;
+        getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any, sortOrder?: 'recent' | 'oldest') => Promise<{rows: any[], total: number}>;
         getSansContactPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;
         getSansLieuEnrolementPage: (siteId: number, offset: number, limit: number, query?: string) => Promise<{rows: any[], total: number}>;

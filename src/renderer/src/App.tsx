@@ -22,6 +22,7 @@ import InventaireOverview from './pages/inventaire/InventaireOverview';
 import InventairePhysiqueScan from './pages/inventaire/InventairePhysiqueScan';
 import InventaireLogistique from './pages/inventaire/InventaireLogistique';
 import InventaireCartesMalCentrees from './pages/inventaire/InventaireCartesMalCentrees';
+import InventaireSansRangement from './pages/inventaire/InventaireSansRangement';
 import ApurementLayout from './pages/apurement/ApurementLayout';
 import ApurementOverview from './pages/apurement/ApurementOverview';
 import ApurementCorrections from './pages/apurement/ApurementCorrections';
@@ -239,6 +240,7 @@ export default function App() {
               <Route path="scan" element={<InventairePhysiqueScan />} />
               <Route path="logistique" element={<InventaireLogistique />} />
               <Route path="anomalies-centre" element={<InventaireCartesMalCentrees />} />
+              <Route path="sans-rangement" element={<InventaireSansRangement />} />
             </Route>
 
             {/* Portail dédié Opérateur Apurement (émargement rétroactif des cahiers historiques) */}

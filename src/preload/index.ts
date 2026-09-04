@@ -150,8 +150,8 @@ const api = {
       ipcRenderer.invoke('cartes:getSansNomPage', siteId, offset, limit, query, filters),
     getSansPrenomPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
       ipcRenderer.invoke('cartes:getSansPrenomPage', siteId, offset, limit, query, filters),
-    getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any): Promise<{ rows: ICarte[]; total: number }> => 
-      ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query, filters),
+    getSansRangementPage: (siteId: number, offset: number, limit: number, query?: string, filters?: any, sortOrder?: 'recent' | 'oldest'): Promise<{ rows: ICarte[]; total: number }> =>
+      ipcRenderer.invoke('cartes:getSansRangementPage', siteId, offset, limit, query, filters, sortOrder),
     getSansContactPage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> => 
       ipcRenderer.invoke('cartes:getSansContactPage', siteId, offset, limit, query),
     getSansLieuNaissancePage: (siteId: number, offset: number, limit: number, query?: string): Promise<{ rows: ICarte[]; total: number }> =>

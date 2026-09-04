@@ -210,6 +210,7 @@ export default function Sidebar() {
         { label: 'Logistique', icon: Boxes, path: '/inventaire/logistique' },
         { label: 'Scan', icon: PackageSearch, path: '/inventaire/scan' },
         { label: 'Cartes mal-centrées', icon: MapPinOff, path: '/inventaire/anomalies-centre' },
+        { label: 'Sans rangement', icon: Package, path: '/inventaire/sans-rangement' },
 
         { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')

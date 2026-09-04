@@ -1738,7 +1738,7 @@ export function getSansNumSecuPage(siteId: number, offset: number, limit: number
   return { rows, total };
 }
 
-export function getSansRangementPage(siteId: number, offset: number, limit: number, query?: string, filters?: QualityFilters) {
+export function getSansRangementPage(siteId: number, offset: number, limit: number, query?: string, filters?: QualityFilters, sortOrder?: 'recent' | 'oldest') {
   const db = getDatabase()!;
   let where = "WHERE site_id = ? AND is_dirty != -1 AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')";
   const params: any[] = [siteId];
@@ -1759,7 +1759,11 @@ export function getSansRangementPage(siteId: number, offset: number, limit: numb
   const countQuery = `SELECT COUNT(*) as count FROM t_cartes ${where}`;
   const total = getCachedCount(db, countQuery, params) || 0;
 
-  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ORDER BY id_carte DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+  // sortOrder (nouveau, additif) : 'oldest' pour la page "Sans rangement" du portail
+  // OPERATEUR_LOGISTIQUE (plan validé, plus anciennes en premier) — comportement par défaut
+  // ('recent'/non fourni) strictement inchangé pour l'appelant historique (MissingDataView.tsx).
+  const orderClause = sortOrder === 'oldest' ? 'ORDER BY id_carte ASC' : 'ORDER BY id_carte DESC';
+  const rows = db.prepare(`SELECT * FROM t_cartes ${where} ${orderClause} LIMIT ? OFFSET ?`).all(...params, limit, offset);
 
   return { rows, total };
 }
