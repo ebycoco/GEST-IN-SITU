@@ -162,7 +162,10 @@ export const EscaladesResoluesTab = () => {
               </h4>
               <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
                 <span>N° Sécu : {carte.num_secu || 'Non renseigné'}</span>
-                <span>Résolue le : {carte.updated_at ? new Date(carte.updated_at).toLocaleDateString() : 'N/A'}</span>
+                {/* action_at (et non updated_at) : migration lot 2 — getEscaladesResoluesCentre()
+                    renvoie toujours SELECT c.* (donc les deux colonnes), mais action_at est
+                    l'horodatage fiable de la résolution, jamais réécrit par la synchro réseau. */}
+                <span>Résolue le : {carte.action_at ? new Date(carte.action_at).toLocaleDateString() : 'N/A'}</span>
               </div>
             </div>
 

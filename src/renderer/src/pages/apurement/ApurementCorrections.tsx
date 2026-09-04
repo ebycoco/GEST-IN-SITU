@@ -25,13 +25,16 @@ function SyncStatusBadge({ status }: { status: string }) {
   );
 }
 
-/** "Aujourd'hui" au sens serveur (updated_at) — même convention que la fenêtre de tolérance
- * appliquée côté serveur (corrigerApurementRetirant/annulerApurementDechargement,
- * cartes.queries.ts). Purement informatif ici : l'enforcement réel reste serveur. */
-function isUpdatedToday(updatedAt: string | null | undefined): boolean {
-  if (!updatedAt) return false;
+/** "Aujourd'hui" au sens de l'action métier locale (action_at, migration lot 2 — auparavant
+ * updated_at) — même convention/même colonne que la fenêtre de tolérance appliquée côté serveur
+ * (assertApurementToleranceWindow dans corrigerApurementRetirant/annulerApurementDechargement,
+ * cartes.queries.ts). Purement informatif ici : l'enforcement réel reste serveur ; ce doublon
+ * client doit rester aligné sur la même colonne que le serveur pour ne jamais désactiver/activer
+ * les boutons "Corriger"/"Annuler" différemment de ce que le serveur autorisera réellement. */
+function isActionToday(actionAt: string | null | undefined): boolean {
+  if (!actionAt) return false;
   const todayStr = new Date().toISOString().split('T')[0];
-  return updatedAt.slice(0, 10) === todayStr;
+  return actionAt.slice(0, 10) === todayStr;
 }
 
 /**
@@ -167,7 +170,7 @@ export default function ApurementCorrections() {
               <tbody>
                 {rows.map((r) => {
                   const isAgentOwner = !!user && user.role === 'OPERATEUR_APUREMENT' && (r.agent_distributeur || '').trim().toUpperCase() === (user.login || '').trim().toUpperCase();
-                  const withinTolerance = isUpdatedToday(r.updated_at);
+                  const withinTolerance = isActionToday(r.action_at);
                   const canAct = isAdmin || (isAgentOwner && withinTolerance);
                   const disabledReason = !canAct
                     ? (isAgentOwner ? "Délai dépassé (jour même uniquement) — contactez un administrateur." : "Vous ne pouvez agir que sur vos propres émargements.")
@@ -194,7 +197,7 @@ export default function ApurementCorrections() {
                       <td style={{ padding: '16px 20px' }}>
                         <div style={{ color: 'var(--text-secondary)', fontSize: 13 }}>{r.agent_distributeur || '—'}</div>
                         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {r.updated_at ? new Date(r.updated_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          {r.action_at ? new Date(r.action_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
                         </div>
                       </td>
                       <td style={{ padding: '16px 20px' }}>

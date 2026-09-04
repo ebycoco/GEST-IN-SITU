@@ -2250,7 +2250,8 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
 /**
  * Vérifie la fenêtre de tolérance "jour même" pour la correction/annulation d'un émargement
  * Apurement (plan validé — correction/annulation d'un émargement Apurement erroné).
- * Comparaison sur `updated_at` (horodatage serveur de l'émargement), pas sur `date_delivrance`
+ * Comparaison sur `action_at` (horodatage de l'action métier locale — insensible aux
+ * réécritures d'`updated_at` par la synchro réseau, lot 2), pas sur `date_delivrance`
  * (saisie libre du cahier historique) — même convention que getApurementStats/
  * getApurementCardsTodayPaginated (stats.queries.ts). Liste blanche explicite des rôles admin
  * (SUPER ADMIN/ADMINISTRATEUR_SITE/ADMIN_CENTRE) : eux seuls n'ont aucune fenêtre de temps ni
@@ -2262,7 +2263,7 @@ export function updateApurementHistorique(id: number, fields: { date_delivrance:
  * rôle actif autre que ces deux catégories.
  */
 function assertApurementToleranceWindow(
-  carte: { agent_distributeur: string | null; updated_at: string | null },
+  carte: { agent_distributeur: string | null; action_at: string | null },
   currentUser?: { role: string; login?: string }
 ): void {
   const ADMIN_ROLES = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'];
@@ -2276,8 +2277,8 @@ function assertApurementToleranceWindow(
   const dTomorrow = new Date();
   dTomorrow.setDate(dTomorrow.getDate() + 1);
   const tomorrowStr = dTomorrow.toISOString().split('T')[0];
-  const updatedAt = carte.updated_at || '';
-  if (!(updatedAt >= todayStr && updatedAt < tomorrowStr)) {
+  const actionAt = carte.action_at || '';
+  if (!(actionAt >= todayStr && actionAt < tomorrowStr)) {
     throw new Error("Action refusée : le délai de correction du jour même est dépassé. Contactez un administrateur (SUPER ADMIN / ADMINISTRATEUR_SITE / ADMIN_CENTRE) pour corriger cet émargement.");
   }
 }
@@ -2308,12 +2309,12 @@ export function corrigerApurementRetirant(
 
   const runTx = db.transaction(() => {
     const carte = db.prepare(`
-      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at,
+      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at, action_at,
              date_delivrance, nom_retirant, num_retirant, relation_retirant
       FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)
     `).get(id, siteIdToUse, siteIdToUse) as {
       sync_id: string | null; site_id: number; centre_id: number | null; statut: string;
-      agent_distributeur: string | null; updated_at: string | null;
+      agent_distributeur: string | null; updated_at: string | null; action_at: string | null;
       date_delivrance: string | null; nom_retirant: string | null; num_retirant: string | null; relation_retirant: string | null;
     } | undefined;
 
@@ -2423,12 +2424,12 @@ export function annulerApurementDechargement(
 
   const runTx = db.transaction(() => {
     const carte = db.prepare(`
-      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at,
+      SELECT sync_id, site_id, centre_id, statut, agent_distributeur, updated_at, action_at,
              date_delivrance, nom_retirant, num_retirant, relation_retirant, centre_retrait
       FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)
     `).get(id, siteIdToUse, siteIdToUse) as {
       sync_id: string | null; site_id: number; centre_id: number | null; statut: string;
-      agent_distributeur: string | null; updated_at: string | null;
+      agent_distributeur: string | null; updated_at: string | null; action_at: string | null;
       date_delivrance: string | null; nom_retirant: string | null; num_retirant: string | null;
       relation_retirant: string | null; centre_retrait: string | null;
     } | undefined;

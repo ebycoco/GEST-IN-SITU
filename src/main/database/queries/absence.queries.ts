@@ -124,6 +124,12 @@ export function getAgentAbsences(agent: string, siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
+// Tri sur `action_at` (et non `updated_at`, qui redevient un pur horodatage d'envoi réseau
+// depuis le lot 1) : resoudreAbsence()/declarerPerdue() posent les deux colonnes à la même
+// valeur `now` (voir plus bas dans ce fichier), donc `action_at` reflète fidèlement le moment
+// réel de la résolution, contrairement à `updated_at` qui sera réécrit par la synchro — migration
+// lot 2. SELECT * inchangé (renvoie déjà `action_at`, colonne réelle de t_cartes) : seul l'ORDER
+// BY change, ResolusTab.tsx lit désormais `action_at` pour l'affichage "Résolue le".
 export function getSignalementsResolus(agent: string, siteId?: number): any[] {
   const db = getDatabase()!;
   let query = "SELECT * FROM t_cartes WHERE agent_signalement_absence = ? AND escalade_niveau = 'RESOLU'";
@@ -132,7 +138,7 @@ export function getSignalementsResolus(agent: string, siteId?: number): any[] {
     query += ' AND site_id = ?';
     params.push(Number(siteId));
   }
-  query += ' ORDER BY updated_at DESC';
+  query += ' ORDER BY action_at DESC';
   return db.prepare(query).all(...params);
 }
 
@@ -411,6 +417,10 @@ export function getAbsencesCentre(centreId: number): any[] {
 // (action='CARTE_ABSENTE_ESCALADEE', json_extract sur valeur_apres.id_carte) reprend exactement
 // le pattern déjà utilisé par resoudreAbsence()/declarerPerdue() ci-dessus pour retrouver un log
 // par id_carte.
+// Tri sur `action_at` (et non `updated_at`) : même raisonnement que getSignalementsResolus
+// ci-dessus (migration lot 2) — resoudreAbsence()/declarerPerdue() posent les deux colonnes à la
+// même valeur `now`. SELECT c.* inchangé (renvoie déjà `action_at`) : seul l'ORDER BY change,
+// EscaladesResoluesTab.tsx lit désormais `action_at` pour l'affichage "Résolue le".
 export function getEscaladesResoluesCentre(centreId: number): any[] {
   const db = getDatabase()!;
   return db.prepare(`
@@ -426,7 +436,7 @@ export function getEscaladesResoluesCentre(centreId: number): any[] {
         WHERE l.action = 'CARTE_ABSENTE_ESCALADEE'
           AND json_extract(l.valeur_apres, '$.id_carte') = c.id_carte
       )
-    ORDER BY c.updated_at DESC
+    ORDER BY c.action_at DESC
   `).all(centreId);
 }
 

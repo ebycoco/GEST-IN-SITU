@@ -265,7 +265,11 @@ export default function InventaireOverview() {
                           <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement || '—'}</td>
                           <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.statut || '—'}</td>
                           <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
-                            {r.updated_at ? new Date(r.updated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                            {/* action_at (et non updated_at) : migration lot 2 — le champ renvoyé
+                                par getInventaireLogistiqueCardsTodayPaginated est désormais
+                                l'horodatage de l'action métier locale, jamais réécrit par la
+                                synchro réseau. */}
+                            {r.action_at ? new Date(r.action_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                           </td>
                           <td style={{ padding: '16px 24px' }}>
                             <SyncStatusBadge status={r.sync_status} />

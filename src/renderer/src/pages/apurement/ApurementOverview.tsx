@@ -40,14 +40,16 @@ function SyncStatusBadge({ status }: { status: string }) {
  * - 4 KPI (Aujourd'hui/Semaine/Mois/Année) : endpoint dédié stats:getApurementStats →
  *   getApurementStats (stats.queries.ts), filtré sur statut='DELIVRE' AND
  *   agent_distributeur=agent connecté AND site_id, comme useVerificationStats, mais indexé sur
- *   `updated_at` (horodatage réel de l'action serveur) et non `date_delivrance` (date du cahier
- *   historique, saisie librement par l'agent — ne reflète pas le moment réel du traitement).
+ *   `action_at` (horodatage de l'action métier locale, migration lot 2) et non `date_delivrance`
+ *   (date du cahier historique, saisie librement par l'agent — ne reflète pas le moment réel du
+ *   traitement) ni `updated_at` (redevenu un pur horodatage d'envoi réseau depuis le lot 1).
  *   Ne PAS réutiliser useVerificationStats/stats:getVerification ici : ce hook reste correct
  *   pour le portail Vérification (délivrance normale, date_delivrance auto-timestampée), mais
  *   donnerait un KPI "Aujourd'hui" proche de 0 pour l'Apurement.
  * - Liste paginée "Travail du jour" : endpoint stats:getApurementCardsTodayPaginated
  *   (LIMIT/OFFSET borné, politique Low-Memory RAM 8 Go — jamais de chargement complet),
- *   également recalé sur `updated_at`.
+ *   également recalé sur `action_at` (champ `action_at` dans les lignes retournées, colonne
+ *   "Heure d'apurement" ci-dessous).
  */
 export default function ApurementOverview() {
   const { user, activeSiteId } = useAuthStore();
@@ -234,7 +236,10 @@ export default function ApurementOverview() {
                         </div>
                       </td>
                       <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
-                        {r.updated_at ? new Date(r.updated_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        {/* action_at (et non updated_at) : migration lot 2 — le champ renvoyé par
+                            getApurementCardsTodayPaginated est désormais l'horodatage de l'action
+                            métier locale, jamais réécrit par la synchro réseau. */}
+                        {r.action_at ? new Date(r.action_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
                       </td>
                       <td style={{ padding: '16px 24px' }}>
                         <SyncStatusBadge status={r.sync_status} />
