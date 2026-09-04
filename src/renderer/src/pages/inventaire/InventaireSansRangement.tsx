@@ -13,6 +13,7 @@ interface CarteSansRangement {
   noms: string;
   prenoms: string;
   num_secu: string | null;
+  date_de_naissance: string | null;
 }
 
 /**
@@ -154,6 +155,19 @@ export default function InventaireSansRangement() {
     }
   };
 
+  // Affichage JJ/MM/AAAA : date_de_naissance est stockée en ISO (AAAA-MM-JJ), même helper que
+  // celui déjà utilisé dans VerificationSearchPage/SearchResults.tsx et
+  // InventaireApurement.tsx (portail Inventaire) pour cet affichage.
+  const formatBirthDate = (isoDate: string | null | undefined): string => {
+    if (!isoDate) return '—';
+    const parts = isoDate.split('-');
+    if (parts.length === 3) {
+      const [year, month, day] = parts;
+      return `${day}/${month}/${year}`;
+    }
+    return isoDate;
+  };
+
   return (
     <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: 24, maxWidth: 1100, margin: '0 auto', padding: '24px 32px' }}>
 
@@ -239,6 +253,7 @@ export default function InventaireSansRangement() {
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Nom</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Prénom</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Date de Naissance</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
                 </tr>
@@ -252,6 +267,7 @@ export default function InventaireSansRangement() {
                       <td style={{ padding: '16px 24px', fontWeight: 600, color: 'white' }}>{r.noms}</td>
                       <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.prenoms}</td>
                       <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{formatBirthDate(r.date_de_naissance)}</td>
                       <td style={{ padding: '16px 24px' }}>
                         <input
                           type="text"

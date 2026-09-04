@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MapPinOff, RefreshCw, Search } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
@@ -71,7 +71,13 @@ export default function InventaireCartesMalCentrees() {
   const [filterDateNaissance, setFilterDateNaissance] = useState('');
   const [filterLieuNaissance, setFilterLieuNaissance] = useState('');
 
-  const filteredRows = useMemo(() => {
+  // Extrait en fonction réutilisable (plutôt qu'inline dans le useMemo) : loadData()/
+  // handleCorriger() ci-dessous en ont aussi besoin pour recalculer le total PAGINÉ sur le
+  // tableau filtré (et non sur `rows` brut) au moment même où `rows` change, sans attendre un
+  // re-render où `filteredRows` (dérivé de l'état `rows` pas encore commité) serait à jour — cf.
+  // bug de pagination corrigé par ce ticket (une correction/un rafraîchissement silencieux avec
+  // un filtre actif pouvait laisser currentPage sur une page inexistante côté filtré).
+  const applyFilters = useCallback((source: CarteMalCentree[]) => {
     const q = searchQuery.trim().toUpperCase();
     // Égalité stricte sur la date de naissance normalisée (même format ISO que le stockage
     // t_cartes.date_de_naissance) — n'applique le filtre qu'une fois la saisie complète
@@ -79,9 +85,9 @@ export default function InventaireCartesMalCentrees() {
     const ddn = filterDateNaissance.length === 10 ? normalizeDate(filterDateNaissance) : '';
     const lieu = filterLieuNaissance.trim().toUpperCase();
 
-    if (!q && !ddn && !lieu) return rows;
+    if (!q && !ddn && !lieu) return source;
 
-    return rows.filter(r => {
+    return source.filter(r => {
       if (q) {
         const fullName = `${r.noms || ''} ${r.prenoms || ''}`.toUpperCase();
         if (!fullName.includes(q)) return false;
@@ -90,7 +96,19 @@ export default function InventaireCartesMalCentrees() {
       if (lieu && !(r.lieu_de_naissance || '').toUpperCase().includes(lieu)) return false;
       return true;
     });
-  }, [rows, searchQuery, filterDateNaissance, filterLieuNaissance]);
+  }, [searchQuery, filterDateNaissance, filterLieuNaissance]);
+
+  const filteredRows = useMemo(() => applyFilters(rows), [rows, applyFilters]);
+
+  // Ref vers la dernière version de applyFilters, lue par loadData() (useCallback ci-dessous) SANS
+  // figurer dans ses dépendances : loadData() ne doit se déclencher (mount, app:data-updated) qu'au
+  // changement de siteIdToUse — filtrage 100% côté renderer (cf. commentaire de tête), donc AUCUN
+  // rechargement réseau ne doit avoir lieu à la simple saisie d'un critère de recherche. Sans cette
+  // ref, ajouter applyFilters aux dépendances de loadData recréerait sa référence à chaque frappe et
+  // déclencherait un rechargement complet via l'effet de montage (loadData) plus bas — régression
+  // que ce ticket ne doit pas introduire en corrigeant le bug de pagination filtrée.
+  const applyFiltersRef = useRef(applyFilters);
+  useEffect(() => { applyFiltersRef.current = applyFilters; }, [applyFilters]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / ITEMS_PER_PAGE));
   const pagedRows = filteredRows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
@@ -109,9 +127,12 @@ export default function InventaireCartesMalCentrees() {
       const res = await window.api.cartes.getCartesMalCentrees(Number(siteIdToUse));
       const nextRows = res || [];
       setRows(nextRows);
-      // Conserve la page courante si elle reste valide vis-à-vis du nouveau total ; sinon
-      // recale sur la dernière page valide (ex. anomalies corrigées ailleurs entre-temps).
-      const newTotalPages = Math.max(1, Math.ceil(nextRows.length / ITEMS_PER_PAGE));
+      // Conserve la page courante si elle reste valide vis-à-vis du nouveau total FILTRÉ ; sinon
+      // recale sur la dernière page valide (ex. anomalies corrigées ailleurs entre-temps, ou
+      // rafraîchissement silencieux via app:data-updated). Bug corrigé par ce ticket : le recalage
+      // se basait auparavant sur nextRows.length (total brut non filtré), ce qui pouvait laisser
+      // currentPage sur une page inexistante côté filtré quand une recherche était active.
+      const newTotalPages = Math.max(1, Math.ceil(applyFiltersRef.current(nextRows).length / ITEMS_PER_PAGE));
       setCurrentPage(prev => Math.min(prev, newTotalPages));
     } catch (err) {
       console.error('Erreur lors du chargement des cartes mal-centrées :', err);
@@ -150,8 +171,9 @@ export default function InventaireCartesMalCentrees() {
       const nextRows = rows.filter(r => r.id_carte !== carte.id_carte);
       setRows(nextRows);
       // Si la page courante devient vide (ex. dernière ligne de la dernière page corrigée),
-      // recule sur la dernière page encore valide.
-      const newTotalPages = Math.max(1, Math.ceil(nextRows.length / ITEMS_PER_PAGE));
+      // recule sur la dernière page encore valide — calculée sur le total FILTRÉ (applyFilters),
+      // pas sur nextRows.length brut (même correctif que loadData ci-dessus).
+      const newTotalPages = Math.max(1, Math.ceil(applyFilters(nextRows).length / ITEMS_PER_PAGE));
       setCurrentPage(prev => Math.min(prev, newTotalPages));
       // Notifie le reste du hub (compteurs InventaireLayout.tsx, etc.) — même pattern que
       // InventaireLogistique.tsx/InventaireApurement.tsx.
