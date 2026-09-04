@@ -6233,6 +6233,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try {
       const secureUser = getSecureCurrentUser();
       if (!secureUser) throw new Error("Session invalide.");
+      // Sécurité (P0) : ce handler exposait un pull complet (le plus coûteux du moteur de
+      // synchro, watermark remis à zéro) à tout compte authentifié — la restriction
+      // SUPER ADMIN/ADMINISTRATEUR_SITE n'existait que côté UI (SyncStatusDashboard.tsx),
+      // contournable depuis la console DevTools. Vérification serveur alignée sur
+      // sync:forceGlobal (verifyUserRole ci-dessus).
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE'])) {
+        throw new Error("Accès refusé. Seuls le SUPER ADMIN et l'ADMINISTRATEUR_SITE peuvent lancer une synchronisation forcée complète.");
+      }
       siteId = secureUser.role === 'SUPER ADMIN' ? Number(siteId) : secureUser.site_id;
 
       if (!siteId || isNaN(Number(siteId))) {
