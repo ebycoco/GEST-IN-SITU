@@ -558,6 +558,14 @@ const api = {
       ipcRenderer.invoke('sync:forceSite', siteId),
     pullSiteCards: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string; code?: 'SITE_NOT_FOUND' }> =>
       ipcRenderer.invoke('sync:pullSiteCards', siteId, currentUser),
+    // Porte de secours "dernier recours" : réinitialise le watermark local (t_config.last_downstream_sync
+    // / last_downstream_sync_id à l'époque Unix) et retélécharge INTÉGRALEMENT les cartes du site depuis
+    // Supabase. Verrouillage anti-concurrence déjà géré côté main (syncEngine.isCurrentlySyncing /
+    // beginManualDownstream) — voir handlers.ts, canal 'sync:forceFullPull'. Bien plus coûteux qu'un
+    // pullSiteCards standard (potentiellement des dizaines de minutes) : à réserver aux cas où
+    // pullSiteCards ne suffit pas à récupérer des données manquantes (watermark périmé/corrompu).
+    forceFullPull: (siteId: number, currentUser?: any): Promise<{ success: boolean; count?: number; message?: string }> =>
+      ipcRenderer.invoke('sync:forceFullPull', siteId, currentUser),
     pullAgents: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> => 
       ipcRenderer.invoke('sync:pullAgents', siteId, currentUser),
     syncUsersFromSupabase: (siteId: number, currentUser?: any): Promise<{ success: boolean; count: number; message?: string }> =>

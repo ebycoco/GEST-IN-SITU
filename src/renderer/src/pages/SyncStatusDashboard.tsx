@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  RefreshCw, Database, AlertCircle, CheckCircle2, 
-  Wifi, WifiOff, ShieldAlert, Lock, Terminal, Heart, Clock
+import {
+  RefreshCw, Database, AlertCircle, CheckCircle2,
+  Wifi, WifiOff, ShieldAlert, Lock, Terminal, Heart, Clock, RotateCcw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
@@ -16,8 +16,10 @@ interface SyncError {
 
 export default function SyncStatusDashboard() {
   const user = useAuthStore((s) => s.user);
+  const activeSiteId = useAuthStore((s) => s.activeSiteId);
   const [loading, setLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isForcingFullPull, setIsForcingFullPull] = useState(false);
   const [downstreamProgress, setDownstreamProgress] = useState<number>(-1);
   const [status, setStatus] = useState<{
     state: 'ONLINE' | 'OFFLINE' | 'PROBING' | 'DEGRADED' | 'PERMANENT_OFFLINE';
@@ -140,6 +142,41 @@ export default function SyncStatusDashboard() {
       toast.error(`❌ Échec de la synchronisation : ${err.message || err}`, { id: toastId });
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  const handleForceFullPull = async () => {
+    if (isSyncing || isForcingFullPull) return;
+    const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
+    if (!siteIdToUse) {
+      toast.error("Aucun site actif sélectionné pour la resynchronisation complète.");
+      return;
+    }
+
+    const isConfirmed = await confirmService.confirm({
+      title: "Resynchronisation Complète (Dernier Recours)",
+      message: "⚠️ Cette action réinitialise le repère de synchronisation de ce site et retélécharge INTÉGRALEMENT toutes ses cartes depuis Supabase Cloud — une opération bien plus longue (potentiellement plusieurs dizaines de minutes) qu'une synchronisation normale. À utiliser uniquement si « Synchroniser maintenant » ne suffit pas à récupérer des données manquantes. Continuer ?",
+      isDanger: true,
+      requirePassword: true,
+      actionName: "Resynchronisation complète forcée (reset watermark)",
+      confirmText: "Lancer la resynchronisation complète"
+    });
+    if (!isConfirmed) return;
+
+    setIsForcingFullPull(true);
+    const toastId = toast.loading("♻️ Resynchronisation complète en cours — cela peut prendre plusieurs minutes...");
+    try {
+      const res = await window.api.sync.forceFullPull(Number(siteIdToUse), user);
+      if (res.success) {
+        toast.success(`✅ Resynchronisation complète terminée : ${res.count ?? 0} carte(s) rapatriée(s).`, { id: toastId, duration: 8000 });
+      } else {
+        toast.error(`⚠️ ${res.message || 'Échec de la resynchronisation complète.'}`, { id: toastId, duration: 8000 });
+      }
+      await loadStatus();
+    } catch (err: any) {
+      toast.error(`❌ Échec de la resynchronisation complète : ${err.message || err}`, { id: toastId });
+    } finally {
+      setIsForcingFullPull(false);
     }
   };
 
@@ -632,8 +669,39 @@ export default function SyncStatusDashboard() {
 
       </div>
 
+      {/* Zone de Dernier Recours — reset watermark + pull complet, réservée aux cas où
+          "Synchroniser maintenant" ne suffit pas à récupérer des cartes manquantes. */}
+      {(user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (activeSiteId || user?.site_id) && (
+        <div className="glass-card-soleil" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, borderColor: 'rgba(248, 113, 113, 0.25)' }}>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+            <div style={{
+              background: 'rgba(248, 113, 113, 0.1)',
+              border: '1px solid rgba(248, 113, 113, 0.25)',
+              width: 46, height: 46, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+            }}>
+              <ShieldAlert size={22} color="#f87171" />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={{ fontSize: 15, fontWeight: 800, color: 'var(--text-primary)' }}>Zone de Dernier Recours</span>
+              <span style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, maxWidth: 560 }}>
+                Réinitialise le repère de synchronisation de ce site et retélécharge intégralement toutes ses cartes depuis Supabase Cloud. Bien plus long qu'une synchronisation normale (potentiellement plusieurs dizaines de minutes) — à utiliser uniquement si « Synchroniser maintenant » ne suffit pas.
+              </span>
+            </div>
+          </div>
+          <button
+            className="btn-sync-soleil"
+            style={{ background: 'linear-gradient(135deg, #ef4444 0%, #b91c1c 100%)', boxShadow: '0 4px 14px rgba(239, 68, 68, 0.25)', color: 'white', flexShrink: 0 }}
+            disabled={isSyncing || isForcingFullPull || status.state === 'PERMANENT_OFFLINE'}
+            onClick={handleForceFullPull}
+          >
+            <RotateCcw size={16} className={isForcingFullPull ? 'spin-animation' : ''} color="white" />
+            <span>{isForcingFullPull ? 'RESYNCHRONISATION...' : 'RESYNCHRONISATION COMPLÈTE'}</span>
+          </button>
+        </div>
+      )}
+
       {/* Bouclier global anti-clics et curseur de chargement */}
-      {(isSyncing) && (
+      {(isSyncing || isForcingFullPull) && (
         <div style={{
           position: 'fixed',
           top: 0,

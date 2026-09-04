@@ -51,6 +51,12 @@ export function mapCardPayload(c: any): any {
     notif_lue: c.notif_lue ?? 1,
     id_site: c.site_id, id_centre: c.centre_id || null, id_poste: c.poste_id || null,
     qr_code_data: c.qr_code_data || null, is_exported: c.is_exported || 0,
-    created_by: c.created_by || null, updated_at: c.updated_at || new Date().toISOString()
+    created_by: c.created_by || null,
+    // updated_at : toujours l'heure RÉELLE d'envoi vers Supabase (jamais c.updated_at, la date de
+    // dernière édition locale) — même correctif que upload-worker.js:205-211. Le pull descendant
+    // incrémental (curseur (updated_at, sync_id) > watermark, RPC fn_downstream_cartes_chunk) doit
+    // pouvoir détecter cette carte sur les autres postes, même si elle a été modifiée puis mise en
+    // attente en t_outbox (Envoi Automatique désactivé) longtemps avant cet envoi effectif.
+    updated_at: new Date().toISOString()
   };
 }

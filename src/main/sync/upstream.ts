@@ -82,7 +82,11 @@ function mapCardPayload(c: any): any {
     qr_code_data: c.qr_code_data || null,
     is_exported: c.is_exported || 0,
     created_by: c.created_by || null,
-    updated_at: c.updated_at || new Date().toISOString(),
+    // updated_at : toujours l'heure RÉELLE d'envoi vers Supabase (jamais c.updated_at, la date de
+    // dernière édition locale) — même correctif que upload-worker.js:205-211 et
+    // payload-mapper.ts:mapCardPayload, pour garantir la détectabilité par le pull descendant
+    // incrémental (curseur (updated_at, sync_id) > watermark) même en cas d'envoi différé.
+    updated_at: new Date().toISOString(),
     ...(c.updated_by !== undefined ? { updated_by: c.updated_by } : {})
   };
 }
