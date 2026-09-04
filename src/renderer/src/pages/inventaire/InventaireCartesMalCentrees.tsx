@@ -3,6 +3,16 @@ import { MapPinOff, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import { confirmService } from '../../components/confirmService';
+import { PaginationInput } from '../../components/PaginationInput';
+
+// Pagination CÔTÉ RENDERER uniquement (slice d'un tableau déjà entièrement chargé en mémoire) —
+// pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts:1057-1129)
+// calcule un index de routage préfixe→centre en mémoire TypeScript et applique le filtre
+// "mal centrée" (expected.centre_id !== row.centre_id) APRÈS la lecture SQL complète, donc hors
+// du WHERE. Une vraie pagination SQL nécessiterait de restructurer cet algorithme (hors périmètre
+// de ce ticket — voir STOP & WARN du rapport associé). Même valeur que InventaireSansRangement.tsx
+// pour la cohérence visuelle entre les deux pages du portail OPERATEUR_LOGISTIQUE.
+const ITEMS_PER_PAGE = 15;
 
 interface CarteMalCentree {
   id_carte: number;
@@ -43,13 +53,22 @@ export default function InventaireCartesMalCentrees() {
   const [rows, setRows] = useState<CarteMalCentree[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [correctingId, setCorrectingId] = useState<number | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  const totalPages = Math.max(1, Math.ceil(rows.length / ITEMS_PER_PAGE));
+  const pagedRows = rows.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
   const loadData = useCallback(async (silent = false) => {
-    if (!siteIdToUse) { setRows([]); setIsLoading(false); return; }
+    if (!siteIdToUse) { setRows([]); setCurrentPage(1); setIsLoading(false); return; }
     try {
       if (!silent) setIsLoading(true);
       const res = await window.api.cartes.getCartesMalCentrees(Number(siteIdToUse));
-      setRows(res || []);
+      const nextRows = res || [];
+      setRows(nextRows);
+      // Conserve la page courante si elle reste valide vis-à-vis du nouveau total ; sinon
+      // recale sur la dernière page valide (ex. anomalies corrigées ailleurs entre-temps).
+      const newTotalPages = Math.max(1, Math.ceil(nextRows.length / ITEMS_PER_PAGE));
+      setCurrentPage(prev => Math.min(prev, newTotalPages));
     } catch (err) {
       console.error('Erreur lors du chargement des cartes mal-centrées :', err);
       toast.error('Erreur lors du chargement des cartes mal-centrées.');
@@ -84,7 +103,12 @@ export default function InventaireCartesMalCentrees() {
       await window.api.cartes.corrigerCentreCarte(carte.id_carte);
       toast.success(`Centre corrigé pour ${carte.noms} ${carte.prenoms}.`);
       // Retrait local immédiat de la ligne corrigée (pas d'attente d'un rechargement complet).
-      setRows(prev => prev.filter(r => r.id_carte !== carte.id_carte));
+      const nextRows = rows.filter(r => r.id_carte !== carte.id_carte);
+      setRows(nextRows);
+      // Si la page courante devient vide (ex. dernière ligne de la dernière page corrigée),
+      // recule sur la dernière page encore valide.
+      const newTotalPages = Math.max(1, Math.ceil(nextRows.length / ITEMS_PER_PAGE));
+      setCurrentPage(prev => Math.min(prev, newTotalPages));
       // Notifie le reste du hub (compteurs InventaireLayout.tsx, etc.) — même pattern que
       // InventaireLogistique.tsx/InventaireApurement.tsx.
       window.dispatchEvent(new CustomEvent('app:data-updated'));
@@ -141,7 +165,7 @@ export default function InventaireCartesMalCentrees() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
+                {pagedRows.map((r) => {
                   const isLocked = r.statut === 'DOUBLON' || r.statut === 'DELIVRE';
                   return (
                     <tr key={r.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
@@ -174,6 +198,24 @@ export default function InventaireCartesMalCentrees() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {totalPages > 1 && (
+          <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,0.05)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Affichage {((currentPage - 1) * ITEMS_PER_PAGE) + 1} à {Math.min(currentPage * ITEMS_PER_PAGE, rows.length)} sur {rows.length}
+            </span>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button className="btn btn-secondary" disabled={currentPage === 1 || isLoading} onClick={() => setCurrentPage(p => p - 1)}>Précédent</button>
+              <PaginationInput
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+                disabled={isLoading}
+              />
+              <button className="btn btn-secondary" disabled={currentPage === totalPages || isLoading} onClick={() => setCurrentPage(p => p + 1)}>Suivant</button>
+            </div>
           </div>
         )}
       </div>
