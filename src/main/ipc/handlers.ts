@@ -1423,7 +1423,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } : null;
 
     const userId = resolvedUser?.id_user;
-    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION', 'OPERATEUR_RECHERCHE'])) {
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'])) {
       log.warn('[SECURITY] Acces refuse a cartes:delivrer : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour délivrer une carte.");
     }
