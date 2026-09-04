@@ -1979,6 +1979,71 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:updateRangementEtFiche', e); throw e; }
   });
+
+  // Détection des cartes "mal-centrées" (nouvelle page dédiée, portail OPERATEUR_LOGISTIQUE,
+  // plan validé) — même périmètre de rôles et même pattern resolveScopedSiteId que
+  // stats:getInventaireOverview ci-dessus (handlers.ts:~5791) : siteId n'est qu'indicatif pour
+  // SUPER ADMIN, tout autre rôle est recadré serveur sur son propre site_id. Décision produit
+  // validée : le HANDLER reste ouvert aux 4 rôles du hub (SUPER ADMIN, ADMINISTRATEUR_SITE,
+  // OPERATEUR_INVENTAIRE, OPERATEUR_LOGISTIQUE) — même si la PAGE renderer elle-même n'est
+  // routée/affichée que pour OPERATEUR_LOGISTIQUE (App.tsx/Sidebar.tsx).
+  ipcMain.handle('cartes:getCartesMalCentrees', (_, siteId?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:getCartesMalCentrees : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try {
+      const scopedSiteId = resolveScopedSiteId(siteId);
+      return queries.getCartesMalCentrees(scopedSiteId);
+    } catch (e) {
+      log.error('IPC Error: cartes:getCartesMalCentrees', e);
+      throw e;
+    }
+  });
+
+  // Correction du centre_id d'une carte mal-centrée (plan validé) — identité et périmètre
+  // dérivés exclusivement de la session serveur (getSecureCurrentUser), jamais d'un currentUser
+  // fourni par le renderer, même modèle que cartes:declarerDoublon ci-dessus. Le cloisonnement
+  // site est de toute façon revérifié dans queries.corrigerCentreCarte() elle-même (même
+  // transaction que la lecture de la carte, élimine tout TOCTOU), ce handler ne fait que le
+  // gate grossier (liste de rôles autorisés à *tenter* l'action) — même périmètre que
+  // cartes:updateRangementEtFiche ci-dessus.
+  ipcMain.handle('cartes:corrigerCentreCarte', async (_, id: number) => {
+    const secureSession = getSecureCurrentUser();
+    const resolvedUser = secureSession ? {
+      id_user: secureSession.id_user,
+      login: secureSession.login,
+      role: secureSession.role,
+      site_id: secureSession.site_id,
+      centre_id: secureSession.centre_id
+    } : null;
+
+    const userId = resolvedUser?.id_user;
+    if (!userId || !verifyUserRole(userId, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a cartes:corrigerCentreCarte : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour corriger le centre de cette carte.");
+    }
+
+    try {
+      const res = await queries.corrigerCentreCarte(id, resolvedUser as any);
+      queries.insertAuditLog(
+        resolvedUser?.login || 'SYSTEM',
+        'CENTRE_CARTE_CORRIGE',
+        `Centre corrigé pour la carte ID ${id} par ${resolvedUser?.login || 'SYSTEM'} (détection "cartes mal-centrées").`
+      );
+      // Pas de logAudit()/CRUD_SYNC_WHITELIST ici (choix documenté, cf. rapport agent-3) : la
+      // visibilité cross-poste via t_logs + is_dirty=1 est déjà assurée directement dans
+      // queries.corrigerCentreCarte() (action 'CENTRE_CARTE_CORRIGE', même modèle que
+      // signalerAbsence()/absence.queries.ts) — ajouter aussi 'CENTRE_CARTE_CORRIGE' à
+      // CRUD_SYNC_WHITELIST dupliquerait cette même ligne t_logs (une fois ici via logAudit(),
+      // une fois déjà faite dans la transaction), ce qui n'est pas souhaitable.
+      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
+      return res;
+    }
+    catch (e) { log.error('IPC Error: cartes:corrigerCentreCarte', e); throw e; }
+  });
+
   ipcMain.handle('cartes:searchCombinedInventaire', async (_, siteId, queryNomsPrenoms, dateNaissance, lieuNaissance) => {
     // Sécurité (P0) : handler auparavant totalement dépourvu de contrôle de rôle (seul le
     // site était filtré). Même périmètre de rôles que cartes:updateApurementHistorique
@@ -5776,6 +5841,48 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       return queries.getApurementStats(effectiveAgentUsername, scoped.siteId);
     } catch (e) {
       log.error('IPC Error: stats:getApurementStats', e);
+      throw e;
+    }
+  });
+
+  // Vue d'ensemble du portail "Inventaire & Logistique" (route `/inventaire`, index route pour
+  // OPERATEUR_LOGISTIQUE — décision produit Option B/Overview-A, plan validé) — 4 KPI
+  // (Aujourd'hui/Semaine/Mois/Année), site-wide, lecture seule. Voir
+  // getInventaireLogistiqueOverviewStats (stats.queries.ts) pour le détail du filtrage et la
+  // limite assumée (pas d'attribution par agent, contrairement à getApurementStats ci-dessus).
+  // Gardé pour les 4 rôles qui accèdent réellement à `/inventaire` (mêmes rôles que la route
+  // App.tsx). Cantonnement (§3 CLAUDE.md) : siteId toujours dérivé de resolveScopedSiteId
+  // (session serveur réelle pour tout rôle non-SUPER ADMIN), jamais du paramètre client brut.
+  ipcMain.handle('stats:getInventaireOverview', (_, siteId?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a stats:getInventaireOverview : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try {
+      const scopedSiteId = resolveScopedSiteId(siteId);
+      return queries.getInventaireLogistiqueOverviewStats(scopedSiteId);
+    } catch (e) {
+      log.error('IPC Error: stats:getInventaireOverview', e);
+      throw e;
+    }
+  });
+
+  // Portail "Inventaire & Logistique" — liste paginée "Travail du jour" (Vue d'ensemble),
+  // site-wide (voir getInventaireLogistiqueCardsTodayPaginated, stats.queries.ts, pour la limite
+  // assumée : aucune attribution par agent). Même garde de rôle et même cantonnement
+  // (resolveScopedSiteId) que stats:getInventaireOverview ci-dessus.
+  ipcMain.handle('stats:getInventaireCardsTodayPaginated', (_, siteId?: number, page?: number, pageSize?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE'])) {
+      log.warn('[SECURITY] Acces refuse a stats:getInventaireCardsTodayPaginated : session invalide ou role non autorise.');
+      throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
+    }
+    try {
+      const scopedSiteId = resolveScopedSiteId(siteId);
+      return queries.getInventaireLogistiqueCardsTodayPaginated(scopedSiteId, page ?? 0, pageSize ?? 20);
+    } catch (e) {
+      log.error('IPC Error: stats:getInventaireCardsTodayPaginated', e);
       throw e;
     }
   });

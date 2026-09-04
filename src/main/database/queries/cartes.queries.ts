@@ -4,6 +4,7 @@ import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '..
 import { networkMonitor } from '../../sync/network-monitor';
 import { mapCardPayload } from '../../sync/payload-mapper';
 import { insertAuditLog } from './audit.queries';
+import { getCentresWithPrefixes } from './hierarchy.queries';
 import { QualityFilters } from '../../../shared/types/quality.types';
 import log from 'electron-log';
 import { isValidDateStrict } from '../../../shared/utils/validators';
@@ -967,6 +968,254 @@ export function annulerDeclarationDoublon(
     }
     throw err;
   }
+}
+
+/**
+ * Détecte les cartes "mal-centrées" (portail OPERATEUR_LOGISTIQUE, plan validé) : le rangement
+ * physique de la carte matche (par préfixe) un centre du site DIFFÉRENT du centre_id
+ * actuellement stocké sur la carte — y compris le cas centre_id IS NULL. Ces cartes sont
+ * bloquées à la délivrance pour les agents du centre attendu (voir delivrerCarte() ci-dessus,
+ * garde `!isUnclassified && carte.centre_id !== currentUser.centre_id`, qui ne regarde jamais
+ * le texte du rangement pour recalculer un centre attendu).
+ *
+ * Algorithme de matching (longest-prefix-first, préfixes UPPER(rangement).startsWith(prefixe))
+ * délibérément RÉIMPLÉMENTÉ ICI de façon isolée et minimale — identique dans son principe à
+ * resolveRouting() (schema.ts, migration V50) et à sa 2e implémentation (workers/import-worker.js),
+ * mais sans aucun partage de code avec ces deux fichiers (hors périmètre de ce chantier, cf. plan
+ * validé) : ne jamais faire évoluer ces trois implémentations en écho les unes des autres.
+ *
+ * Différence volontaire avec resolveRouting() (V50/import-worker.js) : ici, un rangement qui ne
+ * matche AUCUN préfixe d'aucun centre du site n'est PAS traité par défaut comme appartenant au
+ * centre principal du site — il est simplement exclu du résultat (rien à corriger, aucun
+ * centre_attendu calculable), conformément à la définition exacte de l'anomalie validée avec
+ * l'utilisateur (cas exclus : rangement vide/NON CLASSE, ou rangement sans préfixe matchant).
+ *
+ * Lecture seule. Cloisonnement site_id obligatoire en paramètre (jamais dérivé d'une re-requête
+ * directe sur t_users — §3 CLAUDE.md) : le handler IPC (cartes:getCartesMalCentrees) dérive ce
+ * paramètre via getSecureCurrentUser()/resolveScopedSiteId, jamais du paramètre client brut.
+ * Pas de pagination backend pour ce cycle (volume attendu faible, décision produit validée).
+ */
+export function getCartesMalCentrees(siteId: number): Array<{
+  id_carte: number;
+  noms: string;
+  prenoms: string;
+  num_secu: string | null;
+  rangement: string;
+  centre_id_actuel: number | null;
+  nom_centre_actuel: string | null;
+  centre_id_attendu: number;
+  nom_centre_attendu: string;
+  statut: string;
+}> {
+  const db = getDatabase()!;
+
+  // Index de routage (longest-prefix-first) — même construction que getCentresWithPrefixes()
+  // ci-dessus dans hierarchy.queries.ts (dépendance directe, réutilisée en lecture seule).
+  const centres = getCentresWithPrefixes(siteId) as any[];
+  const routingIndex: { centre_id: number; nom_centre: string; prefix: string }[] = [];
+  centres.forEach((c: any) => {
+    if (c.prefixe_rangement && String(c.prefixe_rangement).trim()) {
+      String(c.prefixe_rangement).split(',').forEach((p: string) => {
+        const cleanP = p.toUpperCase().trim();
+        if (cleanP) routingIndex.push({ centre_id: c.id, nom_centre: c.nom, prefix: cleanP });
+      });
+    }
+  });
+  routingIndex.sort((a, b) => b.prefix.length - a.prefix.length);
+
+  const resolveExpectedCentre = (rawRangement: string): { centre_id: number; nom_centre: string } | null => {
+    const upper = rawRangement.toUpperCase().trim();
+    for (const r of routingIndex) {
+      if (upper.startsWith(r.prefix)) return { centre_id: r.centre_id, nom_centre: r.nom_centre };
+    }
+    return null;
+  };
+
+  const centresById = new Map<number, string>(centres.map((c: any) => [c.id, c.nom]));
+
+  // Pré-filtre SQL simple (site_id, rangement non vide/non NON CLASSE — même garde
+  // `isUnclassified` que delivrerCarte()/declarerDoublon() ci-dessus) ; le matching
+  // longest-prefix reste ensuite fait en mémoire (TypeScript), même approche que la migration
+  // V50 (volume analogue, pas d'optimisation supplémentaire nécessaire pour ce cycle).
+  const rows = db.prepare(`
+    SELECT id_carte, noms, prenoms, num_secu, rangement, centre_id, statut
+    FROM t_cartes
+    WHERE site_id = ?
+      AND rangement IS NOT NULL
+      AND TRIM(rangement) != ''
+      AND UPPER(TRIM(rangement)) != 'NON CLASSE'
+  `).all(siteId) as any[];
+
+  const anomalies: any[] = [];
+  for (const row of rows) {
+    const expected = resolveExpectedCentre(row.rangement);
+    if (!expected) continue; // aucun préfixe ne matche : rien à corriger (cas exclu, plan validé)
+    if (expected.centre_id === row.centre_id) continue; // déjà correctement centrée
+
+    anomalies.push({
+      id_carte: row.id_carte,
+      noms: row.noms,
+      prenoms: row.prenoms,
+      num_secu: row.num_secu,
+      rangement: row.rangement,
+      centre_id_actuel: row.centre_id ?? null,
+      nom_centre_actuel: row.centre_id != null ? (centresById.get(row.centre_id) ?? null) : null,
+      centre_id_attendu: expected.centre_id,
+      nom_centre_attendu: expected.nom_centre,
+      statut: row.statut
+    });
+  }
+
+  return anomalies;
+}
+
+/**
+ * Corrige le centre_id d'une carte "mal-centrée" (détectée par getCartesMalCentrees()
+ * ci-dessus) — rend la carte délivrable pour le centre attendu (voir garde `centre_id !==
+ * currentUser.centre_id` dans delivrerCarte() ci-dessus). Quadriptyque transactionnel complet
+ * (transaction + is_dirty=1 + t_logs + t_outbox — skill moteur-sync-offline-first), sur le
+ * modèle de declarerDoublon() ci-dessus.
+ *
+ * Verrous DOUBLON/DELIVRE (plan validé, décisions produit non renégociables) : une carte déjà
+ * délivrée ou déclarée en doublon n'est plus corrigible ici, même principe que les verrous déjà
+ * en place dans declarerDoublon()/updateApurementHistorique() (cartes.queries.ts).
+ *
+ * Le centre_attendu cible n'est JAMAIS reçu du renderer — recalculé ici côté serveur à partir du
+ * rangement ACTUEL de la carte (relu dans cette même transaction) + getCentresWithPrefixes(),
+ * même algorithme que getCartesMalCentrees() ci-dessus (réimplémentation isolée, cf. commentaire
+ * de tête de cette dernière) : un centre_id client forgé ne peut donc jamais rediriger une carte
+ * vers un centre arbitraire — seul le rangement réellement enregistré fait foi.
+ *
+ * Filet FTS5 : volontairement absent ici (contrairement à delivrerCarte()/declarerDoublon()/
+ * transfererCarte() dans ce même fichier). Vérifié directement dans schema.ts avant d'écrire
+ * cette fonction (ne jamais supposer) : trg_cartes_au est défini par
+ * `AFTER UPDATE OF noms, prenoms, num_secu, contact, lieu_de_naissance, rangement ON t_cartes`
+ * aux 3 endroits où il est (re)créé (schema.ts:1034, 1253, 3052 — définition identique aux 3
+ * endroits, dont la recréation V58 qui a justement resserré la liste de colonnes surveillées).
+ * `centre_id` n'en fait PAS partie, et l'UPDATE ci-dessous ne touche jamais `rangement` : ce
+ * trigger ne peut donc jamais se déclencher sur cette mutation — aucun filet défensif nécessaire.
+ */
+export function corrigerCentreCarte(
+  id: number,
+  currentUser?: { role: string; site_id?: number; id_user?: number; login?: string; centre_id?: number }
+) {
+  const db = getDatabase()!;
+
+  const siteIdToUse = currentUser?.role === 'SUPER ADMIN' ? null : (currentUser?.site_id ?? null);
+
+  const runTx = db.transaction(() => {
+    // 2. Relecture complète de la carte + cloisonnement site — même modèle que declarerDoublon()
+    // ci-dessus (siteIdToUse = null pour SUPER ADMIN, sinon égalité stricte site_id).
+    const carte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ? AND (? IS NULL OR site_id = ?)').get(id, siteIdToUse, siteIdToUse) as any;
+
+    if (!carte) {
+      throw new Error("Carte introuvable ou accès non autorisé pour votre site.");
+    }
+
+    // 3. Verrou DOUBLON (décision produit validée)
+    if (carte.statut === 'DOUBLON') {
+      throw new Error(`Cette carte est déclarée en doublon depuis le ${carte.doublon_declare_le || 'date inconnue'} par ${carte.doublon_declare_par || 'un agent inconnu'} — la correction du centre n'est plus possible tant que la déclaration n'est pas annulée par un administrateur.`);
+    }
+
+    // 4. Verrou DELIVRE (décision produit validée)
+    if (carte.statut === 'DELIVRE') {
+      throw new Error("Cette carte a déjà été délivrée — son centre n'est plus corrigible via cette action.");
+    }
+
+    // 5. Recalcul serveur du centre_attendu à partir du rangement ACTUEL relu ci-dessus — même
+    // algorithme (isolé) que getCartesMalCentrees(). Même garde `isUnclassified` que
+    // delivrerCarte()/declarerDoublon() ci-dessus.
+    const rawRangement: string = carte.rangement || '';
+    const isUnclassified = !rawRangement.trim() || rawRangement.trim().toUpperCase() === 'NON CLASSE';
+
+    let centreAttendu: number | null = null;
+    if (!isUnclassified) {
+      const centresDuSite = getCentresWithPrefixes(carte.site_id) as any[];
+      const routingIndex: { centre_id: number; prefix: string }[] = [];
+      centresDuSite.forEach((c: any) => {
+        if (c.prefixe_rangement && String(c.prefixe_rangement).trim()) {
+          String(c.prefixe_rangement).split(',').forEach((p: string) => {
+            const cleanP = p.toUpperCase().trim();
+            if (cleanP) routingIndex.push({ centre_id: c.id, prefix: cleanP });
+          });
+        }
+      });
+      routingIndex.sort((a, b) => b.prefix.length - a.prefix.length);
+
+      const upper = rawRangement.toUpperCase().trim();
+      for (const r of routingIndex) {
+        if (upper.startsWith(r.prefix)) { centreAttendu = r.centre_id; break; }
+      }
+    }
+
+    if (centreAttendu === null || centreAttendu === carte.centre_id) {
+      throw new Error("Cette carte n'est plus mal-centrée — le rangement ou la configuration des centres a changé entre-temps. Rechargez la liste.");
+    }
+
+    const now = new Date().toISOString();
+
+    // 6. UPDATE ciblée — ne touche jamais `rangement` (voir décision FTS5 dans le commentaire de
+    // tête de cette fonction).
+    const result = db.prepare(`
+      UPDATE t_cartes SET
+        centre_id = @centre_id,
+        updated_at = @now,
+        updated_by = @updated_by,
+        is_dirty = 1
+      WHERE id_carte = @id
+    `).run({
+      id,
+      centre_id: centreAttendu,
+      now,
+      updated_by: currentUser?.id_user || null
+    });
+
+    if (result.changes === 0) {
+      throw new Error("Erreur lors de la correction du centre de la carte.");
+    }
+
+    // 8. t_logs (quadriptyque) — mêmes colonnes que l'exemple réel absence.queries.ts:76-79
+    // (signalerAbsence) : id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty,
+    // site_id, centre_id. `action` non colllisionnable : 'CENTRE_CARTE_CORRIGE' n'existe nulle
+    // part ailleurs dans le code (vérifié). Pas d'enqueueOutbox dédié pour cette ligne t_logs
+    // elle-même (même choix que signalerAbsence : seule la mutation t_cartes est propagée via
+    // l'outbox explicite ci-dessous, is_dirty=1 suffisant pour t_logs).
+    const centreIdAvant = carte.centre_id ?? null;
+    const detailMsg = `Centre corrigé pour la carte ID ${id} (${carte.noms} ${carte.prenoms}) : centre_id ${centreIdAvant ?? 'NULL'} -> ${centreAttendu}, d'après le rangement "${carte.rangement}".`;
+    const valeurApres = JSON.stringify({ id_carte: id, centre_id_avant: centreIdAvant, centre_id_apres: centreAttendu, rangement: carte.rangement });
+    try {
+      db.prepare(`
+        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+        VALUES (?, ?, 'CENTRE_CARTE_CORRIGE', ?, ?, ?, 1, ?, ?)
+      `).run(
+        currentUser?.id_user || null,
+        currentUser?.login || 'ADMIN',
+        detailMsg,
+        valeurApres,
+        uuidv4(),
+        carte.site_id,
+        centreAttendu
+      );
+    } catch (err) {
+      log.error('Failed to log CENTRE_CARTE_CORRIGE:', err);
+    }
+
+    // 9. Relecture complète (payload complet obligatoire — piège documenté skill
+    // moteur-sync-offline-first, déjà rencontré sur ce fichier) + capture t_outbox.
+    if (carte.sync_id) {
+      const updatedCarte = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      enqueueOutbox(carte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      // 10. forceCards=true : correction unitaire d'une carte (une seule par appel), jamais un
+      // import massif — même principe que les autres corrections unitaires de ce fichier.
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing(true);
+      }
+    }
+
+    return result;
+  });
+
+  return runTx();
 }
 
 export function transfererCarte(

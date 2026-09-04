@@ -481,6 +481,226 @@ export function getApurementCardsTodayPaginated(
 }
 
 /**
+ * Vue d'ensemble du portail "Inventaire & Logistique" (nouvelle route `/inventaire`, décision
+ * produit Option B / Overview-A — plan validé) : 4 KPI (Aujourd'hui/Semaine/Mois/Année),
+ * site-wide (tous agents confondus), lecture seule.
+ *
+ * Limite assumée et documentée ici (Option Overview-A, contrairement à getApurementStats
+ * ci-dessus) : il n'existe AUCUNE attribution fiable par agent pour ce flux — les deux écritures
+ * concernées, updateCarteRangementAndStatusRapid() (onglet SCAN) et updateRangementEtFiche()
+ * (onglet LOGISTIQUE), ne renseignent aucune colonne "traité par" (contrairement à
+ * agent_distributeur pour la délivrance/l'apurement). Ce n'est donc pas un compteur d'activité
+ * par agent, seulement un comptage d'état/volume de cartes au niveau du site — transparence
+ * volontaire vis-à-vis d'un futur lecteur de ce code, pas seulement du rapport de tâche.
+ *
+ * Définition retenue du "volume traité" (OR des deux signaux d'écriture possibles) :
+ *   - statut = 'EN STOCK' (positionné par le SCAN), OU
+ *   - rangement renseigné et différent de 'NON CLASSE' (positionné par SCAN et LOGISTIQUE) —
+ *     même condition que les listes "sans rangement" déjà utilisées ailleurs dans ce fichier
+ *     (cf. ligne 625) et dans cartes.queries.ts (ligne 1088).
+ * Indexé sur `updated_at` (horodatage réel de l'écriture serveur), même choix que
+ * getApurementStats ci-dessus, pour les mêmes raisons (bornes "Aujourd'hui/Semaine/Mois/Année"
+ * fiables). Cloisonnement (§3 CLAUDE.md) : siteId est un paramètre obligatoire, jamais dérivé
+ * d'une re-requête sur t_users — le handler IPC associé (stats:getInventaireOverview,
+ * handlers.ts) le dérive de getSecureCurrentUser()/resolveScopedSiteId.
+ * AUCUNE modification des fonctions d'écriture updateCarteRangementAndStatusRapid()/
+ * updateRangementEtFiche() : cette fonction est strictement en lecture sur les colonnes qu'elles
+ * mettent à jour (statut, rangement, updated_at).
+ *
+ * Correctif P1 (audit non-régression, cycle courant) : corrigerCentreCarte() (cartes.queries.ts)
+ * fait UPDATE t_cartes SET centre_id=..., updated_at=now, is_dirty=1 sur des cartes qui ont, par
+ * construction, déjà un rangement classifié valide — sans ce correctif, chaque correction de
+ * centre_id via la page "Cartes mal-centrées" serait comptée à tort comme du travail de
+ * scan/classement ici (updated_at retombe dans la fenêtre comptée). Exclusion via NOT EXISTS sur
+ * t_logs : corrigerCentreCarte() insère (même transaction) une ligne t_logs avec
+ * action='CENTRE_CARTE_CORRIGE' et valeur_apres=JSON contenant id_carte (cartes.queries.ts:1185,
+ * 1188-1198) — pas de colonne id_carte dédiée sur t_logs (schema.ts:857-874), donc extraction par
+ * json_extract(valeur_apres, '$.id_carte'). Pas une supposition : ce pattern exact
+ * (json_extract(valeur_apres, '$.id_carte') sur t_logs) est déjà utilisé en production ailleurs
+ * dans ce dépôt (src/main/database/queries/absence.queries.ts:167-168, 264-265, 307, 427) — donc
+ * JSON1 est disponible et éprouvé sur le better-sqlite3 embarqué ; réutilisation à l'identique,
+ * aucune nouvelle colonne/migration (contrainte explicite de ce correctif). Bornage de
+ * t_logs.date_heure : cette colonne est un TEXT au format SQLite `datetime('now')`
+ * ("YYYY-MM-DD HH:MM:SS", schema.ts:857-874) et non un ISO `toISOString()` comme updated_at, mais
+ * les bornes ci-dessous (todayStr/tomorrowStr/weekStr/monthStr/yearStartStr) sont des dates seules
+ * "YYYY-MM-DD" : la comparaison lexicographique reste valide dans les deux formats (un préfixe de
+ * date est toujours "inférieur" à la même date suivie d'une heure, quel que soit le séparateur
+ * 'T' ou espace) — même bornage que le reste de cette fonction, pas de nouveau calcul de dates.
+ * Corrélation temporelle carte/log : corrigerCentreCarte() écrit t_cartes.updated_at et
+ * t_logs.date_heure dans la même transaction (deux appels "now" quasi simultanés) ; l'exclusion
+ * ci-dessous vérifie que le log CENTRE_CARTE_CORRIGE tombe dans la même fenêtre que celle comptée
+ * pour la carte — best-effort documenté, cohérent avec le fait qu'aucun horodatage "avant
+ * correction" n'est conservé sur t_cartes elle-même.
+ */
+export function getInventaireLogistiqueOverviewStats(siteId: number): {
+  today: number;
+  week: number;
+  month: number;
+  year: number;
+} {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const dWeek = new Date();
+  dWeek.setDate(dWeek.getDate() - 7);
+  const weekStr = dWeek.toISOString().split('T')[0];
+
+  const dMonth = new Date();
+  dMonth.setDate(dMonth.getDate() - 30);
+  const monthStr = dMonth.toISOString().split('T')[0];
+
+  const yearStartStr = `${new Date().getFullYear()}-01-01`;
+
+  // Sous-requête d'exclusion (voir commentaire de tête) : réutilisée telle quelle pour les 4
+  // bornes, seule la fenêtre [borne basse, borne haute) change par colonne.
+  const excludeCentreCorrection = (lowParam: string, highParam: string | null) => `
+    NOT EXISTS (
+      SELECT 1 FROM t_logs
+      WHERE t_logs.action = 'CENTRE_CARTE_CORRIGE'
+        AND json_extract(t_logs.valeur_apres, '$.id_carte') = t_cartes.id_carte
+        AND t_logs.date_heure >= ${lowParam}
+        ${highParam ? `AND t_logs.date_heure < ${highParam}` : ''}
+    )
+  `;
+
+  const stats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN updated_at >= ? AND updated_at < ?
+               AND ${excludeCentreCorrection('?', '?')}
+          THEN 1 ELSE 0 END) as today,
+      SUM(CASE WHEN updated_at >= ?
+               AND ${excludeCentreCorrection('?', null)}
+          THEN 1 ELSE 0 END) as week,
+      SUM(CASE WHEN updated_at >= ?
+               AND ${excludeCentreCorrection('?', null)}
+          THEN 1 ELSE 0 END) as month,
+      SUM(CASE WHEN updated_at >= ?
+               AND ${excludeCentreCorrection('?', null)}
+          THEN 1 ELSE 0 END) as year
+    FROM t_cartes
+    WHERE site_id = ?
+      AND (
+        statut = 'EN STOCK'
+        OR (rangement IS NOT NULL AND rangement != '' AND rangement != 'NON CLASSE')
+      )
+  `).get(
+    todayStr, tomorrowStr, todayStr, tomorrowStr,
+    weekStr, weekStr,
+    monthStr, monthStr,
+    yearStartStr, yearStartStr,
+    siteId
+  ) as { today: number; week: number; month: number; year: number } | undefined;
+
+  return {
+    today: stats?.today || 0,
+    week: stats?.week || 0,
+    month: stats?.month || 0,
+    year: stats?.year || 0
+  };
+}
+
+/**
+ * Liste paginée "Travail du jour" du portail "Inventaire & Logistique" (route `/inventaire`,
+ * onglet Vue d'ensemble). Même mécanique que getApurementCardsTodayPaginated ci-dessus
+ * (pagination LIMIT/OFFSET bornée, jointure t_outbox pour le statut de synchro, tri
+ * `updated_at DESC`), mais SITE-WIDE (pas de filtre par agent) : voir le commentaire complet de
+ * getInventaireLogistiqueOverviewStats ci-dessus pour le détail de la limite assumée (aucune
+ * colonne "traité par" sur ce flux). Réutilise exactement la même condition de "volume traité"
+ * et le même bornage de date que getInventaireLogistiqueOverviewStats (ne pas dupliquer un calcul
+ * de bornes différent).
+ *
+ * Correctif P1 (même cycle, même cause racine) : exclusion des cartes dont l'updated_at "du jour"
+ * provient en réalité d'une correction de centre_id via corrigerCentreCarte(), pas d'un scan/
+ * rangement réel — voir le commentaire complet (choix json_extract, preuve d'usage en production,
+ * bornage t_logs.date_heure) sur getInventaireLogistiqueOverviewStats ci-dessus, non dupliqué ici.
+ */
+export function getInventaireLogistiqueCardsTodayPaginated(
+  siteId: number,
+  page: number = 0,
+  pageSize: number = 20
+): {
+  rows: any[];
+  total: number;
+  syncSummary: { synced: number; pending: number; error: number };
+} {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  // Colonnes qualifiées par t_cartes. : même précaution que getApurementCardsTodayPaginated
+  // ci-dessus, cette clause étant réutilisée dans des requêtes qui font LEFT JOIN t_outbox.
+  const conditionClause = `
+    WHERE t_cartes.site_id = ?
+      AND (
+        t_cartes.statut = 'EN STOCK'
+        OR (t_cartes.rangement IS NOT NULL AND t_cartes.rangement != '' AND t_cartes.rangement != 'NON CLASSE')
+      )
+      AND t_cartes.updated_at >= ?
+      AND t_cartes.updated_at < ?
+      AND NOT EXISTS (
+        SELECT 1 FROM t_logs
+        WHERE t_logs.action = 'CENTRE_CARTE_CORRIGE'
+          AND json_extract(t_logs.valeur_apres, '$.id_carte') = t_cartes.id_carte
+          AND t_logs.date_heure >= ?
+          AND t_logs.date_heure < ?
+      )
+  `;
+  const params: (string | number)[] = [siteId, todayStr, tomorrowStr, todayStr, tomorrowStr];
+
+  const totalRow = db.prepare(`SELECT COUNT(*) as total FROM t_cartes ${conditionClause}`).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  // Enrichissement statut de synchro : même jointure et même logique que
+  // getApurementCardsTodayPaginated ci-dessus.
+  const fromWithJoin = `
+    FROM t_cartes
+    LEFT JOIN t_outbox ON t_outbox.id = t_cartes.sync_id AND t_outbox.table_name = 't_cartes'
+  `;
+  const syncStatusCase = `
+    CASE
+      WHEN t_cartes.is_dirty = 0 THEN 'SYNCED'
+      WHEN t_cartes.is_dirty = 1 AND t_outbox.status = 'ERROR' THEN 'ERROR'
+      ELSE 'PENDING'
+    END
+  `;
+
+  const rows = db.prepare(`
+    SELECT t_cartes.id_carte, t_cartes.noms, t_cartes.prenoms, t_cartes.date_de_naissance, t_cartes.lieu_de_naissance,
+           t_cartes.num_secu, t_cartes.rangement, t_cartes.statut, t_cartes.updated_at,
+           ${syncStatusCase} AS sync_status
+    ${fromWithJoin}
+    ${conditionClause}
+    ORDER BY t_cartes.updated_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  const summaryRow = db.prepare(`
+    SELECT
+      SUM(CASE WHEN ${syncStatusCase} = 'SYNCED' THEN 1 ELSE 0 END) as synced,
+      SUM(CASE WHEN ${syncStatusCase} = 'ERROR' THEN 1 ELSE 0 END) as error
+    ${fromWithJoin}
+    ${conditionClause}
+  `).get(...params) as { synced: number | null; error: number | null } | undefined;
+
+  const synced = summaryRow?.synced || 0;
+  const error = summaryRow?.error || 0;
+  const pending = Math.max(0, total - synced - error);
+
+  return { rows, total, syncSummary: { synced, pending, error } };
+}
+
+/**
  * Liste paginée des cartes actuellement déchargées (statut DELIVRE) éligibles à une
  * correction/annulation d'émargement tracée (Portail d'Apurement, onglet "Cartes déchargées" —
  * plan validé : correction/annulation d'un émargement Apurement erroné). Contrairement à

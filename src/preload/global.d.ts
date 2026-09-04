@@ -28,6 +28,8 @@ declare global {
         getVerificationCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementCardsTodayPaginated: (agentUsername: string, siteId: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementStats: (agentUsername: string, siteId: number) => Promise<any>;
+        getInventaireOverview: (siteId?: number) => Promise<{ today: number; week: number; month: number; year: number }>;
+        getInventaireCardsTodayPaginated: (siteId?: number, page?: number, pageSize?: number) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getApurementCorrectionsListPaginated: (page?: number, pageSize?: number, search?: string) => Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }>;
         getAgentToday: (userId: number) => Promise<number>;
         getAgentRecentSaisies: (userId: number, limit?: number, offset?: number) => Promise<{ total: number; rows: any[] }>;
@@ -93,6 +95,8 @@ declare global {
         updateQuickFields: (id: number, fields: { num_secu?: string, rangement?: string, noms?: string, prenoms?: string, contact?: string, lieu_de_naissance?: string, date_de_naissance?: string, sexe?: string, lieu_enrolement?: string }) => Promise<any>;
         searchQuickLogistique: (siteId: number, critere: string) => Promise<any[]>;
         updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }) => Promise<any>;
+        getCartesMalCentrees: (siteId?: number) => Promise<any[]>;
+        corrigerCentreCarte: (id: number) => Promise<any>;
         searchCombinedInventaire: (siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) => Promise<any[]>;
         updateApurementHistorique: (id: number, fields: { date_delivrance: string, nom_retirant: string, num_retirant: string, relation_retirant: string, agent_distributeur: string }) => Promise<any>;
         inventairePhysiqueScan: (identifiant: string, rangement: string) => Promise<any>;

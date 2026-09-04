@@ -4,7 +4,7 @@ import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
   PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck,
-  Fingerprint, Calendar, AlertTriangle, History
+  Fingerprint, Calendar, AlertTriangle, History, PackageSearch, Boxes, MapPinOff
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import iconLogo from '../../assets/icon.png';
@@ -192,9 +192,26 @@ export default function Sidebar() {
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }
-    if (user.role === 'OPERATEUR_LOGISTIQUE' || user.role === 'OPERATEUR_INVENTAIRE') {
+    // OPERATEUR_INVENTAIRE : entrée unique inchangée (hub à onglets internes, cf.
+    // InventaireLayout.tsx — ce rôle conserve exactement le comportement actuel).
+    if (user.role === 'OPERATEUR_INVENTAIRE') {
       return [
         { label: 'Inventaire & Logistique', icon: Package, path: '/inventaire' },
+        ...baseItems.filter(i => i.path === '/profile')
+      ];
+    }
+    // OPERATEUR_LOGISTIQUE : nouveau portail multi-pages (décision produit Option B, plan
+    // validé) — mêmes sous-routes react-router que App.tsx (`/inventaire`, `/inventaire/scan`,
+    // `/inventaire/logistique`), sur le modèle structurel du bloc OPERATEUR_APUREMENT ci-dessous.
+    if (user.role === 'OPERATEUR_LOGISTIQUE') {
+      return [
+        { isHeader: true, label: 'PORTAIL INVENTAIRE & LOGISTIQUE' },
+        { label: 'Vue d\'ensemble', icon: LayoutDashboard, path: '/inventaire', end: true },
+        { label: 'Logistique', icon: Boxes, path: '/inventaire/logistique' },
+        { label: 'Scan', icon: PackageSearch, path: '/inventaire/scan' },
+        { label: 'Cartes mal-centrées', icon: MapPinOff, path: '/inventaire/anomalies-centre' },
+
+        { isHeader: true, label: 'COMPTE' },
         ...baseItems.filter(i => i.path === '/profile')
       ];
     }

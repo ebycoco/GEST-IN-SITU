@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Outlet } from 'react-router-dom';
 import { PackageSearch, Boxes, BookOpenCheck, Database, Globe, RefreshCw } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useDashboardStats } from '../dashboard/hooks/useDashboardStats';
@@ -15,6 +16,18 @@ type Tab = 'SCAN' | 'LOGISTIQUE' | 'APUREMENT';
 export default function InventaireLayout() {
   const { user, activeSiteId } = useAuthStore();
   const [activeTab, setActiveTab] = useState<Tab>('SCAN');
+
+  // OPERATEUR_LOGISTIQUE n'a pas accès à l'onglet APUREMENT HISTORIQUE (les 3 autres rôles du
+  // hub - SUPER ADMIN, ADMINISTRATEUR_SITE, OPERATEUR_INVENTAIRE - conservent les 3 onglets).
+  const canAccessApurement = user?.role !== 'OPERATEUR_LOGISTIQUE';
+
+  // Décision produit validée (Option B, plan d'impact) : OPERATEUR_LOGISTIQUE bascule seul sur
+  // le nouveau portail multi-pages (sous-routes react-router `/inventaire`, `/inventaire/scan`,
+  // `/inventaire/logistique`, navigation via la sidebar dédiée — voir Sidebar.tsx). Les 3 autres
+  // rôles qui partagent cette route (SUPER ADMIN, ADMINISTRATEUR_SITE, OPERATEUR_INVENTAIRE)
+  // conservent EXACTEMENT le comportement actuel ci-dessous (barre d'onglets internes activeTab,
+  // aucun changement observable, même URL /inventaire sans sous-chemin).
+  const isLogistiquePortal = user?.role === 'OPERATEUR_LOGISTIQUE';
 
   const { stats, dirtyCartesCount, cloudCartesCount, detailedSyncStats, loading: isStatsLoading, loadStats } = useDashboardStats(user, activeSiteId, false);
   const {
@@ -49,6 +62,16 @@ export default function InventaireLayout() {
     const interval = setInterval(() => { loadStats(true); }, REFRESH_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [dirtyCartesCount, loadStats]);
+
+  // Garde-fou : si l'onglet APUREMENT est actif et que le rôle actif effectif bascule vers
+  // OPERATEUR_LOGISTIQUE en cours de session (compte multi-rôles, cf. setActiveRole() /
+  // CLAUDE.md §3), on ne doit pas rester bloqué sur un onglet désormais masqué/inaccessible :
+  // retour automatique sur SCAN (onglet par défaut).
+  useEffect(() => {
+    if (!canAccessApurement && activeTab === 'APUREMENT') {
+      setActiveTab('SCAN');
+    }
+  }, [canAccessApurement, activeTab]);
 
   // Quand la récupération automatique des cartes est active pour l'utilisateur courant, le
   // bouton manuel "Récupérer les cartes depuis le cloud" ci-dessous doit rester désactivé et
@@ -201,6 +224,12 @@ export default function InventaireLayout() {
           </div>
         </div>
 
+        {/* Barre d'onglets internes (activeTab) — masquée UNIQUEMENT pour OPERATEUR_LOGISTIQUE
+            (navigation désormais via la sidebar dédiée + sous-routes react-router, voir
+            Sidebar.tsx/App.tsx). Reste affichée à l'identique pour les 3 autres rôles qui
+            partagent cette route (SUPER ADMIN, ADMINISTRATEUR_SITE, OPERATEUR_INVENTAIRE) — zéro
+            changement observable pour eux. */}
+        {!isLogistiquePortal && (
         <div style={{ display: 'flex', gap: 12, background: 'rgba(0,0,0,0.2)', padding: 8, borderRadius: 16, border: '1px solid rgba(255,255,255,0.05)' }}>
           <button
             onClick={() => setActiveTab('SCAN')}
@@ -250,37 +279,49 @@ export default function InventaireLayout() {
             CLASSEMENT LOGISTIQUE
           </button>
 
-          <button
-            onClick={() => setActiveTab('APUREMENT')}
-            className="hover-scale"
-            style={{
-              flex: 1,
-              padding: '12px 16px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              border: 'none',
-              borderRadius: 12,
-              background: activeTab === 'APUREMENT' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
-              color: activeTab === 'APUREMENT' ? 'white' : 'var(--text-muted)',
-              fontWeight: 800,
-              cursor: 'pointer',
-              transition: 'all 0.2s',
-              boxShadow: activeTab === 'APUREMENT' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
-            }}
-          >
-            <BookOpenCheck size={18} />
-            APUREMENT HISTORIQUE
-          </button>
+          {canAccessApurement && (
+            <button
+              onClick={() => setActiveTab('APUREMENT')}
+              className="hover-scale"
+              style={{
+                flex: 1,
+                padding: '12px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                border: 'none',
+                borderRadius: 12,
+                background: activeTab === 'APUREMENT' ? 'linear-gradient(135deg, #ec4899 0%, #be185d 100%)' : 'transparent',
+                color: activeTab === 'APUREMENT' ? 'white' : 'var(--text-muted)',
+                fontWeight: 800,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+                boxShadow: activeTab === 'APUREMENT' ? '0 4px 12px rgba(236, 72, 153, 0.3)' : 'none'
+              }}
+            >
+              <BookOpenCheck size={18} />
+              APUREMENT HISTORIQUE
+            </button>
+          )}
         </div>
+        )}
       </div>
 
-      {/* Content Area */}
+      {/* Content Area — OPERATEUR_LOGISTIQUE : navigation par sous-routes react-router
+          (InventaireOverview/InventairePhysiqueScan/InventaireLogistique montés via <Outlet/>,
+          voir App.tsx). Les 3 autres rôles gardent le rendu conditionnel activeTab existant,
+          strictement inchangé. */}
       <div style={{ background: 'rgba(255,255,255,0.01)', borderRadius: 20, border: '1px solid rgba(255,255,255,0.02)' }}>
-        {activeTab === 'SCAN' && <InventairePhysiqueScan />}
-        {activeTab === 'LOGISTIQUE' && <InventaireLogistique />}
-        {activeTab === 'APUREMENT' && <InventaireApurement />}
+        {isLogistiquePortal ? (
+          <Outlet />
+        ) : (
+          <>
+            {activeTab === 'SCAN' && <InventairePhysiqueScan />}
+            {activeTab === 'LOGISTIQUE' && <InventaireLogistique />}
+            {activeTab === 'APUREMENT' && canAccessApurement && <InventaireApurement />}
+          </>
+        )}
       </div>
     </div>
   );

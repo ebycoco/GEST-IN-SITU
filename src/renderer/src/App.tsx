@@ -18,6 +18,10 @@ import VerificationSearchPage from './pages/VerificationSearchPage';
 import SaisiePage from './pages/SaisiePage';
 import AdminQueuePage from './pages/AdminQueuePage';
 import InventaireLayout from './pages/inventaire/InventaireLayout';
+import InventaireOverview from './pages/inventaire/InventaireOverview';
+import InventairePhysiqueScan from './pages/inventaire/InventairePhysiqueScan';
+import InventaireLogistique from './pages/inventaire/InventaireLogistique';
+import InventaireCartesMalCentrees from './pages/inventaire/InventaireCartesMalCentrees';
 import ApurementLayout from './pages/apurement/ApurementLayout';
 import ApurementOverview from './pages/apurement/ApurementOverview';
 import ApurementCorrections from './pages/apurement/ApurementCorrections';
@@ -225,8 +229,17 @@ export default function App() {
               <Route path="historique" element={<HistoriqueView />} />
             </Route>
 
-            {/* Routes Opérateur Logistique & Inventaire (Hub 3-en-1) */}
-            <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE']}><InventaireLayout /></ProtectedRoute>} />
+            {/* Routes Opérateur Logistique & Inventaire (Hub 3-en-1) — sous-routes react-router
+                réservées en pratique à la navigation d'OPERATEUR_LOGISTIQUE (nouveau portail
+                multi-pages, plan validé Option B) : les 3 autres rôles (SUPER ADMIN,
+                ADMINISTRATEUR_SITE, OPERATEUR_INVENTAIRE) continuent de naviguer par onglets
+                internes (activeTab) sans jamais changer d'URL — voir InventaireLayout.tsx. */}
+            <Route path="inventaire" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_LOGISTIQUE']}><InventaireLayout /></ProtectedRoute>}>
+              <Route index element={<InventaireOverview />} />
+              <Route path="scan" element={<InventairePhysiqueScan />} />
+              <Route path="logistique" element={<InventaireLogistique />} />
+              <Route path="anomalies-centre" element={<InventaireCartesMalCentrees />} />
+            </Route>
 
             {/* Portail dédié Opérateur Apurement (émargement rétroactif des cahiers historiques) */}
             <Route path="apurement" element={<ProtectedRoute requiredRoles={['OPERATEUR_APUREMENT', 'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><ApurementLayout /></ProtectedRoute>}>

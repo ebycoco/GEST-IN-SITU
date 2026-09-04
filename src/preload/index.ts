@@ -162,8 +162,12 @@ const api = {
       ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
     searchQuickLogistique: (siteId: number, critere: string): Promise<Partial<ICarte>[]> => 
       ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere),
-    updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }): Promise<any> => 
+    updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }): Promise<any> =>
       ipcRenderer.invoke('cartes:updateRangementEtFiche', id, fields),
+    getCartesMalCentrees: (siteId?: number): Promise<any[]> =>
+      ipcRenderer.invoke('cartes:getCartesMalCentrees', siteId),
+    corrigerCentreCarte: (id: number): Promise<any> =>
+      ipcRenderer.invoke('cartes:corrigerCentreCarte', id),
     searchCombinedInventaire: (
       siteId: number, 
       queryNomsPrenoms: string, 
@@ -222,6 +226,10 @@ const api = {
       siteId: number
     ): Promise<{ today: number; yesterday: number; week: number; month: number; year: number; last7Days: { dayName: string; count: number }[] }> =>
       ipcRenderer.invoke('stats:getApurementStats', agentUsername, siteId),
+    getInventaireOverview: (siteId?: number): Promise<{ today: number; week: number; month: number; year: number }> =>
+      ipcRenderer.invoke('stats:getInventaireOverview', siteId),
+    getInventaireCardsTodayPaginated: (siteId?: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }> =>
+      ipcRenderer.invoke('stats:getInventaireCardsTodayPaginated', siteId, page, pageSize),
     getApurementCorrectionsListPaginated: (page?: number, pageSize?: number, search?: string): Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }> =>
       ipcRenderer.invoke('stats:getApurementCorrectionsListPaginated', page, pageSize, search),
     getAgentToday: (userId: number): Promise<number> =>
