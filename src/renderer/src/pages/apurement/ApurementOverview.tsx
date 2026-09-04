@@ -64,6 +64,13 @@ export default function ApurementOverview() {
 
   const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
 
+  // Libère la sidebar et l'interface globale (agent-14 : cette page ne levait jamais l'overlay
+  // "Chargement sécurisé en cours..." — MainLayout.tsx — laissant tout compte OPERATEUR_APUREMENT
+  // figé (opacité réduite, interactions bloquées) jusqu'au filet de sécurité de secours à 10s).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   const loadStats = useCallback(async () => {
     if (!user?.login || !siteIdToUse) { setStats(EMPTY_STATS); return; }
     try {

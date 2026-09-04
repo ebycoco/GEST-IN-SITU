@@ -89,6 +89,13 @@ export default function Overview() {
   // qualité (CorrectionSidePanel.onSave, DoublonsView, MissingDataView, InvalidFormatView).
   const [syncSummary, setSyncSummary] = useState({ pending: 0, error: 0 });
 
+  // Libère la sidebar et l'interface globale (agent-14 : cette page ne levait jamais l'overlay
+  // "Chargement sécurisé en cours..." — MainLayout.tsx — laissant tout compte OPERATEUR_QUALITE
+  // figé (opacité réduite, interactions bloquées) jusqu'au filet de sécurité de secours à 10s).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   const loadSyncSummary = useCallback(async () => {
     try {
       const res = await window.api.stats.getSiteSyncSummary(siteIdToUse);

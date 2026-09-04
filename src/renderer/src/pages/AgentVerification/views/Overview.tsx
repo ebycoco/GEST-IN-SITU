@@ -39,6 +39,13 @@ export default function Overview() {
   // getVerificationCardsTodayPaginated (stats.queries.ts) pour la logique de calcul du statut.
   const [syncSummary, setSyncSummary] = useState({ synced: 0, pending: 0, error: 0 });
 
+  // Libère la sidebar et l'interface globale (agent-14 : cette page ne levait jamais l'overlay
+  // "Chargement sécurisé en cours..." — MainLayout.tsx — laissant tout compte OPERATEUR_VERIFICATION
+  // figé (opacité réduite, interactions bloquées) jusqu'au filet de sécurité de secours à 10s).
+  useEffect(() => {
+    useAuthStore.getState().setInitialDataLoading(false);
+  }, []);
+
   // `silent` évite de repasser par isLoading (donc par l'écran "Chargement en cours...") lors des
   // rappels automatiques en arrière-plan (cf. useEffect de polling ci-dessous) : seul le premier
   // chargement / changement de page doit afficher l'état de chargement.
