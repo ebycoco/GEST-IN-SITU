@@ -1,4 +1,4 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.21.0 (2026-09-04)
 
 ## 🚨 Sécurité
 
