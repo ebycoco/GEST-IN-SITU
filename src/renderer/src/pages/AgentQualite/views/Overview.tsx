@@ -1,8 +1,70 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Users, AlertTriangle, Fingerprint, Calendar, Activity, RefreshCw } from 'lucide-react';
+import { Users, AlertTriangle, Fingerprint, Calendar, Activity, RefreshCw, ClipboardList, ChevronLeft, ChevronRight, Wrench, GitMerge } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import { useQualityUIStore } from '../../../stores/qualityUIStore';
+
+// Pagination "Travail du jour" : même taille de page (20 lignes) que les autres portails
+// (AgentVerification/views/Overview.tsx, ApurementOverview.tsx), pour rester cohérent.
+const QUALITE_WORK_PAGE_SIZE = 20;
+
+// Présentation par type d'action d'audit Qualité (QUALITE_CORRECTION/QUALITE_FUSION — voir
+// getQualiteActionsTodayPaginated, stats.queries.ts). QUALITE_NETTOYAGE a été retiré (correctif
+// P1 agent-13-qa-terrain-tester, 2026-09-05) : aucune UI n'appelle qualite:supprimerIncoherences,
+// ce badge ne pouvait donc jamais s'afficher en usage réel — voir le commentaire de
+// getQualiteActionsTodayPaginated pour le détail. QUALITE_MASSE n'apparaît jamais ici non plus :
+// exclue côté requête (alerte méta dupliquée, pas une action physique).
+const QUALITE_ACTION_META: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
+  QUALITE_CORRECTION: { label: 'Correction', color: '#3742fa', Icon: Wrench },
+  QUALITE_FUSION: { label: 'Fusion', color: '#ff4757', Icon: GitMerge }
+};
+
+// `details` (t_audit_log) est toujours un JSON valide écrit par logAudit() (handlers.ts) —
+// JSON.parse protégé quand même par précaution défensive (jamais de crash d'affichage sur une
+// ligne d'audit historique/inattendue).
+function parseQualiteAuditDetails(raw: string): any {
+  try {
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+// Rendu du détail par type d'action. `noms`/`prenoms` proviennent de la jointure best-effort
+// t_cartes faite côté requête (getQualiteActionsTodayPaginated) — jamais garantie (cf.
+// commentaire de cette fonction pour le cas légitime où la jointure ne retrouve rien).
+function renderQualiteActionDetail(action: string, details: any, noms?: string | null, prenoms?: string | null): React.ReactNode {
+  const ficheLabel = (idCarte: number | string | undefined) => {
+    const identite = `${noms || ''} ${prenoms || ''}`.trim();
+    if (identite) return identite;
+    return idCarte !== undefined && idCarte !== null ? `Fiche #${idCarte}` : 'Fiche inconnue';
+  };
+
+  if (action === 'QUALITE_CORRECTION') {
+    return (
+      <>
+        <div style={{ color: 'white', fontWeight: 600 }}>{ficheLabel(details.id_carte)}</div>
+        <div style={{ marginTop: 2 }}>
+          <span style={{ color: 'var(--text-muted)' }}>{details.champ_corrige || '—'} : </span>
+          {details.valeur_avant || '—'} → <span style={{ color: '#3742fa', fontWeight: 600 }}>{details.valeur_apres || '—'}</span>
+        </div>
+      </>
+    );
+  }
+  if (action === 'QUALITE_FUSION') {
+    return (
+      <>
+        <div style={{ color: 'white', fontWeight: 600 }}>
+          Fusion vers {ficheLabel(details.id_carte_cible)} (source #{details.id_carte_source ?? '—'})
+        </div>
+        <div style={{ marginTop: 2, color: 'var(--text-muted)' }}>
+          Champs fusionnés : {Array.isArray(details.champs_fusionnes) && details.champs_fusionnes.length > 0 ? details.champs_fusionnes.join(', ') : 'aucun'}
+        </div>
+      </>
+    );
+  }
+  return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+}
 
 interface QualityStats {
   doublons: number;
@@ -89,6 +151,15 @@ export default function Overview() {
   // qualité (CorrectionSidePanel.onSave, DoublonsView, MissingDataView, InvalidFormatView).
   const [syncSummary, setSyncSummary] = useState({ pending: 0, error: 0 });
 
+  // "Travail du jour" (nouveau) : actions QUALITE_CORRECTION/QUALITE_FUSION de
+  // l'agent connecté aujourd'hui (t_audit_log via getQualiteActionsTodayPaginated). Pagination
+  // 20/page, même style que AgentVerification/views/Overview.tsx. Pas de badge de synchro : ces
+  // entrées d'audit ne passent jamais par l'outbox (t_audit_log n'est pas synchronisée).
+  const [workRows, setWorkRows] = useState<any[]>([]);
+  const [workTotal, setWorkTotal] = useState(0);
+  const [workPage, setWorkPage] = useState(0);
+  const [workLoading, setWorkLoading] = useState(true);
+
   // Libère la sidebar et l'interface globale (agent-14 : cette page ne levait jamais l'overlay
   // "Chargement sécurisé en cours..." — MainLayout.tsx — laissant tout compte OPERATEUR_QUALITE
   // figé (opacité réduite, interactions bloquées) jusqu'au filet de sécurité de secours à 10s).
@@ -109,11 +180,37 @@ export default function Overview() {
     loadSyncSummary();
   }, [loadSyncSummary]);
 
+  // `silent` évite de repasser par workLoading (donc par l'état "Chargement en cours...") lors
+  // des rappels déclenchés par handleDataUpdated ci-dessous : seul le premier chargement / le
+  // changement de page doit afficher l'état de chargement.
+  const loadQualiteActionsToday = useCallback(async (silent = false) => {
+    try {
+      if (!silent) setWorkLoading(true);
+      const res = await window.api.stats.getQualiteActionsTodayPaginated(workPage, QUALITE_WORK_PAGE_SIZE);
+      setWorkRows(res?.rows || []);
+      setWorkTotal(res?.total || 0);
+    } catch (error) {
+      console.error('Erreur lors du chargement du travail qualité du jour :', error);
+    } finally {
+      if (!silent) setWorkLoading(false);
+    }
+  }, [workPage]);
+
   useEffect(() => {
-    const handleDataUpdated = () => { loadSyncSummary(); };
+    loadQualiteActionsToday();
+  }, [loadQualiteActionsToday]);
+
+  useEffect(() => {
+    // Ajout de loadQualiteActionsToday() dans ce handler EXISTANT (pas de nouveau listener
+    // 'app:data-updated', §CLAUDE.md Low-Memory) : dispatché après chaque correction/fusion/
+    // suppression qualité (CorrectionSidePanel.onSave, DoublonsView, MissingDataView,
+    // InvalidFormatView), donc le bon moment pour rafraîchir aussi "Travail du jour". Rappel
+    // silencieux (pas de flash de "Chargement en cours...") : cohérent avec loadSyncSummary
+    // ci-dessus, qui ne bascule pas non plus d'indicateur de chargement dédié sur cet événement.
+    const handleDataUpdated = () => { loadSyncSummary(); loadQualiteActionsToday(true); };
     window.addEventListener('app:data-updated', handleDataUpdated);
     return () => window.removeEventListener('app:data-updated', handleDataUpdated);
-  }, [loadSyncSummary]);
+  }, [loadSyncSummary, loadQualiteActionsToday]);
 
   const loadStats = useCallback(async () => {
     setStatsLoading(true);
@@ -238,6 +335,93 @@ export default function Overview() {
           sublabel="Anomalies résiduelles à corriger"
           onClick={() => navigate('/agent-qualite/anomalies-brutes')}
         />
+      </div>
+
+      {/* Travail du jour : actions de correction/fusion effectuées aujourd'hui par
+          l'agent connecté (t_audit_log, cf. getQualiteActionsTodayPaginated). */}
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+          <ClipboardList size={20} color="#6366f1" />
+          <h2 style={{ fontSize: 18, fontWeight: 800, margin: 0, color: 'white' }}>Travail du jour</h2>
+        </div>
+
+        <div className="glass-card" style={{ borderRadius: 16, overflow: 'hidden' }}>
+          {workLoading ? (
+            <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>Chargement en cours...</div>
+          ) : workRows.length === 0 ? (
+            <div style={{ padding: 48, textAlign: 'center', color: 'var(--text-muted)' }}>
+              <ClipboardList size={48} style={{ margin: '0 auto 16px', opacity: 0.5 }} />
+              Aucune action qualité effectuée aujourd'hui pour le moment.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                <thead>
+                  <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                    <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
+                    <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Détail</th>
+                    <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Heure</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workRows.map((r) => {
+                    // Fallback générique (correctif P1, 2026-09-05) : QUALITE_NETTOYAGE n'étant
+                    // plus une clé de QUALITE_ACTION_META ni renvoyé par la requête (filtrée sur
+                    // QUALITE_CORRECTION/QUALITE_FUSION uniquement), ce cas ne devrait jamais se
+                    // présenter — conservé par défensivité si une action inattendue apparaissait.
+                    const meta = QUALITE_ACTION_META[r.action] || { label: r.action, color: '#6366f1', Icon: ClipboardList };
+                    const details = parseQualiteAuditDetails(r.details);
+                    const Icon = meta.Icon;
+                    return (
+                      <tr key={r.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
+                        <td style={{ padding: '16px 24px' }}>
+                          <span style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 6,
+                            background: `${meta.color}18`, color: meta.color, border: `1px solid ${meta.color}30`,
+                            padding: '4px 10px', borderRadius: 8, fontSize: 11, fontWeight: 800,
+                            textTransform: 'uppercase', letterSpacing: 0.5
+                          }}>
+                            <Icon size={13} /> {meta.label}
+                          </span>
+                        </td>
+                        <td style={{ padding: '16px 24px', color: 'var(--text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
+                          {renderQualiteActionDetail(r.action, details, r.noms, r.prenoms)}
+                        </td>
+                        <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
+                          {r.date_creation ? new Date(r.date_creation).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {workTotal > QUALITE_WORK_PAGE_SIZE && (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 16, padding: '16px', borderTop: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.02)' }}>
+              <button
+                onClick={() => setWorkPage(p => Math.max(0, p - 1))}
+                disabled={workPage === 0}
+                className="btn-outline"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: workPage === 0 ? 'transparent' : 'rgba(255,255,255,0.05)', color: workPage === 0 ? 'var(--text-muted)' : 'white', cursor: workPage === 0 ? 'not-allowed' : 'pointer' }}
+              >
+                <ChevronLeft size={16} /> Précédent
+              </button>
+              <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+                Page {workPage + 1} sur {Math.max(1, Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE))}
+              </span>
+              <button
+                onClick={() => setWorkPage(p => (p + 1 < Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE) ? p + 1 : p))}
+                disabled={workPage + 1 >= Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE)}
+                className="btn-outline"
+                style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(255,255,255,0.1)', background: workPage + 1 >= Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE) ? 'transparent' : 'rgba(255,255,255,0.05)', color: workPage + 1 >= Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE) ? 'var(--text-muted)' : 'white', cursor: workPage + 1 >= Math.ceil(workTotal / QUALITE_WORK_PAGE_SIZE) ? 'not-allowed' : 'pointer' }}
+              >
+                Suivant <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

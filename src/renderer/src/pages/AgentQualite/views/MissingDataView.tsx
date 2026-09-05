@@ -105,7 +105,11 @@ export default function MissingDataView() {
       await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
         champ_corrige: field,
-        valeur_avant: card[field] || '(Vide)',
+        // Correctif P1 (agent-13-qa-terrain-tester, 2026-09-05) : envoyer une chaîne réellement
+        // vide plutôt que le littéral '(Vide)', qui n'est pas falsy et tombait donc dans la
+        // branche de masquage num_secu/contact de maskSensitiveField() (handlers.ts) au lieu de
+        // sa branche dédiée aux valeurs vides — d'où l'affichage corrompu observé en audit.
+        valeur_avant: card[field] || '',
         valeur_apres: field === 'contact' ? providedValue.replace(/\D/g, '') : providedValue.trim().toUpperCase()
       });
       toast.success('Donnée mise à jour avec succès !');

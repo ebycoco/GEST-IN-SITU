@@ -79,7 +79,7 @@ export default function InvalidFormatView() {
       await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
         champ_corrige: 'date_de_naissance',
-        valeur_avant: card.date_de_naissance || '(Vide)',
+        valeur_avant: card.date_de_naissance || '',
         valeur_apres: editValue
       });
       window.api.log.info(`[QUALITÉ] Succès : Correction de date terminée pour ID=${card.id_carte}`);
@@ -126,7 +126,7 @@ export default function InvalidFormatView() {
       await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
         champ_corrige: champ,
-        valeur_avant: card[champ] || '(Vide)',
+        valeur_avant: card[champ] || '',
         valeur_apres: champ === 'contact' ? valeur.replace(/\D/g, '') : champ === 'date_de_naissance' ? valeur : valeur.trim().toUpperCase()
       });
       window.api.log.info(`[QUALITÉ] Succès correction '${champ}' pour ID=${card.id_carte}`);

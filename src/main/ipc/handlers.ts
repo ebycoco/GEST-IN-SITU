@@ -5973,6 +5973,29 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  // Portail Qualité — liste paginée "Travail du jour" (Vue d'ensemble), actions d'audit
+  // QUALITE_CORRECTION/QUALITE_FUSION/QUALITE_NETTOYAGE (t_audit_log, écrites par logAudit()
+  // dans qualite:corrigerFormat/fusionnerDoublons/supprimerIncoherences ci-dessus — voir
+  // getQualiteActionsTodayPaginated, stats.queries.ts, pour le détail du filtrage et la
+  // décision "pas d'index sur t_audit_log pour l'instant"). Cantonnement (§3 CLAUDE.md) :
+  // agentLogin dérivé EXCLUSIVEMENT de la session serveur réelle (getSecureCurrentUser().login),
+  // jamais d'un paramètre client — t_audit_log n'a pas de site_id/centre_id, le seul filtre de
+  // sécurité pertinent et suffisant est donc "ses propres actions".
+  ipcMain.handle('stats:getQualiteActionsTodayPaginated', async (_, page?: number, pageSize?: number) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) throw new Error("Session invalide.");
+      if (!verifyUserRole(secureUser.id_user, ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'OPERATEUR_QUALITE'])) {
+        log.warn(`[SECURITY] Accès refusé à stats:getQualiteActionsTodayPaginated pour l'utilisateur ID ${secureUser.id_user} (rôle non autorisé)`);
+        throw new Error("Accès refusé pour cette opération.");
+      }
+      return queries.getQualiteActionsTodayPaginated(secureUser.login, page ?? 0, pageSize ?? 20);
+    } catch (e) {
+      log.error('IPC Error: stats:getQualiteActionsTodayPaginated', e);
+      throw e;
+    }
+  });
+
   // Portail d'Apurement — onglet "Cartes déchargées" (plan validé — correction/annulation d'un
   // émargement Apurement erroné). Liste des cartes DELIVRE éligibles à corrigerApurement/
   // annulerApurement (mêmes rôles autorisés à *tenter* l'action que ces deux handlers — la

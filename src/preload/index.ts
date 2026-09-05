@@ -246,6 +246,8 @@ const api = {
       ipcRenderer.invoke('stats:getAgentStats', userId),
     getAgentCardsTodayPaginated: (userId: number, page?: number, pageSize?: number): Promise<{ rows: any[]; total: number; syncSummary: { synced: number; pending: number; error: number } }> =>
       ipcRenderer.invoke('stats:getAgentCardsTodayPaginated', userId, page, pageSize),
+    getQualiteActionsTodayPaginated: (page?: number, pageSize?: number): Promise<{ rows: any[]; total: number }> =>
+      ipcRenderer.invoke('stats:getQualiteActionsTodayPaginated', page, pageSize),
     getSiteSaisieToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 
       ipcRenderer.invoke('stats:getSiteSaisieToday', siteId, centreId, agentId, dateStr),
     getSiteQualiteToday: (siteId: number, centreId?: number, agentId?: number, dateStr?: string): Promise<any[]> => 

@@ -291,6 +291,98 @@ export function getVerificationCardsTodayPaginated(
 }
 
 /**
+ * Liste paginée des actions Qualité effectuées aujourd'hui par un agent OPERATEUR_QUALITE donné
+ * (Portail Qualité, onglet "Vue d'ensemble" > "Travail du jour"). Contrairement aux fonctions
+ * *TodayPaginated ci-dessus (toutes filtrées sur t_cartes), celle-ci lit `t_audit_log`
+ * (colonnes id, utilisateur, action, details, date_creation — schema.ts, table sans site_id/
+ * centre_id) sur les 2 actions écrites par logAudit() dans handlers.ts et réellement
+ * déclenchables depuis l'UI : QUALITE_CORRECTION (qualite:corrigerFormat), QUALITE_FUSION
+ * (qualite:fusionnerDoublons). QUALITE_NETTOYAGE (qualite:supprimerIncoherences) est
+ * volontairement exclue de cette liste : correctif P1 (agent-13-qa-terrain-tester, 2026-09-05)
+ * — aucun appel à qualite:supprimerIncoherences n'existe dans src/renderer (grep exhaustif),
+ * ce type d'action est donc actuellement inatteignable et n'a jamais de raison d'apparaître ici ;
+ * le handler et logAudit() restent inchangés (potentiel futur outil admin), seule cette liste de
+ * lecture est réduite. QUALITE_MASSE est également exclue pour une autre raison : c'est une alerte
+ * méta insérée EN PLUS de QUALITE_NETTOYAGE quand deletedCount > 50 (handlers.ts), l'inclure
+ * doublonnerait l'affichage d'une seule action physique.
+ *
+ * Décision produit validée (plan d'impact agent-1 + utilisateur) : PAS d'index sur t_audit_log
+ * pour l'instant, même choix que pour `logs:consultation` déjà en place — table purement locale
+ * (jamais synchronisée Supabase), volume borné par agent/jour, et le filtre utilisateur + fenêtre
+ * "aujourd'hui" limite déjà fortement le scan. Mêmes bornes todayStr/tomorrowStr (date du jour,
+ * exclusif lendemain 00:00) que getVerificationCardsTodayPaginated ci-dessus ; `date_creation`
+ * est un ISO complet avec heure (écrit par logAudit() via `datetime('now')`), donc fiable pour
+ * cette borne.
+ *
+ * Cantonnement (§3 CLAUDE.md) : le seul filtre de sécurité est `utilisateur = agentLogin`
+ * (dérivé exclusivement de getSecureCurrentUser().login côté handler, jamais du renderer) — il
+ * n'existe pas de site_id/centre_id sur cette table pour un filtrage supplémentaire.
+ *
+ * Enrichissement d'affichage best-effort UNIQUEMENT (jamais un filtre de sécurité) : LEFT JOIN
+ * sur t_cartes pour résoudre nom/prénom, via json_extract(details, '$.id_carte') pour
+ * QUALITE_CORRECTION et json_extract(details, '$.id_carte_cible') pour QUALITE_FUSION (la carte
+ * cible, seule survivante après fusion). Pour QUALITE_CORRECTION, `id_carte` peut désigner un id
+ * de `t_import_anomalies` déjà supprimé (cas de transfert d'anomalie, handlers.ts:2710-2724) :
+ * la jointure ne retrouve alors légitimement rien, ce n'est pas un bug. Le CASE conserve une
+ * branche ELSE NULL générique (au lieu d'un simple IF) pour rester correct si une action sans
+ * id_carte associé était réintroduite un jour dans la clause IN ci-dessous.
+ *
+ * Politique Low-Memory (RAM 8 Go) : pageSize toujours borné (LIMIT/OFFSET, plafond 100), jamais
+ * de chargement de l'historique complet en mémoire.
+ */
+export function getQualiteActionsTodayPaginated(
+  agentLogin: string,
+  page: number = 0,
+  pageSize: number = 20
+): { rows: any[]; total: number } {
+  const db = getDatabase()!;
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const dTomorrow = new Date();
+  dTomorrow.setDate(dTomorrow.getDate() + 1);
+  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
+
+  const safePageSize = Math.min(Math.max(1, Math.floor(pageSize) || 20), 100);
+  const safePage = Math.max(0, Math.floor(page) || 0);
+  const offset = safePage * safePageSize;
+
+  const conditionClause = `
+    WHERE t_audit_log.utilisateur = ?
+      AND t_audit_log.action IN ('QUALITE_CORRECTION', 'QUALITE_FUSION')
+      AND t_audit_log.date_creation >= ?
+      AND t_audit_log.date_creation < ?
+  `;
+  const params: (string | number)[] = [agentLogin, todayStr, tomorrowStr];
+
+  const totalRow = db.prepare(`
+    SELECT COUNT(*) as total FROM t_audit_log ${conditionClause}
+  `).get(...params) as { total: number } | undefined;
+  const total = totalRow?.total || 0;
+
+  // CASE de résolution de l'id de carte à joindre selon le type d'action — voir commentaire de
+  // la fonction ci-dessus pour le détail par action.
+  const joinTargetIdExpr = `
+    CASE t_audit_log.action
+      WHEN 'QUALITE_CORRECTION' THEN CAST(json_extract(t_audit_log.details, '$.id_carte') AS INTEGER)
+      WHEN 'QUALITE_FUSION' THEN CAST(json_extract(t_audit_log.details, '$.id_carte_cible') AS INTEGER)
+      ELSE NULL
+    END
+  `;
+
+  const rows = db.prepare(`
+    SELECT t_audit_log.id, t_audit_log.action, t_audit_log.details, t_audit_log.date_creation,
+           t_cartes.noms, t_cartes.prenoms
+    FROM t_audit_log
+    LEFT JOIN t_cartes ON t_cartes.id_carte = ${joinTargetIdExpr}
+    ${conditionClause}
+    ORDER BY t_audit_log.date_creation DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, safePageSize, offset);
+
+  return { rows, total };
+}
+
+/**
  * Équivalent de getVerificationStats ci-dessus, mais dédié au Portail d'Apurement
  * (OPERATEUR_APUREMENT — Vue d'ensemble, 4 KPI Aujourd'hui/Semaine/Mois/Année).
  *
