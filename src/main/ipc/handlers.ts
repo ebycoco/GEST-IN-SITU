@@ -1557,7 +1557,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     try {
       const res = await queries.transfererCarte(id, data, secureUser);
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       queries.insertAuditLog(secureUser.login || 'SYSTEM', 'CARTE_TRANSFEREE', `Transfert carte ${id} vers le centre ${data.centre_id}`);
       // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : en plus de
       // insertAuditLog() ci-dessus (t_audit_log local, inchangé), le transfert devient visible
