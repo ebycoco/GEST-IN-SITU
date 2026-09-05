@@ -37,6 +37,23 @@ parentPort.on('message', (msg) => {
 
     if (type === 'getStats') {
       const t0 = performance.now();
+      // Correctif (agent-4-db-sync) : whereClause (site_id/centre_id uniquement, construit dans
+      // stats.queries.ts) laissait passer dans TOUTES les colonnes de cette requête (total,
+      // en_stock, distribuees, absentes, sans_*, cartes_fantomes) les cartes soft-supprimées en
+      // attente de purge/synchro (is_dirty = -1, sémantique confirmée par le bloc "cartes
+      // supprimées en attente" plus bas dans ce même fichier) et les brouillons de saisie non
+      // finalisés (statut = 'BROUILLON', SaisiePage.tsx) — deux catégories déjà exclues de la
+      // liste réelle de cartes par getCartesPage() (cartes.queries.ts, WHERE is_dirty != -1).
+      // DOUBLON reste volontairement INCLUS : une carte déclarée doublon est toujours une carte
+      // physique réelle, toujours recherchable/livrable-bloquée (cf. verrous DOUBLON dans
+      // cartes.queries.ts), pas un résidu à purger — même traitement que le CTE dirty_base de
+      // getDetailedSyncStats plus bas, qui n'exclut que is_dirty=-1/BROUILLON, jamais DOUBLON.
+      // activeWhereClause reste local à cette requête : whereClause (variable partagée) n'est
+      // pas modifié, pour ne pas altérer les requêtes doublons/doublonsProbables plus bas dans
+      // ce même case, qui réutilisent whereClause tel quel (hors périmètre de ce correctif).
+      const activeWhereClause = whereClause
+        ? `${whereClause} AND is_dirty != -1 AND statut != 'BROUILLON'`
+        : `WHERE is_dirty != -1 AND statut != 'BROUILLON'`;
       const stats = db.prepare(`
         SELECT
           COUNT(*) as total,
@@ -55,7 +72,7 @@ parentPort.on('message', (msg) => {
           THEN 1 ELSE 0 END), 0) as cartes_fantomes,
           0 as dates_invalides
         FROM t_cartes
-        ${whereClause}
+        ${activeWhereClause}
       `).get(params);
       const t1 = performance.now();
 
@@ -111,8 +128,9 @@ parentPort.on('message', (msg) => {
       stats.dates_invalides = anomaliesCount;
       stats.dates_naissance_vide = datesNaissanceVideCount;
       stats.autres_anomalies = autresAnomaliesCount;
-      // stats.total reste un COUNT(*) pur sur t_cartes : le nombre réel de cartes sur ce
-      // poste, sans y ajouter les anomalies encore en attente de correction (t_import_anomalies).
+      // stats.total est un COUNT(*) sur t_cartes filtré par activeWhereClause (is_dirty != -1,
+      // statut != 'BROUILLON', voir commentaire plus haut) : le nombre réel de cartes actives sur
+      // ce poste, sans y ajouter les anomalies encore en attente de correction (t_import_anomalies).
       const t2 = performance.now();
 
       const andSiteT = siteId ? `AND t.site_id = @siteId` : '';
