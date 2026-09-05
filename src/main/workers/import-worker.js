@@ -743,6 +743,42 @@ async function run() {
           }
         }
 
+        // ============================================================
+        // MISSION num_secu — Validation format canonique (^\d{13}$)
+        // Diagnostic du 27/07/2026 (site_id=4) : des valeurs en notation
+        // scientifique (ex: "3,84E+12") passaient sans contrôle. Tolère
+        // tel quel le vide et le préfixe sentinelle '-' (logique de
+        // complétion automatique, cf. bloc UPDATE ~ligne 1094-1108) —
+        // sinon exige exactement 13 chiffres. Non-bloquant : même modèle
+        // que STATUT_INCONNU ci-dessus (carte quand même créée, anomalie
+        // tracée pour audit), jamais le modèle DATE_INVALIDE qui rejette
+        // toute la ligne. Coût : un seul test regex par ligne, aucune
+        // allocation supplémentaire sur l'ensemble du lot (Low-Memory §2).
+        // ============================================================
+        var numSecuInvalid = numSecuRaw !== '' && numSecuRaw.charAt(0) !== '-' && !/^\d{13}$/.test(numSecuRaw);
+        if (numSecuInvalid) {
+          var numSecuErrMsg = 'Numero de securite invalide "' + numSecuRaw + '" (format attendu : 13 chiffres)';
+          console.warn('[CSV WORKER] NUM_SECU_INVALIDE détecté, création anomalie:', numSecuRaw);
+          anomaliesBatch.push({
+            carte_id: numSecuRaw || (noms + '|' + prenoms + '|' + ddn),
+            type_anomalie: 'NUM_SECU_INVALIDE',
+            description: numSecuErrMsg,
+            noms: noms,
+            prenoms: prenoms,
+            date_de_naissance: ddn,
+            num_secu: numSecuRaw,
+            contact: contact,
+            site_id: siteId,
+            erreur_message: numSecuErrMsg,
+            lieu_de_naissance: lieuN,
+            rangement: (getCol(cols, colMap, 'rangement') || '').toUpperCase().trim(),
+            lieu_enrolement: lieuE,
+            statut: finalStatut,
+            date_delivrance: dateDelivrance
+          });
+          totalRejected++;
+        }
+
         var resolved = resolveRouting(getCol(cols, colMap, 'rangement') || '');
 
         // Validation stricte des dates
@@ -779,7 +815,9 @@ async function run() {
             noms: noms,
             prenoms: prenoms,
             date_de_naissance: ddn,
-            num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+            // NUM_SECU_INVALIDE (cf. validation ci-dessus) : la carte est quand même créée
+            // mais avec num_secu vidé (null) — valeur brute déjà conservée dans l'anomalie.
+            num_secu: numSecuInvalid ? null : numSecuRaw,
             lieu_de_naissance: lieuN,
             contact: contact,
             lieu_enrolement: lieuE,
