@@ -332,6 +332,32 @@ export default function CartesPage() {
     loadData(0, newF);
   };
 
+  // Point d'entrée unique pour le menu déroulant "Statuts" ET la carte stat
+  // "Anomalies / Absent" cliquable ci-dessous : ce même contrôle pilote deux
+  // dimensions de filtre distinctes sur des colonnes différentes — `statut`
+  // (statut logistique) pour toutes les options normales, ou
+  // `statut_physique = 'ABSENT'` (statut physique) pour l'option "Absentes
+  // (anomalie)". Les deux ne doivent jamais cohabiter dans `filters` : chaque
+  // bascule efface l'autre dimension en une seule mise à jour atomique, pour
+  // éviter la combinaison AND involontaire (statut ET statut_physique) qui
+  // provoquait un filtre trop restrictif ne renvoyant aucun résultat.
+  const handleStatutSelectChange = (value: string) => {
+    let newF: Record<string, string>;
+    if (value === 'ABSENT') {
+      // Déstructuration avec rest (pas d'opérateur `delete` sur une propriété
+      // littérale connue d'un objet Record<string, string> — cf. commentaire
+      // TS2790 plus haut sur le cas 'q').
+      const { statut: _statut, ...rest } = filters;
+      newF = { ...rest, statut_physique: 'ABSENT' };
+    } else {
+      const { statut_physique: _statutPhysique, ...rest } = filters;
+      newF = value ? { ...rest, statut: value } : rest;
+    }
+    setFilters(newF);
+    setSelected(null);
+    loadData(0, newF);
+  };
+
   return (
     <div className="page-content animate-fade-in" style={{ padding: '24px 28px', display: 'flex', flexDirection: 'column', gap: 24 }}>
       
@@ -372,7 +398,7 @@ export default function CartesPage() {
           borderCol="rgba(239,68,68,0.18)"
           iconColor="#fca5a5"
           loading={loading}
-          onClick={() => handleFilterChange('statut_physique', 'ABSENT')}
+          onClick={() => handleStatutSelectChange('ABSENT')}
         />
       </div>
 
@@ -466,8 +492,8 @@ export default function CartesPage() {
             background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(255,255,255,0.02)', 
             height: 40, cursor: 'pointer', fontSize: 13, padding: '0 12px'
           }}
-          value={filters.statut || ''}
-          onChange={(e) => handleFilterChange('statut', e.target.value)}
+          value={filters.statut_physique === 'ABSENT' ? 'ABSENT' : (filters.statut || '')}
+          onChange={(e) => handleStatutSelectChange(e.target.value)}
         >
           <option value="">Tous les Statuts</option>
           <option value="EN STOCK">📦 En Stock</option>
@@ -475,6 +501,7 @@ export default function CartesPage() {
           <option value="ANNULE">⚠️ Annulées</option>
           <option value="BROUILLON">📝 Brouillons</option>
           <option value="DOUBLON">⚠️ Doublons déclarés</option>
+          <option value="ABSENT">🚨 Absentes (anomalie)</option>
         </select>
 
         <button 
