@@ -18,6 +18,14 @@ export function getAllConfig() {
 
 export async function getCentreStats(centreId: number, siteId: number) {
   const db = getDatabase()!;
+  // Correctif (agent-4-db-sync) : alignement sur le même comportement que getStats()/stats-worker.js
+  // (case 'getStats', commit c6c9f2c) — cette requête laissait passer dans total/en_stock/distribuees/
+  // absentes les cartes soft-supprimées en attente de purge/synchro (is_dirty = -1) et les brouillons
+  // de saisie non finalisés (statut = 'BROUILLON'), deux catégories déjà exclues de la liste réelle de
+  // cartes par getCartesPage() (cartes.queries.ts, WHERE is_dirty != -1). DOUBLON reste volontairement
+  // INCLUS : une carte déclarée doublon est toujours une carte physique réelle, pas un résidu à purger
+  // — même raisonnement que le correctif stats-worker.js. Le cloisonnement site_id/centre_id existant
+  // (CLAUDE.md §3) reste strictement inchangé.
   return db.prepare(`
     SELECT
       COUNT(*) as total,
@@ -25,7 +33,7 @@ export async function getCentreStats(centreId: number, siteId: number) {
       IFNULL(SUM(CASE WHEN statut IN ('DELIVRE','DISTRIBUEE','RETIRE') THEN 1 ELSE 0 END), 0) as distribuees,
       IFNULL(SUM(CASE WHEN statut_physique = 'ABSENT' THEN 1 ELSE 0 END), 0) as absentes
     FROM t_cartes
-    WHERE site_id = ? AND centre_id = ?
+    WHERE site_id = ? AND centre_id = ? AND is_dirty != -1 AND statut != 'BROUILLON'
   `).get(siteId, centreId) as Record<string, number>;
 }
 
