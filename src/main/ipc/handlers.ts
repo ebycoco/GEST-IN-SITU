@@ -3057,8 +3057,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const csvLines = [
         headers.join(';'),
         ...rows.map(r => headers.map(h => {
-          const val = String(r[h] ?? '').replace(/"/g, '""');
-          return `"${val}"`;
+          const raw = String(r[h] ?? '');
+          // Anti-notation-scientifique Excel (test COM réel du 2026-09-05) : num_secu (13
+          // chiffres) est réinterprété par Excel comme un nombre à l'ouverture d'un CSV et
+          // affiché en notation scientifique ("1,2346E+12"), cause plausible et démontrée
+          // de la corruption constatée sur 384 cartes (export → ouverture/sauvegarde Excel
+          // → réimport). Le préfixe ="valeur" est une formule Excel qui renvoie la chaîne
+          // littérale telle quelle : Excel l'affiche en texte sans jamais altérer la
+          // valeur réelle. N'est PAS appliqué aux autres colonnes numériques-like
+          // (contact : normalisé à 10 chiffres, sous le seuil d'affichage scientifique
+          // d'Excel ; num_retirant : champ libre non normalisé, sans validation stricte
+          // en aval — aucun risque démontré ne justifie d'y toucher).
+          // import-worker.js (fn stripExcelTextGuard, cf. cette même fonction) neutralise
+          // ce préfixe si ce même export CSV est réimporté tel quel par l'application, afin
+          // de ne jamais déclencher une fausse anomalie NUM_SECU_INVALIDE.
+          const val = (h === 'num_secu' && raw) ? `="${raw}"` : raw;
+          const escaped = val.replace(/"/g, '""');
+          return `"${escaped}"`;
         }).join(';'))
       ];
 

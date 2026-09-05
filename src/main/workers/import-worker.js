@@ -26,6 +26,22 @@ async function run() {
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+  // Anti-notation-scientifique Excel (cf. export:csv, handlers.ts ~L3059) : num_secu (13
+  // chiffres) est exporté avec un garde formule ="valeur" pour empêcher Excel de le
+  // réinterpréter comme un nombre à l'ouverture du CSV. Si ce même fichier d'export est
+  // réimporté tel quel par l'application (sans passage par Excel), le parseur CSV
+  // volontairement simple de ce worker (line.split + un seul niveau de dé-guillemetage,
+  // pas de dé-échappement CSV complet des doublons de guillemets internes) laisse une
+  // trace résiduelle du type =""1234567890123"" au lieu de la valeur attendue. Cette
+  // fonction neutralise cette trace pour ne jamais déclencher une fausse anomalie
+  // NUM_SECU_INVALIDE (cf. validation ^\d{13}$ plus bas) sur un ré-import de notre propre
+  // export. Sans effet sur une valeur normale, jamais préfixée par '=' (retour inchangé).
+  function stripExcelTextGuard(value) {
+    if (!value || value.charAt(0) !== '=') return value;
+    var m = /^=+"*([^"]*)"*$/.exec(value);
+    return m ? m[1] : value;
+  }
+
   // Détecteur d'encodage pour supporter UTF-8 et Windows-1252 (Latin1)
   function detectEncoding(path) {
     try {
@@ -643,7 +659,7 @@ async function run() {
 
         // Lecture anticipée pour le contrôle de ligne vide (num_secu et date_delivrance ne sont
         // sinon lus qu'à l'intérieur de branches conditionnelles plus bas dans la boucle).
-        var numSecuRaw = (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim();
+        var numSecuRaw = stripExcelTextGuard((getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim());
         var dateDelivranceRaw = (getCol(cols, colMap, 'date_delivrance') || '').trim();
 
         // Ligne totalement vide (hors `rangement`, qui reçoit un défaut automatique et ne doit
@@ -722,13 +738,13 @@ async function run() {
               var errMsg = 'Statut inconnu "' + rawStatut + '" normalisé en EN STOCK';
               console.warn('[CSV WORKER] STATUT_INCONNU détecté, création anomalie:', rawStatut);
               anomaliesBatch.push({
-                carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn),
+                carte_id: stripExcelTextGuard((getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim()) || (noms + '|' + prenoms + '|' + ddn),
                 type_anomalie: 'STATUT_INCONNU',
                 description: errMsg,
                 noms: noms,
                 prenoms: prenoms,
                 date_de_naissance: ddn,
-                num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+                num_secu: stripExcelTextGuard((getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim()),
                 contact: contact,
                 site_id: siteId,
                 erreur_message: errMsg,
@@ -794,13 +810,13 @@ async function run() {
           totalRejected++;
           totalExcludedFromBatch++;
           anomaliesBatch.push({
-            carte_id: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim() || (noms + '|' + prenoms + '|' + ddn),
+            carte_id: stripExcelTextGuard((getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim()) || (noms + '|' + prenoms + '|' + ddn),
             type_anomalie: 'DATE_INVALIDE',
             description: dateError,
             noms: noms,
             prenoms: prenoms,
             date_de_naissance: ddn,
-            num_secu: (getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim(),
+            num_secu: stripExcelTextGuard((getCol(cols, colMap, 'num_secu', 'num_secu') || '').trim()),
             contact: contact,
             site_id: siteId,
             erreur_message: dateError,
