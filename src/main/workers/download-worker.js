@@ -82,7 +82,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
       doublon_annule_par, doublon_annule_le, doublon_motif_annulation,
       apurement_correction_par, apurement_correction_le, apurement_correction_motif,
       apurement_annulation_par, apurement_annulation_le, apurement_annulation_motif,
-      site_id, centre_id, poste_id, qr_code_data, sync_id,
+      site_id, centre_id, poste_id, qr_code_data, sync_id, is_exported,
       created_at, updated_at, action_at, synced_at, is_dirty
     ) VALUES (
       :noms, :prenoms, :date_de_naissance, :lieu_de_naissance, :num_secu,
@@ -96,7 +96,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
       :doublon_annule_par, :doublon_annule_le, :doublon_motif_annulation,
       :apurement_correction_par, :apurement_correction_le, :apurement_correction_motif,
       :apurement_annulation_par, :apurement_annulation_le, :apurement_annulation_motif,
-      :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id,
+      :site_id, :centre_id, :poste_id, :qr_code_data, :sync_id, :is_exported,
       :created_at, :updated_at, :action_at, :updated_at, 0
     )
   `);
@@ -110,7 +110,8 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
         agent_distributeur = :agent_distributeur, centre_retrait = :centre_retrait,
         cle_doublon = :cle_doublon, cle_doublon_flex = :cle_doublon_flex,
         statut_physique = :statut_physique, centre_id = :centre_id, poste_id = :poste_id,
-        qr_code_data = :qr_code_data, updated_at = :updated_at, action_at = :action_at, synced_at = :updated_at,
+        qr_code_data = :qr_code_data, is_exported = :is_exported,
+        updated_at = :updated_at, action_at = :action_at, synced_at = :updated_at,
         agent_signalement_absence = :agent_signalement_absence,
         date_signalement_absence = :date_signalement_absence,
         note_signalement_absence = :note_signalement_absence,
@@ -264,6 +265,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
             poste_id: card.id_poste || card.poste_id || null,
             qr_code_data: card.qr_code_data || null,
             sync_id: card.sync_id,
+            is_exported: card.is_exported ?? 0,
             created_at: card.created_at || new Date().toISOString(),
             updated_at: card.updated_at || new Date().toISOString(),
             action_at: card.action_at || null
@@ -369,6 +371,7 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
               centre_id: card.id_centre || card.centre_id || null,
               poste_id: card.id_poste || card.poste_id || null,
               qr_code_data: card.qr_code_data || null,
+              is_exported: card.is_exported ?? 0,
               updated_at: card.updated_at || new Date().toISOString(),
               action_at: card.action_at || null
             });

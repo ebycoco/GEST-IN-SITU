@@ -407,7 +407,7 @@ export default function ExportPage() {
             <span>RÈGLES DE CONFORMITÉ DES EXPORTS</span>
           </div>
           <ul style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-            <li>Les exports incluent obligatoirement la colonne unique de signature <code style={{ color: '#ffd700' }}>cle_doublon</code>. Elle permet de fusionner des bases de sites distants en limitant à 100% le risque de doublon.</li>
+            <li>Les exports au format CSV et Excel incluent obligatoirement la colonne unique de signature <code style={{ color: '#ffd700' }}>cle_doublon</code>, qui permet de fusionner des bases de sites distants en limitant à 100% le risque de doublon. Le PDF (document d'émargement imprimable) ne porte pas cette garantie, sa vocation étant la signature manuelle et non la réconciliation de données.</li>
             <li>Le marquage des nouveautés met à jour l'historique local pour éviter d'exporter deux fois les mêmes éléments physiques lors de navettes successives sur clé USB.</li>
           </ul>
         </div>

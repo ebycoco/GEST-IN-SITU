@@ -286,7 +286,14 @@ export default function CartesPage() {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const result = await window.api.export.csv(filters);
+      // getExportRows() applique désormais un filtre `rangement` exact (correctif Centrale
+      // d'Export / ExportPage.tsx, où rangement provient toujours d'une liste de suggestions
+      // exacte). Sur cette page, `rangement` est un champ texte libre utilisé ailleurs en
+      // LIKE '%valeur%' (match partiel) : le réutiliser tel quel casserait silencieusement cet
+      // export dès qu'un filtre rangement partiel est actif à l'écran. On l'exclut du payload
+      // pour préserver le comportement historique (pas de filtrage par rangement à l'export).
+      const { rangement: _rangement, ...exportFilters } = filters;
+      const result = await window.api.export.csv(exportFilters);
       if (result.success) {
         toast.success(`${result.count.toLocaleString('fr')} cartes exportées !`);
       }

@@ -1382,9 +1382,25 @@ export function getExportRows(filters?: Record<string, string>) {
     where += ' AND site_id = @siteId';
     params.siteId = Number(filters.site_id);
   }
-  if (filters?.statut) {
+  // P0-1 (audit export) : SANS_RANGEMENT / SANS_SECU sont des pseudo-statuts envoyés par
+  // ExportPage.tsx pour cibler les anomalies qualité — ils ne correspondent à aucune valeur
+  // possible de la colonne `statut` (contrainte CHECK, schema.ts), donc `statut = @statut`
+  // ne matchait jamais rien pour ces deux cas. Conditions reprises à l'identique de
+  // getSansRangementPage()/getSansNumSecuPage() (mêmes fonctions, plus bas dans ce fichier)
+  // pour rester cohérent avec la détection d'anomalie déjà éprouvée ailleurs.
+  if (filters?.statut === 'SANS_RANGEMENT') {
+    where += " AND is_dirty != -1 AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')";
+  } else if (filters?.statut === 'SANS_SECU') {
+    where += " AND is_dirty != -1 AND (num_secu IS NULL OR num_secu = '' OR num_secu LIKE '-%')";
+  } else if (filters?.statut) {
     where += ' AND statut = @statut';
     params.statut = filters.statut;
+  }
+  // P0-2 (audit export) : filters.rangement (envoyé par ExportPage.tsx, filtre "Rangement
+  // ciblé") n'était jusqu'ici jamais lu par cette fonction — le filtre UI était inopérant.
+  if (filters?.rangement && filters.rangement !== 'ALL') {
+    where += ' AND rangement = @rangement';
+    params.rangement = filters.rangement;
   }
   if (filters?.export_status === 'exported') {
     where += ' AND is_exported = 1';
@@ -1393,7 +1409,7 @@ export function getExportRows(filters?: Record<string, string>) {
   }
 
   return db.prepare(`
-    SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
       contact, rangement, statut, date_delivrance, nom_retirant, num_retirant,
       agent_saisie, agent_distributeur, centre_retrait, created_at, site_id, cle_doublon
     FROM t_cartes ${where}
@@ -1417,16 +1433,57 @@ export function getDistinctRangements(siteId?: number) {
   return db.prepare(query).all(params).map((row: any) => row.rangement);
 }
 
-export function marquerCartesExporte(ids: number[]) {
+export function marquerCartesExporte(ids: number[], currentUser?: { id_user?: number; login?: string }) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const stmt = db.prepare('UPDATE t_cartes SET is_exported = 1, is_dirty = 1, updated_at = ?, action_at = ? WHERE id_carte = ?');
+  const selectStmt = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?');
+  const logStmt = db.prepare(`
+    INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+    VALUES (?, ?, 'CARTE_MARQUEE_EXPORTEE', ?, ?, ?, 1, ?, ?)
+  `);
+  // Quadriptyque transactionnel (skill moteur-sync-offline-first) : ce marquage "déjà exporté"
+  // ne posait jusqu'ici que is_exported=1/is_dirty=1, sans t_logs ni t_outbox — la propagation
+  // vers les autres postes du même site n'avait donc lieu que via un bulk-upload manuel, jamais
+  // via le cycle de synchro automatique. On relit la carte complète après UPDATE (payload
+  // complet avec site_id, pas minimal — cf. piège documenté dans le skill) avant enqueueOutbox.
+  // Statements préparés une seule fois hors boucle (Low-Memory §2) : un export "Toute la base"
+  // peut porter sur plusieurs milliers d'ids.
   const runTx = db.transaction((idList: number[]) => {
     for (const id of idList) {
-      stmt.run(now, now, id);
+      const result = stmt.run(now, now, id);
+      if (result.changes === 0) continue;
+
+      const updatedCarte = selectStmt.get(id) as any;
+      if (!updatedCarte) continue;
+
+      try {
+        logStmt.run(
+          currentUser?.id_user || null,
+          currentUser?.login || 'SYSTEM',
+          `Carte marquée comme déjà exportée (ID ${id}), pour éviter une double exportation lors d'une navette USB.`,
+          JSON.stringify({ id_carte: id, is_exported: 1 }),
+          uuidv4(),
+          updatedCarte.site_id,
+          updatedCarte.centre_id ?? null
+        );
+      } catch (err) {
+        log.error('Failed to log CARTE_MARQUEE_EXPORTEE:', err);
+      }
+
+      if (updatedCarte.sync_id) {
+        enqueueOutbox(updatedCarte.sync_id, 't_cartes', 'UPDATE', updatedCarte);
+      }
     }
   });
   runTx(ids);
+
+  // Bulk (potentiellement toute la base) : pas de forceCards=true, même règle que les autres
+  // mutations multi-cartes de ce fichier (ex: fusionnerDoublons côté handlers.ts) — respecte
+  // le toggle "Envoi Automatique" au lieu de le contourner comme les mutations unitaires.
+  if (networkMonitor.getState() === 'ONLINE') {
+    scheduleOutboxProcessing();
+  }
 }
 
 export function exportCartes(ids: number[]) {
@@ -1602,13 +1659,37 @@ export function updateDateDeNaissance(id: number, newDate: string) {
     return res;
   }
 
-  const res = db.prepare(`
-    UPDATE t_cartes
-    SET date_de_naissance = ?, updated_at = ?, action_at = ?, is_dirty = 1
-    WHERE id_carte = ?
-  `).run(newDate, now, now, id);
-  autoEnqueueCorrection(id);
-  return res;
+  // P0-4 (audit export) : cle_doublon/cle_doublon_flex n'étaient jamais recalculées ici après
+  // correction de la date de naissance sur une carte déjà présente dans t_cartes (elles
+  // l'étaient déjà correctement dans la branche "transfert d'anomalie DLQ" ci-dessus, qui sert
+  // de modèle pour la formule reproduite à l'identique). UPDATE + autoEnqueueCorrection()
+  // regroupés dans une même transaction SQLite (ils ne l'étaient pas) — autoEnqueueCorrection
+  // avale déjà ses propres erreurs en interne (cf. commentaire plus haut dans ce fichier, ligne
+  // ~1592), donc cet appel ne peut pas provoquer de rollback inattendu.
+  const runStandardTx = db.transaction(() => {
+    const carte = db.prepare(
+      'SELECT noms, prenoms, lieu_de_naissance, contact FROM t_cartes WHERE id_carte = ?'
+    ).get(id) as { noms: string; prenoms: string; lieu_de_naissance: string; contact: string } | undefined;
+
+    const noms = removeAccents(carte?.noms || '');
+    const prenoms = removeAccents(carte?.prenoms || '');
+    const lieuN = removeAccents(carte?.lieu_de_naissance || '');
+    const contact = normalizeContact(carte?.contact || '');
+    const cleDbl = `${noms}|${prenoms}|${newDate}|${lieuN}|${contact}`;
+    const cleFlex = `${noms}|${prenoms}|${newDate}|${contact}`;
+
+    const updateRes = db.prepare(`
+      UPDATE t_cartes
+      SET date_de_naissance = ?, cle_doublon = ?, cle_doublon_flex = ?, updated_at = ?, action_at = ?, is_dirty = 1
+      WHERE id_carte = ?
+    `).run(newDate, cleDbl, cleFlex, now, now, id);
+
+    autoEnqueueCorrection(id);
+
+    return updateRes;
+  });
+
+  return runStandardTx();
 }
 
 export function getDoublonsStrictsPage(siteId: number, offset: number, limit: number, query?: string, filters?: QualityFilters) {

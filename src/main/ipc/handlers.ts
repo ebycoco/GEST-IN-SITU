@@ -3057,7 +3057,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const rows = queries.getExportRows(scopedFilters) as Record<string, unknown>[];
       if (rows.length === 0) return { success: false, reason: 'no_data' };
 
-      const headers = Object.keys(rows[0]);
+      // id_carte est un identifiant technique interne (nécessaire à marquerCartesExporte
+      // ci-dessous) : il ne doit jamais apparaître dans le fichier CSV remis à un tiers.
+      const headers = Object.keys(rows[0]).filter(h => h !== 'id_carte');
       const csvLines = [
         headers.join(';'),
         ...rows.map(r => headers.map(h => {
@@ -3066,12 +3068,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }).join(';'))
       ];
 
-      const { writeFileSync } = await import('fs');
-      writeFileSync(result.filePath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
+      // P0-5 (audit export, Low-Memory \u00A72) : writeFileSync bloquait le Main Process (donc toute
+      // l'UI, freeze constat\u00E9 sur postes 8 Go) le temps d'\u00E9crire un export "Toute la base"
+      // volumineux. fs.promises.writeFile est d\u00E9j\u00E0 le pattern retenu par le handler PDF
+      // (ligne ~3277 de ce m\u00EAme fichier) \u2014 repris ici pour coh\u00E9rence.
+      const fsPromises = (await import('fs')).promises;
+      await fsPromises.writeFile(result.filePath, '\uFEFF' + csvLines.join('\r\n'), 'utf-8');
 
       if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
-        queries.marquerCartesExporte(ids);
+        const secureUser = getSecureCurrentUser();
+        queries.marquerCartesExporte(ids, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
       }
 
       log.info(`Export CSV: ${rows.length} rows to ${result.filePath}`);
@@ -3104,15 +3111,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Cartes CMU');
 
-      const headers = Object.keys(rows[0]);
+      // id_carte est un identifiant technique interne (nécessaire à marquerCartesExporte
+      // plus bas) : il ne doit jamais apparaître dans le classeur Excel remis à un tiers.
+      const headers = Object.keys(rows[0]).filter(h => h !== 'id_carte');
       worksheet.columns = headers.map(h => ({
         header: h.toUpperCase().replace(/_/g, ' '),
         key: h,
         width: h === 'noms' || h === 'prenoms' ? 25 : 18
       }));
 
-      // Add rows
-      rows.forEach(r => worksheet.addRow(r));
+      // P0-5 (audit export, Low-Memory §2) : rows.forEach(addRow) sans découpage bloquait le
+      // Main Process (donc toute l'UI) le temps de peupler un export "Toute la base" volumineux.
+      // Chunké par lots de 500 avec un setImmediate entre chaque lot pour rendre la main à
+      // l'Event Loop (pattern documenté dans le skill low-memory-patterns).
+      const EXPORT_EXCEL_CHUNK_SIZE = 500;
+      for (let i = 0; i < rows.length; i += EXPORT_EXCEL_CHUNK_SIZE) {
+        const chunk = rows.slice(i, i + EXPORT_EXCEL_CHUNK_SIZE);
+        chunk.forEach(r => worksheet.addRow(r));
+        if (i + EXPORT_EXCEL_CHUNK_SIZE < rows.length) {
+          await new Promise<void>(resolveChunk => setImmediate(resolveChunk));
+        }
+      }
 
       // Style header row
       const headerRow = worksheet.getRow(1);
@@ -3127,7 +3146,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
-        queries.marquerCartesExporte(ids);
+        const secureUser = getSecureCurrentUser();
+        queries.marquerCartesExporte(ids, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
       }
 
       log.info(`Export Excel: ${rows.length} rows to ${result.filePath}`);
@@ -3278,7 +3298,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       if (scopedFilters?.incremental === 'true') {
         const ids = rows.map(r => r.id_carte as number);
-        queries.marquerCartesExporte(ids);
+        const secureUser = getSecureCurrentUser();
+        queries.marquerCartesExporte(ids, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
       }
 
       await sendProgress(100);
@@ -3294,8 +3315,28 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // Sécurité (P1, cloisonnement §3) : siteId dérivé de la session serveur — même pattern que
   // cartes:getAbsences/cartes:getAgentAbsences ci-dessus. Un siteId omis ou forgé à 0/null
   // renvoyait auparavant la nomenclature des rangements de tous les sites.
-  ipcMain.handle('cartes:getRangements', (_, siteId?: number) => queries.getDistinctRangements(resolveScopedSiteId(siteId)));
-  ipcMain.handle('export:marquerExporte', (_, ids: number[]) => queries.marquerCartesExporte(ids));
+  // P1-2 (audit export) : un SUPER ADMIN sans site actif (export "tous sites", cf.
+  // ExportPage.tsx) se voyait rejeter par resolveScopedSiteId() ("site_id requis"), alors que
+  // getExportRows() gère déjà nativement ce même cas (site_id non forcé = tous sites). Portée
+  // strictement limitée à ce canal : resolveScopedSiteId() elle-même n'est pas touchée (utilisée
+  // par ~30 autres handlers).
+  ipcMain.handle('cartes:getRangements', (_, siteId?: number) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) throw new Error("Session invalide.");
+    if (secureUser.role === 'SUPER ADMIN' && (siteId === undefined || siteId === null)) {
+      return queries.getDistinctRangements(undefined);
+    }
+    return queries.getDistinctRangements(resolveScopedSiteId(siteId));
+  });
+  // P0-3 (audit export) : seul canal de la famille export:* sans contrôle d'accès (les 4 autres
+  // passent tous par assertExportAccess()). Vérifié : aucun appel côté src/renderer (canal
+  // inutilisé actuellement), corrigé quand même par cohérence/défense en profondeur — non
+  // supprimé sans validation explicite (cf. consigne de la tâche).
+  ipcMain.handle('export:marquerExporte', (_, ids: number[]) => {
+    assertExportAccess();
+    const secureUser = getSecureCurrentUser();
+    return queries.marquerCartesExporte(ids, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
+  });
   ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(assertExportAccess(filters)));
 
   // EXPORT - Centralized generateFile with Audit & Alerts
