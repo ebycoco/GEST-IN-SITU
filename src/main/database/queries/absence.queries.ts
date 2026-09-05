@@ -245,11 +245,14 @@ export function declarerPerdue(id: number, currentUser?: { role: string; site_id
   const db = getDatabase()!;
   // Quadriptyque transactionnel (skill moteur-sync-offline-first) : UPDATE + relecture +
   // INSERT t_logs + enqueueOutbox regroupés dans une transaction unique (même pattern que
-  // resoudreAbsence()/reactiverCarte() ci-dessus) — un échec à n'importe quelle étape
-  // (notamment enqueueOutbox, hors try/catch mais à l'intérieur de la transaction) annule
-  // intégralement l'UPDATE sur t_cartes, plutôt que de le laisser commité isolément. Pas de
-  // garde-fou FTS5 ici : statut_physique/escalade_niveau ne sont pas surveillés par
-  // trg_cartes_au (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
+  // resoudreAbsence()/reactiverCarte() ci-dessus). La garantie d'atomicité porte sur l'UPDATE +
+  // la relecture et sur toute exception non anticipée survenant en dehors des blocs try/catch
+  // déjà en place plus bas : enqueueOutbox() encapsule tout son corps dans son propre try/catch
+  // et ne relance jamais (voir src/main/sync/outbox.service.ts), de même que l'INSERT t_logs
+  // ci-dessous — un échec réel de l'un ou l'autre est donc auto-protégé et non bloquant par
+  // conception, il ne provoque jamais de rollback de l'UPDATE dans les faits. Pas de garde-fou
+  // FTS5 ici : statut_physique/escalade_niveau ne sont pas surveillés par trg_cartes_au
+  // (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
   const runTx = db.transaction(() => {
     const now = new Date().toISOString();
     let query = `
@@ -497,11 +500,14 @@ export function escaladerAuSite(id: number, currentUser?: { id_user?: number; lo
   const db = getDatabase()!;
   // Quadriptyque transactionnel (skill moteur-sync-offline-first) : UPDATE + relecture +
   // INSERT t_logs + enqueueOutbox regroupés dans une transaction unique (même pattern que
-  // resoudreAbsence()/reactiverCarte()/declarerPerdue() ci-dessus) — un échec à n'importe
-  // quelle étape (notamment enqueueOutbox, hors try/catch mais à l'intérieur de la
-  // transaction) annule intégralement l'UPDATE sur t_cartes, plutôt que de le laisser commité
-  // isolément. Pas de garde-fou FTS5 ici : escalade_niveau n'est pas surveillé par
-  // trg_cartes_au (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
+  // resoudreAbsence()/reactiverCarte()/declarerPerdue() ci-dessus). La garantie d'atomicité
+  // porte sur l'UPDATE + la relecture et sur toute exception non anticipée survenant en dehors
+  // des blocs try/catch déjà en place plus bas : enqueueOutbox() encapsule tout son corps dans
+  // son propre try/catch et ne relance jamais (voir src/main/sync/outbox.service.ts), de même
+  // que l'INSERT t_logs ci-dessous — un échec réel de l'un ou l'autre est donc auto-protégé et
+  // non bloquant par conception, il ne provoque jamais de rollback de l'UPDATE dans les faits.
+  // Pas de garde-fou FTS5 ici : escalade_niveau n'est pas surveillé par trg_cartes_au
+  // (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
   const runTx = db.transaction(() => {
     const now = new Date().toISOString();
 

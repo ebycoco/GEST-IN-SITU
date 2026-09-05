@@ -63,10 +63,17 @@ export default function AdminQueuePage() {
   // ils font apparaître/déplacer une carte dans "Anomalies Actives" en temps réel. Abonnement
   // IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2), même pattern que le
   // sous-composant.
+  // P1 (audit agent-9, cycle 2) : un pull automatique descendant (sync-engine.ts, downstream.ts)
+  // émet aussi cet événement mais sans champ `type` reconnu (downstream.ts envoie
+  // `{ count: totalMerged }`) — cas générique correspondant justement au scénario multi-poste
+  // visé (changement fait sur un autre poste du même site/centre, synchronisé via Supabase).
+  // Traité prudemment comme signal générique "des données sont peut-être arrivées du cloud,
+  // recharge", même pattern que EscaladesResoluesTab.tsx ci-dessus.
   useEffect(() => {
     if (window.api && window.api.onDatabaseUpdated) {
       const unsubscribe = window.api.onDatabaseUpdated((data) => {
         if (
+          !data?.type ||
           data?.type === 'ABSENCE_SIGNALEE' ||
           data?.type === 'ABSENCE_ESCALADEE' ||
           data?.type === 'ABSENCE_RESOLUE' ||
