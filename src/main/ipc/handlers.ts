@@ -1708,9 +1708,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     try {
       const res = await queries.resoudreAbsence(id, data, secureUser);
       queries.insertAuditLog(
-        secureUser.login || data.agent_resolution_absence || 'ADMIN',
+        secureUser.login || data.agent || 'ADMIN',
         'VALIDATION',
-        `Validation/Résolution d'absence physique pour la carte ID ${id}. Nouveau rangement : ${data.nouveau_rangement}.`
+        `Validation/Résolution d'absence physique pour la carte ID ${id}. Nouveau rangement : ${data.rangement}.`
       );
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sync:updated-data', { type: 'ABSENCE_RESOLUE' });

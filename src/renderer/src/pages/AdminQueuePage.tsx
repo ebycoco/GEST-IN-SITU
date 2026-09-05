@@ -55,6 +55,31 @@ export default function AdminQueuePage() {
     loadAllData();
   }, [activeSiteId, user?.site_id]);
 
+  // ─── Rafraîchissement temps réel (sync:updated-data) ──────────────────────
+  // P1-3 (audit agent-9) : cette page (onglets "Anomalies Actives"/"Historique des Pertes")
+  // n'avait aucun abonnement, contrairement à EscaladesResoluesTab.tsx (même mécanisme IPC,
+  // même fichier handlers.ts) qui recharge déjà sur ABSENCE_RESOLUE/ABSENCE_PERDUE_CONFIRMEE/
+  // CARTE_RETROUVEE. ABSENCE_SIGNALEE et ABSENCE_ESCALADEE sont également pertinents ici :
+  // ils font apparaître/déplacer une carte dans "Anomalies Actives" en temps réel. Abonnement
+  // IPC nettoyé au démontage (politique low-memory, CLAUDE.md §2), même pattern que le
+  // sous-composant.
+  useEffect(() => {
+    if (window.api && window.api.onDatabaseUpdated) {
+      const unsubscribe = window.api.onDatabaseUpdated((data) => {
+        if (
+          data?.type === 'ABSENCE_SIGNALEE' ||
+          data?.type === 'ABSENCE_ESCALADEE' ||
+          data?.type === 'ABSENCE_RESOLUE' ||
+          data?.type === 'ABSENCE_PERDUE_CONFIRMEE' ||
+          data?.type === 'CARTE_RETROUVEE'
+        ) {
+          loadAllData();
+        }
+      });
+      return () => unsubscribe();
+    }
+  }, [activeSiteId, user?.site_id]);
+
   const handleResolveAbsence = async (id: number) => {
     const rangement = resolutionRangements[id] || '';
     if (!rangement.trim()) {

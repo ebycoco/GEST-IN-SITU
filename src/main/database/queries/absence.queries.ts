@@ -142,7 +142,7 @@ export function getSignalementsResolus(agent: string, siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
-export function resoudreAbsence(id: number, data: { status: string; agent: string; note: string; rangement: string }, currentUser?: { role: string; site_id?: number }) {
+export function resoudreAbsence(id: number, data: { status: string; agent: string; note: string; rangement: string }, currentUser?: { role: string; site_id?: number; centre_id?: number }) {
   const db = getDatabase()!;
   const runTx = db.transaction(() => {
     const now = new Date().toISOString();
@@ -155,6 +155,14 @@ export function resoudreAbsence(id: number, data: { status: string; agent: strin
     if (currentUser && currentUser.role !== 'SUPER ADMIN') {
       query += ' AND site_id = @site_id';
       params.site_id = currentUser.site_id;
+      // Cloisonnement §3 (P1-1) : un ADMIN_CENTRE ne doit résoudre que les absences de son
+      // propre centre — site_id seul laissait passer un id_carte forgé d'un autre centre du
+      // même site. ADMINISTRATEUR_SITE/SUPER ADMIN restent volontairement non restreints par
+      // centre (portée légitime sur tout le site). Même pattern que getAbsencesCentre.
+      if (currentUser.role === 'ADMIN_CENTRE') {
+        query += ' AND centre_id = @centre_id';
+        params.centre_id = currentUser.centre_id;
+      }
     }
     const result = db.prepare(query).run(params);
     if (result.changes === 0) {
@@ -233,74 +241,92 @@ export function resoudreAbsence(id: number, data: { status: string; agent: strin
   }
 }
 
-export function declarerPerdue(id: number, currentUser?: { role: string; site_id?: number }) {
+export function declarerPerdue(id: number, currentUser?: { role: string; site_id?: number; centre_id?: number }) {
   const db = getDatabase()!;
-  const now = new Date().toISOString();
-  let query = `
-    UPDATE t_cartes
-    SET statut_physique = 'PERDUE', escalade_niveau = 'RESOLU', updated_at = @now, action_at = @now, is_dirty = 1
-    WHERE id_carte = @id
-  `;
-  const params: any = { now, id };
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = @site_id';
-    params.site_id = currentUser.site_id;
-  }
-  const result = db.prepare(query).run(params);
-  if (result.changes === 0) {
-    throw new Error("Accès non autorisé aux données de ce site");
-  }
+  // Quadriptyque transactionnel (skill moteur-sync-offline-first) : UPDATE + relecture +
+  // INSERT t_logs + enqueueOutbox regroupés dans une transaction unique (même pattern que
+  // resoudreAbsence()/reactiverCarte() ci-dessus) — un échec à n'importe quelle étape
+  // (notamment enqueueOutbox, hors try/catch mais à l'intérieur de la transaction) annule
+  // intégralement l'UPDATE sur t_cartes, plutôt que de le laisser commité isolément. Pas de
+  // garde-fou FTS5 ici : statut_physique/escalade_niveau ne sont pas surveillés par
+  // trg_cartes_au (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
+  const runTx = db.transaction(() => {
+    const now = new Date().toISOString();
+    let query = `
+      UPDATE t_cartes
+      SET statut_physique = 'PERDUE', escalade_niveau = 'RESOLU', updated_at = @now, action_at = @now, is_dirty = 1
+      WHERE id_carte = @id
+    `;
+    const params: any = { now, id };
+    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+      query += ' AND site_id = @site_id';
+      params.site_id = currentUser.site_id;
+      // Cloisonnement §3 (P1-1) : restreint également par centre pour un ADMIN_CENTRE (même
+      // raisonnement que resoudreAbsence() ci-dessus) — ADMINISTRATEUR_SITE/SUPER ADMIN non
+      // restreints par centre.
+      if (currentUser.role === 'ADMIN_CENTRE') {
+        query += ' AND centre_id = @centre_id';
+        params.centre_id = currentUser.centre_id;
+      }
+    }
+    const result = db.prepare(query).run(params);
+    if (result.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
 
-  const card = db.prepare('SELECT site_id, noms, prenoms, contact, agent_signalement_absence, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
-  if (card) {
-    const siteId = card.site_id;
-    const message = `La carte de ${card.noms} ${card.prenoms} a été confirmée PERDUE par l'administration.`;
-    const payload = {
-      read: false,
-      noms: card.noms,
-      prenoms: card.prenoms,
-      contact: card.contact || '—',
-      isLost: true,
-      site_id: siteId
-    };
-    try {
-      const unreadLog = db.prepare(`
-        SELECT id_log FROM t_logs 
-        WHERE action = 'CARTE_ABSENTE_SIGNALEE' 
-        AND json_extract(valeur_apres, '$.read') = false
-        AND json_extract(valeur_apres, '$.id_carte') = ?
-      `).get(id) as { id_log: number } | undefined;
+    const card = db.prepare('SELECT site_id, noms, prenoms, contact, agent_signalement_absence, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
+    if (card) {
+      const siteId = card.site_id;
+      const message = `La carte de ${card.noms} ${card.prenoms} a été confirmée PERDUE par l'administration.`;
+      const payload = {
+        read: false,
+        noms: card.noms,
+        prenoms: card.prenoms,
+        contact: card.contact || '—',
+        isLost: true,
+        site_id: siteId
+      };
+      try {
+        const unreadLog = db.prepare(`
+          SELECT id_log FROM t_logs
+          WHERE action = 'CARTE_ABSENTE_SIGNALEE'
+          AND json_extract(valeur_apres, '$.read') = false
+          AND json_extract(valeur_apres, '$.id_carte') = ?
+        `).get(id) as { id_log: number } | undefined;
 
-      if (unreadLog) {
+        if (unreadLog) {
+          db.prepare(`
+            UPDATE t_logs
+            SET valeur_apres = '{"read": true}', is_read = 1, is_dirty = 1
+            WHERE id_log = ?
+          `).run(unreadLog.id_log);
+        } else {
+          log.error("Log introuvable pour la carte ID:", id);
+        }
+
         db.prepare(`
-          UPDATE t_logs 
-          SET valeur_apres = '{"read": true}', is_read = 1, is_dirty = 1 
-          WHERE id_log = ?
-        `).run(unreadLog.id_log);
-      } else {
-        log.error("Log introuvable pour la carte ID:", id);
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+          VALUES (NULL, 'SYSTEM', 'CARTE_PERDUE_CONFIRMEE', ?, ?, ?, 1, ?)
+        `).run(message, JSON.stringify(payload), uuidv4(), siteId);
+      } catch (err) {
+        log.error('Failed to log or update on declarerPerdue:', err);
       }
 
-      db.prepare(`
-        INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-        VALUES (NULL, 'SYSTEM', 'CARTE_PERDUE_CONFIRMEE', ?, ?, ?, 1, ?)
-      `).run(message, JSON.stringify(payload), uuidv4(), siteId);
-    } catch (err) {
-      log.error('Failed to log or update on declarerPerdue:', err);
+      // Propagation vers Supabase : même défaut confirmé que resoudreAbsence()/escaladerAuSite()
+      // ci-dessus — sans cet enqueue, la confirmation de perte reste locale tant qu'aucun envoi
+      // manuel en masse n'est déclenché. Payload complet requis (site_id manquant sinon -> rejet
+      // systématique par mapCardPayload() dans outbox.service.ts).
+      if (card.sync_id) {
+        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+        scheduleOutboxProcessing();
+      }
     }
 
-    // Propagation vers Supabase : même défaut confirmé que resoudreAbsence()/escaladerAuSite()
-    // ci-dessus — sans cet enqueue, la confirmation de perte reste locale tant qu'aucun envoi
-    // manuel en masse n'est déclenché. Payload complet requis (site_id manquant sinon -> rejet
-    // systématique par mapCardPayload() dans outbox.service.ts).
-    if (card.sync_id) {
-      const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
-      enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
-      scheduleOutboxProcessing();
-    }
-  }
+    return result;
+  });
 
-  return result;
+  return runTx();
 }
 
 export function getHistoriquePertes(siteId?: number): any[] {
@@ -322,7 +348,7 @@ export function getHistoriquePertes(siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
-export function reactiverCarte(id: number, nouveauRangement: string, currentUser?: { role: string; site_id?: number }) {
+export function reactiverCarte(id: number, nouveauRangement: string, currentUser?: { role: string; site_id?: number; centre_id?: number }) {
   const db = getDatabase()!;
   const runTx = db.transaction(() => {
     const now = new Date().toISOString();
@@ -335,6 +361,13 @@ export function reactiverCarte(id: number, nouveauRangement: string, currentUser
     if (currentUser && currentUser.role !== 'SUPER ADMIN') {
       updateQuery += ' AND site_id = @site_id';
       params.site_id = currentUser.site_id;
+      // Cloisonnement §3 (P1-1) : restreint également par centre pour un ADMIN_CENTRE (même
+      // raisonnement que resoudreAbsence()/declarerPerdue() ci-dessus) — ADMINISTRATEUR_SITE/
+      // SUPER ADMIN non restreints par centre.
+      if (currentUser.role === 'ADMIN_CENTRE') {
+        updateQuery += ' AND centre_id = @centre_id';
+        params.centre_id = currentUser.centre_id;
+      }
     }
     const result = db.prepare(updateQuery).run(params);
     if (result.changes === 0) {
@@ -460,53 +493,71 @@ export function getAbsencesSite(siteId?: number): any[] {
   return db.prepare(query).all(...params);
 }
 
-export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number; role?: string }) {
+export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number; centre_id?: number; role?: string }) {
   const db = getDatabase()!;
-  const now = new Date().toISOString();
+  // Quadriptyque transactionnel (skill moteur-sync-offline-first) : UPDATE + relecture +
+  // INSERT t_logs + enqueueOutbox regroupés dans une transaction unique (même pattern que
+  // resoudreAbsence()/reactiverCarte()/declarerPerdue() ci-dessus) — un échec à n'importe
+  // quelle étape (notamment enqueueOutbox, hors try/catch mais à l'intérieur de la
+  // transaction) annule intégralement l'UPDATE sur t_cartes, plutôt que de le laisser commité
+  // isolément. Pas de garde-fou FTS5 ici : escalade_niveau n'est pas surveillé par
+  // trg_cartes_au (contrairement à `rangement` dans resoudreAbsence()/reactiverCarte()).
+  const runTx = db.transaction(() => {
+    const now = new Date().toISOString();
 
-  let query = `
-    UPDATE t_cartes
-    SET escalade_niveau = 'SITE', updated_at = @now, action_at = @now, is_dirty = 1
-    WHERE id_carte = @id AND statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE'
-  `;
-  const params: any = { now, id };
-  // Sécurité (cloisonnement §3, même modèle que resoudreAbsence/declarerPerdue/reactiverCarte
-  // ci-dessus) : pour tout rôle non-SUPER-ADMIN, restreint l'escalade aux cartes du site de
-  // l'appelant — absent avant ce correctif (aucun filtrage site_id n'existait ici).
-  if (currentUser && currentUser.role !== 'SUPER ADMIN') {
-    query += ' AND site_id = @site_id';
-    params.site_id = currentUser.site_id;
-  }
-  const result = db.prepare(query).run(params);
-  
-  if (result.changes > 0) {
-    const card = db.prepare('SELECT site_id, noms, prenoms, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
-    if (card) {
-      const siteId = card.site_id;
-      const agent = currentUser?.login || 'ADMIN_CENTRE';
-      const message = `⚠️ [ESCALADE] La carte de ${card.noms} ${card.prenoms} a été escaladée à l'Administrateur Site par ${agent}.`;
-      try {
-        db.prepare(`
-          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
-          VALUES (?, ?, 'CARTE_ABSENTE_ESCALADEE', ?, ?, ?, 1, ?)
-        `).run(currentUser?.id_user || null, agent, message, JSON.stringify({ read: false, id_carte: id }), uuidv4(), siteId);
-      } catch (err) {
-        log.error('Failed to log CARTE_ABSENTE_ESCALADEE:', err);
-      }
-
-      // Propagation vers Supabase : sans cet enqueue, l'escalade reste locale et un
-      // ADMINISTRATEUR_SITE sur un autre poste ne voit jamais la carte dans sa file
-      // d'attente (défaut confirmé, même pattern que signalerAbsence/resoudreAbsence
-      // ci-dessus). Payload complet requis (site_id manquant sinon -> rejet systématique
-      // par mapCardPayload() dans outbox.service.ts).
-      if (card.sync_id) {
-        const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
-        enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
-        scheduleOutboxProcessing();
+    let query = `
+      UPDATE t_cartes
+      SET escalade_niveau = 'SITE', updated_at = @now, action_at = @now, is_dirty = 1
+      WHERE id_carte = @id AND statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE'
+    `;
+    const params: any = { now, id };
+    // Sécurité (cloisonnement §3, même modèle que resoudreAbsence/declarerPerdue/reactiverCarte
+    // ci-dessus) : pour tout rôle non-SUPER-ADMIN, restreint l'escalade aux cartes du site de
+    // l'appelant — absent avant ce correctif (aucun filtrage site_id n'existait ici).
+    if (currentUser && currentUser.role !== 'SUPER ADMIN') {
+      query += ' AND site_id = @site_id';
+      params.site_id = currentUser.site_id;
+      // Cloisonnement §3 (P1-1) : restreint également par centre pour un ADMIN_CENTRE (même
+      // raisonnement que resoudreAbsence()/declarerPerdue()/reactiverCarte() ci-dessus) —
+      // ADMINISTRATEUR_SITE/SUPER ADMIN non restreints par centre.
+      if (currentUser.role === 'ADMIN_CENTRE') {
+        query += ' AND centre_id = @centre_id';
+        params.centre_id = currentUser.centre_id;
       }
     }
-  }
-  return result;
+    const result = db.prepare(query).run(params);
+
+    if (result.changes > 0) {
+      const card = db.prepare('SELECT site_id, noms, prenoms, sync_id FROM t_cartes WHERE id_carte = ?').get(id) as any;
+      if (card) {
+        const siteId = card.site_id;
+        const agent = currentUser?.login || 'ADMIN_CENTRE';
+        const message = `⚠️ [ESCALADE] La carte de ${card.noms} ${card.prenoms} a été escaladée à l'Administrateur Site par ${agent}.`;
+        try {
+          db.prepare(`
+            INSERT INTO t_logs (id_user, login_user, action, detail, valeur_apres, sync_id, is_dirty, site_id)
+            VALUES (?, ?, 'CARTE_ABSENTE_ESCALADEE', ?, ?, ?, 1, ?)
+          `).run(currentUser?.id_user || null, agent, message, JSON.stringify({ read: false, id_carte: id }), uuidv4(), siteId);
+        } catch (err) {
+          log.error('Failed to log CARTE_ABSENTE_ESCALADEE:', err);
+        }
+
+        // Propagation vers Supabase : sans cet enqueue, l'escalade reste locale et un
+        // ADMINISTRATEUR_SITE sur un autre poste ne voit jamais la carte dans sa file
+        // d'attente (défaut confirmé, même pattern que signalerAbsence/resoudreAbsence
+        // ci-dessus). Payload complet requis (site_id manquant sinon -> rejet systématique
+        // par mapCardPayload() dans outbox.service.ts).
+        if (card.sync_id) {
+          const fullCard = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id) as any;
+          enqueueOutbox(card.sync_id, 't_cartes', 'UPDATE', fullCard);
+          scheduleOutboxProcessing();
+        }
+      }
+    }
+    return result;
+  });
+
+  return runTx();
 }
 
 export function archiveSignalement(id_carte: number, login_user: string) {
