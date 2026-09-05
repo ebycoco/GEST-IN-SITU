@@ -955,7 +955,7 @@ function TransferModal({ carte, onClose, onSuccess }: { carte: ICarte; onClose: 
               <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '2px 0 0' }}>Assigner la carte à un autre guichet/centre.</p>
             </div>
           </div>
-          <button type="button" style={{ background: 'rgba(255,255,255,0.02)', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 6, borderRadius: 10, display: 'flex' }} onClick={onClose}>
+          <button type="button" disabled={loading} style={{ background: 'rgba(255,255,255,0.02)', border: 'none', color: 'var(--text-muted)', cursor: loading ? 'not-allowed' : 'pointer', padding: 6, borderRadius: 10, display: 'flex', opacity: loading ? 0.5 : 1 }} onClick={loading ? undefined : onClose}>
             <X size={18} />
           </button>
         </div>
