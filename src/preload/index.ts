@@ -109,10 +109,14 @@ const api = {
       ipcRenderer.invoke('cartes:getAbsences', siteId),
     getAbsencesCentre: (centreId: number): Promise<ICarte[]> =>
       ipcRenderer.invoke('cartes:getAbsencesCentre', centreId),
+    getAbsencesCentreCount: (centreId: number): Promise<number> =>
+      ipcRenderer.invoke('cartes:getAbsencesCentreCount', centreId),
     getEscaladesResoluesCentre: (centreId: number): Promise<ICarte[]> =>
       ipcRenderer.invoke('cartes:getEscaladesResoluesCentre', centreId),
-    getAbsencesSite: (siteId?: number): Promise<ICarte[]> => 
+    getAbsencesSite: (siteId?: number): Promise<ICarte[]> =>
       ipcRenderer.invoke('cartes:getAbsencesSite', siteId),
+    getAbsencesSiteCount: (siteId?: number): Promise<number> =>
+      ipcRenderer.invoke('cartes:getAbsencesSiteCount', siteId),
     escaladerAuSite: (id: number): Promise<any> =>
       ipcRenderer.invoke('cartes:escaladerAuSite', id),
     getAgentAbsences: (agent: string, siteId?: number): Promise<ICarte[]> => 

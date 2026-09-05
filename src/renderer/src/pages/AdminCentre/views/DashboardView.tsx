@@ -26,6 +26,10 @@ interface OperatorCadence {
 export default function DashboardView() {
   const { user } = useAuthStore();
   const [stats, setStats] = useState<CentreStats>({ total: 0, en_stock: 0, distribuees: 0, absentes: 0 });
+  // Compte dédié "Absentes" aligné sur le palier d'escalade CENTRE réellement actionnable
+  // dans la file d'attente de traitement (AdminQueuePage.tsx) — distinct de stats.absentes
+  // (qui compte tous les paliers). Voir getAbsencesCentreCount (absence.queries.ts).
+  const [absentQueueCount, setAbsentQueueCount] = useState(0);
   const [cadence, setCadence] = useState<OperatorCadence[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastRefreshed, setLastRefreshed] = useState<Date>(new Date());
@@ -39,10 +43,14 @@ export default function DashboardView() {
       const centreIdToUse = user?.centre_id;
 
       if (centreIdToUse && siteIdToUse) {
-        const statsRes = await window.api.stats.getCentre(centreIdToUse, siteIdToUse);
-        const cadenceRes = await window.api.stats.getCentreOperateurs(centreIdToUse);
+        const [statsRes, cadenceRes, absentQueueRes] = await Promise.all([
+          window.api.stats.getCentre(centreIdToUse, siteIdToUse),
+          window.api.stats.getCentreOperateurs(centreIdToUse),
+          window.api.cartes.getAbsencesCentreCount(centreIdToUse)
+        ]);
         if (statsRes) setStats(statsRes);
         if (cadenceRes) setCadence(cadenceRes);
+        setAbsentQueueCount(absentQueueRes);
         useCacheStore.getState().setCentreDashboardCache({
           stats: statsRes,
           cadence: cadenceRes
@@ -69,6 +77,11 @@ export default function DashboardView() {
     }
     if (!hasCache) {
       fetchDashboardData();
+    } else if (user?.centre_id) {
+      // absentQueueCount n'est pas mis en cache (requête COUNT légère, volontairement toujours
+      // à jour) — sans cet appel, un cache-hit afficherait 0 jusqu'au prochain rafraîchissement
+      // silencieux (30s) ou événement app:data-updated.
+      window.api.cartes.getAbsencesCentreCount(user.centre_id).then(setAbsentQueueCount).catch(() => {});
     }
     const interval = setInterval(() => fetchDashboardData(true), 30000);
     
@@ -152,7 +165,7 @@ export default function DashboardView() {
               <AlertTriangle size={18} />
             </div>
           </div>
-          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>{stats.absentes.toLocaleString()}</div>
+          <div style={{ fontSize: 32, fontWeight: 800, color: 'var(--text-primary)' }}>{absentQueueCount.toLocaleString()}</div>
           <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 8 }}>Signalements en cours</div>
         </div>
 

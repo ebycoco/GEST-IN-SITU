@@ -180,6 +180,10 @@ export default function CartesPage() {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<Stats | null>(null);
+  // Compte dédié "Anomalies / Absent" aligné sur le palier d'escalade réellement actionnable
+  // dans la file d'attente de traitement (AdminQueuePage.tsx) — distinct de stats.absentes
+  // (qui compte tous les paliers). Voir getAbsencesCentreCount/getAbsencesSiteCount.
+  const [actionableAbsentCount, setActionableAbsentCount] = useState(0);
   const [filters, setFilters] = useState<Record<string, string>>({});
   // P1-a (audit agent-9) : état local léger pour la valeur AFFICHÉE dans le champ
   // de recherche, découplé de `filters.q` qui pilote loadData/l'effet [loadData].
@@ -248,11 +252,16 @@ export default function CartesPage() {
         finalFilters.centre_id = user.centre_id.toString();
       }
 
-      const [data, statsData] = await Promise.all([
+      const [data, statsData, absentCount] = await Promise.all([
         window.api.cartes.getPage(off, currentLimit, finalFilters),
         user?.role === 'ADMIN_CENTRE' && user?.centre_id && user?.site_id
           ? window.api.stats.getCentre(user.centre_id, user.site_id)
-          : window.api.stats.get(siteIdToUse || undefined)
+          : window.api.stats.get(siteIdToUse || undefined),
+        // Compte dédié "palier actionnable" (voir déclaration de actionableAbsentCount) —
+        // même branchement par rôle que l'appel stats.get/getCentre ci-dessus.
+        user?.role === 'ADMIN_CENTRE' && user?.centre_id
+          ? window.api.cartes.getAbsencesCentreCount(user.centre_id)
+          : window.api.cartes.getAbsencesSiteCount(siteIdToUse || undefined)
       ]);
 
       if (requestId !== requestIdRef.current) return; // réponse obsolète, ignorée
@@ -260,6 +269,7 @@ export default function CartesPage() {
       setCartes(data.rows);
       setTotal(data.total);
       setStats(statsData);
+      setActionableAbsentCount(absentCount);
       setOffset(off);
       if (listRef.current) listRef.current.scrollTo(0);
     } catch (e) {
@@ -392,7 +402,7 @@ export default function CartesPage() {
         />
         <StatsCard
           label="Anomalies / Absent"
-          value={stats?.absentes || 0}
+          value={actionableAbsentCount}
           icon={AlertTriangle}
           gradient="linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(239,68,68,0.04) 100%)"
           borderCol="rgba(239,68,68,0.18)"

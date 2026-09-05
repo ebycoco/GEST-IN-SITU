@@ -69,8 +69,10 @@ declare global {
         annulerDoublon: (id: number, motifAnnulation: string) => Promise<any>;
         getAbsences: (siteId?: number) => Promise<any[]>;
         getAbsencesCentre: (centreId: number) => Promise<any[]>;
+        getAbsencesCentreCount: (centreId: number) => Promise<number>;
         getEscaladesResoluesCentre: (centreId: number) => Promise<any[]>;
         getAbsencesSite: (siteId?: number) => Promise<any[]>;
+        getAbsencesSiteCount: (siteId?: number) => Promise<number>;
         escaladerAuSite: (id: number) => Promise<any>;
         getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;
         getSignalementsResolus: (agent: string, siteId?: number) => Promise<any[]>;

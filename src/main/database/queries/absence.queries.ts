@@ -448,6 +448,20 @@ export function getAbsencesCentre(centreId: number): any[] {
   `).all(centreId);
 }
 
+// Comptage dédié (pas de LIMIT, pas de JOIN t_users) pour la tuile stat "Anomalies / Absent"
+// alignée sur le palier d'escalade CENTRE réellement actionnable par un ADMIN_CENTRE dans la
+// file d'attente de traitement (AdminQueuePage.tsx) — même WHERE que getAbsencesCentre()
+// ci-dessus, volontairement dupliqué plutôt que dérivé (ex: .length sur getAbsencesCentre())
+// pour ne pas rapatrier les lignes complètes ni la limite à 500 juste pour un total.
+export function getAbsencesCentreCount(centreId: number): number {
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes
+    WHERE statut_physique = 'ABSENT' AND escalade_niveau = 'CENTRE' AND centre_id = ?
+  `).get(centreId) as { count: number };
+  return row.count;
+}
+
 // Visibilité ADMIN_CENTRE des signalements que ce centre a escaladés au site puis qui ont été
 // résolus (peu importe l'issue finale : retrouvée ou perdue, voir escalade_niveau='RESOLU'
 // désormais posé par resoudreAbsence()/declarerPerdue()/reactiverCarte()). L'EXISTS sur t_logs
@@ -496,6 +510,28 @@ export function getAbsencesSite(siteId?: number): any[] {
   }
   query += ' ORDER BY c.date_signalement_absence DESC LIMIT 500';
   return db.prepare(query).all(...params);
+}
+
+// Comptage dédié (pas de LIMIT, pas de JOIN t_users) pour la/les tuile(s) stat "Anomalies /
+// Absent" alignée sur le palier d'escalade SITE réellement actionnable par un
+// ADMINISTRATEUR_SITE/SUPER ADMIN dans la file d'attente de traitement (AdminQueuePage.tsx) —
+// même WHERE/filtre site_id optionnel que getAbsencesSite() ci-dessus, volontairement dupliqué
+// plutôt que dérivé pour ne pas rapatrier les lignes complètes ni la limite à 500 juste pour un
+// total.
+export function getAbsencesSiteCount(siteId?: number): number {
+  const db = getDatabase()!;
+  let query = `
+    SELECT COUNT(*) as count FROM t_cartes c
+    WHERE c.statut_physique = 'ABSENT'
+      AND c.escalade_niveau = 'SITE'
+  `;
+  const params: any[] = [];
+  if (siteId !== undefined && siteId !== null) {
+    query += ' AND c.site_id = ?';
+    params.push(Number(siteId));
+  }
+  const row = db.prepare(query).get(...params) as { count: number };
+  return row.count;
 }
 
 export function escaladerAuSite(id: number, currentUser?: { id_user?: number; login?: string; site_id?: number; centre_id?: number; role?: string }) {

@@ -1615,6 +1615,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:getAbsencesCentre', e); throw e; }
   });
+  ipcMain.handle('cartes:getAbsencesCentreCount', async (_, centreId: number) => {
+    try {
+      // Sécurité (cloisonnement §3) : même pattern exact que cartes:getAbsencesCentre
+      // ci-dessus — centreId dérivé de la session serveur, jamais du paramètre client.
+      // Comptage dédié pour la tuile stat "Anomalies / Absent" alignée sur le palier
+      // d'escalade CENTRE réellement actionnable dans la file d'attente de traitement.
+      const secureUser = getSecureCurrentUser();
+      const effectiveCentreId = (secureUser && secureUser.role !== 'SUPER ADMIN' && secureUser.role !== 'ADMINISTRATEUR_SITE')
+        ? (secureUser.centre_id ?? centreId)
+        : centreId;
+      return queries.getAbsencesCentreCount(effectiveCentreId);
+    }
+    catch (e) { log.error('IPC Error: cartes:getAbsencesCentreCount', e); throw e; }
+  });
   ipcMain.handle('cartes:getEscaladesResoluesCentre', async (_, centreId: number) => {
     try {
       // Sécurité (cloisonnement §3) : même pattern exact que cartes:getAbsencesCentre
@@ -1632,6 +1646,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // Sécurité (cloisonnement §3, P1) : idem cartes:getAbsences.
     try { return queries.getAbsencesSite(resolveScopedSiteId(siteId)); }
     catch (e) { log.error('IPC Error: cartes:getAbsencesSite', e); throw e; }
+  });
+  ipcMain.handle('cartes:getAbsencesSiteCount', async (_, siteId?: number) => {
+    // Sécurité (cloisonnement §3) : idem cartes:getAbsencesSite. Comptage dédié pour la/les
+    // tuile(s) stat "Anomalies / Absent" alignée sur le palier d'escalade SITE réellement
+    // actionnable dans la file d'attente de traitement.
+    try { return queries.getAbsencesSiteCount(resolveScopedSiteId(siteId)); }
+    catch (e) { log.error('IPC Error: cartes:getAbsencesSiteCount', e); throw e; }
   });
   ipcMain.handle('cartes:escaladerAuSite', async (_, id: number) => {
     // Sécurité (P0) : identité et périmètre dérivés exclusivement de la session serveur (non
