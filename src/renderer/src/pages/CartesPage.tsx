@@ -751,17 +751,33 @@ export default function CartesPage() {
                 <DetailRow label="Statut" value={selected.statut} icon={Truck} isStatus />
                 {/* P1-4 (audit agent-9) : badge d'alerte visible quand la carte physique
                     n'est pas en état "OK" (absente, perdue, retrouvée) — invisible
-                    auparavant sur la fiche individuelle. */}
+                    auparavant sur la fiche individuelle.
+                    Clarification ergonomie (confusion utilisateur) : ce badge reflète le
+                    dernier contrôle physique (statut_physique), une dimension indépendante
+                    du statut administratif ci-dessus (statut) — une carte "En Stock" peut
+                    être signalée absente si elle n'a pas été retrouvée en rangement lors
+                    de la dernière vérification. Tooltip natif `title` (cohérent avec les
+                    usages existants du fichier, ex. lignes ~152/422) + légende visible en
+                    permanence pour les agents terrain peu familiers du survol. */}
                 {selected.statut_physique && selected.statut_physique !== 'OK' && (
-                  <div style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-                    padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 800,
-                    textTransform: 'uppercase', letterSpacing: 0.5,
-                    background: 'rgba(239, 68, 68, 0.1)', color: '#f87171',
-                    border: '1px solid rgba(239, 68, 68, 0.2)'
-                  }}>
-                    <AlertTriangle size={12} />
-                    {selected.statut_physique}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                    <div
+                      title="Résultat de la dernière vérification physique (contrôle en rangement) — indépendant du statut administratif ci-dessus."
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+                        padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 800,
+                        textTransform: 'uppercase', letterSpacing: 0.5,
+                        background: 'rgba(239, 68, 68, 0.1)', color: '#f87171',
+                        border: '1px solid rgba(239, 68, 68, 0.2)',
+                        cursor: 'help'
+                      }}
+                    >
+                      <AlertTriangle size={12} />
+                      {selected.statut_physique}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                      Non retrouvée au dernier contrôle physique — distinct du statut administratif ci-dessus.
+                    </div>
                   </div>
                 )}
               </div>
