@@ -3332,10 +3332,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   // passent tous par assertExportAccess()). Vérifié : aucun appel côté src/renderer (canal
   // inutilisé actuellement), corrigé quand même par cohérence/défense en profondeur — non
   // supprimé sans validation explicite (cf. consigne de la tâche).
+  // P1-C (audit export, cloisonnement §3) : assertExportAccess() ne contrôlait que le rôle de
+  // l'appelant, pas l'appartenance des id_carte reçus au site de cet appelant — un
+  // ADMINISTRATEUR_SITE aurait en théorie pu marquer comme exportées des cartes d'un autre site
+  // via des id_carte forgés (canal toujours inutilisé côté UI, corrigé par défense en
+  // profondeur). filtrerIdsCartesParSite() exclut silencieusement les ids hors-site pour tout
+  // rôle non-SUPER-ADMIN ; le SUPER ADMIN n'est volontairement pas restreint, cohérent avec
+  // assertExportAccess() qui ne le cantonne pas non plus sur les autres canaux export.
   ipcMain.handle('export:marquerExporte', (_, ids: number[]) => {
     assertExportAccess();
     const secureUser = getSecureCurrentUser();
-    return queries.marquerCartesExporte(ids, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
+    const scopedIds = secureUser && secureUser.role !== 'SUPER ADMIN'
+      ? queries.filtrerIdsCartesParSite(ids, secureUser.site_id)
+      : ids;
+    return queries.marquerCartesExporte(scopedIds, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
   });
   ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(assertExportAccess(filters)));
 

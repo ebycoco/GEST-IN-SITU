@@ -2,7 +2,7 @@
 
 ### 🚨 Sécurité
 
-- **Canal IPC `export:marquerExporte` sans contrôle d'accès** : contrairement à ses 4 canaux frères (`export:csv/excel/pdf/getRows`), il ne passait par aucun contrôle de rôle ni de cantonnement site. Aligné sur `assertExportAccess()` — canal confirmé inutilisé côté interface à ce jour, corrigé par cohérence et défense en profondeur.
+- **Canal IPC `export:marquerExporte` sans contrôle d'accès ni cantonnement site** : contrairement à ses 4 canaux frères (`export:csv/excel/pdf/getRows`), il ne passait par aucun contrôle de rôle, et n'excluait pas non plus les `id_carte` d'un autre site que celui de l'appelant. Aligné sur `assertExportAccess()` puis filtrage par site ajouté — canal confirmé inutilisé côté interface à ce jour, corrigé par cohérence et défense en profondeur.
 
 ### 🛠️ Corrections & Fiabilité
 

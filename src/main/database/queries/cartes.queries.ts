@@ -1496,6 +1496,31 @@ export function exportCartes(ids: number[]) {
   return marquerCartesExporte(ids);
 }
 
+// P1-C (audit export, cloisonnement §3) : filtre un ensemble d'id_carte reçus du renderer pour
+// ne conserver que ceux appartenant réellement à siteId. Utilisée par le handler IPC
+// export:marquerExporte (canal confirmé inutilisé côté src/renderer à ce jour, corrigée quand
+// même par défense en profondeur) pour empêcher un rôle non-SUPER-ADMIN de marquer comme
+// exportées des cartes d'un autre site via des id_carte forgés côté client. Exclusion
+// silencieuse des ids hors-site (retourne le sous-ensemble valide) plutôt qu'un rejet global :
+// cohérent avec la nature non sensible de l'opération (marquage d'état, pas une mutation
+// de contenu). Découpage par lots de 500 (Low-Memory §2) : la clause IN(...) reste bornée
+// même si le renderer transmettait un jour un très grand nombre d'ids.
+const FILTRER_IDS_PAR_SITE_CHUNK_SIZE = 500;
+export function filtrerIdsCartesParSite(ids: number[], siteId: number): number[] {
+  if (ids.length === 0) return [];
+  const db = getDatabase()!;
+  const validIds: number[] = [];
+  for (let i = 0; i < ids.length; i += FILTRER_IDS_PAR_SITE_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + FILTRER_IDS_PAR_SITE_CHUNK_SIZE);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = db.prepare(
+      `SELECT id_carte FROM t_cartes WHERE id_carte IN (${placeholders}) AND site_id = ?`
+    ).all(...chunk, siteId) as { id_carte: number }[];
+    validIds.push(...rows.map(r => r.id_carte));
+  }
+  return validIds;
+}
+
 
 export function getInvalidDateRecords(siteId?: number, offset = 0, limit = 50, query?: string) {
   const db = getDatabase()!;
