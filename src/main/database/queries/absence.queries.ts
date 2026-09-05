@@ -347,7 +347,7 @@ export function getHistoriquePertes(siteId?: number): any[] {
     query += ' AND c.site_id = ?';
     params.push(Number(siteId));
   }
-  query += ' ORDER BY l.date_heure DESC';
+  query += ' ORDER BY l.date_heure DESC LIMIT 500';
   return db.prepare(query).all(...params);
 }
 
@@ -442,8 +442,9 @@ export function getAbsencesCentre(centreId: number): any[] {
     LEFT JOIN t_users u ON c.agent_signalement_absence = u.login
     WHERE c.statut_physique = 'ABSENT' 
       AND c.escalade_niveau = 'CENTRE' 
-      AND c.centre_id = ? 
+      AND c.centre_id = ?
     ORDER BY c.date_signalement_absence DESC
+    LIMIT 500
   `).all(centreId);
 }
 
@@ -473,6 +474,7 @@ export function getEscaladesResoluesCentre(centreId: number): any[] {
           AND json_extract(l.valeur_apres, '$.id_carte') = c.id_carte
       )
     ORDER BY c.action_at DESC
+    LIMIT 500
   `).all(centreId);
 }
 
@@ -492,7 +494,7 @@ export function getAbsencesSite(siteId?: number): any[] {
     query += ' AND c.site_id = ?';
     params.push(Number(siteId));
   }
-  query += ' ORDER BY c.date_signalement_absence DESC';
+  query += ' ORDER BY c.date_signalement_absence DESC LIMIT 500';
   return db.prepare(query).all(...params);
 }
 

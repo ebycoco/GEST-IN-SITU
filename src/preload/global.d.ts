@@ -71,7 +71,7 @@ declare global {
         getAbsencesCentre: (centreId: number) => Promise<any[]>;
         getEscaladesResoluesCentre: (centreId: number) => Promise<any[]>;
         getAbsencesSite: (siteId?: number) => Promise<any[]>;
-        escaladerAuSite: (id: number, currentUser?: any) => Promise<any>;
+        escaladerAuSite: (id: number) => Promise<any>;
         getAgentAbsences: (agent: string, siteId?: number) => Promise<any[]>;
         getSignalementsResolus: (agent: string, siteId?: number) => Promise<any[]>;
         archiveSignalement: (id: number, agentLogin: string) => Promise<boolean>;
@@ -79,7 +79,7 @@ declare global {
         resoudreAbsence: (id: number, data: any) => Promise<boolean>;
         declarerPerdue: (id: number) => Promise<boolean>;
         getHistoriquePertes: (siteId?: number) => Promise<any[]>;
-        reactiverCarte: (id: number, nouveauRangement: string, currentUser?: any) => Promise<any>;
+        reactiverCarte: (id: number, nouveauRangement: string) => Promise<any>;
         getInvalidDates: (siteId?: number, offset?: number, limit?: number, query?: string) => Promise<{ rows: any[], total: number }>;
         getDatesVidesPage: (siteId?: number, offset?: number, limit?: number, query?: string) => Promise<{ rows: any[], total: number }>;
         updateDate: (id: number, newDate: string) => Promise<boolean>;

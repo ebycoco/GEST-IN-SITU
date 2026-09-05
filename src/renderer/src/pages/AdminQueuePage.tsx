@@ -137,7 +137,7 @@ export default function AdminQueuePage() {
   const handleEscaladeSite = async (id: number) => {
     try {
       setIsResolving(prev => ({ ...prev, [id]: true }));
-      await window.api.cartes.escaladerAuSite(id, user ? { id_user: user.id_user, login: user.login, site_id: user.site_id } : undefined);
+      await window.api.cartes.escaladerAuSite(id);
       toast.success("Carte escaladée à l'administrateur du site avec succès.");
       loadAllData();
     } catch (err) {
@@ -151,7 +151,7 @@ export default function AdminQueuePage() {
   const handleReactivate = async (id: number, rangement: string) => {
     try {
       setIsReactivating(prev => ({ ...prev, [id]: true }));
-      await window.api.cartes.reactiverCarte(id, rangement, user ? { role: user.role, site_id: user.site_id } : undefined);
+      await window.api.cartes.reactiverCarte(id, rangement);
       toast.success("Carte réactivée et réintégrée au stock.");
       setShowReactivateModal(false);
       loadAllData();

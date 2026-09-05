@@ -113,8 +113,8 @@ const api = {
       ipcRenderer.invoke('cartes:getEscaladesResoluesCentre', centreId),
     getAbsencesSite: (siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAbsencesSite', siteId),
-    escaladerAuSite: (id: number, currentUser?: Partial<IUser>): Promise<any> => 
-      ipcRenderer.invoke('cartes:escaladerAuSite', id, currentUser),
+    escaladerAuSite: (id: number): Promise<any> =>
+      ipcRenderer.invoke('cartes:escaladerAuSite', id),
     getAgentAbsences: (agent: string, siteId?: number): Promise<ICarte[]> => 
       ipcRenderer.invoke('cartes:getAgentAbsences', agent, siteId),
     getSignalementsResolus: (agent: string, siteId?: number): Promise<ICarte[]> => 
@@ -132,8 +132,8 @@ const api = {
       ipcRenderer.invoke('cartes:declarerPerdue', id),
     getHistoriquePertes: (siteId?: number): Promise<any[]> => 
       ipcRenderer.invoke('cartes:getHistoriquePertes', siteId),
-    reactiverCarte: (id: number, nouveauRangement: string, currentUser?: Partial<IUser>): Promise<any> => 
-      ipcRenderer.invoke('cartes:reactiverCarte', id, nouveauRangement, currentUser),
+    reactiverCarte: (id: number, nouveauRangement: string): Promise<any> =>
+      ipcRenderer.invoke('cartes:reactiverCarte', id, nouveauRangement),
     getInvalidDates: (siteId?: number, offset?: number, limit?: number, query?: string): Promise<{ rows: any[], total: number }> => 
       ipcRenderer.invoke('cartes:getInvalidDates', siteId, offset, limit, query),
     getDatesVidesPage: (siteId?: number, offset?: number, limit?: number, query?: string): Promise<{ rows: any[], total: number }> => 
