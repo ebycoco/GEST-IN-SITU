@@ -3,20 +3,14 @@ import { FixedSizeList as List } from 'react-window';
 import { 
   CreditCard, Filter, Plus, Truck, 
   AlertTriangle, RefreshCw, Download, 
-  Search, MoreHorizontal, CheckCircle2, 
+  Search, CheckCircle2,
   XCircle, ChevronRight, ChevronLeft, 
   Hash, Phone, MapPin, Package, Info, X, User
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
-
-interface Carte {
-  id_carte: number; noms: string; prenoms: string; num_secu: string;
-  contact: string; rangement: string; statut: string; statut_physique: string;
-  date_delivrance: string; agent_saisie: string; centre_retrait: string;
-  nom_retirant?: string; num_retirant?: string; date_retrait?: string;
-}
+import { ICarte } from '../../../shared/types';
 
 interface Stats {
   total: number;
@@ -26,7 +20,7 @@ interface Stats {
 }
 
 // Composant Row mémoïsé pour éviter les re-rendus inutiles dans la liste virtuelle
-const MemoRow = React.memo(({ index, style, data }: { index: number; style: React.CSSProperties; data: { cartes: Carte[]; selected: Carte | null; setSelected: (c: Carte) => void; setShowDelivery: (s: boolean) => void; userRole?: string } }) => {
+const MemoRow = React.memo(({ index, style, data }: { index: number; style: React.CSSProperties; data: { cartes: ICarte[]; selected: ICarte | null; setSelected: (c: ICarte) => void; setShowDelivery: (s: boolean) => void; userRole?: string } }) => {
   const { cartes, selected, setSelected, setShowDelivery, userRole } = data;
   const c = cartes[index];
   if (!c) return <div style={style} />;
@@ -155,28 +149,11 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
               transition: 'all 0.2s'
             }}
             onClick={(e) => { e.stopPropagation(); setSelected(c); setShowDelivery(true); }}
-            title="Distribuer"
+            title="Transférer vers un autre centre"
           >
             <Truck size={15} />
           </button>
         )}
-        <button 
-          className="btn-icon" 
-          style={{ 
-            background: isSelected ? 'rgba(139, 92, 246, 0.15)' : 'rgba(255, 255, 255, 0.02)', 
-            color: isSelected ? '#a78bfa' : 'var(--text-muted)', 
-            borderRadius: 10, 
-            width: 32, 
-            height: 32,
-            border: isSelected ? '1px solid rgba(139, 92, 246, 0.25)' : '1px solid rgba(255, 255, 255, 0.04)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            cursor: 'pointer'
-          }}
-        >
-          <ChevronRight size={15} />
-        </button>
       </div>
     </div>
   );
@@ -198,22 +175,33 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
 
 export default function CartesPage() {
   const navigate = useNavigate();
-  const [cartes, setCartes] = useState<Carte[]>([]);
+  const [cartes, setCartes] = useState<ICarte[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<Stats | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [selected, setSelected] = useState<Carte | null>(null);
+  // P1-a (audit agent-9) : état local léger pour la valeur AFFICHÉE dans le champ
+  // de recherche, découplé de `filters.q` qui pilote loadData/l'effet [loadData].
+  // Ça garde le champ réactif à chaque frappe sans déclencher d'appel IPC avant
+  // l'expiration du debounce (voir handleFilterChange, cas 'q').
+  const [searchInput, setSearchInput] = useState('');
+  const [selected, setSelected] = useState<ICarte | null>(null);
   const [showDelivery, setShowDelivery] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [centres, setCentres] = useState<any[]>([]);
   const [pageSize, setPageSize] = useState(25);
-  const [exporting, setExporting] = useState(false);
 
   const user = useAuthStore(state => state.user);
   const activeSiteId = useAuthStore(state => state.activeSiteId);
   const listRef = useRef<List>(null);
+  // P1-1 (audit agent-9) : compteur léger "dernière requête gagne" — évite qu'une
+  // réponse getPage/stats tardive (requête N-1) n'écrase l'affichage d'une requête
+  // plus récente (N) en cas de frappe rapide ou de changements de filtre successifs.
+  const requestIdRef = useRef(0);
+  // P1-1 : timer de debounce sur le champ recherche texte libre (léger, pas de
+  // rétention de données volumineuses en closure — juste l'id du timeout).
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Libère la sidebar et l'interface globale (audit agent-9 : cette page ne
   // levait jamais l'overlay "Chargement sécurisé en cours...", gel permanent).
@@ -225,7 +213,30 @@ export default function CartesPage() {
     cartes, selected, setSelected, setShowDelivery, userRole: user?.role
   }), [cartes, selected, user?.role]);
 
+  // P2 (audit agent-9) : condition d'affichage du bouton de transfert du panneau
+  // de détail, hissée au niveau du composant pour permettre de ne rendre le
+  // conteneur footer que lorsqu'il contient effectivement un bouton (évite une
+  // bande grise vide quand la carte est déjà livrée/distribuée/retirée, ou pour
+  // les rôles OPERATEUR_VERIFICATION/OPERATEUR_SAISIE).
+  const canTransferSelected = !!selected
+    && !['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut)
+    && user?.role !== 'OPERATEUR_VERIFICATION'
+    && user?.role !== 'OPERATEUR_SAISIE';
+
   const loadData = useCallback(async (off = 0, flt = filters, currentLimit = pageSize) => {
+    // P1-b (audit agent-9) : loadData est le point de passage UNIQUE de toute
+    // nouvelle requête (recherche différée, changement de filtre, pagination,
+    // pageSize, réinitialisation). Annuler ici le debounce de recherche évite
+    // qu'un timer resté actif en arrière-plan (déclenché par une frappe) ne
+    // déclenche plus tard une requête obsolète qui écraserait silencieusement
+    // le résultat d'une action synchrone plus récente (mauvais filtre/page).
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+    // P1-1 : identifiant de cette requête précise ; toute application de résultat
+    // n'a lieu que si aucune requête plus récente n'a été émise entretemps.
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
@@ -243,17 +254,20 @@ export default function CartesPage() {
           ? window.api.stats.getCentre(user.centre_id, user.site_id)
           : window.api.stats.get(siteIdToUse || undefined)
       ]);
-      
+
+      if (requestId !== requestIdRef.current) return; // réponse obsolète, ignorée
+
       setCartes(data.rows);
       setTotal(data.total);
       setStats(statsData);
       setOffset(off);
       if (listRef.current) listRef.current.scrollTo(0);
-    } catch (e) { 
-      console.error(e); 
+    } catch (e) {
+      if (requestId !== requestIdRef.current) return; // réponse obsolète, ignorée
+      console.error(e);
       toast.error("Erreur de chargement");
-    } finally { 
-      setLoading(false); 
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [filters, user, activeSiteId, pageSize]);
 
@@ -275,33 +289,47 @@ export default function CartesPage() {
     }
   }, [user, activeSiteId]);
 
+  // P1-1 : nettoyage du timer de debounce recherche au démontage, pour éviter un
+  // setState (via loadData) déclenché après que le composant a quitté l'écran.
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
+
   const handleFilterChange = (key: string, value: string) => {
+    if (key === 'q') {
+      // P1-a (audit agent-9) : la valeur affichée est mise à jour immédiatement
+      // (réactivité visuelle de la frappe), mais `filters` — dont `loadData` est
+      // dépendante via useCallback, elle-même dépendance de l'effet qui l'appelle
+      // automatiquement — n'est répercuté qu'à l'intérieur du callback du
+      // setTimeout, une fois le délai de 350ms écoulé. C'est ce seul changement
+      // différé de `filters` qui déclenche l'effet [loadData] et donc l'unique
+      // appel IPC — aucun appel explicite à loadData n'est fait ici pour éviter
+      // un double déclenchement.
+      setSearchInput(value);
+      setSelected(null);
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = setTimeout(() => {
+        setFilters(prev => {
+          if (!value) {
+            // Retire la clé 'q' sans opérateur `delete` (TS2790 : `prev` est typé
+            // Record<string, string>, propriété non optionnelle) — déstructuration
+            // avec rest, équivalente fonctionnellement.
+            const { q: _q, ...rest } = prev;
+            return rest;
+          }
+          return { ...prev, q: value };
+        });
+      }, 350);
+      return;
+    }
+
     const newF = { ...filters, [key]: value };
     if (!value) delete newF[key];
     setFilters(newF);
     setSelected(null);
     loadData(0, newF);
-  };
-
-  const handleExport = async () => {
-    setExporting(true);
-    try {
-      // getExportRows() applique désormais un filtre `rangement` exact (correctif Centrale
-      // d'Export / ExportPage.tsx, où rangement provient toujours d'une liste de suggestions
-      // exacte). Sur cette page, `rangement` est un champ texte libre utilisé ailleurs en
-      // LIKE '%valeur%' (match partiel) : le réutiliser tel quel casserait silencieusement cet
-      // export dès qu'un filtre rangement partiel est actif à l'écran. On l'exclut du payload
-      // pour préserver le comportement historique (pas de filtrage par rangement à l'export).
-      const { rangement: _rangement, ...exportFilters } = filters;
-      const result = await window.api.export.csv(exportFilters);
-      if (result.success) {
-        toast.success(`${result.count.toLocaleString('fr')} cartes exportées !`);
-      }
-    } catch (e) {
-      toast.error('Erreur lors de l\'export.');
-    } finally {
-      setExporting(false);
-    }
   };
 
   return (
@@ -336,14 +364,15 @@ export default function CartesPage() {
           iconColor="#86efac"
           loading={loading}
         />
-        <StatsCard 
-          label="Anomalies / Absent" 
-          value={stats?.absentes || 0} 
-          icon={AlertTriangle} 
-          gradient="linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(239,68,68,0.04) 100%)" 
+        <StatsCard
+          label="Anomalies / Absent"
+          value={stats?.absentes || 0}
+          icon={AlertTriangle}
+          gradient="linear-gradient(135deg, rgba(239,68,68,0.15) 0%, rgba(239,68,68,0.04) 100%)"
           borderCol="rgba(239,68,68,0.18)"
           iconColor="#fca5a5"
           loading={loading}
+          onClick={() => handleFilterChange('statut_physique', 'ABSENT')}
         />
       </div>
 
@@ -425,7 +454,7 @@ export default function CartesPage() {
               height: 40, fontSize: 13, transition: 'border-color 0.2s ease-in-out'
             }}
             placeholder="Rechercher par nom, n° sécu, contact..."
-            value={filters.q || ''}
+            value={searchInput}
             onChange={(e) => handleFilterChange('q', e.target.value)}
           />
         </div>
@@ -542,7 +571,7 @@ export default function CartesPage() {
                   <button 
                     className="btn btn-outline" 
                     style={{ borderRadius: 12, padding: '0 20px', height: 40, display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }} 
-                    onClick={() => { setFilters({}); loadData(0, {}); }}
+                    onClick={() => { setFilters({}); setSearchInput(''); loadData(0, {}); }}
                   >
                     <RefreshCw size={14} />
                     <span>Réinitialiser</span>
@@ -551,7 +580,7 @@ export default function CartesPage() {
               ) : (
                 <List 
                   ref={listRef}
-                  key={`${filters.statut || ''}-${filters.q || ''}-${cartes.length}`}
+                  key={`${filters.statut || ''}-${cartes.length}`}
                   height={550} 
                   itemCount={cartes.length} 
                   itemSize={68} 
@@ -590,6 +619,7 @@ export default function CartesPage() {
                       onChange={(e) => {
                         const newSize = Number(e.target.value);
                         setPageSize(newSize);
+                        setSelected(null);
                         loadData(0, filters, newSize);
                       }}
                       style={{
@@ -615,7 +645,7 @@ export default function CartesPage() {
                   <button 
                     className="btn btn-secondary btn-sm" 
                     disabled={offset === 0}
-                    onClick={() => loadData(offset - pageSize)}
+                    onClick={() => { setSelected(null); loadData(offset - pageSize); }}
                     style={{ 
                       width: 34, height: 34, padding: 0, borderRadius: 10, justifyContent: 'center',
                       display: 'flex', alignItems: 'center', opacity: offset === 0 ? 0.4 : 1, transition: 'all 0.2s'
@@ -626,7 +656,7 @@ export default function CartesPage() {
                   <button 
                     className="btn btn-secondary btn-sm" 
                     disabled={offset + pageSize >= total}
-                    onClick={() => loadData(offset + pageSize)}
+                    onClick={() => { setSelected(null); loadData(offset + pageSize); }}
                     style={{ 
                       width: 34, height: 34, padding: 0, borderRadius: 10, justifyContent: 'center',
                       display: 'flex', alignItems: 'center', opacity: offset + pageSize >= total ? 0.4 : 1, transition: 'all 0.2s'
@@ -680,7 +710,31 @@ export default function CartesPage() {
                 <DetailRow label="N° Sécurité" value={selected.num_secu} icon={Hash} />
                 <DetailRow label="Contact" value={selected.contact} icon={Phone} />
                 <DetailRow label="Rangement" value={selected.rangement} icon={MapPin} />
+                {/* P1-5 (audit agent-9) : centre actuel de la carte, résolu via le state
+                    `centres` déjà chargé pour ce site ; repli sur le champ texte
+                    `centre_retrait` si le centre n'a pas pu être résolu (ex: rôle sans
+                    accès à la liste des centres, ou centre hors du site courant). */}
+                <DetailRow
+                  label="Centre actuel"
+                  value={centres.find((c: any) => c.id === selected.centre_id)?.nom || selected.centre_retrait || undefined}
+                  icon={MapPin}
+                />
                 <DetailRow label="Statut" value={selected.statut} icon={Truck} isStatus />
+                {/* P1-4 (audit agent-9) : badge d'alerte visible quand la carte physique
+                    n'est pas en état "OK" (absente, perdue, retrouvée) — invisible
+                    auparavant sur la fiche individuelle. */}
+                {selected.statut_physique && selected.statut_physique !== 'OK' && (
+                  <div style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+                    padding: '4px 10px', borderRadius: 12, fontSize: 10, fontWeight: 800,
+                    textTransform: 'uppercase', letterSpacing: 0.5,
+                    background: 'rgba(239, 68, 68, 0.1)', color: '#f87171',
+                    border: '1px solid rgba(239, 68, 68, 0.2)'
+                  }}>
+                    <AlertTriangle size={12} />
+                    {selected.statut_physique}
+                  </div>
+                )}
               </div>
 
               {['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && (
@@ -709,34 +763,28 @@ export default function CartesPage() {
               )}
             </div>
 
-            <div style={{ padding: 20, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 10 }}>
-               {!['DELIVRE', 'DISTRIBUEE', 'RETIRE'].includes(selected.statut) && user?.role !== 'OPERATEUR_SAISIE' && (
-                <button 
-                  className="btn btn-primary" 
-                  style={{ 
+            {/* P2 (audit agent-9) : le conteneur footer n'est rendu que si un bouton
+                doit effectivement y figurer (canTransferSelected), pour éviter une
+                bande grise vide quand la carte est déjà DELIVRE/DISTRIBUEE/RETIRE
+                ou que le rôle actif n'a pas le droit de transférer. */}
+            {canTransferSelected && (
+              <div style={{ padding: 20, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', gap: 10 }}>
+                <button
+                  className="btn btn-primary"
+                  style={{
                     flex: 1, borderRadius: 12, height: 42,
                     background: 'linear-gradient(135deg, #8b5cf6, #3b82f6)',
                     border: 'none', color: 'white', fontWeight: 700, fontSize: 13,
                     boxShadow: '0 4px 15px rgba(139,92,246,0.2)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                     cursor: 'pointer'
-                  }} 
+                  }}
                   onClick={() => setShowDelivery(true)}
                 >
                   <Truck size={15} /> Transférer la carte
                 </button>
-              )}
-              <button 
-                className="btn btn-outline" 
-                style={{ 
-                  borderRadius: 12, width: 42, height: 42, padding: 0, justifyContent: 'center',
-                  background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-                  display: 'flex', alignItems: 'center', color: 'var(--text-muted)'
-                }}
-              >
-                <MoreHorizontal size={18} />
-              </button>
-            </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -757,20 +805,22 @@ export default function CartesPage() {
   );
 }
 
-function StatsCard({ label, value, icon: Icon, gradient, borderCol, iconColor, loading }: any) {
+function StatsCard({ label, value, icon: Icon, gradient, borderCol, iconColor, loading, onClick }: any) {
   return (
-    <div 
-      className="glass-card" 
-      style={{ 
-        padding: '16px 20px', 
-        display: 'flex', 
-        alignItems: 'center', 
+    <div
+      className="glass-card"
+      style={{
+        padding: '16px 20px',
+        display: 'flex',
+        alignItems: 'center',
         gap: 14,
         background: gradient,
         border: `1px solid ${borderCol}`,
         borderRadius: 16,
-        backdropFilter: 'blur(10px)'
+        backdropFilter: 'blur(10px)',
+        cursor: onClick ? 'pointer' : 'default'
       }}
+      onClick={onClick}
     >
       <div style={{ 
         width: 40, height: 40, borderRadius: 12, 
@@ -825,12 +875,18 @@ function DetailRow({ label, value, icon: Icon, isStatus }: any) {
   );
 }
 
-function TransferModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: () => void; onSuccess: () => void }) {
+function TransferModal({ carte, onClose, onSuccess }: { carte: ICarte; onClose: () => void; onSuccess: () => void }) {
   const [centreRetrait, setCentreRetrait] = useState('');
   const [rangementUrgence, setRangementUrgence] = useState('');
   const [loading, setLoading] = useState(false);
   const [centres, setCentres] = useState<any[]>([]);
   const user = useAuthStore(state => state.user);
+  // P1-2 (audit agent-9) : évite un setState après démontage du modal si la
+  // réponse IPC de transferer() arrive après que l'utilisateur a fermé la fenêtre.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    return () => { isMountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (user?.site_id) {
@@ -843,7 +899,7 @@ function TransferModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!centreRetrait) { toast.error('Veuillez sélectionner un centre de destination'); return; }
-    
+
     if (!navigator.onLine) {
       toast.error("Cette action requiert une connexion internet active afin de synchroniser immédiatement le transfert avec le cloud.", { duration: 5000 });
       return;
@@ -864,19 +920,22 @@ function TransferModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
         rangement: rangementUrgence,
         agent_transfert: user?.login || 'AGENT'
       });
-      
+
+      if (!isMountedRef.current) return; // modal démonté entretemps, résultat ignoré
+
       const centreName = selectedCentre?.nom || centreRetrait;
       toast.success(`Transfert réussi ! Veuillez informer le centre de destination ${centreName} d'effectuer une récupération des cartes depuis le cloud pour voir la carte et pouvoir la délivrer.`, { duration: 8000 });
       onSuccess();
     } catch (e) {
+      if (!isMountedRef.current) return; // modal démonté entretemps, résultat ignoré
       toast.error("Erreur lors du transfert.");
     } finally {
-      setLoading(false);
+      if (isMountedRef.current) setLoading(false);
     }
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose} style={{ zIndex: 2000 }}>
+    <div className="modal-overlay" onClick={loading ? undefined : onClose} style={{ zIndex: 2000 }}>
       <div className="premium-glass animate-slide-up" style={{ 
         width: '100%', maxWidth: 500, 
         borderRadius: 24, overflow: 'hidden', 
@@ -958,7 +1017,7 @@ function TransferModal({ carte, onClose, onSuccess }: { carte: Carte; onClose: (
           </div>
 
           <div style={{ marginTop: 32, display: 'flex', gap: 12 }}>
-            <button type="button" className="btn btn-outline" style={{ flex: 1, borderRadius: 12, height: 44, fontSize: 13 }} onClick={onClose}>Annuler</button>
+            <button type="button" className="btn btn-outline" disabled={loading} style={{ flex: 1, borderRadius: 12, height: 44, fontSize: 13, opacity: loading ? 0.5 : 1, cursor: loading ? 'not-allowed' : 'pointer' }} onClick={loading ? undefined : onClose}>Annuler</button>
             <button 
               type="submit" 
               className="btn btn-primary" 

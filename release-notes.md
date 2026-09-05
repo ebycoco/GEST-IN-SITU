@@ -1,5 +1,10 @@
 # GEST-IN-SITU — Prochaine version (non publiée)
 
+### 🚀 Nouveautés & Ergonomie
+
+- **Page Cartes CMU : statut physique visible sur la fiche individuelle** — un badge d'alerte apparaît désormais dans le panneau de détail quand une carte est signalée absente/perdue/retrouvée, information auparavant invisible malgré son agrégation en tête de page ("Anomalies / Absent"). Cette carte statistique est désormais cliquable pour filtrer directement la liste sur ces cartes.
+- **Page Cartes CMU : centre actuel de la carte affiché dans le panneau de détail** — utile pour décider un transfert en vue "tous les centres" (SUPER ADMIN / ADMINISTRATEUR_SITE).
+
 ### 🚨 Sécurité
 
 - **Canal IPC `export:marquerExporte` sans contrôle d'accès ni cantonnement site** : contrairement à ses 4 canaux frères (`export:csv/excel/pdf/getRows`), il ne passait par aucun contrôle de rôle, et n'excluait pas non plus les `id_carte` d'un autre site que celui de l'appelant. Aligné sur `assertExportAccess()` puis filtrage par site ajouté — canal confirmé inutilisé côté interface à ce jour, corrigé par cohérence et défense en profondeur.
@@ -15,6 +20,11 @@
 - **Export ciblé par rangement sur la page Cartes préservé** : le nouveau filtre exact de la Centrale d'Exportation aurait pu vider silencieusement cet export historique, qui utilise un filtre texte libre partiel — comportement d'origine conservé sur cette page.
 - **Recherche de rangements pour un Super Administrateur sans site actif sélectionné** : échouait silencieusement (aucun message, liste vide en permanence). Corrigé.
 - Précision du texte d'information sur la garantie anti-doublon de l'export : s'applique aux formats CSV/Excel, pas au PDF (document d'émargement imprimable).
+- **Page Cartes CMU : recherche par nom provoquant un rechargement/clignotement de la liste à chaque frappe** — la recherche est désormais différée (~350ms après la dernière frappe), avec annulation propre du délai si une autre action (changement de filtre, pagination) survient entretemps, pour éviter qu'un résultat de recherche obsolète n'écrase silencieusement l'affichage courant.
+- **Page Cartes CMU : modal de transfert de carte fermable pendant la soumission en cours** — un clic sur "Annuler" ou en dehors du modal pendant l'attente réseau n'empêchait pas le transfert de s'appliquer réellement en base malgré l'apparence d'une annulation. L'overlay et le bouton "Annuler" sont désormais bloqués tant que la requête est en cours.
+- **Page Cartes CMU : libellé "Distribuer" trompeur** sur le bouton de réassignation d'une carte vers un autre centre de stock (pouvait laisser croire à tort à une délivrance au bénéficiaire final) — renommé en "Transférer vers un autre centre".
+- **Page Cartes CMU : panneau de détail affichant des données obsolètes après un changement de page** — désormais réinitialisé automatiquement lors de la pagination ou d'un changement de taille de page.
+- **Page Cartes CMU : nettoyage de fiabilité** — suppression d'une fonction d'export interne devenue morte (jamais reliée à un bouton, l'export réel passe par la Centrale d'Exportation) et de deux boutons décoratifs sans action ; le type de carte utilisé par la page est désormais aligné sur le type partagé de l'application, pour éviter toute divergence silencieuse avec les données réellement renvoyées par le serveur.
 
 ### ⚡ Performances
 
