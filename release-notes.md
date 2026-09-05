@@ -26,6 +26,7 @@
 - **Page Cartes CMU : modal de transfert de carte fermable pendant la soumission en cours** — un clic sur "Annuler" ou en dehors du modal pendant l'attente réseau n'empêchait pas le transfert de s'appliquer réellement en base malgré l'apparence d'une annulation. L'overlay, le bouton "Annuler" et le bouton de fermeture "X" sont désormais bloqués tant que la requête est en cours.
 - **Page Cartes CMU : libellé "Distribuer" trompeur** sur le bouton de réassignation d'une carte vers un autre centre de stock (pouvait laisser croire à tort à une délivrance au bénéficiaire final) — renommé en "Transférer vers un autre centre".
 - **Page Cartes CMU : panneau de détail affichant des données obsolètes après un changement de page** — désormais réinitialisé automatiquement lors de la pagination ou d'un changement de taille de page.
+- **Page Cartes CMU : filtre de statut incomplet** — le menu ne permettait pas d'isoler les brouillons de saisie non finalisés ni les cartes déclarées en doublon, qui apparaissaient mélangés aux cartes normales sans distinction possible. Deux options ajoutées ("Brouillons" / "Doublons déclarés").
 - **Page Cartes CMU : nettoyage de fiabilité** — suppression d'une fonction d'export interne devenue morte (jamais reliée à un bouton, l'export réel passe par la Centrale d'Exportation) et de deux boutons décoratifs sans action ; le type de carte utilisé par la page est désormais aligné sur le type partagé de l'application, pour éviter toute divergence silencieuse avec les données réellement renvoyées par le serveur.
 
 ### ⚡ Performances
