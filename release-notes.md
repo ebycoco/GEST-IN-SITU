@@ -5,6 +5,7 @@
 - **Page Cartes CMU : statut physique visible sur la fiche individuelle** — un badge d'alerte apparaît désormais dans le panneau de détail quand une carte est signalée absente/perdue/retrouvée, information auparavant invisible malgré son agrégation en tête de page ("Anomalies / Absent"). Cette carte statistique est désormais cliquable pour filtrer directement la liste sur ces cartes.
 - **Page Cartes CMU : centre actuel de la carte affiché dans le panneau de détail** — utile pour décider un transfert en vue "tous les centres" (SUPER ADMIN / ADMINISTRATEUR_SITE).
 - **Nettoyage de fiabilité (`handlers.ts`)** : suppression de 6 diffusions IPC mortes (`cartes:updated`, transfert/déclaration/annulation de doublon, correction/annulation d'apurement) qu'aucun listener n'écoutait côté interface — le rafraîchissement réel repose sur la convention déjà en place (`app:data-updated`).
+- **Statistiques de cartes (Total/En Stock/Distribuées/Anomalies) gonflées par les cartes supprimées en attente de synchro et les brouillons de saisie non finalisés** : ces cartes n'apparaissent jamais dans la liste réelle mais étaient tout de même comptées dans les chiffres affichés sur 5 écrans (Cartes CMU, Vue Qualité, Dashboard, Recherche Vérification, Dashboard Admin Centre) — pouvait notamment masquer à tort l'alerte "base de données locale vide" sur un centre sans aucune carte réelle. Corrigé à la source.
 
 ### 🚨 Sécurité
 
