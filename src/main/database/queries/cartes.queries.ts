@@ -1392,7 +1392,13 @@ export function getExportRows(filters?: Record<string, string>) {
     where += " AND is_dirty != -1 AND (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')";
   } else if (filters?.statut === 'SANS_SECU') {
     where += " AND is_dirty != -1 AND (num_secu IS NULL OR num_secu = '' OR num_secu LIKE '-%')";
-  } else if (filters?.statut) {
+  } else if (filters?.statut && filters.statut !== 'ALL') {
+    // Bug signalé (2026-09-05) : ExportPage.tsx envoie toujours filters.statut, y compris
+    // la valeur par défaut 'ALL' (option "Toute la base (Sans filtre)"). 'ALL' ne correspond
+    // à aucune valeur réelle de la colonne `statut` (contrainte CHECK, schema.ts) : sans cette
+    // exclusion, la branche générique ajoutait "AND statut = 'ALL'", ne matchant jamais aucune
+    // ligne (0 résultat -> "Aucune donnée ne correspond aux critères sélectionnés."). Traité
+    // ici comme "pas de filtre du tout", cohérent avec le libellé affiché à l'utilisateur.
     where += ' AND statut = @statut';
     params.statut = filters.statut;
   }

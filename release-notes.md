@@ -6,6 +6,7 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Export "Toute la base (Sans filtre)" retournant toujours "Aucune donnée ne correspond aux critères sélectionnés"**, y compris quand des cartes existent bien en base — l'option par défaut de la Centrale d'Exportation ajoutait à tort un filtre sur une valeur de statut inexistante. Reproduit puis corrigé.
 - **Filtres d'anomalie de la Centrale d'Exportation inopérants** : "Anomalie : Sans Rangement physique" et "Sans numéro de Sécurité Sociale" ciblaient des valeurs de statut qui n'existent pas dans le schéma de la base — l'export retournait donc toujours "aucune donnée" pour ces deux filtres, masquant silencieusement les vraies anomalies terrain. Appliquent désormais les mêmes conditions que les vues d'anomalies équivalentes.
 - **Filtre "Rangement ciblé" de l'export ignoré** : accepté par l'interface mais jamais appliqué à la requête — un export "ciblé sur une boîte" exportait en réalité toute la base filtrée par statut seul. Corrigé.
 - **Export en mode incrémental ("nouveautés uniquement") faisant systématiquement échouer l'export à l'écran** : le marquage interne des cartes déjà exportées plantait (identifiant de carte manquant dans la requête), alors que le fichier CSV/Excel/PDF avait déjà été généré avec succès sur le disque juste avant. L'utilisateur croyait son export raté et pouvait le relancer inutilement.
