@@ -1495,7 +1495,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'CARTE_DOUBLON_DECLAREE',
         JSON.stringify({ id_carte: id, motif: motifTrimmed })
       );
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:declarerDoublon', e); throw e; }
@@ -1538,7 +1537,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'CARTE_DOUBLON_ANNULEE',
         JSON.stringify({ id_carte: id, motif_annulation: motifAnnulationTrimmed })
       );
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:annulerDoublon', e); throw e; }
@@ -2042,7 +2040,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // signalerAbsence()/absence.queries.ts) — ajouter aussi 'CENTRE_CARTE_CORRIGE' à
       // CRUD_SYNC_WHITELIST dupliquerait cette même ligne t_logs (une fois ici via logAudit(),
       // une fois déjà faite dans la transaction), ce qui n'est pas souhaitable.
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       return res;
     }
     catch (e) { log.error('IPC Error: cartes:corrigerCentreCarte', e); throw e; }
@@ -2130,7 +2127,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'CARTE_APUREMENT_CORRIGEE',
         JSON.stringify({ id_carte: id, motif: motifTrimmed, before, after: fields })
       );
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       return result;
     }
     catch (e) { log.error('IPC Error: cartes:corrigerApurement', e); throw e; }
@@ -2172,7 +2168,6 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         'CARTE_APUREMENT_ANNULEE',
         JSON.stringify({ id_carte: id, motif_annulation: motifTrimmed, before })
       );
-      BrowserWindow.getAllWindows().forEach(w => w.webContents.send('cartes:updated'));
       return result;
     }
     catch (e) { log.error('IPC Error: cartes:annulerApurement', e); throw e; }
