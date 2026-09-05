@@ -473,6 +473,8 @@ export default function CartesPage() {
           <option value="EN STOCK">📦 En Stock</option>
           <option value="DELIVRE">✅ Distribuées</option>
           <option value="ANNULE">⚠️ Annulées</option>
+          <option value="BROUILLON">📝 Brouillons</option>
+          <option value="DOUBLON">⚠️ Doublons déclarés</option>
         </select>
 
         <button 
