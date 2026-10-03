@@ -614,9 +614,20 @@ export function hardDeleteUser(id: number, creator?: { role: string; site_id?: n
         scheduleOutboxProcessing();
       }
     } else {
-      // Si l'utilisateur n'a jamais été synchronisé, suppression physique immédiate
-      db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(id);
-      db.prepare('DELETE FROM t_users WHERE id_user = ?').run(id);
+      // Si l'utilisateur n'a jamais été synchronisé, suppression physique immédiate.
+      // t_logs(id_user) référence t_users(id_user) sans ON DELETE (FK canonique, V72) : les logs
+      // de l'agent sont détachés (id_user = NULL, login conservé dans login_user) avant la
+      // suppression, le tout dans une seule transaction (aucun état partiel). is_dirty de t_logs
+      // non modifié : sa propagation passe uniquement par t_outbox, ce détachement reste local.
+      // UPDATE conditionné à l'existence d'une ligne : sur une FK t_logs encore cassée, un UPDATE
+      // de t_logs lèverait « no such table » (même garde que purgeLocalUserAfterCloudDelete).
+      db.transaction(() => {
+        if (db.prepare('SELECT 1 FROM t_logs WHERE id_user = ? LIMIT 1').get(id)) {
+          db.prepare('UPDATE t_logs SET id_user = NULL WHERE id_user = ?').run(id);
+        }
+        db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(id);
+        db.prepare('DELETE FROM t_users WHERE id_user = ?').run(id);
+      })();
     }
   }
 

@@ -232,6 +232,50 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
     expect(db.prepare("SELECT COUNT(*) AS c FROM t_logs WHERE sync_id IN ('d-1', 'd-2')").get()).toEqual({ c: 2 });
   });
 
+  it('(e) base déjà estampillée 72 avec FK t_logs cassée (V72 en échec lors d\'un rejeu V64 par V66) → réparée au démarrage suivant', () => {
+    const { db, userId } = makeHealthy('e');
+    breakLikeOldV64(db);
+    db.pragma('user_version = 72');
+    const logsAvant = allLogs(db);
+
+    expect(() => schema.runMigrations(db)).not.toThrow();
+
+    expect(userVersion(db)).toBe(72);
+    expect(fkTargets(db, 't_logs').map(f => f.table)).toEqual(['t_users']);
+    expect(allLogs(db)).toEqual(logsAvant);
+    expect(() => db.prepare(`INSERT INTO t_logs (id_user, login_user, action, sync_id) VALUES (?, 'agent_v72', 'TEST', 'e-insert')`).run(userId))
+      .not.toThrow();
+  });
+
+  it('(f) base saine estampillée 72 : le rappel inconditionnel de V72 n\'écrit rien', () => {
+    const { db } = makeHealthy('f');
+    const schemaAvant = tLogsSchema(db);
+    const changesAvant = db.prepare('SELECT total_changes() AS c').get() as { c: number };
+
+    schema.migrateV72(db);
+
+    expect(db.prepare('SELECT total_changes() AS c').get()).toEqual(changesAvant);
+    expect(tLogsSchema(db)).toEqual(schemaAvant);
+  });
+
+  it('(g) échec de V72 depuis migrateV64 : message dédié journalisé, erreur propagée', () => {
+    const { db } = makeHealthy('g');
+    downgradeUsersToPreV64(db);
+    // Injection d'échec : FK de t_logs vers une table absente écrite entre apostrophes, que la
+    // réécriture de V72 ne reconnaît pas → FK toujours cassée après reconstruction → V72 lève.
+    db.pragma('foreign_keys = OFF');
+    db.exec('ALTER TABLE t_logs RENAME TO t_logs_orig');
+    db.exec("CREATE TABLE t_logs (id_log INTEGER PRIMARY KEY AUTOINCREMENT, id_user INTEGER, login_user TEXT, action TEXT NOT NULL, FOREIGN KEY (id_user) REFERENCES 't_table_absente'(id_user))");
+    db.exec('DROP TABLE t_logs_orig');
+    db.pragma('foreign_keys = ON');
+    const errorSpy = vi.spyOn(log, 'error');
+
+    expect(() => schema.migrateV64(db)).toThrow(/FK de t_logs toujours cassée/);
+
+    expect(errorSpy.mock.calls.some(c => String(c[0]).includes('[MIGRATION V64] V64 appliquée, mais réparation t_logs (V72) en échec'))).toBe(true);
+    errorSpy.mockRestore();
+  });
+
   it('autres FK cassées : signalées uniquement, jamais réparées', () => {
     const { db } = makeHealthy('autres');
     db.exec('CREATE TABLE t_test_fk_cassee (id INTEGER PRIMARY KEY, ref_id INTEGER, FOREIGN KEY (ref_id) REFERENCES t_table_disparue(id))');

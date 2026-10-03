@@ -47,6 +47,14 @@ export function runMigrations(db: Database.Database): void {
     // Filets de sécurité (colonnes, puis intégrité structurelle — peut rejouer migrateV60).
     migrateV27_safetyNet(db);
     migrateV66_structuralIntegrityNet(db);
+    // Filet V72 inconditionnel : si V72 a échoué lors d'un rejeu de V64 par le filet V66 (erreur
+    // avalée par V66), la base peut être estampillée 72 avec la FK de t_logs encore cassée. Sur
+    // base saine : lectures sqlite_master/PRAGMA uniquement, aucune écriture. Non bloquant, comme V66.
+    try {
+      migrateV72(db);
+    } catch (e: any) {
+      log.error('[MIGRATION V72] Échec du filet de réparation de t_logs (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+    }
 
     // 2. Réinstallation canonique des triggers FTS5 : migrateV60 (RENAME/DROP de t_cartes) et les
     // passes ci-dessus suppriment les triggers. Installation centralisée, avant toute validation.
@@ -3606,7 +3614,12 @@ export function migrateV64(db: Database.Database): void {
     // Le RENAME de t_users ci-dessus a aussi réécrit la FK de t_logs vers t_users_backup_v63
     // (supprimée) : seule t_user_roles est corrigée dans la transaction. V64 pouvant être rejouée
     // par migrateV66_structuralIntegrityNet APRÈS V72, on répare t_logs ici aussi (no-op si saine).
-    migrateV72(db);
+    try {
+      migrateV72(db);
+    } catch (e: any) {
+      log.error(`[MIGRATION V64] V64 appliquée, mais réparation t_logs (V72) en échec : ${e.message}`);
+      throw e;
+    }
 
     const globalIntegrity = db.pragma('integrity_check', { simple: true });
     log.info(`[MIGRATION V64] GLOBAL PRAGMA integrity_check de fin = ${globalIntegrity}`);
@@ -4144,9 +4157,12 @@ export function migrateV72(db: Database.Database): void {
         }
 
         // Lignes orphelines : conservées (aucune suppression), signalées pour audit.
-        const orphans = db.pragma('foreign_key_check(t_logs)') as { rowid: number }[];
-        if (orphans.length > 0) {
-          log.warn(`[MIGRATION V72] ${orphans.length} ligne(s) t_logs orpheline(s) (id_user absent de t_users) CONSERVÉE(S) sans modification. rowid (20 premiers) : ${orphans.slice(0, 20).map(o => o.rowid).join(', ')}`);
+        // COUNT + LIMIT 20 plutôt que foreign_key_check (qui matérialise toute la liste) : Low-Memory.
+        const orphanFrom = 'FROM t_logs l LEFT JOIN t_users u ON u.id_user = l.id_user WHERE l.id_user IS NOT NULL AND u.id_user IS NULL';
+        const orphanCount = (db.prepare(`SELECT COUNT(*) AS c ${orphanFrom}`).get() as { c: number }).c;
+        if (orphanCount > 0) {
+          const sample = (db.prepare(`SELECT l.rowid AS rowid ${orphanFrom} ORDER BY l.rowid LIMIT 20`).all() as { rowid: number }[]).map(o => o.rowid);
+          log.warn(`[MIGRATION V72] ${orphanCount} ligne(s) t_logs orpheline(s) (id_user absent de t_users) CONSERVÉE(S) sans modification. rowid (20 premiers) : ${sample.join(', ')}`);
         }
 
         log.info(`[MIGRATION V72] t_logs reconstruite : ${countAfter} ligne(s) conservée(s), ${oldIndexes.length} index et ${oldTriggers.length} trigger(s) recréé(s).`);

@@ -172,6 +172,38 @@ export function cancelPendingInsert(syncId: string, tableName: string): boolean 
 }
 
 /**
+ * Suppression physique locale d'un utilisateur après confirmation de sa suppression cloud.
+ *
+ * t_logs(id_user) référence t_users(id_user) sans ON DELETE (FK canonique rétablie par V72) :
+ * les lignes de journal de l'agent sont d'abord détachées (id_user = NULL ; le login reste dans
+ * login_user), puis rôles et utilisateur sont supprimés — le tout dans UNE transaction (aucun
+ * état partiel « agent sans rôle » en cas d'échec).
+ *
+ * is_dirty/synced_at de t_logs volontairement NON modifiés : la propagation de t_logs vers
+ * Supabase passe exclusivement par t_outbox (enqueueOutbox à l'insertion, cf. utils/audit.ts) ;
+ * is_dirty n'y est qu'un indicateur local, remis à 0 par _clearLocalDirtyFlag. Le détachement
+ * est donc strictement local et n'engendre aucun envoi.
+ *
+ * L'UPDATE t_logs n'est exécuté que si une ligne référence l'agent : sur une base dont la FK de
+ * t_logs serait encore cassée (V72 en échec), un UPDATE de t_logs lèverait « no such table ».
+ */
+export function purgeLocalUserAfterCloudDelete(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  syncId: string
+): { logsDetached: number; usersDeleted: number } {
+  return db.transaction(() => {
+    const userIds = 'SELECT id_user FROM t_users WHERE sync_id = ?';
+    let logsDetached = 0;
+    if (db.prepare(`SELECT 1 FROM t_logs WHERE id_user IN (${userIds}) LIMIT 1`).get(syncId)) {
+      logsDetached = db.prepare(`UPDATE t_logs SET id_user = NULL WHERE id_user IN (${userIds})`).run(syncId).changes;
+    }
+    db.prepare(`DELETE FROM t_user_roles WHERE id_user IN (${userIds})`).run(syncId);
+    const usersDeleted = db.prepare('DELETE FROM t_users WHERE sync_id = ?').run(syncId).changes;
+    return { logsDetached, usersDeleted };
+  })();
+}
+
+/**
  * Traite séquentiellement les entrées `PENDING` de t_outbox.
  *
  * Comportement asynchrone et résilient :
@@ -396,9 +428,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
             // Confirmation de suppression Cloud -> Réaliser la suppression physique réelle SQLite locale
             try {
               if (entry.table_name === 't_users') {
-                db.prepare('DELETE FROM t_user_roles WHERE id_user IN (SELECT id_user FROM t_users WHERE sync_id = ?)').run(syncIdToDelete);
-                db.prepare('DELETE FROM t_users WHERE sync_id = ?').run(syncIdToDelete);
-                log.info(`[OutboxService] Suppression physique locale effectuée pour t_users (sync_id=${syncIdToDelete})`);
+                const { logsDetached } = purgeLocalUserAfterCloudDelete(db, syncIdToDelete);
+                log.info(`[OutboxService] Suppression physique locale effectuée pour t_users (sync_id=${syncIdToDelete}, ${logsDetached} ligne(s) t_logs détachée(s))`);
               } else if (entry.table_name === 't_cartes') {
                 db.prepare('DELETE FROM t_cartes WHERE sync_id = ?').run(syncIdToDelete);
                 log.info(`[OutboxService] Suppression physique locale effectuée pour t_cartes (sync_id=${syncIdToDelete})`);
