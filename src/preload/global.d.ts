@@ -44,6 +44,7 @@ declare global {
         getRetraitsTrend: (siteId: number, centreId: number | null, period: string, customDate?: string | null) => Promise<Array<{ label: string; total: number }>>;
         getUnsyncedCardsCount: (siteId: number) => Promise<number>;
         getUnsyncedConformeCardsCount: (siteId: number) => Promise<number>;
+        getUnsyncedConformeOrphanCardsCount: (siteId: number, options: { allowMissing: boolean; onlyModified: boolean }) => Promise<number>;
         getUnsyncedUsersCount: (siteId: number) => Promise<number>;
         getUnsyncedCentresCount: (siteId: number) => Promise<number>;
         getDetailedSyncStats: (siteId: number) => Promise<{ cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number }>;

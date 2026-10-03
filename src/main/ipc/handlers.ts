@@ -2368,6 +2368,23 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     catch (e) { log.error('IPC Error: stats:getUnsyncedConformeCardsCount', e); throw e; }
   });
 
+  // Cartes conformes modifiées en local sans ligne d'outbox (voir stats.queries.ts) : alimente
+  // l'affichage du bouton « Envoyer les corrections » quand l'envoi automatique est actif.
+  // Cloisonnement §3 : site dérivé de la session serveur (resolveScopedSiteId) ; ADMIN_CENTRE
+  // cantonné à son centre, comme sync:startBulk qui enverra réellement ces cartes.
+  ipcMain.handle('stats:getUnsyncedConformeOrphanCardsCount', async (_, siteId: number, options?: { allowMissing?: boolean; onlyModified?: boolean }) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      if (!secureUser) return 0;
+      const centreId = secureUser.role === 'ADMIN_CENTRE' && secureUser.centre_id ? secureUser.centre_id : null;
+      // Mêmes options que le clic du portail (voir usePushButtonVisibility) : compteur = ensemble envoyé.
+      // Absence d'options = mode le plus strict (allowMissing false) : jamais de sur-comptage.
+      const sendOptions = { allowMissing: options?.allowMissing === true, onlyModified: options?.onlyModified === true };
+      return queries.getUnsyncedConformeOrphanCardsCount(resolveScopedSiteId(siteId), centreId, sendOptions);
+    }
+    catch (e) { log.error('IPC Error: stats:getUnsyncedConformeOrphanCardsCount', e); return 0; }
+  });
+
   ipcMain.handle('stats:getDetailedSyncStats', async (_, siteId: number) => {
     // Sécurité (cloisonnement §3, P1) : siteId dérivé de la session serveur pour tout rôle
     // non-SUPER ADMIN (resolveScopedSiteId) — même famille de faiblesse que P0-1/P0-4, gravité

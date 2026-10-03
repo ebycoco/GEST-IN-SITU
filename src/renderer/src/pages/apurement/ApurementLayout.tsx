@@ -99,7 +99,7 @@ export default function ApurementLayout() {
     refreshActionableCount,
     outboxBacklogCount,
     refreshOutboxBacklogCount
-  } = usePushButtonVisibility(conformeCartesCount, isBulkUploading);
+  } = usePushButtonVisibility(conformeCartesCount, isBulkUploading, { allowMissing: true, onlyModified: (detailedSyncStats?.modifiedCount || 0) > 0 });
 
   const handlePushClick = async () => {
     // forceMissing=true : une donnée manquante (rangement, nom, prénom, contact...) ne doit

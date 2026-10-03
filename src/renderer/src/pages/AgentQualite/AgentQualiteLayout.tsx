@@ -117,7 +117,7 @@ export default function AgentQualiteLayout() {
     refreshActionableCount,
     outboxBacklogCount,
     refreshOutboxBacklogCount
-  } = usePushButtonVisibility(conformeCartesCount, isBulkUploading);
+  } = usePushButtonVisibility(conformeCartesCount, isBulkUploading, { allowMissing: true, onlyModified: (detailedSyncStats?.modifiedCount || 0) > 0 });
   const nonConformeCount = Math.max(0, dirtyCartesCount - conformeCartesCount);
 
   const handlePushClick = async () => {

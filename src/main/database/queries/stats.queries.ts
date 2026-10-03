@@ -971,6 +971,80 @@ export function getUnsyncedConformeCardsCount(siteId: number): number {
   return row?.count || 0;
 }
 
+/**
+ * Options d'envoi manuel (mêmes noms que les paramètres de runBulkUpload / upload-worker.js).
+ * allowProbable et allowInvalid sont toujours à false sur les boutons « Envoyer les corrections » :
+ * ils ne sont donc pas paramétrables ici.
+ */
+export interface PushSendOptions {
+  allowMissing: boolean;
+  onlyModified: boolean;
+}
+
+/**
+ * Cartes locales que le bouton manuel « Envoyer les corrections » enverra, et qui n'ont AUCUNE ligne
+ * PENDING/ERROR dans t_outbox pour t_cartes. Ces cartes ne partent jamais par le circuit automatique
+ * (ex. modifiées avant une mise à jour de l'application) et ne sont pas comptées par
+ * getOutboxActionableCount.
+ *
+ * Le filtre de sélection reprend à l'identique celui de upload-worker.js (lignes 43-120), selon les
+ * options passées : pour cette partie, le bouton n'affiche que des cartes qu'il enverra réellement.
+ * (La partie outbox, getOutboxActionableCount, n'applique pas ce filtre de conformité : écart préexistant.)
+ * Disjoint du compteur d'outbox (PENDING/ERROR exclus) : additionner les deux ne compte aucune carte deux fois.
+ * `centreId` : cantonnement identique à sync:startBulk pour ADMIN_CENTRE.
+ */
+export function getUnsyncedConformeOrphanCardsCount(
+  siteId: number,
+  centreId: number | null = null,
+  options: PushSendOptions = { allowMissing: false, onlyModified: false }
+): number {
+  const db = getDatabase()!;
+  const centreClause = centreId ? 'AND centre_id = ?' : '';
+  const modifiedClause = options.onlyModified
+    ? `((is_dirty = 1 AND synced_at IS NOT NULL AND synced_at != '') OR is_dirty = -1) AND statut != 'BROUILLON'`
+    : `(is_dirty = 1 OR is_dirty = -1 OR synced_at IS NULL OR synced_at = '') AND statut != 'BROUILLON'`;
+  const missingClause = options.allowMissing
+    ? ''
+    : `AND (noms IS NOT NULL AND noms != '')
+      AND (prenoms IS NOT NULL AND prenoms != '')
+      AND NOT ((noms IS NULL OR noms = '') AND (prenoms IS NULL OR prenoms = '') AND (date_de_naissance IS NULL OR date_de_naissance = ''))
+      AND (rangement IS NOT NULL AND rangement != '' AND rangement != 'NON CLASSE')`;
+  const params: number[] = [siteId];
+  if (centreId) params.push(centreId);
+  params.push(siteId, siteId);
+  const row = db.prepare(`
+    SELECT COUNT(*) as count FROM t_cartes
+    WHERE site_id = ?
+      ${centreClause}
+      AND ${modifiedClause}
+      AND NOT EXISTS (
+        SELECT 1 FROM t_outbox o
+        WHERE o.table_name = 't_cartes'
+          AND o.status IN ('PENDING', 'ERROR')
+          AND o.id = t_cartes.sync_id
+      )
+      AND NOT (
+        (noms IS NULL OR noms = '') AND
+        (prenoms IS NULL OR prenoms = '') AND
+        (num_secu IS NULL OR num_secu = '') AND
+        (rangement IS NULL OR rangement = '' OR rangement = 'NON CLASSE')
+      )
+      ${missingClause}
+      AND (date_de_naissance IS NULL OR date_de_naissance = '' OR date_de_naissance REGEXP '^\\d{4}-\\d{2}-\\d{2}$')
+      AND (cle_doublon IS NULL OR cle_doublon = '' OR cle_doublon = '||||' OR cle_doublon NOT IN (
+        SELECT cle_doublon FROM t_cartes
+        WHERE site_id = ? AND cle_doublon IS NOT NULL AND cle_doublon != '' AND cle_doublon != '||||'
+        GROUP BY cle_doublon HAVING COUNT(*) > 1
+      ))
+      AND (noms || '||' || prenoms || '||' || date_de_naissance) NOT IN (
+        SELECT noms || '||' || prenoms || '||' || date_de_naissance FROM t_cartes
+        WHERE site_id = ?
+        GROUP BY noms, prenoms, date_de_naissance HAVING COUNT(DISTINCT cle_doublon) > 1
+      )
+  `).get(...params) as { count: number };
+  return row?.count || 0;
+}
+
 export function getUnsyncedUsersCount(siteId: number): number {
   const db = getDatabase()!;
   const row = db.prepare('SELECT COUNT(*) as count FROM t_users WHERE site_id = ? AND is_dirty = 1').get(siteId) as { count: number };

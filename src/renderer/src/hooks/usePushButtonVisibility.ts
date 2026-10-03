@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAutoUpstreamPreference } from './useAutoUpstreamPreference';
 import { useOnlineStatus } from './useOnlineStatus';
+import { useAuthStore } from '../stores/authStore';
+import { computePushButtonState } from './pushButtonState';
 
 /**
  * Intervalle de rafraîchissement du compteur "actionnable" (t_outbox PENDING+ERROR) quand
@@ -22,9 +24,10 @@ const REFRESH_INTERVAL_MS = 90000;
  * - Envoi automatique actif + hors-ligne : bouton visible (actions locales en attente),
  *   compteur = `conformeCount`.
  * - Envoi automatique actif + en ligne : bouton visible seulement si `actionableCount > 0`
- *   (une carte est réellement bloquée en attente ou en échec d'auto-envoi), compteur =
- *   `actionableCount` (source : sync:getCardsOutboxActionableCount, PENDING+ERROR sur
- *   t_cartes).
+ *   (une carte est réellement bloquée en attente ou en échec d'auto-envoi, OU une carte conforme
+ *   modifiée en local n'a aucune ligne d'outbox), compteur = `actionableCount` = lignes d'outbox
+ *   PENDING+ERROR sur t_cartes (sync:getCardsOutboxActionableCount) + cartes conformes locales sans
+ *   ligne d'outbox (stats:getUnsyncedConformeOrphanCardsCount). La règle est dans pushButtonState.ts.
  *
  * Rafraîchissement du compteur actionnable : au montage, toutes les 90s (uniquement quand
  * auto actif + en ligne), sur l'événement déjà existant `sync:onStatusChanged` (déjà
@@ -48,19 +51,44 @@ const REFRESH_INTERVAL_MS = 90000;
  * message explicite si `!navigator.onLine` au moment du clic. Aucune logique supplémentaire
  * n'est nécessaire ici pour ce garde-fou.
  */
-export function usePushButtonVisibility(conformeCount: number, isBulkUploading: boolean) {
+export function usePushButtonVisibility(
+  conformeCount: number,
+  isBulkUploading: boolean,
+  /**
+   * Options du clic « Envoyer les corrections » de la page appelante (allowMissing, onlyModified).
+   * Le compteur orphelin doit reproduire exactement ces options, sinon le bouton peut afficher des
+   * cartes que le clic n'enverra pas (ou masquer celles qu'il enverra).
+   */
+  sendOptions: { allowMissing: boolean; onlyModified: boolean }
+) {
+  const { allowMissing, onlyModified } = sendOptions;
   const autoUpstream = useAutoUpstreamPreference();
   const isOnline = useOnlineStatus();
   const [rawActionableCount, setRawActionableCount] = useState(0);
+  const [orphanCount, setOrphanCount] = useState(0);
   const [outboxBacklogCount, setOutboxBacklogCount] = useState(0);
+  const siteId = useAuthStore((s) => (s.user?.role === 'SUPER ADMIN' ? s.activeSiteId : s.user?.site_id));
 
+  // Cartes conformes modifiées en local SANS ligne d'outbox (ex. avant une mise à jour de
+  // l'application) : elles ne sont pas comptées par l'outbox mais l'envoi manuel peut les envoyer.
+  const refreshOrphanCount = useCallback(() => {
+    if (!siteId) { setOrphanCount(0); return; }
+    window.api.stats.getUnsyncedConformeOrphanCardsCount(Number(siteId), { allowMissing, onlyModified })
+      .then(setOrphanCount)
+      .catch((err) => {
+        console.error('Failed to fetch orphan conforme cards count', err);
+      });
+  }, [siteId, allowMissing, onlyModified]);
+
+  // Appelé par les pages après un push manuel réussi : rafraîchit les deux compteurs d'un coup.
   const refreshActionableCount = useCallback(() => {
     window.api.sync.getCardsOutboxActionableCount()
       .then(setRawActionableCount)
       .catch((err) => {
         console.error('Failed to fetch outbox actionable count', err);
       });
-  }, []);
+    refreshOrphanCount();
+  }, [refreshOrphanCount]);
 
   // Compteur informatif de backlog réel (t_outbox PENDING sur t_cartes) — cf. docblock
   // ci-dessus. Indépendant de la logique visible/disabled.
@@ -85,9 +113,9 @@ export function usePushButtonVisibility(conformeCount: number, isBulkUploading: 
     return () => clearInterval(interval);
   }, [autoUpstream, isOnline, refreshActionableCount]);
 
-  // Rafraîchissement sur l'événement de statut de synchro déjà existant (poussé par le
-  // Main Process après chaque cycle) — nettoyage systématique du listener au démontage
-  // (CLAUDE.md §2).
+  // Rafraîchissement sur l'événement de statut de synchro déjà existant (poussé par le Main
+  // Process à chaque changement d'état réseau, pas après chaque cycle : cf. handlers.ts) —
+  // nettoyage systématique du listener au démontage (CLAUDE.md §2).
   useEffect(() => {
     if (!window.api?.sync?.onStatusChanged) return undefined;
     const unsubscribe = window.api.sync.onStatusChanged(() => {
@@ -97,20 +125,20 @@ export function usePushButtonVisibility(conformeCount: number, isBulkUploading: 
     return () => unsubscribe();
   }, [refreshActionableCount, refreshOutboxBacklogCount]);
 
-  let visible: boolean;
-  let actionableCount: number;
+  // `conformeCount` (cartes is_dirty=1 conformes) varie dès qu'une carte est modifiée ou envoyée :
+  // c'est le signal pour relire le nombre de cartes locales sans ligne d'outbox.
+  useEffect(() => {
+    refreshOrphanCount();
+  }, [conformeCount, refreshOrphanCount]);
 
-  if (!autoUpstream || !isOnline) {
-    // Envoi auto désactivé, ou actif mais hors-ligne : comportement legacy, toujours visible.
-    visible = true;
-    actionableCount = conformeCount;
-  } else {
-    // Envoi auto actif + en ligne : masqué tant qu'aucune carte n'est réellement bloquée.
-    visible = rawActionableCount > 0;
-    actionableCount = rawActionableCount;
-  }
-
-  const disabled = isBulkUploading || actionableCount === 0;
+  const { visible, disabled, actionableCount } = computePushButtonState({
+    autoUpstream,
+    isOnline,
+    conformeCount,
+    outboxActionableCount: rawActionableCount,
+    orphanCount,
+    isBulkUploading
+  });
 
   return {
     visible,

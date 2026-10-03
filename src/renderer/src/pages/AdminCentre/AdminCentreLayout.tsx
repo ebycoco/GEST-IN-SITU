@@ -156,7 +156,7 @@ export default function AdminCentreLayout() {
   // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
   // des cartes que l'envoi rejettera silencieusement.
   const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
-  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading);
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading, { allowMissing: false, onlyModified: false });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: 'var(--bg-primary)' }}>

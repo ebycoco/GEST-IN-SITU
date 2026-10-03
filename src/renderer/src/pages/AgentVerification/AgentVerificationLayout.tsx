@@ -79,7 +79,7 @@ export default function AgentVerificationLayout() {
   // donnée manquante) — distinct du compte brut is_dirty pour ne pas activer le bouton sur
   // des cartes que l'envoi rejettera silencieusement.
   const conformeCount = (detailedSyncStats?.cleanCount || 0) + (detailedSyncStats?.modifiedCount || 0);
-  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading);
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(conformeCount, isBulkUploading, { allowMissing: false, onlyModified: false });
 
   const handlePushClick = async () => {
     const res = await handleStartBulkUpload(false, false, false);

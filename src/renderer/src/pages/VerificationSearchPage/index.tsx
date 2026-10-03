@@ -80,7 +80,7 @@ export default function VerificationSearchPage() {
 
   // Pas de conformeCount local dédié dans cette vue — dirtyCartesCount (compteur brut
   // is_dirty=1) sert d'équivalent, comme dans le reste du fichier (cf. plan validé A.5).
-  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(dirtyCartesCount, isBulkUploading);
+  const { visible: pushVisible, disabled: pushDisabled, actionableCount, refreshActionableCount } = usePushButtonVisibility(dirtyCartesCount, isBulkUploading, { allowMissing: false, onlyModified: false });
 
   const fetchSyncStats = async () => {
     if (user?.site_id) {
