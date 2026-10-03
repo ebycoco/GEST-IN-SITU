@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { RefreshCw, Cloud, CloudOff, CloudLightning } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useCloudActionGuard } from '../hooks/useCloudActionGuard';
@@ -16,6 +16,17 @@ export default function SyncWidget() {
 
   const [isSyncing, setIsSyncing] = useState(false);
   const cloudGuard = useCloudActionGuard();
+
+  // Anti-rafale du forçage manuel (protection contre touche/clic répété) :
+  // - forceSyncInFlightRef : vrai tant que window.api.sync.force() n'a pas résolu.
+  //   Remis à faux dans le finally, donc jamais bloqué si l'IPC échoue.
+  // - lastForceSyncAtRef : horodatage (ms) de la dernière demande ACCEPTÉE ;
+  //   toute demande survenant moins de FORCE_SYNC_MIN_INTERVAL_MS après est ignorée.
+  // Refs (et non state) : pas de re-rendu supplémentaire, et lecture synchrone
+  // immédiate entre deux clics rapprochés (pas de closure périmée).
+  const forceSyncInFlightRef = useRef(false);
+  const lastForceSyncAtRef = useRef(0);
+  const FORCE_SYNC_MIN_INTERVAL_MS = 3000;
 
   // Charger le statut initial
   useEffect(() => {
@@ -43,11 +54,17 @@ export default function SyncWidget() {
   const handleForceSync = async () => {
     return cloudGuard(async () => {
       if (isSyncing) return;
+      // Demande ignorée si une synchronisation forcée est déjà en cours
+      if (forceSyncInFlightRef.current) return;
+      // Demande ignorée si la précédente demande acceptée date de moins de 3 s
+      if (Date.now() - lastForceSyncAtRef.current < FORCE_SYNC_MIN_INTERVAL_MS) return;
       if (syncStatus.state !== 'ONLINE') {
       toast.error("Impossible de forcer la synchronisation : l'appareil est hors-ligne.");
       return;
     }
 
+    lastForceSyncAtRef.current = Date.now();
+    forceSyncInFlightRef.current = true;
     setIsSyncing(true);
     const toastId = toast.loading('Synchronisation des données en cours...');
 
@@ -64,6 +81,7 @@ export default function SyncWidget() {
     } catch (err: any) {
       toast.error(`Erreur de synchronisation: ${err.message || err}`, { id: toastId });
     } finally {
+      forceSyncInFlightRef.current = false;
       setIsSyncing(false);
     }
     });

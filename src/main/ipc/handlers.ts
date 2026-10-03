@@ -5345,9 +5345,21 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  // Garde anti-rafale : un sync:force accepté bloque les suivants pendant 3 s.
+  // Placée AVANT l'audit : un appel refusé ne lance aucun cycle et n'écrit aucune ligne d'audit.
+  let lastForceSyncAcceptedAt = 0;
+  const FORCE_SYNC_MIN_INTERVAL_MS = 3000;
+
   ipcMain.handle('sync:force', async (_, currentUser) => {
+    const now = Date.now();
+    if (now - lastForceSyncAcceptedAt < FORCE_SYNC_MIN_INTERVAL_MS) {
+      log.warn('[sync:force] Refusé : synchronisation manuelle déjà demandée il y a moins de 3 secondes.');
+      return { success: false, message: 'Synchronisation déjà demandée il y a moins de 3 secondes. Veuillez patienter.' };
+    }
+    lastForceSyncAcceptedAt = now;
+
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
-    
+
     setImmediate(() => {
       logAudit(
         userLogin,
