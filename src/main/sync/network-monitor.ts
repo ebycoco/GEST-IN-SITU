@@ -25,12 +25,27 @@ export class NetworkMonitor extends EventEmitter {
   /**
    * Nombre maximum de tentatives de ping autorisées pendant la phase de démarrage
    * (avant qu'un utilisateur se connecte). Au-delà, on passe en PERMANENT_OFFLINE
-   * et on stoppe DÉFINITIVEMENT le setInterval pour protéger le service réseau d'Electron.
-   * L'utilisateur doit cliquer sur "Réessayer" pour relancer une session de 3 pings.
+   * et on stoppe le setInterval de 30 s pour protéger le service réseau d'Electron.
+   * Remarque : ce compteur s'incrémente pour tout état ≠ ONLINE, donc aussi en pleine session
+   * (bien avant FAILURES_FOR_OFFLINE, qui n'est en pratique jamais atteint). La sortie se fait
+   * par "Réessayer" ou, depuis P1-B, automatiquement via la sonde de reprise à backoff ci-dessous.
    */
   private readonly MAX_BOOT_RETRIES = 2; // R5: Réduit de 3 à 2 pour accélérer le repli hors-ligne
   private bootPingCount = 0;
   private isPermanentOffline = false;
+
+  /**
+   * Reprise automatique depuis PERMANENT_OFFLINE (P1-B, audit du 27/09/2026) : ce compteur
+   * s'incrémente aussi en pleine session (tout état ≠ ONLINE), donc une coupure d'environ 90 s
+   * arrêtait définitivement la synchro jusqu'au clic sur "Réessayer" ou un redémarrage. Le ping
+   * régulier de 30 s reste arrêté (protection du service réseau d'Electron conservée), mais une
+   * sonde UNIQUE est replanifiée avec un backoff exponentiel 1 → 2 → 4 → 8 → 10 min (plafond).
+   * Au premier succès : retour ONLINE (sync-engine relance l'upstream et l'outbox) et ping normal.
+   */
+  private readonly RECOVERY_BASE_DELAY_MS = 60_000;
+  private readonly RECOVERY_MAX_DELAY_MS = 10 * 60_000;
+  private recoveryTimer: NodeJS.Timeout | null = null;
+  private recoveryAttempt = 0;
 
   private isChecking = false;
   private bypassForceOnline = false;
@@ -75,11 +90,80 @@ export class NetworkMonitor extends EventEmitter {
   }
 
   public stop(): void {
+    this.clearPingInterval();
+    this.cancelRecoveryProbe();
+    log.info('[NetworkMonitor] Moniteur réseau arrêté.');
+  }
+
+  private clearPingInterval(): void {
     if (this.pingInterval) {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
-    log.info('[NetworkMonitor] Moniteur réseau arrêté.');
+  }
+
+  private cancelRecoveryProbe(): void {
+    if (this.recoveryTimer) {
+      clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+    this.recoveryAttempt = 0;
+  }
+
+  /** Délai de la prochaine sonde de reprise (exposé pour les tests). */
+  public getNextRecoveryDelayMs(): number {
+    return Math.min(this.RECOVERY_BASE_DELAY_MS * 2 ** this.recoveryAttempt, this.RECOVERY_MAX_DELAY_MS);
+  }
+
+  private scheduleRecoveryProbe(): void {
+    if (E2E_DISABLE_SYNC || this.recoveryTimer) return;
+    const delay = this.getNextRecoveryDelayMs();
+    this.recoveryAttempt++;
+    log.info(`[NetworkMonitor] Sonde de reprise automatique planifiée dans ${Math.round(delay / 1000)} s (tentative ${this.recoveryAttempt}).`);
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      void this.runRecoveryProbe();
+    }, delay);
+    if (typeof (this.recoveryTimer as any).unref === 'function') {
+      (this.recoveryTimer as any).unref();
+    }
+  }
+
+  private async runRecoveryProbe(): Promise<void> {
+    if (!this.isPermanentOffline) return;
+    if (this.isChecking) {
+      this.scheduleRecoveryProbe();
+      return;
+    }
+    this.isChecking = true;
+    let reachable = false;
+    try {
+      reachable = net.online && await this.pingEndpoint(this.getPingUrl());
+    } catch {
+      reachable = false;
+    } finally {
+      this.isChecking = false;
+    }
+
+    // Une action manuelle ("Réessayer") a pu sortir de PERMANENT_OFFLINE pendant le ping.
+    if (!this.isPermanentOffline) return;
+
+    if (!reachable) {
+      log.info('[NetworkMonitor] Sonde de reprise : réseau toujours indisponible.');
+      this.scheduleRecoveryProbe();
+      return;
+    }
+
+    log.info('[NetworkMonitor] Sonde de reprise : réseau rétabli — sortie automatique de PERMANENT_OFFLINE.');
+    this.isPermanentOffline = false;
+    this.cancelRecoveryProbe();
+    this.handleSuccess(); // bootPingCount = 0 et transition ONLINE (sync-engine relance les cycles)
+    this.start();
+  }
+
+  private getPingUrl(): string {
+    const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://itvyayakwgzvfqvdrgyv.supabase.co';
+    return `${supabaseUrl}/rest/v1/`;
   }
 
   public getState(): NetworkState {
@@ -172,8 +256,9 @@ export class NetworkMonitor extends EventEmitter {
         );
         this.isPermanentOffline = true;
         this.isChecking = false;
-        this.stop(); // Stoppe le setInterval définitivement
+        this.clearPingInterval(); // Stoppe le ping régulier de 30 s…
         this.transitionTo('PERMANENT_OFFLINE');
+        this.scheduleRecoveryProbe(); // …mais une sonde espacée (backoff) reste active
         return;
       }
     }
@@ -191,9 +276,7 @@ export class NetworkMonitor extends EventEmitter {
     }
 
     try {
-      const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://itvyayakwgzvfqvdrgyv.supabase.co';
-
-      const isOnline = await this.pingEndpoint(`${supabaseUrl}/rest/v1/`);
+      const isOnline = await this.pingEndpoint(this.getPingUrl());
 
       if (isOnline) {
         this.handleSuccess();
