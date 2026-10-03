@@ -413,7 +413,12 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       // Cloisonnement site (P0-1) : une anomalie n'appartenant pas au site de l'utilisateur
       // (hors SUPER ADMIN) ne doit jamais pouvoir être transférée vers t_cartes par ce canal.
       // Même logique que la vérification déjà appliquée par qualite:fusionnerDoublons (handlers.ts).
-      if (currentUser && currentUser.role !== 'SUPER ADMIN' && anomaly.site_id !== currentUser.site_id) {
+      // P1-D : sans utilisateur, le contrôle ci-dessous était sauté (appel sans session = aucun
+      // cloisonnement). Les appelants légitimes (cartes:update, cmu:updateCarte) passent la session.
+      if (!currentUser) {
+        throw new Error("Session invalide : transfert d'anomalie refusé.");
+      }
+      if (currentUser.role !== 'SUPER ADMIN' && anomaly.site_id !== currentUser.site_id) {
         throw new Error("Accès refusé : cette anomalie n'appartient pas à votre site.");
       }
 
@@ -433,7 +438,14 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       const cleFlex = `${noms}|${prenoms}|${ddn || ''}|${contact}`;
       
       const newSyncId = uuidv4();
-      const siteId = anomaly.site_id || (currentUser?.site_id || 1);
+      // P1-D (audit du 27/09/2026) : l'ancien repli `anomaly.site_id || (currentUser?.site_id || 1)`
+      // pouvait rattacher une carte au site 1 (ou au site de l'appelant) sans preuve d'appartenance.
+      // Le site vient désormais exclusivement de l'anomalie ; pour tout rôle non SUPER ADMIN il a
+      // déjà été vérifié égal au site de la session serveur (contrôle ci-dessus).
+      const siteId = anomaly.site_id;
+      if (!siteId) {
+        throw new Error("Anomalie sans site de rattachement : transfert impossible. Contactez un administrateur.");
+      }
       
       // 3. Insérer dans t_cartes avec statut EN STOCK
       const stmt = db.prepare(`
@@ -579,7 +591,10 @@ export function deleteCarte(id: number, currentUser?: { role: string; site_id?: 
   // OU si c'est un OPERATEUR_SAISIE qui supprime un BROUILLON
   let isAllowed = false;
   if (!currentUser) {
-    isAllowed = true;
+    // P1-D (audit du 27/09/2026) : un appel sans utilisateur était autorisé par défaut
+    // (isAllowed = true), sans aucun contrôle de rôle ni de site. Les deux appelants
+    // (cartes:delete, cmu:deleteCarte) passent toujours la session serveur vérifiée.
+    throw new Error("Accès non autorisé : session invalide pour la suppression d'une carte.");
   } else if (['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_QUALITE'].includes(currentUser.role)) {
     isAllowed = true;
   } else if (currentUser.role === 'OPERATEUR_SAISIE' && carte.statut === 'BROUILLON') {
@@ -676,6 +691,18 @@ export function delivrerCarte(
     // (cahier historique). Blocage immédiat, avant toute écriture.
     if (carte.statut === 'DOUBLON') {
       throw new Error("Action refusée : cette carte est déclarée en doublon et ne peut plus être délivrée. Contactez un administrateur pour vérifier ou annuler cette déclaration.");
+    }
+
+    // Garde serveur anti-seconde délivrance (P0-B, décision utilisateur validée : seul EN STOCK
+    // est délivrable). Sans elle, un second appel (UI contournée, double clic, deux postes sur une
+    // même base) écrasait nom_retirant/num_retirant/date_delivrance, donc la preuve de retrait.
+    // Contrôle placé dans la même transaction que l'UPDATE : atomique vis-à-vis de tout autre
+    // appel IPC (better-sqlite3 synchrone, thread main unique).
+    if (carte.statut === 'DELIVRE') {
+      throw new Error("Action refusée : cette carte a déjà été délivrée. La preuve de retrait existante ne peut pas être remplacée.");
+    }
+    if (carte.statut !== 'EN STOCK') {
+      throw new Error(`Action refusée : une carte au statut "${carte.statut}" ne peut pas être délivrée.`);
     }
 
     let contactToUpdate = null;
@@ -2027,8 +2054,30 @@ export function updateQuickFields(id: number, fields: {
   // db.transaction() inconditionnel (aucun appelant connu de cette fonction n'est déjà dans
   // une transaction, et better-sqlite3 gère nativement l'imbrication via savepoints si c'était
   // le cas). autoEnqueueCorrection() reste hors transaction, comportement inchangé.
+  // P1-D (audit du 27/09/2026) : noms, prénoms, date/lieu de naissance et contact composent
+  // cle_doublon / cle_doublon_flex. Les modifier ici sans recalcul laissait des clés obsolètes :
+  // doublons non détectés (ou faux doublons) et blocage d'envoi calculé sur une identité périmée.
+  const identityChanged = fields.noms !== undefined || fields.prenoms !== undefined
+    || fields.contact !== undefined || fields.lieu_de_naissance !== undefined || fields.date_de_naissance !== undefined;
+
   const runTx = db.transaction(() => {
     const result = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+    if (identityChanged && result.changes > 0) {
+      // Même formule que updateCarte() et updateDateDeNaissance(), appliquée aux valeurs
+      // réellement stockées après l'UPDATE ci-dessus. Recalcul seul : aucun nouveau blocage
+      // métier (la détection/résolution des doublons reste celle du portail Qualité).
+      const c = db.prepare(
+        'SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, contact FROM t_cartes WHERE id_carte = ?'
+      ).get(id) as { noms: string | null; prenoms: string | null; date_de_naissance: string | null; lieu_de_naissance: string | null; contact: string | null };
+      const noms = removeAccents(c.noms || '');
+      const prenoms = removeAccents(c.prenoms || '');
+      const ddn = c.date_de_naissance || '';
+      const lieuN = removeAccents(c.lieu_de_naissance || '');
+      const contact = normalizeContact(c.contact || '');
+      db.prepare('UPDATE t_cartes SET cle_doublon = ?, cle_doublon_flex = ? WHERE id_carte = ?')
+        .run(`${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`, `${noms}|${prenoms}|${ddn}|${contact}`, id);
+    }
 
     if (centreLogInfo) {
       // t_logs — mêmes colonnes/action que updateRangementEtFiche() ci-dessus ('CENTRE_CARTE_RECALCULE').
