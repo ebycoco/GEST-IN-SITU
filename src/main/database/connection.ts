@@ -39,8 +39,15 @@ export async function initDatabase(): Promise<Database.Database> {
   db.pragma('page_size = 4096');
   db.pragma('wal_autocheckpoint = 100000'); // 400MB WAL avant autocheckpoint (empêche les freezes de l'UI pendant l'import massif)
 
-  // Run schema migrations
-  runMigrations(db);
+  // Run schema migrations. En cas d'échec (y compris RECOVERY_REQUIRED), la connexion est libérée
+  // et l'erreur remontée : aucune écriture supplémentaire n'est faite sur une base en recovery.
+  try {
+    runMigrations(db);
+  } catch (migrationErr) {
+    db.close();
+    db = null;
+    throw migrationErr;
+  }
   // Invalider le cache des colonnes de t_centres après migration
   invalidateCentresColumnsCache();
 

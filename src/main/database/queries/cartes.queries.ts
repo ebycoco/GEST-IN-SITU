@@ -9,6 +9,7 @@ import { QualityFilters } from '../../../shared/types/quality.types';
 import log from 'electron-log';
 import { isValidDateStrict } from '../../../shared/utils/validators';
 import { normalizeDate } from '../../../shared/utils/date';
+import { installCanonicalFtsTriggers } from '../schema';
 
 /**
  * Enfile automatiquement une carte tout juste corrigée (Qualité) vers t_outbox pour une
@@ -111,19 +112,10 @@ export function nuclearResetFts5(): void {
       );`);
       // 4. Repeupler depuis t_cartes (content table)
       db.exec("INSERT INTO t_cartes_fts(t_cartes_fts) VALUES('rebuild');");
-      // 5. Recréer les 3 triggers
-      db.exec(`CREATE TRIGGER trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
-        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-      END;`);
-      db.exec(`CREATE TRIGGER trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-      END;`);
-      db.exec(`CREATE TRIGGER trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-        DELETE FROM t_cartes_fts WHERE rowid = old.id_carte;
-        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-      END;`);
+      // 5. Recréer les triggers — définitions canoniques V71 (commande 'delete' avec les anciennes
+      // valeurs). Les anciennes définitions locales (DELETE direct) réintroduisaient la dérive
+      // de l'index FTS5 à contenu externe à chaque reset (P0-D, audit du 27/09/2026).
+      installCanonicalFtsTriggers(db);
       log.info('[FTS5] Reset nucléaire terminé avec succès. Recherche plein texte restaurée.');
     } catch (resetErr) {
       log.error('[FTS5] Échec du reset nucléaire FTS5 :', resetErr);

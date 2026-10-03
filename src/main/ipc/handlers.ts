@@ -5,6 +5,8 @@ import * as queries from '../database/queries';
 import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
 import { hashPassword } from '../auth/local-auth';
 import { createReadStream, openSync, readSync, closeSync, copyFileSync, existsSync, statSync } from 'fs';
+import { snapshotDatabase, performRestore, RestoreOutcome } from '../database/recovery';
+import { SCHEMA_VERSION } from '../database/schema';
 import { join, basename } from 'path';
 import log from 'electron-log';
 import * as readline from 'readline';
@@ -6423,13 +6425,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         return { success: false, reason: 'cancelled' };
       }
 
-      const dbPath = getDbPath();
-      if (!existsSync(dbPath)) {
-        log.error(`[DB EXPORT] Fichier source introuvable à l'emplacement : ${dbPath}`);
+      // Snapshot SQLite cohérent de la base vivante (VACUUM INTO, WAL inclus) : une copie brute du
+      // fichier .db omettrait les transactions encore présentes dans le WAL.
+      const liveDb = getDatabase();
+      if (!liveDb) {
+        log.error('[DB EXPORT] Base non ouverte : exportation impossible.');
         return { success: false, reason: 'source_missing' };
       }
-
-      copyFileSync(dbPath, result.filePath);
+      snapshotDatabase(liveDb, result.filePath);
       log.info(`[DB EXPORT] Base de données exportée avec succès par ${currentUser?.login || 'SYSTEM'} vers : ${result.filePath}`);
       queries.insertAuditLog(
         currentUser?.login || 'SYSTEM',
@@ -6512,19 +6515,27 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       const dbPath = getDbPath();
       const backupDir = getBackupDir();
-      const backupPath = join(backupDir, `gest_in_situ_backup_${Date.now()}.db`);
 
-      // Sauvegarde de sécurité
-      if (existsSync(dbPath)) {
-        copyFileSync(dbPath, backupPath);
-        log.info(`[DB IMPORT] Sauvegarde de sécurité créée à : ${backupPath}`);
+      // Restauration contrôlée : copie isolée, validation, réparation FTS5 éventuelle dans la copie,
+      // snapshot de sécurité de la base vivante, remplacement atomique, puis suppression du marqueur
+      // RECOVERY_REQUIRED seulement après succès. Toute étape en échec laisse la base vivante intacte.
+      let restore: RestoreOutcome;
+      try {
+        restore = performRestore({
+          sourcePath: importPath,
+          dbPath,
+          backupDir,
+          liveDb: getDatabase(),
+          closeLive: () => closeDatabase(),
+          targetVersion: SCHEMA_VERSION,
+        });
+      } catch (restoreErr: any) {
+        log.warn(`[DB IMPORT] ${restoreErr.message}`);
+        return { success: false, reason: 'invalid_database' };
       }
-
-      // Fermeture propre de la base avant écrasement
-      closeDatabase();
-
-      // Remplacement du fichier
-      copyFileSync(importPath, dbPath);
+      const backupPath = restore.safetyPath ?? '(aucune)';
+      log.info(`[DB IMPORT] Sauvegarde de sécurité : ${backupPath}`);
+      if (restore.ftsRepaired.length > 0) log.warn(`[DB IMPORT] Index FTS5 reconstruit dans la copie : ${restore.ftsRepaired.join(', ')}`);
       log.info(`[DB IMPORT] Base de données remplacée avec succès depuis ${importPath} par ${currentUser?.login || 'SYSTEM'}`);
 
       // Essayer d'enregistrer l'audit dans la nouvelle base importée

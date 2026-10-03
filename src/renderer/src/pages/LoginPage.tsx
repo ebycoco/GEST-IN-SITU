@@ -49,6 +49,8 @@ export default function LoginPage() {
         toast.error("Format de fichier SQLite invalide.", { id: toastId });
       } else if (res.reason === 'unauthorized') {
         toast.error("Mot de passe SUPER ADMIN incorrect.", { id: toastId });
+      } else if (res.reason === 'invalid_database') {
+        toast.error("Base refusée : fichier non valide, incompatible ou en échec d'intégrité. Aucune donnée n'a été modifiée.", { id: toastId, duration: 8000 });
       } else {
         toast.error(`Échec de l'importation : ${res.reason}`, { id: toastId });
       }

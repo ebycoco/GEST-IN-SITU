@@ -18,10 +18,12 @@ if (process.platform === 'win32') {
 
 
 import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme, dialog } from 'electron';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 import { initDatabase, getDatabase } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
+import { recoveryMarkerPath, performRestore } from './database/recovery';
+import { SCHEMA_VERSION } from './database/schema';
 import { ensureSyncIds } from './database/queries/hierarchy.queries';
 import { setupAutoUpdater, isUpdateReadyToInstall, triggerUpdateInstall } from './auto-updater';
 import { loadInitialNavigation } from './startup-navigation';
@@ -355,7 +357,62 @@ app.whenReady().then(async () => {
   checkPendingUpdateMarker();
 
   // Initialize database
-  await initDatabase();
+  try {
+    await initDatabase();
+  } catch (dbErr: any) {
+    if (dbErr?.code === 'RECOVERY_REQUIRED') {
+      // Base existante dont la migration a échoué : aucune réinstallation, aucune écriture automatique.
+      // Sortie unique : restauration explicite d'une sauvegarde validée, puis redémarrage.
+      log.error('[STARTUP] Base en RECOVERY_REQUIRED, démarrage arrêté.', dbErr.info);
+      const dbPath: string = dbErr.info.dbPath;
+      const choice = dialog.showMessageBoxSync({
+        type: 'error',
+        title: 'GEST-IN-SITU — Base de données à restaurer',
+        message: 'La mise à jour de la base locale a échoué.',
+        detail:
+          "Aucune donnée n'a été supprimée ni réinitialisée.\n\n" +
+          `Snapshot de l'état en échec : ${dbErr.info.snapshotPath ?? 'non créé'}\n` +
+          `Marqueur : ${recoveryMarkerPath(dbPath)}\n\n` +
+          'Vous pouvez restaurer une sauvegarde valide (fichier .db) ou quitter et contacter le support.',
+        buttons: ['Restaurer une sauvegarde…', 'Quitter'],
+        defaultId: 1,
+        cancelId: 1,
+      });
+      if (choice === 0) {
+        const picked = dialog.showOpenDialogSync({
+          title: 'Choisir une sauvegarde à restaurer',
+          properties: ['openFile'],
+          filters: [{ name: 'Base SQLite', extensions: ['db', 'sqlite'] }],
+        });
+        if (picked && picked[0]) {
+          try {
+            performRestore({
+              sourcePath: picked[0],
+              dbPath,
+              backupDir: join(dirname(dbPath), 'backups_recovery'),
+              liveDb: null,
+              targetVersion: SCHEMA_VERSION,
+            });
+            log.warn(`[STARTUP] Restauration validée depuis ${picked[0]} : redémarrage.`);
+            app.relaunch();
+            app.exit(0);
+            return;
+          } catch (restoreErr: any) {
+            log.error('[STARTUP] Restauration refusée :', restoreErr);
+            dialog.showErrorBox(
+              'GEST-IN-SITU — Restauration refusée',
+              `${restoreErr.message}
+
+Aucune modification n'a été appliquée à la base locale. Le marqueur RECOVERY_REQUIRED est conservé.`
+            );
+          }
+        }
+      }
+      app.exit(1);
+      return;
+    }
+    throw dbErr;
+  }
   log.info('Database initialized');
   resetOutboxErrors();
 

@@ -1,105 +1,133 @@
 import Database from 'better-sqlite3';
+import { dirname, join } from 'path';
 import log from 'electron-log';
 import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
+import { RecoveryRequiredError, RecoveryInfo, readRecoveryMarker, writeRecoveryMarker, snapshotDatabase, validateDatabase, countCriticalRows, planFtsRepair, repairFtsDrift } from './recovery';
 
-export const SCHEMA_VERSION = 70;
+export const SCHEMA_VERSION = 71;
 
 export function runMigrations(db: Database.Database): void {
+  const dbPath = (db as any).name as string;
+
+  // Marqueur RECOVERY_REQUIRED : aucun démarrage automatique (ni migration, ni rejeu, ni réinstallation).
+  // Sortir de cet état passe uniquement par une restauration validée (performRestore).
+  const marker = readRecoveryMarker(dbPath);
+  if (marker) {
+    log.error(`[MIGRATION] Base en RECOVERY_REQUIRED (${marker.reason}) : démarrage automatique refusé.`);
+    throw new RecoveryRequiredError(marker);
+  }
+
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
-  log.info(`[MIGRATION] Version du schÃ©ma actuelle : ${currentVersion}, cible : ${SCHEMA_VERSION}`);
+  const hasUserTables = (db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").get() as { c: number }).c > 0;
+  // Installation neuve = base absente (aucune table, user_version 0).
+  const isFreshInstall = currentVersion === 0 && !hasUserTables;
+  const pending = currentVersion < SCHEMA_VERSION;
+  log.info(`[MIGRATION] Version du schéma actuelle : ${currentVersion}, cible : ${SCHEMA_VERSION}${isFreshInstall ? ' (installation neuve)' : ''}`);
+
+  // Contrat : user_version 0 avec des tables = base existante de version inconnue. Rien n'est rejoué
+  // (un rejeu depuis V1 sur un schéma moderne échoue) ni écrit : RECOVERY_REQUIRED directement.
+  if (currentVersion === 0 && hasUserTables) {
+    throw enterRecoveryRequired(db, dbPath, 0, new Error('user_version = 0 sur une base contenant déjà des tables : version indéterminée, aucune migration rejouée automatiquement'));
+  }
+
+  const before = pending && !isFreshInstall ? countCriticalRows(db) : null;
 
   try {
-    if (currentVersion < 1) {
-      log.info('Running migration v1: Initial schema');
+    // 1. Migration
+    if (isFreshInstall) {
+      log.info('New database installation: schéma initial créé directement');
       migrateV1(db);
-      db.pragma(`user_version = ${SCHEMA_VERSION}`);
-      log.info(`New database installation: schema directly set to version ${SCHEMA_VERSION}`);
-      // Filet de sÃ©curitÃ© : garantir les colonnes mÃªme pour une install neuve
-      migrateV27_safetyNet(db);
-      // Filet d'intÃ©gritÃ© structurelle (V66) : nÃ©gligeable sur une install neuve
-      // (migrateV1 crÃ©e dÃ©jÃ  le schÃ©ma courant), gardÃ© pour la parfaite
-      // cohÃ©rence de tous les chemins de dÃ©marrage.
-      migrateV66_structuralIntegrityNet(db);
-      log.info('All migrations complete');
-      return;
+      migrateV71(db);
+    } else {
+      runMigrationSequence(db, currentVersion);
     }
 
-    // â”€â”€â”€ SÃ‰QUENCE NORMALE DE MIGRATIONS (V2 â†’ V{SCHEMA_VERSION}) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Extraite en fonction rÃ©utilisable runMigrationSequence() plus bas dans ce
-    // fichier, rejouÃ©e Ã  l'identique par ce chemin normal ET par le chemin de
-    // secours (reconstruction d'urgence, catch global ci-dessous) â€” au lieu de
-    // maintenir une liste figÃ©e sÃ©parÃ©e qui devait Ãªtre resynchronisÃ©e
-    // manuellement Ã  chaque nouvelle migration (cause confirmÃ©e du bug : la
-    // liste de secours s'arrÃªtait Ã  migrateV48 tout en tamponnant user_version
-    // au maximum, ce qui mentait sur l'Ã©tat rÃ©el du schÃ©ma).
-    runMigrationSequence(db, currentVersion, false);
-
-    db.pragma(`user_version = ${SCHEMA_VERSION}`);
-
-    // â”€â”€â”€ FILET DE SÃ‰CURITÃ‰ UNIVERSEL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // ExÃ©cutÃ© aprÃ¨s TOUTES les migrations pour corriger les bases corrompues
+    // Filets de sécurité (colonnes, puis intégrité structurelle — peut rejouer migrateV60).
     migrateV27_safetyNet(db);
-    // â”€â”€â”€ FILET D'INTÃ‰GRITÃ‰ STRUCTURELLE PÃ‰RENNE (V66) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Contrairement Ã  migrateV27_safetyNet (colonnes uniquement via ALTER TABLE
-    // ADD COLUMN), inspecte l'Ã©tat structurel RÃ‰EL (sqlite_master / PRAGMA
-    // table_info) plutÃ´t que de faire confiance Ã  user_version â€” indÃ©pendant de
-    // toute tromperie passÃ©e ou future sur user_version. Toujours APRÃˆS
-    // migrateV27_safetyNet (ordre impÃ©ratif). CoÃ»t nÃ©gligeable : uniquement des
-    // lookups sqlite_master, jamais de scan de lignes de t_cartes/t_users.
     migrateV66_structuralIntegrityNet(db);
-    // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-    log.info('[MIGRATION] Toutes les migrations terminÃ©es avec succÃ¨s.');
+    // 2. Réinstallation canonique des triggers FTS5 : migrateV60 (RENAME/DROP de t_cartes) et les
+    // passes ci-dessus suppriment les triggers. Installation centralisée, avant toute validation.
+    db.transaction(() => installCanonicalFtsTriggers(db))();
 
-  } catch (migrationError: any) {
-    // â”€â”€â”€ CATCH GLOBAL : RECONSTRUCTION D'URGENCE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    log.error('[MIGRATION] Ã‰CHEC CRITIQUE du cycle de migration. DÃ©clenchement de la reconstruction d\'urgence.', migrationError);
-
-    try {
-      // Ã‰tape 1 : Sauvegarder la base corrompue
-      const { join } = require('path');
-      const { copyFileSync } = require('fs');
-      const dbPath = (db as any).name as string;
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const backupPath = join(require('path').dirname(dbPath), `database_backup_emergency_${timestamp}.db`);
-      try {
-        copyFileSync(dbPath, backupPath);
-        log.warn(`[MIGRATION] Sauvegarde d'urgence crÃ©Ã©e : ${backupPath}`);
-      } catch (backupErr) {
-        log.error('[MIGRATION] Impossible de crÃ©er la sauvegarde d\'urgence :', backupErr);
+    if (pending) {
+      // 3. Validation structurelle et FTS5 (user_version pas encore estampillé)
+      let report = validateDatabase(db);
+      const plan = planFtsRepair(report);
+      if (plan === 'stop') {
+        throw new Error(`Validation post-migration échouée : ${report.failures.join(' | ')}`);
+      }
+      if (plan === 'rebuild') {
+        // 4-5. Dérive FTS5 seule : reconstruction contrôlée de l'index (aucune autre anomalie)
+        log.warn(`[MIGRATION] Dérive FTS5 existante détectée (${report.ftsDrift.join(', ')}) : reconstruction contrôlée.`);
+        repairFtsDrift(db, report);
+        // 6. Validation FTS5 après reconstruction
+        report = validateDatabase(db);
+        if (!report.ok) {
+          throw new Error(`Validation après reconstruction FTS5 échouée : ${report.failures.join(' | ')}`);
+        }
       }
 
-      // Ã‰tape 2 : RÃ©initialisation forcÃ©e du schÃ©ma en V1, puis rejeu COMPLET de
-      // la sÃ©quence normale (V2 â†’ V{SCHEMA_VERSION}) via runMigrationSequence().
-      // Contrairement Ã  l'ancienne liste figÃ©e ad-hoc (migrateV29..migrateV48
-      // uniquement) qui tamponnait user_version = SCHEMA_VERSION AVANT de rejouer
-      // quoi que ce soit et s'arrÃªtait bien avant V65 : un poste ayant traversÃ©
-      // ce filet se dÃ©clarait faussement "Ã  jour" alors qu'il lui manquait
-      // structurellement les migrations V49-V65 (dont les index de performance
-      // V60/V61/V62 â€” preuve en production : requÃªtes stats:get passÃ©es de <1s
-      // Ã  7-11s sur le poste affectÃ©). Le tamponnage de user_version n'intervient
-      // dÃ©sormais qu'APRÃˆS que runMigrationSequence ait rÃ©ellement terminÃ© avec
-      // succÃ¨s, jamais avant.
-      log.warn(`[MIGRATION] Tentative de rÃ©installation complÃ¨te du schÃ©ma jusqu'en V${SCHEMA_VERSION}...`);
-      db.pragma('user_version = 0');
-      migrateV1(db);
-      // Garde anti-rÃ©cursion explicite (isEmergencyRetry=true) : si cette
-      // deuxiÃ¨me tentative Ã©choue Ã  son tour, runMigrationSequence() ne retente
-      // JAMAIS une nouvelle reconstruction â€” elle logue une erreur critique
-      // distincte et remonte l'exception telle quelle, captÃ©e par le catch
-      // (emergencyError) ci-dessous qui throw sans aucune boucle possible.
-      runMigrationSequence(db, 1, true);
-      db.pragma(`user_version = ${SCHEMA_VERSION}`);
-      migrateV27_safetyNet(db);
-      migrateV66_structuralIntegrityNet(db);
-      log.info(`[MIGRATION] Reconstruction d'urgence terminÃ©e. SchÃ©ma rÃ©ellement rÃ©installÃ© en V${SCHEMA_VERSION}.`);
-
-    } catch (emergencyError: any) {
-      log.error('[MIGRATION] Ã‰CHEC TOTAL de la reconstruction d\'urgence. L\'application peut Ãªtre inutilisable.', emergencyError);
-      throw emergencyError;
+      // 7. Données critiques inchangées par la migration et la reconstruction
+      if (before) {
+        const after = countCriticalRows(db);
+        for (const table of Object.keys(before)) {
+          if (before[table] !== -1 && before[table] !== after[table]) {
+            throw new Error(`Données critiques modifiées par la migration : ${table} ${before[table]} → ${after[table]}`);
+          }
+        }
+      }
+      log.info('[MIGRATION] Validation post-migration réussie (intégrité, schéma, triggers, FTS5 simple et strict, données critiques).');
     }
+
+    // 8. user_version final : uniquement après migration complète et validation réussie
+    db.pragma(`user_version = ${SCHEMA_VERSION}`);
+    const stamped = db.pragma('user_version', { simple: true }) as number;
+    if (stamped !== SCHEMA_VERSION) {
+      throw new Error(`user_version non persisté : attendu ${SCHEMA_VERSION}, obtenu ${stamped}`);
+    }
+    // 9. Migration considérée réussie
+    log.info('[MIGRATION] Toutes les migrations terminées avec succès.');
+  } catch (err) {
+    throw enterRecoveryRequired(db, dbPath, currentVersion, err);
   }
+}
+
+/**
+ * Passage en RECOVERY_REQUIRED : snapshot cohérent de l'état après rollback (VACUUM INTO), marqueur
+ * fichier, puis erreur remontée à l'appelant. Aucune réinstallation, aucune remise à zéro de
+ * user_version. Les transactions de migration ayant échoué sont déjà annulées par SQLite.
+ */
+function enterRecoveryRequired(db: Database.Database, dbPath: string, fromVersion: number, cause: unknown): RecoveryRequiredError {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  log.error('[MIGRATION] ÉCHEC : passage en RECOVERY_REQUIRED. Aucune réinstallation automatique, user_version inchangé.', cause);
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const snapshotPath = join(dirname(dbPath), 'backups_recovery', `recovery_v${fromVersion}_to_v${SCHEMA_VERSION}_${stamp}.db`);
+  let savedSnapshot: string | null = null;
+  try {
+    snapshotDatabase(db, snapshotPath);
+    savedSnapshot = snapshotPath;
+    log.warn(`[MIGRATION] Snapshot de recovery (VACUUM INTO, WAL inclus) : ${snapshotPath}`);
+  } catch (snapErr) {
+    log.error('[MIGRATION] Snapshot de recovery impossible :', snapErr);
+  }
+
+  const info: RecoveryInfo = {
+    dbPath,
+    fromVersion,
+    targetVersion: SCHEMA_VERSION,
+    reason,
+    snapshotPath: savedSnapshot,
+    createdAt: new Date().toISOString(),
+  };
+  try {
+    writeRecoveryMarker(info);
+  } catch (markerErr) {
+    log.error('[MIGRATION] Marqueur RECOVERY_REQUIRED non écrit : le prochain démarrage retentera la migration.', markerErr);
+  }
+  return new RecoveryRequiredError(info);
 }
 
 // =====================================================
@@ -109,15 +137,11 @@ export function runMigrations(db: Database.Database): void {
 // d'urgence) â€” au lieu de maintenir une liste figÃ©e sÃ©parÃ©e qui devait Ãªtre
 // resynchronisÃ©e manuellement Ã  chaque nouvelle migration.
 //
-// @param currentVersion   Version de schÃ©ma de dÃ©part (la vraie valeur lue
-//                          depuis user_version en chemin normal, ou 1 aprÃ¨s le
-//                          repli d'urgence sur migrateV1).
-// @param isEmergencyRetry  Garde anti-rÃ©cursion explicite : distingue un rejeu
-//                          normal d'un rejeu dÃ©jÃ  en reconstruction d'urgence,
-//                          pour journaliser prÃ©cisÃ©ment un Ã©chec en cascade
-//                          plutÃ´t que de retenter silencieusement.
+// @param currentVersion   Version de schéma de départ (valeur lue depuis user_version).
+//                          Un échec remonte à runMigrations(), qui passe la base en
+//                          RECOVERY_REQUIRED : aucun rejeu automatique n'est tenté ici.
 // =====================================================
-function runMigrationSequence(db: Database.Database, currentVersion: number, isEmergencyRetry: boolean): void {
+function runMigrationSequence(db: Database.Database, currentVersion: number): void {
   try {
     if (currentVersion < 2) {
       log.info('Running migration v2: Ensuring tables');
@@ -463,17 +487,12 @@ function runMigrationSequence(db: Database.Database, currentVersion: number, isE
       log.info('Running migration v70: Adding action_at column to t_cartes (horodatage d\'action metier, distinct du watermark reseau updated_at)');
       migrateV70(db);
     }
-  } catch (seqError: any) {
-    if (isEmergencyRetry) {
-      // Garde anti-rÃ©cursion explicite : on est dÃ©jÃ  en train de rejouer la
-      // sÃ©quence complÃ¨te depuis V1 suite Ã  une reconstruction d'urgence, et
-      // MÃŠME CE REJEU Ã©choue. On ne tente surtout PAS une deuxiÃ¨me reconstruction
-      // (aucun appel rÃ©cursif Ã  runMigrations ou runMigrationSequence ici) : on
-      // journalise une erreur critique distincte et on remonte l'exception telle
-      // quelle, captÃ©e par le catch (emergencyError) de runMigrations qui la
-      // relance sans aucune nouvelle tentative.
-      log.error('[MIGRATION] Ã‰CHEC CRITIQUE pendant le rejeu de la sÃ©quence de migrations DURANT la reconstruction d\'urgence elle-mÃªme (isEmergencyRetry=true). Abandon dÃ©finitif â€” aucune nouvelle reconstruction ne sera tentÃ©e.', seqError);
+
+    if (currentVersion < 71) {
+      log.info('Running migration v71: FTS5 triggers canoniques (commande \'delete\' avec anciennes valeurs) sur t_cartes_fts et t_anomalies_fts');
+      migrateV71(db);
     }
+  } catch (seqError: any) {
     throw seqError;
   }
 }
@@ -2808,7 +2827,7 @@ function migrateV54(db: Database.Database): void {
 
     // ETAPE 1 : BACKUP
     const { join, dirname } = require('path');
-    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const { mkdirSync, statSync } = require('fs');
     const dbPath = (db as any).name as string;
     
     if (dbPath !== ':memory:') {
@@ -2818,7 +2837,7 @@ function migrateV54(db: Database.Database): void {
       } catch(e) {}
       const timestamp = new Date().getTime();
       const backupPath = join(backupDir, `backup_pre_v54_${timestamp}.sqlite`);
-      copyFileSync(dbPath, backupPath);
+      snapshotDatabase(db, backupPath);
       const backupSize = statSync(backupPath).size;
       log.info(`[MIGRATION V54] Backup physique pre-reconstruction cree avec succes : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
     }
@@ -3128,7 +3147,7 @@ export function migrateV60(db: Database.Database): void {
 
     // ÉTAPE 1 : BACKUP PHYSIQUE
     const { join, dirname } = require('path');
-    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const { mkdirSync, statSync } = require('fs');
     const dbPath = (db as any).name as string;
 
     if (dbPath !== ':memory:') {
@@ -3138,7 +3157,7 @@ export function migrateV60(db: Database.Database): void {
       } catch (e) {}
       const timestamp = new Date().getTime();
       const backupPath = join(backupDir, `backup_pre_v60_${timestamp}.sqlite`);
-      copyFileSync(dbPath, backupPath);
+      snapshotDatabase(db, backupPath);
       const backupSize = statSync(backupPath).size;
       log.info(`[MIGRATION V60] Backup physique pré-reconstruction créé avec succès : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
     }
@@ -3383,7 +3402,7 @@ export function migrateV64(db: Database.Database): void {
 
     // ÉTAPE 1 : BACKUP PHYSIQUE
     const { join, dirname } = require('path');
-    const { copyFileSync, mkdirSync, statSync } = require('fs');
+    const { mkdirSync, statSync } = require('fs');
     const dbPath = (db as any).name as string;
 
     if (dbPath !== ':memory:') {
@@ -3393,7 +3412,7 @@ export function migrateV64(db: Database.Database): void {
       } catch (e) {}
       const timestamp = new Date().getTime();
       const backupPath = join(backupDir, `backup_pre_v64_${timestamp}.sqlite`);
-      copyFileSync(dbPath, backupPath);
+      snapshotDatabase(db, backupPath);
       const backupSize = statSync(backupPath).size;
       log.info(`[MIGRATION V64] Backup physique pré-reconstruction créé avec succès : ${backupPath} (${(backupSize / 1024 / 1024).toFixed(2)} MB)`);
     }
@@ -3915,6 +3934,75 @@ function migrateV70(db: Database.Database): void {
     log.info('[MIGRATION V70] Migration V70 terminée avec succès.');
   } catch (e: any) {
     log.error('[MIGRATION V70] Erreur :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V71 — Triggers FTS5 canoniques (P0-D, audit du 27/09/2026)
+// =====================================================
+// t_cartes_fts et t_anomalies_fts sont des tables FTS5 à contenu EXTERNE (content='t_cartes',
+// content='t_import_anomalies'). Pour ce type de table, la documentation SQLite impose de retirer
+// une ligne de l'index par la commande spéciale INSERT INTO fts(fts, rowid, ...) VALUES('delete',
+// old.rowid, old.col...). Les triggers historiques faisaient un `DELETE FROM fts WHERE rowid = ...` :
+// FTS5 relit alors les colonnes dans la table de contenu, qui porte DÉJÀ les nouvelles valeurs dans
+// un trigger AFTER UPDATE — les jetons des anciennes valeurs ne sont jamais retirés. Effets constatés :
+// résultats de recherche fantômes, puis `integrity-check` strict (rank=1) en échec
+// « database disk image is malformed » (reproduit en mémoire et mesuré sur une copie de la base dev).
+//
+// Portée volontairement limitée aux TRIGGERS (DDL, aucune réécriture de données) : la reconstruction
+// de l'index existant (qui garde les jetons fantômes déjà accumulés) est une opération distincte,
+// explicite et soumise à validation (voir fts-maintenance.ts), jamais déclenchée par cette migration.
+// Idempotente : DROP IF EXISTS puis CREATE, dans une transaction. Le filtre `AFTER UPDATE OF <colonnes
+// FTS>` de V58 (anti-récursion avec trg_cartes_invalid_date_*) est conservé.
+// Rollback : rejouer migrateV58 + les définitions historiques (non recommandé : réintroduit la dérive).
+// =====================================================
+export function installCanonicalFtsTriggers(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS trg_cartes_ai;
+    DROP TRIGGER IF EXISTS trg_cartes_ad;
+    DROP TRIGGER IF EXISTS trg_cartes_au;
+
+    CREATE TRIGGER trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
+      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+
+    CREATE TRIGGER trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
+      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES ('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+    END;
+
+    CREATE TRIGGER trg_cartes_au AFTER UPDATE OF noms, prenoms, num_secu, contact, lieu_de_naissance, rangement ON t_cartes BEGIN
+      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES ('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+
+    DROP TRIGGER IF EXISTS trg_anomalies_ad;
+    DROP TRIGGER IF EXISTS trg_anomalies_au;
+
+    CREATE TRIGGER trg_anomalies_ad AFTER DELETE ON t_import_anomalies BEGIN
+      INSERT INTO t_anomalies_fts(t_anomalies_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES ('delete', old.id, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+    END;
+
+    CREATE TRIGGER trg_anomalies_au AFTER UPDATE ON t_import_anomalies BEGIN
+      INSERT INTO t_anomalies_fts(t_anomalies_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES ('delete', old.id, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
+      INSERT INTO t_anomalies_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
+      VALUES (new.id, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
+    END;
+  `);
+}
+
+function migrateV71(db: Database.Database): void {
+  try {
+    db.transaction(() => installCanonicalFtsTriggers(db))();
+    log.info('[MIGRATION V71] Triggers FTS5 canoniques installés (t_cartes_fts, t_anomalies_fts). Index existant NON reconstruit (opération distincte, soumise à validation).');
+  } catch (e: any) {
+    log.error('[MIGRATION V71] Erreur :', e.message);
     throw e;
   }
 }

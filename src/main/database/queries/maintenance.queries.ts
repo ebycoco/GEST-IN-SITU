@@ -1,4 +1,5 @@
 import { getDatabase } from '../connection';
+import { installCanonicalFtsTriggers } from '../schema';
 import log from 'electron-log';
 
 export function clearDatabaseCartes(siteId?: number): void {
@@ -156,24 +157,7 @@ export async function purgeLocalDatabase(siteId: number, progressCallback?: (per
 
     // Étape 3 : Recréation des TRIGGERS uniquement (copie exacte de emergencyPurge) —
     // t_cartes_fts elle-même n'est JAMAIS droppée/recréée (voir justification ci-dessus).
-    db.exec(`
-      CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
-        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-        INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-        INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
-        INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-        VALUES(new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-      END;
-    `);
+    installCanonicalFtsTriggers(db);
     if (progressCallback) progressCallback(60);
     await new Promise(resolve => setImmediate(resolve));
 
@@ -369,24 +353,7 @@ export async function emergencyPurge(
   // Étape 4 : Recréation des TRIGGERS uniquement (75%) — t_cartes_fts elle-même n'est
   // JAMAIS droppée/recréée (voir justification ci-dessus).
   if (progressCallback) progressCallback(75);
-  db.exec(`
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_ai AFTER INSERT ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES (new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_ad AFTER DELETE ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS trg_cartes_au AFTER UPDATE ON t_cartes BEGIN
-      INSERT INTO t_cartes_fts(t_cartes_fts, rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES('delete', old.id_carte, old.noms, old.prenoms, old.num_secu, old.contact, old.lieu_de_naissance, old.rangement);
-      INSERT INTO t_cartes_fts(rowid, noms, prenoms, num_secu, contact, lieu_de_naissance, rangement)
-      VALUES(new.id_carte, new.noms, new.prenoms, new.num_secu, new.contact, new.lieu_de_naissance, new.rangement);
-    END;
-  `);
+    installCanonicalFtsTriggers(db);
   await new Promise(resolve => setImmediate(resolve));
 
   // ─── PURGE FTS5 INCRÉMENTALE NON-BLOQUANTE (lots de 500 + yield setImmediate) ───
