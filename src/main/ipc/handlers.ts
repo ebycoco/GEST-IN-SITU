@@ -5350,7 +5350,17 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   let lastForceSyncAcceptedAt = 0;
   const FORCE_SYNC_MIN_INTERVAL_MS = 3000;
 
-  ipcMain.handle('sync:force', async (_, currentUser) => {
+  // `currentUser` reste dans la signature (le preload l'envoie encore) mais n'est plus utilisé
+  // pour l'identité : seule la session serveur fait foi (CLAUDE.md §3).
+  ipcMain.handle('sync:force', async (_, _currentUser) => {
+    // Session obligatoire, vérifiée AVANT la garde anti-rafale : un appel sans session
+    // ne consomme pas la fenêtre de 3 s, ne lance aucun cycle et n'écrit aucun audit.
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser) {
+      log.warn('[SECURITY] Accès refusé à sync:force : session invalide.');
+      return { success: false, message: 'Session invalide. Veuillez vous reconnecter.' };
+    }
+
     const now = Date.now();
     if (now - lastForceSyncAcceptedAt < FORCE_SYNC_MIN_INTERVAL_MS) {
       log.warn('[sync:force] Refusé : synchronisation manuelle déjà demandée il y a moins de 3 secondes.');
@@ -5358,7 +5368,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     lastForceSyncAcceptedAt = now;
 
-    const userLogin = currentUser?.login || getCurrentUserLogin() || 'SYSTEM';
+    const userLogin: string = secureUser.login || 'SYSTEM';
 
     setImmediate(() => {
       logAudit(
