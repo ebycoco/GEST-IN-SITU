@@ -6,6 +6,7 @@ files:
   - dist/**
   - package.json
   - resources/splash.html
+  - resources/icon.ico
 publish:
   provider: github
   owner: ebycoco
