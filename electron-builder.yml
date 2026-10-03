@@ -5,6 +5,7 @@ directories:
 files:
   - dist/**
   - package.json
+  - resources/splash.html
 publish:
   provider: github
   owner: ebycoco
