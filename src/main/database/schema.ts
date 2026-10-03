@@ -5,7 +5,7 @@ import { hashPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { RecoveryRequiredError, RecoveryInfo, readRecoveryMarker, writeRecoveryMarker, snapshotDatabase, validateDatabase, countCriticalRows, planFtsRepair, repairFtsDrift } from './recovery';
 
-export const SCHEMA_VERSION = 71;
+export const SCHEMA_VERSION = 72;
 
 export function runMigrations(db: Database.Database): void {
   const dbPath = (db as any).name as string;
@@ -39,6 +39,7 @@ export function runMigrations(db: Database.Database): void {
       log.info('New database installation: schéma initial créé directement');
       migrateV1(db);
       migrateV71(db);
+      migrateV72(db);
     } else {
       runMigrationSequence(db, currentVersion);
     }
@@ -491,6 +492,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number): vo
     if (currentVersion < 71) {
       log.info('Running migration v71: FTS5 triggers canoniques (commande \'delete\' avec anciennes valeurs) sur t_cartes_fts et t_anomalies_fts');
       migrateV71(db);
+    }
+
+    if (currentVersion < 72) {
+      log.info('Running migration v72: Repairing t_logs foreign key left pointing to a missing table (t_users_backup_v63, side effect of the V64 RENAME)');
+      migrateV72(db);
     }
   } catch (seqError: any) {
     throw seqError;
@@ -3597,6 +3603,11 @@ export function migrateV64(db: Database.Database): void {
       db.pragma('foreign_keys = ON');
     }
 
+    // Le RENAME de t_users ci-dessus a aussi réécrit la FK de t_logs vers t_users_backup_v63
+    // (supprimée) : seule t_user_roles est corrigée dans la transaction. V64 pouvant être rejouée
+    // par migrateV66_structuralIntegrityNet APRÈS V72, on répare t_logs ici aussi (no-op si saine).
+    migrateV72(db);
+
     const globalIntegrity = db.pragma('integrity_check', { simple: true });
     log.info(`[MIGRATION V64] GLOBAL PRAGMA integrity_check de fin = ${globalIntegrity}`);
     log.info("[MIGRATION V64] CHECK constraint de t_users.role et t_user_roles.role mise à jour avec succès pour inclure 'OPERATEUR_APUREMENT'.");
@@ -4003,6 +4014,148 @@ function migrateV71(db: Database.Database): void {
     log.info('[MIGRATION V71] Triggers FTS5 canoniques installés (t_cartes_fts, t_anomalies_fts). Index existant NON reconstruit (opération distincte, soumise à validation).');
   } catch (e: any) {
     log.error('[MIGRATION V71] Erreur :', e.message);
+    throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V72 — Réparation de la clé étrangère de t_logs pointant vers une table absente
+// =====================================================
+// Panne terrain : toute écriture dans t_logs échoue avec « no such table: main.t_users_backup_v63 ».
+// Cause : migrateV64 exécute `ALTER TABLE t_users RENAME TO t_users_backup_v63` ; depuis SQLite 3.26
+// (legacy_alter_table OFF), le RENAME réécrit les clauses REFERENCES des autres tables. migrateV64
+// corrige t_user_roles (remplacement explicite) mais pas t_logs, dont la FK reste pointée sur
+// t_users_backup_v63, supprimée ensuite. Avec foreign_keys = ON, chaque INSERT dans t_logs échoue.
+//
+// Réparation conditionnelle : t_logs n'est reconstruite QUE si une de ses FK vise une table absente.
+// Cible canonique : t_users(id_user) (migrateV1, `FOREIGN KEY (id_user) REFERENCES t_users(id_user)`),
+// seule FK jamais déclarée sur t_logs. La définition existante est reprise TEXTUELLEMENT (colonnes,
+// défauts, AUTOINCREMENT, colonnes ajoutées par ALTER, clauses ON DELETE éventuelles) : seul le nom de la
+// table référencée absente est remplacé. Copie INSERT…SELECT en une instruction, index et triggers
+// recréés, séquence AUTOINCREMENT préservée (pas de réattribution d'id_log déjà utilisés).
+// Les lignes orphelines (id_user absent de t_users) sont CONSERVÉES et signalées : la FK canonique
+// (sans action) ne contrôle pas les lignes existantes, seulement les nouvelles écritures de id_user.
+// Les autres tables ayant une FK vers une table absente sont uniquement signalées, jamais modifiées.
+// Idempotente : sans FK cassée, aucune écriture.
+// =====================================================
+const T_LOGS_FK_CANONICAL_TARGET = 't_users';
+const T_LOGS_REBUILD_TMP = 't_logs_v72_rebuild';
+
+interface BrokenForeignKey { table: string; from: string; to: string | null; target: string }
+
+const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
+
+/** FK de toutes les tables utilisateur dont la table référencée n'existe pas (lookups sqlite_master/PRAGMA uniquement). */
+export function findBrokenForeignKeys(db: Database.Database): BrokenForeignKey[] {
+  const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[])
+    .map(r => r.name);
+  const existing = new Set(tables.map(t => t.toLowerCase()));
+  const broken: BrokenForeignKey[] = [];
+  for (const table of tables) {
+    const fks = db.pragma(`foreign_key_list(${quoteIdent(table)})`) as { table: string; from: string; to: string | null }[];
+    for (const fk of fks) {
+      if (!existing.has(fk.table.toLowerCase())) {
+        broken.push({ table, from: fk.from, to: fk.to, target: fk.table });
+      }
+    }
+  }
+  return broken;
+}
+
+export function migrateV72(db: Database.Database): void {
+  try {
+    const broken = findBrokenForeignKeys(db);
+
+    const others = broken.filter(b => b.table !== 't_logs');
+    if (others.length > 0) {
+      log.warn(`[MIGRATION V72] ${others.length} autre(s) clé(s) étrangère(s) vers une table absente détectée(s) — NON réparée(s) par cette migration (signalement uniquement) : ${others.map(b => `${b.table}(${b.from}) → ${b.target}(${b.to ?? '?'})`).join(', ')}`);
+    }
+
+    const logsBroken = broken.filter(b => b.table === 't_logs');
+    if (logsBroken.length === 0) {
+      log.info('[MIGRATION V72] Clés étrangères de t_logs saines : aucune modification.');
+      return;
+    }
+
+    // Seule la FK id_user → t_users(id_user) a une cible canonique connue : aucune supposition au-delà.
+    const unsupported = logsBroken.filter(b => b.from !== 'id_user' || (b.to !== null && b.to !== 'id_user'));
+    if (unsupported.length > 0) {
+      log.error(`[MIGRATION V72] FK cassée(s) de t_logs sans cible canonique connue — t_logs NON modifiée : ${unsupported.map(b => `${b.from} → ${b.target}(${b.to ?? '?'})`).join(', ')}`);
+      return;
+    }
+
+    const tableRow = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='t_logs'").get() as { sql: string } | undefined;
+    if (!tableRow?.sql) {
+      throw new Error('[MIGRATION V72] Définition de t_logs introuvable dans sqlite_master.');
+    }
+
+    let newSql = tableRow.sql;
+    for (const b of logsBroken) {
+      const escaped = b.target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      newSql = newSql.replace(new RegExp(`(REFERENCES\\s+)(["\`\\[]?)${escaped}(["\`\\]]?)`, 'gi'), `$1${T_LOGS_FK_CANONICAL_TARGET}`);
+    }
+    const createRe = /^(\s*CREATE\s+TABLE\s+)(?:IF\s+NOT\s+EXISTS\s+)?(["`[]?)t_logs(["`\]]?)(\s*\()/i;
+    if (!createRe.test(newSql)) {
+      throw new Error(`[MIGRATION V72] En-tête CREATE TABLE de t_logs inattendu, reconstruction annulée : ${tableRow.sql.slice(0, 80)}`);
+    }
+    newSql = newSql.replace(createRe, `$1${T_LOGS_REBUILD_TMP}$4`);
+
+    log.warn(`[MIGRATION V72] FK de t_logs vers table absente (${logsBroken.map(b => b.target).join(', ')}) : reconstruction de t_logs avec REFERENCES ${T_LOGS_FK_CANONICAL_TARGET}(id_user).`);
+
+    // PRAGMA foreign_keys est sans effet dans une transaction : désactivé avant, restauré après.
+    const fkState = db.pragma('foreign_keys', { simple: true }) as number;
+    db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        const countBefore = (db.prepare('SELECT COUNT(*) AS c FROM t_logs').get() as { c: number }).c;
+        const seqBefore = (db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 't_logs'").get() as { seq: number } | undefined)?.seq ?? null;
+        const oldIndexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='t_logs' AND sql IS NOT NULL").all() as { name: string; sql: string }[];
+        const oldTriggers = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name='t_logs' AND sql IS NOT NULL").all() as { name: string; sql: string }[];
+        const cols = (db.pragma('table_info(t_logs)') as { name: string }[]).map(c => quoteIdent(c.name)).join(', ');
+
+        db.exec(`DROP TABLE IF EXISTS ${T_LOGS_REBUILD_TMP}`);
+        db.exec(newSql);
+        db.exec(`INSERT INTO ${T_LOGS_REBUILD_TMP} (${cols}) SELECT ${cols} FROM t_logs`);
+
+        const countCopied = (db.prepare(`SELECT COUNT(*) AS c FROM ${T_LOGS_REBUILD_TMP}`).get() as { c: number }).c;
+        if (countCopied !== countBefore) {
+          throw new Error(`[MIGRATION V72] Perte de données détectée sur t_logs : avant=${countBefore}, copié=${countCopied}`);
+        }
+
+        db.exec('DROP TABLE t_logs');
+        db.exec(`ALTER TABLE ${T_LOGS_REBUILD_TMP} RENAME TO t_logs`);
+        for (const idx of oldIndexes) db.exec(idx.sql);
+        for (const trg of oldTriggers) db.exec(trg.sql);
+
+        if (seqBefore !== null) {
+          const upd = db.prepare("UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 't_logs'").run(seqBefore);
+          if (upd.changes === 0) {
+            db.prepare("INSERT INTO sqlite_sequence (name, seq) VALUES ('t_logs', ?)").run(seqBefore);
+          }
+        }
+
+        const stillBroken = findBrokenForeignKeys(db).filter(b => b.table === 't_logs');
+        if (stillBroken.length > 0) {
+          throw new Error(`[MIGRATION V72] FK de t_logs toujours cassée après reconstruction : ${stillBroken.map(b => b.target).join(', ')}`);
+        }
+        const countAfter = (db.prepare('SELECT COUNT(*) AS c FROM t_logs').get() as { c: number }).c;
+        if (countAfter !== countBefore) {
+          throw new Error(`[MIGRATION V72] Perte de données détectée sur t_logs : avant=${countBefore}, après=${countAfter}`);
+        }
+
+        // Lignes orphelines : conservées (aucune suppression), signalées pour audit.
+        const orphans = db.pragma('foreign_key_check(t_logs)') as { rowid: number }[];
+        if (orphans.length > 0) {
+          log.warn(`[MIGRATION V72] ${orphans.length} ligne(s) t_logs orpheline(s) (id_user absent de t_users) CONSERVÉE(S) sans modification. rowid (20 premiers) : ${orphans.slice(0, 20).map(o => o.rowid).join(', ')}`);
+        }
+
+        log.info(`[MIGRATION V72] t_logs reconstruite : ${countAfter} ligne(s) conservée(s), ${oldIndexes.length} index et ${oldTriggers.length} trigger(s) recréé(s).`);
+      }).exclusive();
+    } finally {
+      if (fkState) db.pragma('foreign_keys = ON');
+    }
+  } catch (e: any) {
+    log.error('[MIGRATION V72] Erreur :', e.message);
     throw e;
   }
 }

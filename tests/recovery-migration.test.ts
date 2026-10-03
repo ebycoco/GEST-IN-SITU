@@ -94,7 +94,7 @@ function makeLiveInRecovery(name: string, n: number): string {
   seed(live, n);
   live.close();
   recovery.writeRecoveryMarker({
-    dbPath, fromVersion: 70, targetVersion: 71, reason: 'scénario de test',
+    dbPath, fromVersion: 70, targetVersion: 72, reason: 'scénario de test',
     snapshotPath: null, createdAt: new Date().toISOString(),
   });
   return dbPath;
@@ -147,12 +147,12 @@ describe('Recovery des migrations', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(71);
+    expect(userVersion(db)).toBe(72);
     expect(triggerSql(db, 'trg_cartes_ad')).toMatch(/VALUES\s*\(\s*'delete'/i);
     expect(triggerSql(db, 'trg_anomalies_au')).toMatch(/VALUES\s*\(\s*'delete'/i);
     expect(countCartes(db)).toBe(avant);
     expect(loggedMessages().some(m => m.includes('Running migration v71'))).toBe(true);
-    expect(recovery.validateDatabase(db, 71).ok).toBe(true);
+    expect(recovery.validateDatabase(db, 72).ok).toBe(true);
   });
 
   it('B — échec volontaire de V71 : rollback, snapshot cohérent, RECOVERY_REQUIRED', () => {
@@ -252,7 +252,7 @@ describe('Recovery des migrations', () => {
     expect(() => schema.runMigrations(db)).not.toThrow();
 
     const msgs = loggedMessages();
-    for (const v of [67, 68, 69, 70, 71]) {
+    for (const v of [67, 68, 69, 70, 71, 72]) {
       expect(msgs.some(m => m.includes(`Running migration v${v}:`)), `V${v} exécutée`).toBe(true);
     }
     expect(msgs.some(m => m.includes('New database installation'))).toBe(false);
@@ -261,7 +261,7 @@ describe('Recovery des migrations', () => {
     expect(cols).toContain('doublon_declare_par');
     expect(cols).toContain('action_at');
     expect((db.pragma('table_info(t_outbox)') as { name: string }[]).map(c => c.name)).toContain('last_attempt_at');
-    expect(userVersion(db)).toBe(71);
+    expect(userVersion(db)).toBe(72);
     expect(triggerSql(db, 'trg_cartes_ad')).toMatch(/VALUES\s*\(\s*'delete'/i);
     expect(countCartes(db)).toBe(60);
   });
@@ -276,7 +276,7 @@ describe('Recovery des migrations', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(71);
+    expect(userVersion(db)).toBe(72);
     expect(warnSpy.mock.calls.some(c => String(c[0]).includes('Dérive FTS5 existante'))).toBe(true);
     warnSpy.mockRestore();
     expect(fts.checkFtsIntegrity(db, 't_cartes_fts', true).ok).toBe(true);
@@ -314,13 +314,13 @@ describe('Recovery des migrations', () => {
     const db = track(openLikeApp(scenarioDb('G')));
     schema.runMigrations(db);
     seed(db, 200);
-    const ok = recovery.validateDatabase(db, 71);
+    const ok = recovery.validateDatabase(db, 72);
     expect(ok.failures).toEqual([]);
     expect(ok.ok).toBe(true);
 
     db.exec(LEGACY_TRIGGERS);
     db.prepare(`UPDATE t_cartes SET rangement = 'ZZZ-1' WHERE id_carte <= 120`).run();
-    const derive = recovery.validateDatabase(db, 71);
+    const derive = recovery.validateDatabase(db, 72);
     expect(derive.ok).toBe(false);
     expect(derive.ftsDrift).toEqual(['t_cartes_fts']);
     expect(derive.ftsSimpleFailed).toEqual([]);
@@ -333,7 +333,7 @@ describe('Recovery des migrations', () => {
     const db = track(openLikeApp(scenarioDb('G2')));
     schema.runMigrations(db);
     db.exec('DROP TRIGGER trg_cartes_au;');
-    const report = recovery.validateDatabase(db, 71);
+    const report = recovery.validateDatabase(db, 72);
     expect(report.ok).toBe(false);
     expect(report.failures).toContain('trigger manquant : trg_cartes_au');
   });
@@ -406,7 +406,7 @@ describe('Recovery des migrations', () => {
     const livePath = makeLiveInRecovery('J-live', 10);
     const backupDir = path.join(tmpRoot, 'J', 'backups');
     const outcome = recovery.performRestore({
-      sourcePath: snapPath, dbPath: livePath, backupDir, liveDb: null, targetVersion: 71,
+      sourcePath: snapPath, dbPath: livePath, backupDir, liveDb: null, targetVersion: 72,
     });
 
     expect(outcome.ftsRepaired).toEqual(['t_cartes_fts']);
@@ -432,7 +432,7 @@ describe('Recovery des migrations', () => {
     const backupDir = path.join(tmpRoot, 'J2', 'backups');
 
     expect(() => recovery.performRestore({
-      sourcePath: garbage, dbPath: livePath, backupDir, liveDb: null, targetVersion: 71,
+      sourcePath: garbage, dbPath: livePath, backupDir, liveDb: null, targetVersion: 72,
     })).toThrow(recovery.RestoreRefusedError);
 
     expect(recovery.readRecoveryMarker(livePath)).not.toBeNull();
@@ -452,7 +452,7 @@ describe('Recovery des migrations', () => {
     const livePath = makeLiveInRecovery('J3-live', 10);
 
     expect(() => recovery.performRestore({
-      sourcePath: snapPath, dbPath: livePath, backupDir: path.join(tmpRoot, 'J3', 'backups'), liveDb: null, targetVersion: 71,
+      sourcePath: snapPath, dbPath: livePath, backupDir: path.join(tmpRoot, 'J3', 'backups'), liveDb: null, targetVersion: 72,
     })).toThrow(/user_version 0 hors de la plage/);
     expect(recovery.readRecoveryMarker(livePath)).not.toBeNull();
   });
@@ -466,7 +466,7 @@ describe('Recovery des migrations', () => {
     const backupDir = path.join(tmpRoot, 'J5', 'backups');
 
     expect(() => recovery.performRestore({
-      sourcePath: snapPath, dbPath: livePath, backupDir, liveDb: null, targetVersion: 71,
+      sourcePath: snapPath, dbPath: livePath, backupDir, liveDb: null, targetVersion: 72,
     })).toThrow(/snapshot d'un échec de migration/);
     expect(recovery.readRecoveryMarker(livePath)).not.toBeNull();
     expect(fs.existsSync(backupDir)).toBe(false);
@@ -481,7 +481,7 @@ describe('Recovery des migrations', () => {
     const livePath = makeLiveInRecovery('J4-live', 10);
 
     expect(() => recovery.performRestore({
-      sourcePath: snapPath, dbPath: livePath, backupDir: path.join(tmpRoot, 'J4', 'backups'), liveDb: null, targetVersion: 71,
+      sourcePath: snapPath, dbPath: livePath, backupDir: path.join(tmpRoot, 'J4', 'backups'), liveDb: null, targetVersion: 72,
     })).toThrow(/anomalie non réparable automatiquement/);
     expect(recovery.readRecoveryMarker(livePath)).not.toBeNull();
   });

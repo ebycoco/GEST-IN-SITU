@@ -64,9 +64,9 @@ describe('FTS5 — triggers canoniques V71 + maintenance (P0-D)', () => {
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('installation neuve : SCHEMA_VERSION 71 et triggers canoniques en place', () => {
-    expect(schema.SCHEMA_VERSION).toBe(71);
-    expect(db.pragma('user_version', { simple: true })).toBe(71);
+  it('installation neuve : SCHEMA_VERSION 72 et triggers canoniques en place', () => {
+    expect(schema.SCHEMA_VERSION).toBe(72);
+    expect(db.pragma('user_version', { simple: true })).toBe(72);
     const sql = (name: string) => (db.prepare(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?`).get(name) as { sql: string }).sql;
     for (const t of ['trg_cartes_ad', 'trg_cartes_au', 'trg_anomalies_ad', 'trg_anomalies_au']) {
       expect(sql(t)).toMatch(/VALUES \('delete'/);
@@ -130,7 +130,7 @@ describe('FTS5 — triggers canoniques V71 + maintenance (P0-D)', () => {
     const nbCartes = (legacy.prepare('SELECT COUNT(*) AS c FROM t_cartes').get() as { c: number }).c;
     // Contrat décidé : V71 + dérive FTS5 seule → reconstruction contrôlée par la migration elle-même.
     schema.runMigrations(legacy);
-    expect(legacy.pragma('user_version', { simple: true })).toBe(71);
+    expect(legacy.pragma('user_version', { simple: true })).toBe(72);
     expect(fts.checkFtsIntegrity(legacy, 't_cartes_fts', true).ok).toBe(true);
     expect(fts.checkFtsIntegrity(legacy, 't_anomalies_fts', true).ok).toBe(true);
     expect((legacy.prepare('SELECT COUNT(*) AS c FROM t_cartes').get() as { c: number }).c).toBe(nbCartes);
