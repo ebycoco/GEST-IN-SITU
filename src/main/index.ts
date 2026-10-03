@@ -24,6 +24,7 @@ import { initDatabase, getDatabase } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
 import { ensureSyncIds } from './database/queries/hierarchy.queries';
 import { setupAutoUpdater, isUpdateReadyToInstall, triggerUpdateInstall } from './auto-updater';
+import { loadInitialNavigation } from './startup-navigation';
 import * as fs from 'fs';
 import { initBackupScheduler } from './backup';
 import log from 'electron-log';
@@ -253,11 +254,14 @@ function createWindow(): void {
     return { action: 'deny' };
   });
 
-  if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
-  }
+  // Chargement initial : même cible qu'avant, avec une seule récupération si le Network Service
+  // a été perdu pendant le démarrage (voir src/main/startup-navigation.ts).
+  const win = mainWindow;
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL'];
+  const loadInitialPage = is.dev && rendererUrl
+    ? () => win.loadURL(rendererUrl)
+    : () => win.loadFile(join(__dirname, '../renderer/index.html'));
+  void loadInitialNavigation(loadInitialPage, { log, canRetry: () => !win.isDestroyed() });
 }
 
 // Window controls IPC
