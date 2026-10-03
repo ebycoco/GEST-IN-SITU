@@ -24,6 +24,7 @@ import { normalizeDate } from '../../shared/utils/date';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
 import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxErrorIds, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
+import { classifyImportOutcome, isSupportedImportFile, UNSUPPORTED_IMPORT_FILE_MESSAGE } from '../import/import-outcome';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
 const FAILSAFE_ROOT_ID = 999999;
@@ -2391,8 +2392,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const result = await dialog.showOpenDialog({
       properties: ['openFile'],
       filters: [
-        { name: 'Fichiers données', extensions: ['csv', 'xlsx', 'xls'] },
-        { name: 'Tous', extensions: ['*'] }
+        // P1-C : seul le CSV est réellement lu (aperçu et worker lisent le fichier en texte) ;
+        // proposer xlsx/xls laissait importer des octets binaires comme des données.
+        { name: 'Fichiers CSV', extensions: ['csv'] }
       ]
     });
     return result.canceled ? null : result.filePaths[0];
@@ -2421,6 +2423,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // IMPORT - Preview (only reads first 1000 rows + counts total)
   ipcMain.handle('import:parseCSV', async (_, filePath: string) => {
+    if (!isSupportedImportFile(filePath)) {
+      return { rows: [], headers: [], total: 0, error: UNSUPPORTED_IMPORT_FILE_MESSAGE };
+    }
     try {
       const rows: any[] = [];
       let headers: string[] = [];
@@ -2872,6 +2877,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (secureUser!.role !== 'SUPER ADMIN') {
         siteId = secureUser!.site_id ?? undefined;
       }
+      // P1-C : défense serveur, un appel IPC direct ne doit pas pouvoir faire lire un binaire.
+      if (!isSupportedImportFile(filePath)) {
+        return reject(new Error(UNSUPPORTED_IMPORT_FILE_MESSAGE));
+      }
 
       // Resolve the path to better-sqlite3 native module
       let sqlitePath: string;
@@ -3001,7 +3010,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           }
           decrement();
           syncEngine.resume();
-          resolve(msg.result);
+          // P1-C : bilan SUCCES / PARTIEL / ECHEC calculé ici (source de vérité), affiché tel quel
+          // par ImportPage — plus de « succès » inconditionnel à 100 % de rejets.
+          resolve({ ...msg.result, outcome: classifyImportOutcome(msg.result || {}) });
         } else if (msg.type === 'error') {
           mainWindow.removeListener('focus', onMainWindowFocus);
           log.error('Import worker error', msg.error);

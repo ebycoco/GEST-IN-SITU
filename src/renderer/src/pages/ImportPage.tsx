@@ -26,7 +26,7 @@ export default function ImportPage() {
   const [preview, setPreview] = useState<{ rows: any[]; headers: string[]; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number } | null>(null);
+  const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number; outcome?: { status: 'SUCCES' | 'PARTIEL' | 'ECHEC'; message: string } } | null>(null);
   
   const [showFixCentreModal, setShowFixCentreModal] = useState(false);
   const [showConfirmSetupModal, setShowConfirmSetupModal] = useState(false);
@@ -205,7 +205,14 @@ export default function ImportPage() {
       // de les importer quand même (le fichier disque n'est jamais réécrit).
       const res = await window.api.import.processFile(file, user?.login || 'ADMIN', preview?.total, Number(siteIdToUse), user?.id_user, Array.from(excludedRowIndices));
       setResult(res);
-      toast.success(`Migration terminée !`);
+      // P1-C : le bilan (calculé côté main) détermine le message — plus de succès inconditionnel.
+      if (res?.outcome?.status === 'ECHEC') {
+        toast.error(res.outcome.message, { duration: 8000 });
+      } else if (res?.outcome?.status === 'PARTIEL') {
+        toast(res.outcome.message, { icon: '⚠️', duration: 8000 });
+      } else {
+        toast.success(res?.outcome?.message || 'Migration terminée !');
+      }
       await fetchCardCount();
       useCacheStore.getState().invalidateDashboardCache();
     } catch (e) {
@@ -422,7 +429,7 @@ export default function ImportPage() {
             <div style={{ maxWidth: 550 }}>
               <h2 style={{ fontSize: 32, fontWeight: 900, color: 'white', marginBottom: 16, letterSpacing: '-0.5px' }}>Prêt pour la migration ?</h2>
               <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: 18, lineHeight: 1.6, fontWeight: 500 }}>
-                Glissez-déposez votre listing Excel/CSV ou utilisez le bouton pour injecter vos données dans le système.
+                Sélectionnez votre listing au format CSV (depuis Excel : « Enregistrer sous » → CSV UTF-8) pour injecter vos données dans le système.
               </p>
             </div>
 
@@ -467,13 +474,23 @@ export default function ImportPage() {
             borderRadius: 32
           }}>
             <div style={{ 
-              width: 80, height: 80, borderRadius: '50%', background: 'var(--accent-green)', 
+              width: 80, height: 80, borderRadius: '50%',
+              background: result.outcome?.status === 'ECHEC' ? '#ef4444' : result.outcome?.status === 'PARTIEL' ? '#f97316' : 'var(--accent-green)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 20px',
               boxShadow: '0 0 40px rgba(39, 174, 96, 0.4)', color: 'white'
             }}>
-              <CheckCircle size={44} />
+              {result.outcome?.status === 'ECHEC' || result.outcome?.status === 'PARTIEL' ? <AlertCircle size={44} /> : <CheckCircle size={44} />}
             </div>
             <h2 style={{ fontSize: 28, fontWeight: 950, color: 'white', marginBottom: 8, letterSpacing: '-1px', textAlign: 'center' }}>Bilan de Migration</h2>
+            {result.outcome && (
+              <p role="status" style={{
+                textAlign: 'center', fontWeight: 800, fontSize: 15, margin: '0 auto 12px', padding: '10px 16px', borderRadius: 12, maxWidth: 640,
+                color: result.outcome.status === 'ECHEC' ? '#ef4444' : result.outcome.status === 'PARTIEL' ? '#f97316' : '#10b981',
+                background: result.outcome.status === 'ECHEC' ? 'rgba(239,68,68,0.10)' : result.outcome.status === 'PARTIEL' ? 'rgba(249,115,22,0.10)' : 'rgba(16,185,129,0.10)'
+              }}>
+                {result.outcome.status === 'ECHEC' ? 'ÉCHEC' : result.outcome.status === 'PARTIEL' ? 'SUCCÈS PARTIEL' : 'SUCCÈS'} — {result.outcome.message}
+              </p>
+            )}
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, marginBottom: 32, fontWeight: 500, textAlign: 'center' }}>
               Importation finalisée en <span style={{ color: '#ffd700', fontWeight: 700 }}>{formatDuration(result.duration)}</span>.
             </p>
