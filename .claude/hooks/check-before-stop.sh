@@ -27,13 +27,8 @@ if [ -f "pytest.ini" ] || [ -f "pyproject.toml" ]; then
   fi
 fi
 
-# 3. Playwright e2e - seulement si des fichiers sensibles ont changé
-if echo "$CHANGED" | grep -qE '^(src/main/|e2e/|src/preload/)'; then
-  E2E_OUTPUT=$(env -u ELECTRON_RUN_AS_NODE npx playwright test 2>&1)
-  if [ $? -ne 0 ]; then
-    FAILURES="${FAILURES}--- Tests Playwright e2e en échec ---\n${E2E_OUTPUT}\n\n"
-  fi
-fi
+# 3. Playwright e2e : retiré du hook Stop (lance Electron et peut toucher Supabase via les specs cloud).
+# Lancement manuel uniquement : npm run test:e2e
 
 if [ -n "$FAILURES" ]; then
   echo -e "Des vérifications ont échoué avant de terminer :\n\n${FAILURES}Corrige ces problèmes avant de conclure." >&2
