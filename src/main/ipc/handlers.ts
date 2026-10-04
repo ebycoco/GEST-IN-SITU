@@ -5403,6 +5403,33 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   ipcMain.handle('sync:startBulk', async (_, siteId: number, allowProbable: boolean = false, allowInvalid: boolean = false, allowMissing: boolean = false, onlyModified: boolean = false, currentUser?: any) => {
     const userLogin = currentUser?.login || getCurrentUserLogin() || 'ADMIN';
 
+    // ── Contrôle d'accès serveur (correctif audit pré-release) ───────────────────────
+    // Aucune garde de rôle n'existait dans ce handler : tout appelant IPC pouvait lancer
+    // un transfert de masse vers Supabase pour un site. L'identité provient exclusivement de
+    // getSecureCurrentUser() (session serveur), jamais du paramètre client `currentUser`.
+    // Liste autorisée = rôles câblés côté renderer sur un bouton d'envoi : useForceSyncActions
+    // (AgentVerification, AgentSaisie, Inventaire, Apurement, AgentQualite, dashboard/SiteAdminView),
+    // AdminCentreLayout et VerificationSearchPage. verifyUserRole() contrôle aussi statut_actif
+    // et les rôles secondaires (t_user_roles), comme les autres handlers du fichier.
+    // Placé AVANT beginBulkUpload() : un refus n'acquiert aucun verrou, donc n'a rien à libérer
+    // (le finally ci-dessous ne couvre que le chemin après acquisition). Aucun await ici.
+    const accessUser = getSecureCurrentUser();
+    if (!accessUser || !verifyUserRole(accessUser.id_user, [
+      'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
+      'OPERATEUR_VERIFICATION', 'OPERATEUR_SAISIE', 'OPERATEUR_INVENTAIRE',
+      'OPERATEUR_LOGISTIQUE', 'OPERATEUR_APUREMENT', 'OPERATEUR_QUALITE'
+    ])) {
+      log.warn(`[SECURITY] sync:startBulk refusé pour le site ${siteId} : session absente ou rôle non autorisé (login=${accessUser?.login ?? 'inconnu'}).`);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: 'Accès refusé. Votre rôle ne permet pas de lancer une synchronisation de masse.',
+        strictCount: 0,
+        probableCount: 0,
+        invalidCount: 0
+      };
+    }
+
     // ── Verrou anti-concurrence ──────────────────────────────────────────────
     // Symétrique à sync:pullSiteCards : runBulkUpload ouvre lui aussi un Worker Thread
     // avec sa propre connexion SQLite indépendante (upload-worker.js). Si le SyncEngine
