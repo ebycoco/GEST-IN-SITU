@@ -1,4 +1,4 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.22.0
 
 ### 🚀 Nouveautés & Ergonomie
 
