@@ -111,8 +111,10 @@ test.describe.serial('QA Terrain — bannière licence et déconnexion', () => {
 
   test('prépare la licence : site à +2 jours (fenêtre de bannière <= 3 j)', async () => {
     await setSiteLicence(env.seed.siteId, midnightUtcIso(2), 0);
-    // Sanity indépendante du code testé : 2 jours pleins restants.
-    expect(Math.ceil((new Date(midnightUtcIso(2)).getTime() - Date.now()) / DAY)).toBeGreaterThanOrEqual(1);
+    // Sanity indépendante du code testé (règle A1) : le jour d'échéance est dans 2 jours calendaires UTC.
+    const t = new Date();
+    const iso = midnightUtcIso(2);
+    expect(Math.round((Date.parse(iso) - Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate())) / DAY)).toBe(2);
   });
 
   test('(a) ADMINISTRATEUR_SITE licence +2 j : bannière visible après login', async () => {

@@ -14,8 +14,8 @@
  * test-results/agent13-licence/ (ignoré par git).
  *
  * Dates : l'échéance est écrite en base comme le fait SitesPage (minuit UTC, ISO). Les valeurs
- * attendues sont recalculées ici de façon indépendante du code testé (formule Math.ceil écrite à
- * la main + noms de mois FR en dur), pour détecter un décalage d'un jour.
+ * attendues sont recalculées ici de façon indépendante du code testé (jours calendaires UTC, règle A1 « dernier
+ * jour utilisable », écrits à la main + noms de mois FR en dur), pour détecter un décalage d'un jour.
  */
 import { test, expect, type Page, type Locator } from '@playwright/test';
 import { launchSeededApp, teardownSeededApp, type E2EEnvironment } from '../fixtures/electron-app';
@@ -36,8 +36,15 @@ function midnightUtcIso(offsetDays: number): string {
   const t = new Date();
   return new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate() + offsetDays)).toISOString();
 }
+/**
+ * Règle A1 (dernier jour utilisable) : jours CALENDAIRES UTC entre aujourd'hui et le jour d'échéance
+ * (0 le jour même). Calcul indépendant du code testé : on compare deux minuits UTC (partie AAAA-MM-JJ
+ * de la valeur brute vs date UTC courante), sans Math.ceil sur un écart en millisecondes.
+ */
 function expectedDaysLeft(iso: string): number {
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / DAY);
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const t = new Date();
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate())) / DAY);
 }
 /** « 5 novembre 2026 » depuis la partie AAAA-MM-JJ de la valeur BRUTE en base (aucun fuseau). */
 function expectedFrDate(iso: string): string {
@@ -166,6 +173,8 @@ test.describe.serial('QA Terrain — carte Licence du dashboard (agent-13)', () 
     { label: 'plus45', expiry: midnightUtcIso(45), perm: 0, kind: 'ok' },
     { label: 'plus2', expiry: midnightUtcIso(2), perm: 0, kind: 'critical' },
     { label: 'plus1', expiry: midnightUtcIso(1), perm: 0, kind: 'critical' },
+    // now+3h : sous la règle A1 seul le JOUR UTC compte (heure ignorée) ; selon l'heure du run, ce jour est
+    // aujourd'hui (« Expire aujourd'hui ») ou demain (« 1 jour restant ») : l'attendu est calculé en jours calendaires.
     { label: 'aujourdhui', expiry: new Date(Date.now() + 3 * 3600 * 1000).toISOString(), perm: 0, kind: 'critical' },
     { label: 'permanent', expiry: null, perm: 1, kind: 'permanent' },
     { label: 'sans_echeance', expiry: null, perm: 0, kind: 'undefined' }
@@ -192,8 +201,11 @@ test.describe.serial('QA Terrain — carte Licence du dashboard (agent-13)', () 
         expect(text).toContain(head);
         expect(text).toContain(`Échéance le ${expectedFrDate(c.expiry!)}`);
         expect(text).toContain(CONTACT_MSG);
-        // Bannière : uniquement si 0 <= n <= 3 (règle existante, même Math.ceil).
-        if (n >= 0 && n <= 3) await expect(banner()).toBeVisible({ timeout: 10000 });
+        // Bannière : uniquement si 0 <= n <= 3 (jours calendaires UTC, règle A1), avec « (dernier jour inclus) ».
+        if (n >= 0 && n <= 3) {
+          await expect(banner()).toBeVisible({ timeout: 10000 });
+          await expect(banner()).toContainText('(dernier jour inclus)');
+        }
         else await expect(banner()).toHaveCount(0);
       }
       console.log(`[LICENCE_QA] ${c.label} | base=${c.expiry} | carte="${text}" | bordure=${await cardColor()}`);
