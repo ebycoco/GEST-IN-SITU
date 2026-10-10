@@ -84,6 +84,7 @@ test.describe.serial('QA terrain — Présence : retentative après FK user_sync
     await A.window.getByTestId('password-input').fill(user.password);
     const tLogin = Date.now();
     await A.window.getByTestId('login-submit').click();
+    const tClickEnd = Date.now();
     await A.window.waitForURL(/#\/agent-verification/, { timeout: 30000 });
     await sleep(1500);
     const failLog = appLog().split('\n').filter((l) => /PresenceService/.test(l));
@@ -113,6 +114,15 @@ test.describe.serial('QA terrain — Présence : retentative après FK user_sync
     expect(row.login).toBe(u.login);
     expect(row.role).toBe('OPERATEUR_VERIFICATION');
     expect(row.last_heartbeat_at).toBeTruthy();
+
+    // 242c2a3 : last_login_at rejoué = heure du LOGIN (pas du battement). Avant le correctif : NULL.
+    const loginMs = new Date(row.last_login_at).getTime();
+    const hbMs = new Date(row.last_heartbeat_at).getTime();
+    console.log(`[FKR][LOGINAT] clic login=${new Date(tLogin).toISOString()} (fin clic ${new Date(tClickEnd).toISOString()}) ; last_login_at=${row.last_login_at} ; last_heartbeat_at=${row.last_heartbeat_at} ; ecart login->heartbeat=${hbMs - loginMs} ms`);
+    expect(row.last_login_at, 'last_login_at doit etre NON NULL apres rattrapage').not.toBeNull();
+    expect(Math.abs(loginMs - tLogin)).toBeLessThan(3000);           // heure du login, a la seconde pres
+    expect(Math.abs(loginMs - hbMs)).toBeGreaterThan(60000);         // != heure du battement (~2 min plus tard)
+    // Page presence non testee ici (voir spec loginat). Battement suivant : verifie dans le spec loginat (cas 3).
 
     // 2e échec FK volontaire au tick +4 min : retire ligne+compte cloud APRES le cycle UserSync de +3 min.
     let seen = 0;
