@@ -8,7 +8,13 @@ automatiquement sur les deux projets Supabase du projet :
 
 | Projet | Ref | Usage |
 |---|---|---|
-| Dev/Staging | `zddibqgutigwxjwbojmn` | tests e2e-cloud (`allowRealSync: true`), aucune donnée citoyenne réelle |
+| Dev/Staging | `ajadkziqaskadlzboeqo` (GEST-IN-SITU-DEV) | tests e2e-cloud (`allowRealSync: true`), aucune donnée citoyenne réelle |
+
+> **Historique :** le projet dev d'origine (`zddibqgutigwxjwbojmn`) a été supprimé par erreur
+> puis recréé le 2026-10-10 sous la référence `ajadkziqaskadlzboeqo`, en rejouant `0001` → `0005`.
+> Les anciens commentaires des fichiers SQL citant `zddibqgutigwxjwbojmn` sont conservés
+> tels quels (historique daté). `.env.e2e` et `e2e/fixtures/supabase-dev-client.ts` pointent
+> sur le nouveau projet.
 | Production | `itvyayakwgzvfqvdrgyv` | postes de terrain Côte d'Ivoire, données réelles |
 
 Conséquence : le 17/08/2026, la table `t_user_presence` a été créée **à la main
@@ -30,7 +36,7 @@ ce dossier — jamais exécutée directement en base sans fichier correspondant.
    `CREATE INDEX IF NOT EXISTS`, `CREATE OR REPLACE FUNCTION`, etc., pour
    pouvoir être rejoué sans casse si une base est déjà partiellement à jour).
 3. Appliquer ce fichier **manuellement, dans cet ordre, sur les deux
-   projets** : dev/staging (`zddibqgutigwxjwbojmn`) **puis** production
+   projets** : dev/staging (`ajadkziqaskadlzboeqo`) **puis** production
    (`itvyayakwgzvfqvdrgyv`) — jamais un seul des deux. Le rôle `agent-4-db-sync`
    ne fait qu'écrire les fichiers ; l'application réelle sur les projets
    Supabase reste un geste explicite validé par l'utilisateur (même logique
@@ -85,6 +91,20 @@ présente mise en place — voir limitation ci-dessous.
   préalable que la table n'existe pas déjà (le `IF NOT EXISTS` protège
   cependant contre une double exécution accidentelle, contrairement au
   fichier 0001).
+
+- **`0003_apurement_correction_annulation.sql`** — 6 colonnes `apurement_correction_*` /
+  `apurement_annulation_*` sur `t_cartes` (idempotent).
+- **`0004_action_at.sql`** — colonne `action_at` sur `t_cartes` + backfill `action_at = updated_at`
+  (idempotent).
+- **`0005_t_cartes_colonnes_manquantes.sql`** — rattrapage de 12 colonnes de `t_cartes`
+  (`contact_retirant`, `relation_retirant`, 7 colonnes de traçabilité doublon,
+  `note_signalement_absence`, `escalade_niveau`, `has_invalid_date`), ajoutées à la main sur la
+  production et l'ancien dev mais jamais écrites en migration. Appliquée sur le dev recréé le
+  2026-10-10. **Production : déjà conforme** (vérifié en lecture seule le 2026-10-10 sur
+  `information_schema` : les 12 colonnes existent avec les mêmes types, plus des valeurs par
+  défaut `escalade_niveau = 'CENTRE'` et `has_invalid_date = 0` que le dev n'a pas — sans
+  incidence, l'application envoie toujours ces valeurs). Aucune application sur la production
+  n'est nécessaire. Idempotente.
 
 ## Limitation connue / travail restant
 
