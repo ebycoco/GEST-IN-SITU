@@ -98,6 +98,45 @@ function checkAndPushLicenseExpiryWarning(user: any): void {
   }
 }
 
+/**
+ * Battement de présence immédiat au retour réseau (OFFLINE/autre -> ONLINE).
+ *
+ * Les écritures de présence sont no-op hors ONLINE sans rattrapage (presence.service.ts) et le
+ * tick n'a lieu que toutes les 2 min : sans ceci, un agent revenu en ligne resterait affiché
+ * Inactif/Hors ligne jusqu'à 2 min. Aucun nouveau timer : simple écouteur d'événement.
+ *
+ * Gestion mémoire/listeners : UN SEUL handler nommé (référence de module), retiré dans
+ * stopSessionHeartbeat() et au début de startSessionHeartbeat() -> aucun empilement entre
+ * connexions. Throttle ~30 s pour éviter les rafales lors d'un réseau instable
+ * (ONLINE/OFFLINE rapprochés). heartbeatPresence() est fire-and-forget et catche ses erreurs.
+ */
+const NETWORK_RETURN_HEARTBEAT_THROTTLE_MS = 30 * 1000;
+let lastNetworkReturnHeartbeatAt = 0;
+
+function onNetworkChangeForPresence(evt: { oldState: string; newState: string }): void {
+  try {
+    if (!evt || evt.newState !== 'ONLINE' || evt.oldState === 'ONLINE') return;
+
+    const activeUser = getSecureCurrentUser();
+    if (!activeUser?.sync_id) return;
+
+    const now = Date.now();
+    if (now - lastNetworkReturnHeartbeatAt < NETWORK_RETURN_HEARTBEAT_THROTTLE_MS) return;
+    lastNetworkReturnHeartbeatAt = now;
+
+    const presenceUser: PresenceUserRef = {
+      sync_id: activeUser.sync_id,
+      login: activeUser.login,
+      site_id: activeUser.site_id ?? null,
+      centre_id: activeUser.centre_id ?? null,
+      role: activeUser.role,
+    };
+    heartbeatPresence(presenceUser);
+  } catch (e) {
+    log.warn('Erreur lors du battement de présence au retour réseau:', e);
+  }
+}
+
 export function startSessionHeartbeat(user: any, sessionToken: string): void {
   // Nettoyer un intervalle existant
   stopSessionHeartbeat();
@@ -162,6 +201,12 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
 
   log.info(`Démarrage du Heartbeat de session pour l'utilisateur : ${user.login}`);
 
+  // Battement immédiat au retour ONLINE (voir onNetworkChangeForPresence). Le retrait préalable
+  // garantit un seul écouteur même si stopSessionHeartbeat() n'a pas été appelé en amont.
+  networkMonitor.off('change', onNetworkChangeForPresence);
+  networkMonitor.on('change', onNetworkChangeForPresence);
+  lastNetworkReturnHeartbeatAt = 0;
+
   // Ping local toutes les 2 minutes (120 000 ms) pour la forme et traçabilité locale
   heartbeatInterval = setInterval(() => {
     log.debug(`Heartbeat local réussi pour ${currentUserLogin}`);
@@ -192,6 +237,9 @@ export function startSessionHeartbeat(user: any, sessionToken: string): void {
 }
 
 export async function stopSessionHeartbeat(): Promise<void> {
+  // Retrait de l'écouteur réseau de présence (additif ; no-op s'il n'est pas abonné).
+  networkMonitor.off('change', onNetworkChangeForPresence);
+
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;

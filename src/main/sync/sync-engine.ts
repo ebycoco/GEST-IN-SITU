@@ -7,7 +7,8 @@ import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, 
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
-import { refreshSecureCurrentUser, getCurrentGrantedRoles, getCurrentUserLogin, stopSessionHeartbeat } from '../auth/session-heartbeat';
+import { refreshSecureCurrentUser, getCurrentGrantedRoles, getCurrentUserLogin, stopSessionHeartbeat, getSecureCurrentUser } from '../auth/session-heartbeat';
+import { recordPresenceLogout } from './presence.service';
 
 // ─── INTERVALLE DU CYCLE DOWNSTREAM AUTOMATIQUE (POST-LOGIN) ────────────────
 // 2 heures — déclenché après authentification de l'utilisateur.
@@ -491,6 +492,16 @@ class SyncEngine extends EventEmitter {
       // La notification renderer ci-dessous reste best-effort (UX : afficher le message et
       // rediriger vers /login) mais n'est plus le SEUL rempart de sécurité.
       if (refreshResult.revoked || refreshResult.disabled || refreshResult.siteSuspended || refreshResult.licenseExpired) {
+        // Présence agents : capturer le sync_id de la session AVANT stopSessionHeartbeat() (qui
+        // vide secureCurrentUser) puis enregistrer la déconnexion — sinon le auth:logout
+        // ultérieur du renderer ne trouverait plus de session et n'écrirait rien. Fire-and-forget
+        // (jamais await, erreurs catchées en interne, no-op hors ONLINE). Volontairement ici et
+        // non dans stopSessionHeartbeat() (appelé au début de startSessionHeartbeat : logout
+        // parasite de l'ancienne session après un nouveau login).
+        const expiredSessionSyncId: string | undefined = getSecureCurrentUser()?.sync_id;
+        if (expiredSessionSyncId) {
+          recordPresenceLogout(expiredSessionSyncId);
+        }
         await stopSessionHeartbeat();
         this.stopUserAccountsSyncTimer();
         this.stopAutoDownstreamTimer();

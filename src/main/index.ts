@@ -34,7 +34,8 @@ import { syncEngine } from './sync/sync-engine';
 import { preloadUsersFromCloud } from './sync/downstream';
 import { resetOutboxErrors } from './sync/outbox.service';
 
-import { stopSessionHeartbeat } from './auth/session-heartbeat';
+import { stopSessionHeartbeat, getSecureCurrentUser } from './auth/session-heartbeat';
+import { recordPresenceLogoutAndWait } from './sync/presence.service';
 
 // ─── ISOLATION DEV/PROD DU DOSSIER userData (SQLite + fichiers annexes) ────────
 // Correctif P0 (QA terrain, août 2026) : en mode développement (`npm run dev`),
@@ -75,6 +76,8 @@ process.on('unhandledRejection', (reason, promise) => {
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let isQuitting = false;
+// Garde anti-réentrance du flush de présence à la fermeture (voir mainWindow.on('close')).
+let isFlushingPresenceOnClose = false;
 let isPreloadingUsers = false; // R1: Déchaîner le Login, ne plus bloquer
 
 // Sécurisation de l'instance unique
@@ -205,9 +208,13 @@ function createWindow(): void {
 
   mainWindow.on('close', (e) => {
     if (isQuitting) return;
-    
+
     e.preventDefault();
-    
+
+    // Un flush de présence est déjà en cours (double clic sur la croix) : ne rien relancer ni
+    // empiler, la fermeture déjà programmée aura lieu à la fin du flush (1,5 s au pire).
+    if (isFlushingPresenceOnClose) return;
+
     try {
       const isSyncActive = syncEngine.isCurrentlySyncing();
       const isImporting = isImportActive();
@@ -236,13 +243,43 @@ function createWindow(): void {
       // à app.quit() en interne (autoUpdater.quitAndInstall). Le chemin normal
       // (pas de mise à jour en attente, immense majorité des fermetures) est
       // inchangé : même comportement qu'avant (isQuitting = true; app.quit()).
-      if (isUpdateReadyToInstall()) {
-        log.info('[AutoUpdater] Mise à jour en attente détectée à la fermeture — déclenchement de l\'installation visible.');
-        isQuitting = true;
-        triggerUpdateInstall();
+      const proceedWithClose = (): void => {
+        try {
+          if (isUpdateReadyToInstall()) {
+            log.info('[AutoUpdater] Mise à jour en attente détectée à la fermeture — déclenchement de l\'installation visible.');
+            isQuitting = true;
+            triggerUpdateInstall();
+          } else {
+            isQuitting = true;
+            app.quit();
+          }
+        } catch (err) {
+          log.error('Erreur lors du cycle de fermeture:', err);
+          isQuitting = true;
+          app.quit();
+        }
+      };
+
+      // ─── PRÉSENCE AGENTS : DÉCONNEXION ÉCRITE À LA FERMETURE ──────────────────
+      // Point d'insertion volontairement APRÈS tout contrôle annulable (dialogue
+      // « Attendre » ci-dessus) et AVANT la fermeture effective (app.quit() comme
+      // triggerUpdateInstall()). Le sync_id est capturé ICI, avant toute fonction qui
+      // vide la session. Flux asynchrone : recordPresenceLogoutAndWait() est borné par un
+      // timeout dur de 1,5 s et ne rejette jamais ; `.finally()` garantit donc que la
+      // fermeture existante est retardée de 1,5 s au pire, jamais bloquée. Sans session /
+      // sync_id : aucune attente (comportement inchangé). Sans réseau, la fonction retourne
+      // immédiatement. SQLite n'est pas touchée (db.close() de will-quit inchangé).
+      const closingSyncId: string | undefined = getSecureCurrentUser()?.sync_id;
+      if (closingSyncId) {
+        isFlushingPresenceOnClose = true;
+        void recordPresenceLogoutAndWait(closingSyncId)
+          .catch(() => { /* ne rejette jamais ; filet de sécurité */ })
+          .finally(() => {
+            isFlushingPresenceOnClose = false;
+            proceedWithClose();
+          });
       } else {
-        isQuitting = true;
-        app.quit();
+        proceedWithClose();
       }
     } catch (err) {
       log.error('Erreur lors du cycle de fermeture:', err);

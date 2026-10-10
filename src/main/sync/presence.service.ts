@@ -188,6 +188,68 @@ export function recordPresenceLogout(userSyncId: string): void {
   });
 }
 
+/**
+ * Variante AWAITABLE de recordPresenceLogout(), réservée à la fermeture de l'application
+ * (src/main/index.ts, handler `close` de la fenêtre) : l'appelant doit pouvoir laisser à l'UPDATE
+ * une chance de partir avant que le process ne se termine, sans jamais bloquer la fermeture.
+ *
+ * Logique asynchrone / erreurs / mémoire :
+ *  - No-op IMMÉDIAT (retour sans aucune attente) si `userSyncId` est vide, si le réseau n'est
+ *    pas ONLINE ou si le client Supabase est indisponible.
+ *  - Sinon : Promise.race entre l'UPDATE `last_logout_at` (UPDATE simple, jamais upsert — même
+ *    logique que _updateLogout) et un timeout dur `timeoutMs` (1,5 s par défaut). En cas de
+ *    timeout, la requête en vol est annulée via `AbortController` (`.abortSignal()` de
+ *    postgrest-js, confirmé via Context7) : elle libère sa connexion et ne laisse aucune
+ *    promesse pendante.
+ *  - Ne propage JAMAIS d'erreur (Supabase, réseau, abort) : tout est catché et loggé.
+ *  - Le timer de timeout est TOUJOURS nettoyé (clearTimeout dans `finally`) : aucune retenue
+ *    mémoire ni timer résiduel après le retour.
+ *
+ * Ne remplace pas recordPresenceLogout() (fire-and-forget, inchangée, utilisée par auth:logout).
+ */
+export async function recordPresenceLogoutAndWait(userSyncId: string, timeoutMs = 1500): Promise<void> {
+  if (!userSyncId) return;
+  if (networkMonitor.getState() !== 'ONLINE') return;
+
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  const controller = new AbortController();
+  let timer: NodeJS.Timeout | null = null;
+
+  try {
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+    });
+
+    const update = (async (): Promise<'done'> => {
+      try {
+        const { error } = await supabase
+          .from(PRESENCE_TABLE)
+          .update({ last_logout_at: new Date().toISOString() })
+          .eq('user_sync_id', userSyncId)
+          .abortSignal(controller.signal);
+        if (error) {
+          log.warn(`[PresenceService] logout de fermeture ${PRESENCE_TABLE} échoué (user_sync_id=${userSyncId}) :`, error.message);
+        }
+      } catch (err: any) {
+        log.warn(`[PresenceService] logout de fermeture ${PRESENCE_TABLE} exception (user_sync_id=${userSyncId}) :`, err?.message || err);
+      }
+      return 'done';
+    })();
+
+    const winner = await Promise.race([update, timeout]);
+    if (winner === 'timeout') {
+      log.warn(`[PresenceService] logout de fermeture : délai de ${timeoutMs} ms dépassé (user_sync_id=${userSyncId}), fermeture non retardée davantage.`);
+      controller.abort();
+    }
+  } catch (err: any) {
+    log.warn('[PresenceService] logout de fermeture : exception inattendue :', err?.message || err);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ─── Fonction de lecture ─────────────────────────────────────────────────────
 
 /**
