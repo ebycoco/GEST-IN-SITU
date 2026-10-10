@@ -56,8 +56,6 @@ interface LicenseSidebarBadgeProps {
 }
 
 export function LicenseSidebarBadge({ site, role }: LicenseSidebarBadgeProps) {
-  // Hook appelé avant tout retour anticipé (règles des hooks).
-  const tooltipId = React.useId();
   if (!site) return null;
   const { state } = computeLicenseStatus(site.expiry_date, site.is_permanent);
   const model = getLicenseBadgeModel(state, role);
@@ -66,23 +64,23 @@ export function LicenseSidebarBadge({ site, role }: LicenseSidebarBadgeProps) {
   return (
     <div
       role="status"
+      // Source UNIQUE de l'infobulle : l'attribut title (infobulle visuelle + description accessible exposée par Chromium).
+      // Ni aria-describedby ni <span> masqué : évite la double annonce lecteur d'écran.
       title={model.tooltip ?? undefined}
-      aria-describedby={model.tooltip ? tooltipId : undefined}
       style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2, marginTop: 3, position: 'relative', minWidth: 0 }}
     >
       {/* Ligne 1 : pastille · Licence · Pro (inchangée, nowrap). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, whiteSpace: 'nowrap' }}>
         <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', background: model.color, flexShrink: 0 }} />
-        <span style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: 0.4, textTransform: 'uppercase', color: 'var(--text-secondary)', flexShrink: 0 }}>Licence</span>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 0.3, textTransform: 'uppercase', color: 'var(--text-primary)', flexShrink: 0 }}>Licence</span>
         {/* Libellé FIXE « Pro » (aucune donnée de plan en base) — même style que LicenseStatusCard. */}
-        <span style={{ fontSize: 9.5, fontWeight: 800, padding: '1px 6px', borderRadius: 999, background: '#ffd700', color: '#0a0e27', flexShrink: 0 }}>Pro</span>
+        <span style={{ fontSize: 11, fontWeight: 800, lineHeight: 1.2, padding: '0 5px', borderRadius: 999, background: '#ffd700', color: '#0a0e27', flexShrink: 0 }}>Pro</span>
       </div>
       {/* Ligne 2 (critical uniquement) : texte sur sa propre ligne, aligné sous « Licence » (8px pastille + 6px gap),
           jamais tronqué (pas d'ellipsis) ; retour à la ligne propre si la largeur disponible était insuffisante. */}
       {model.showSoonText && (
-        <span style={{ marginLeft: 14, minWidth: 0, fontSize: 10, fontWeight: 600, color: model.color, whiteSpace: 'normal', overflowWrap: 'break-word' }}>Expire bientôt</span>
+        <span style={{ marginLeft: 14, minWidth: 0, fontSize: 11, fontWeight: 700, color: model.color, whiteSpace: 'normal', overflowWrap: 'break-word' }}>Expire bientôt</span>
       )}
-      {model.tooltip && <span id={tooltipId} style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>{model.tooltip}</span>}
     </div>
   );
 }
