@@ -7,6 +7,7 @@ import { PaginationInput } from '../../components/PaginationInput';
 import DateInput from '../../components/DateInput';
 import { normalizeDate } from '../../../../shared/utils/date';
 import { cleanIpcErrorMessage } from './phoneFormat';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 // Pagination CÔTÉ RENDERER uniquement (slice d'un tableau déjà entièrement chargé en mémoire) —
 // pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts)
@@ -284,7 +285,7 @@ export default function InventaireCartesMalCentrees() {
                       <td style={{ padding: '12px 10px', minWidth: 160 }}>
                         <div style={{ fontWeight: 600, color: 'white' }}>{r.noms} {r.prenoms}</div>
                       </td>
-                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{formatNumSecu(r.num_secu) || '—'}</td>
                       <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{r.rangement}</td>
                       <td style={{ padding: '12px 10px', color: '#f87171' }}>{r.nom_centre_actuel || 'Aucun'}</td>
                       <td style={{ padding: '12px 10px', color: '#34d399', fontWeight: 600 }}>{r.nom_centre_attendu}</td>

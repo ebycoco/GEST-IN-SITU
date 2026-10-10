@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Search, RefreshCw, Database, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { formatNumSecu } from '../../../shared/utils/numSecu';
 
 export default function TableCartesPage() {
   const [cartes, setCartes] = useState<any[]>([]);
@@ -223,6 +224,9 @@ export default function TableCartesPage() {
                         displayValue = <span style={{ opacity: 0.3 }}>NULL</span>;
                       } else if (typeof value === 'boolean' || col.key === 'has_invalid_date' || col.key === 'notif_lue') {
                         displayValue = value ? '1' : '0';
+                      } else if (col.key === 'num_secu') {
+                        // Affichage seul : jamais de notation scientifique (valeur en base inchangée)
+                        displayValue = formatNumSecu(String(value));
                       }
                       
                       return (
@@ -235,7 +239,7 @@ export default function TableCartesPage() {
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           fontFamily: col.key === 'id_carte' || col.key === 'sync_id' ? 'monospace' : 'inherit'
-                        }} title={String(value || '')}>
+                        }} title={col.key === 'num_secu' ? formatNumSecu(value as string | null) : String(value || '')}>
                           {displayValue}
                         </td>
                       );

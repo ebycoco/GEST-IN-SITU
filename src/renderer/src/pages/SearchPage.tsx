@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, CreditCard } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { formatNumSecu } from '../../../shared/utils/numSecu';
 
 interface Carte { id_carte: number; noms: string; prenoms: string; num_secu: string; contact: string; rangement: string; statut: string; }
 
@@ -123,7 +124,7 @@ export default function SearchPage() {
                          <td style={{ fontWeight: 600 }}>{c.noms}</td>
                          <td>{c.prenoms}</td>
                          <td>{c.contact || '—'}</td>
-                         <td>{c.num_secu || '—'}</td>
+                         <td>{formatNumSecu(c.num_secu) || '—'}</td>
                          <td>{c.rangement || '—'}</td>
                          <td><span className="status-badge stock">{c.statut}</span></td>
                        </tr>

@@ -4,6 +4,7 @@ import { confirmService } from '../confirmService';
 import DateInput from '../DateInput';
 import toast from 'react-hot-toast';
 import { normalizeDate } from '../../../../shared/utils/date';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 export interface ICarte {
   id_carte?: number;
@@ -37,7 +38,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
         lieu_de_naissance: record.lieu_de_naissance || '',
         contact: record.contact || '',
         rangement: record.rangement || (record as any).code_rangement || '',
-        num_secu: record.num_secu || '',
+        num_secu: formatNumSecu(record.num_secu),
       });
     }
   }, [record]);
@@ -50,7 +51,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
 
   const handleSave = async () => {
     const isSensitiveModif = 
-      (record.num_secu && formData.num_secu !== record.num_secu) || 
+      (record.num_secu && formData.num_secu !== formatNumSecu(record.num_secu)) || 
       (record.noms && formData.noms !== record.noms);
 
     if (isSensitiveModif) {
@@ -203,6 +204,6 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
 }
 
 function isSensitiveModifWarning(formData: Partial<ICarte>, record: ICarte) {
-  return (record.num_secu && formData.num_secu !== record.num_secu) || 
+  return (record.num_secu && formData.num_secu !== formatNumSecu(record.num_secu)) || 
          (record.noms && formData.noms !== record.noms);
 }

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../../stores/authStore';
 import { Search, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 export const NonResolusTab = () => {
   const user = useAuthStore((s) => s.user);
@@ -99,7 +100,7 @@ export const NonResolusTab = () => {
               {carte.noms} {carte.prenoms}
             </h4>
             <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
-              <span>N° Sécu : {carte.num_secu || 'Non renseigné'}</span>
+              <span>N° Sécu : {formatNumSecu(carte.num_secu) || 'Non renseigné'}</span>
               <span>Statut : {carte.escalade_niveau === 'SITE' ? 'Escaladée au Site' : 'En traitement au Centre'}</span>
             </div>
           </div>

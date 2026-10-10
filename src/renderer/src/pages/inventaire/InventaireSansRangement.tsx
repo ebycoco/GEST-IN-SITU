@@ -6,6 +6,7 @@ import { PaginationInput } from '../../components/PaginationInput';
 import DateInput from '../../components/DateInput';
 import { useDebounce } from '../../hooks/useDebounce';
 import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -294,7 +295,7 @@ export default function InventaireSansRangement() {
                     <tr key={r.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
                       <td style={{ padding: '12px 10px', fontWeight: 600, color: 'white' }}>{r.noms}</td>
                       <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{r.prenoms}</td>
-                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{formatNumSecu(r.num_secu) || '—'}</td>
                       <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{formatBirthDate(r.date_de_naissance)}</td>
                       <td style={{ padding: '12px 10px' }}>
                         <input

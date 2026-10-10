@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import SaisiePage, { FormState } from '../../SaisiePage';
 import { useAuthStore } from '../../../stores/authStore';
 import { useCacheStore } from '../../../stores/cacheStore';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 interface SaisieEditModalProps {
   carte: any;
@@ -29,7 +30,7 @@ export default function SaisieEditModal({ carte, onClose, onSuccess }: SaisieEdi
       date_de_naissance: carte.date_de_naissance || '',
       lieu_de_naissance: carte.lieu_de_naissance || '',
       contact: carte.contact || '',
-      num_secu: carte.num_secu || '',
+      num_secu: formatNumSecu(carte.num_secu),
       rangement: carte.rangement || '',
       site: resolvedSiteName,
       centre: resolvedCentreName,

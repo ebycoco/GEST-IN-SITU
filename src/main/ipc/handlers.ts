@@ -21,6 +21,7 @@ import { logAudit, CRUD_SYNC_WHITELIST } from '../utils/audit';
 import { deleteCentre } from '../database/queries/hierarchy.queries';
 import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
+import { formatNumSecu } from '../../shared/utils/numSecu';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
 import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxErrorIds, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
@@ -3108,7 +3109,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const csvLines = [
         headers.join(';'),
         ...rows.map(r => headers.map(h => {
-          const raw = String(r[h] ?? '');
+          // Affichage/export seul : n° sécu jamais en notation scientifique (base inchangée).
+          const raw = h === 'num_secu' ? formatNumSecu(String(r[h] ?? '')) : String(r[h] ?? '');
           // Anti-notation-scientifique Excel (test COM réel du 2026-09-05) : num_secu (13
           // chiffres) est réinterprété par Excel comme un nombre à l'ouverture d'un CSV et
           // affiché en notation scientifique ("1,2346E+12"), cause plausible et démontrée
@@ -3187,7 +3189,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const EXPORT_EXCEL_CHUNK_SIZE = 500;
       for (let i = 0; i < rows.length; i += EXPORT_EXCEL_CHUNK_SIZE) {
         const chunk = rows.slice(i, i + EXPORT_EXCEL_CHUNK_SIZE);
-        chunk.forEach(r => worksheet.addRow(r));
+        // num_secu : conversion d'affichage (jamais de notation scientifique), base inchangée.
+        chunk.forEach(r => worksheet.addRow('num_secu' in r ? { ...r, num_secu: formatNumSecu(r.num_secu as string | null) } : r));
         if (i + EXPORT_EXCEL_CHUNK_SIZE < rows.length) {
           await new Promise<void>(resolveChunk => setImmediate(resolveChunk));
         }
@@ -3407,7 +3410,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       : ids;
     return queries.marquerCartesExporte(scopedIds, secureUser ? { id_user: secureUser.id_user, login: secureUser.login } : undefined);
   });
-  ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => queries.getExportRows(assertExportAccess(filters)));
+  ipcMain.handle('export:getRows', (_, filters?: Record<string, string>) => {
+    const rows = queries.getExportRows(assertExportAccess(filters)) as Record<string, unknown>[];
+    // Affichage seul : n° sécu jamais en notation scientifique (base inchangée).
+    return rows.map(r => ('num_secu' in r ? { ...r, num_secu: formatNumSecu(r.num_secu as string | null) } : r));
+  });
 
   // EXPORT - Centralized generateFile with Audit & Alerts
   ipcMain.handle('export:generateFile', async (event, format: 'csv' | 'excel' | 'pdf', filters?: Record<string, string>) => {

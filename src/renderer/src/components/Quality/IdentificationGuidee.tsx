@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, ChevronRight, CheckCircle, AlertCircle, X } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 interface IdentificationGuideeProps {
   isOpen: boolean;
@@ -132,7 +133,7 @@ export function IdentificationGuidee({ isOpen, onClose, siteId, initialName, onS
                         <div>
                           <div style={{ fontWeight: 700, color: 'white', fontSize: 15 }}>{r.noms} {r.prenoms}</div>
                           <div style={{ display: 'flex', gap: 12, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
-                            <span>N° Sécu: <strong style={{ color: 'white' }}>{r.num_secu || '—'}</strong></span>
+                            <span>N° Sécu: <strong style={{ color: 'white' }}>{formatNumSecu(r.num_secu) || '—'}</strong></span>
                             <span>Date: <strong style={{ color: 'white' }}>{r.date_de_naissance || '—'}</strong></span>
                             <span>Rangement: <strong style={{ color: 'var(--accent-primary)' }}>{r.rangement || 'NON CLASSE'}</strong></span>
                           </div>

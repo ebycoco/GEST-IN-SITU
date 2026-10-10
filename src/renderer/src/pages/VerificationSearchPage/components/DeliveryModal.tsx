@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, CheckCircle, Package, ArrowRight, ShieldCheck, AlertTriangle, Loader, MessageSquare } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 
 interface DeliveryModalProps {
@@ -95,7 +96,7 @@ export function DeliveryModal({
               {modalStep === 1 ? 'Vérification Physique' : modalStep === 2 ? 'Validation du Retrait' : modalStep === 3 ? 'Signalement d\'Absence' : 'Déclaration de Doublon'}
             </h3>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-              Carte CMU n° {displayCarte.num_secu || 'non spécifié'}
+              Carte CMU n° {formatNumSecu(displayCarte.num_secu) || 'non spécifié'}
             </p>
           </div>
           <button onClick={resetModal} className="btn-close" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', width: 36, height: 36, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>
@@ -129,7 +130,7 @@ export function DeliveryModal({
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', marginTop: 8, paddingTop: 16, borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Num Sécu</span>
-                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{displayCarte.num_secu || '-'}</span>
+                    <span style={{ fontSize: 13, color: 'white', fontWeight: 600 }}>{formatNumSecu(displayCarte.num_secu) || '-'}</span>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <span style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Contact</span>

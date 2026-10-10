@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
 import { confirmService } from '../../components/confirmService';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 export default function InventaireApurement() {
   const { user } = useAuthStore();
@@ -371,7 +372,7 @@ export default function InventaireApurement() {
                             Né(e) le {formatBirthDate(c.date_de_naissance)} à <span style={{ color: '#ec4899', fontWeight: 600 }}>{c.lieu_de_naissance || '—'}</span>
                           </div>
                           <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: 2 }}>
-                            Statut : <span style={{ color: c.statut === 'EN STOCK' ? '#10b981' : '#ec4899', fontWeight: 700 }}>{c.statut}</span> | CMU : {c.num_secu || '—'}
+                            Statut : <span style={{ color: c.statut === 'EN STOCK' ? '#10b981' : '#ec4899', fontWeight: 700 }}>{c.statut}</span> | CMU : {formatNumSecu(c.num_secu) || '—'}
                           </div>
                         </div>
                       </div>
@@ -391,7 +392,7 @@ export default function InventaireApurement() {
               <div style={{ fontSize: 11, fontWeight: 800, color: '#ffd700', textTransform: 'uppercase', marginBottom: 4 }}>Dossier Sélectionné</div>
               <h3 style={{ margin: 0, fontSize: 18, fontWeight: 800, color: 'white' }}>{selectedCarte.noms} {selectedCarte.prenoms}</h3>
               <p style={{ margin: '4px 0 0 0', fontSize: 13, color: 'var(--text-muted)' }}>
-                Né(e) le {formatBirthDate(selectedCarte.date_de_naissance)} à {selectedCarte.lieu_de_naissance} | CMU : {selectedCarte.num_secu || 'NON RENSEIGNÉ'}
+                Né(e) le {formatBirthDate(selectedCarte.date_de_naissance)} à {selectedCarte.lieu_de_naissance} | CMU : {formatNumSecu(selectedCarte.num_secu) || 'NON RENSEIGNÉ'}
               </p>
             </div>
 

@@ -1,5 +1,6 @@
 import React from 'react';
 import { X, Calendar, MapPin, User, Phone, CheckCircle, Clock } from 'lucide-react';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 interface DeliveryProofModalProps {
   isOpen: boolean;
@@ -49,7 +50,7 @@ export function DeliveryProofModal({ isOpen, onClose, carte }: DeliveryProofModa
               </span>
             </div>
             <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '4px 0 0 0' }}>
-              Carte N° {carte.num_secu || 'non spécifié'}
+              Carte N° {formatNumSecu(carte.num_secu) || 'non spécifié'}
             </p>
           </div>
           <button onClick={onClose} className="btn-close" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', width: 36, height: 36, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: 'white' }}>

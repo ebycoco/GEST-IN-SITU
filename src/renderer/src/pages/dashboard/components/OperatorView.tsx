@@ -3,6 +3,7 @@ import { OnlineBadge } from '../../../components/OnlineBadge';
 import { useAutoDownstreamPreference } from '../../../hooks/useAutoDownstreamPreference';
 
 import { Activity, Database, Globe, RefreshCw } from 'lucide-react';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 interface OperatorViewProps {
   operatorTodayCount: number;
@@ -170,7 +171,7 @@ export function OperatorView({
               {operatorRecentSaisies.map((c) => (
                 <tr key={c.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
                   <td style={{ padding: '14px 16px', fontWeight: 700, color: 'white' }}>{c.noms} {c.prenoms}</td>
-                  <td style={{ padding: '14px 16px', color: 'var(--text-secondary)' }}>{c.num_secu || '—'}</td>
+                  <td style={{ padding: '14px 16px', color: 'var(--text-secondary)' }}>{formatNumSecu(c.num_secu) || '—'}</td>
                   <td style={{ padding: '14px 16px', color: 'var(--text-secondary)' }}>{c.date_de_naissance || '—'}</td>
                   <td style={{ padding: '14px 16px', color: '#ffd700', fontWeight: 600 }}>{c.rangement || '—'}</td>
                   <td style={{ padding: '14px 16px' }}>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { History, Search, Edit2, AlertCircle, FileText, Cloud, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import SaisieEditModal from '../components/SaisieEditModal';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 export default function HistoriqueView() {
   const { user } = useAuthStore();
@@ -91,7 +92,7 @@ export default function HistoriqueView() {
                       <div style={{ fontWeight: 600, color: 'white' }}>{saisie.noms} {saisie.prenoms}</div>
                       <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{saisie.lieu_de_naissance}</div>
                     </td>
-                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#93c5fd' }}>{saisie.num_secu}</td>
+                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#93c5fd' }}>{formatNumSecu(saisie.num_secu)}</td>
                     <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>
                       {new Date(saisie.created_at || new Date()).toLocaleDateString('fr-FR')}
                     </td>

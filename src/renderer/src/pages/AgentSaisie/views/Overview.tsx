@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Activity, Calendar, Target, CalendarDays, ClipboardList, ChevronLeft, ChevronRight, RefreshCw, CheckCircle2, Clock3, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 const PAGE_SIZE = 20;
 
@@ -255,7 +256,7 @@ export default function Overview() {
                         {r.date_de_naissance || '—'}{r.lieu_de_naissance ? ` · ${r.lieu_de_naissance}` : ''}
                       </div>
                     </td>
-                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#eccc68' }}>{r.num_secu || '—'}</td>
+                    <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#eccc68' }}>{formatNumSecu(r.num_secu) || '—'}</td>
                     <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement || '—'}</td>
                     <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.contact || '—'}</td>
                     <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>

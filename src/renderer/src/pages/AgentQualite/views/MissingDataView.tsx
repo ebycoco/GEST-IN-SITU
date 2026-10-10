@@ -10,6 +10,7 @@ import { isValidCalendarDate } from '../../../utils/dateValidator';
 import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { ExpandedManquantDetails } from '../../../components/Quality/ExpandedManquantDetails';
 import { useDebounce } from '../../../hooks/useDebounce';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 type MissingTab = 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM' | 'SANS_CONTACT' | 'SANS_LIEU' | 'SANS_DATE' | 'SANS_LIEU_ENROLEMENT';
 
@@ -225,7 +226,7 @@ export default function MissingDataView() {
                           {expandedId === r.id_carte ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />}
                           <div>
                             <strong>{r.noms || '(Sans Nom)'} {r.prenoms || '(Sans Prénom)'}</strong><br />
-                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sécu: {r.num_secu || '—'}</span>
+                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Sécu: {formatNumSecu(r.num_secu) || '—'}</span>
                           </div>
                         </div>
                       </td>

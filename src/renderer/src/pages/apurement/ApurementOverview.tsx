@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Activity, Calendar, CalendarDays, Target, ClipboardList, ChevronLeft, ChevronRight, CheckCircle2, Clock3, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 const PAGE_SIZE = 20;
 
@@ -227,7 +228,7 @@ export default function ApurementOverview() {
                           {r.date_de_naissance || '—'}{r.lieu_de_naissance ? ` · ${r.lieu_de_naissance}` : ''}
                         </div>
                       </td>
-                      <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#f9a8d4' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#f9a8d4' }}>{formatNumSecu(r.num_secu) || '—'}</td>
                       <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement || '—'}</td>
                       <td style={{ padding: '16px 24px' }}>
                         <div style={{ color: 'white', fontSize: 13 }}>{r.nom_retirant || '—'}</div>

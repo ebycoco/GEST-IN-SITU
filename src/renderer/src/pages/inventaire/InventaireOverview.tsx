@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Activity, Calendar, CalendarDays, Target, PackageSearch, ClipboardList, ChevronLeft, ChevronRight, CheckCircle2, Clock3, AlertTriangle } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 interface InventaireOverviewStats {
   today: number;
@@ -261,7 +262,7 @@ export default function InventaireOverview() {
                               {r.date_de_naissance || '—'}{r.lieu_de_naissance ? ` · ${r.lieu_de_naissance}` : ''}
                             </div>
                           </td>
-                          <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                          <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{formatNumSecu(r.num_secu) || '—'}</td>
                           <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement || '—'}</td>
                           <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.statut || '—'}</td>
                           <td style={{ padding: '16px 24px', color: 'var(--text-muted)', fontSize: 13 }}>

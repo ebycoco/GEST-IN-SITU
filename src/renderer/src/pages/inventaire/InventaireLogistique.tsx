@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
 import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 /**
  * Vrai si la carte n'a pas de rangement exploitable : vide, NULL/undefined ou « NON CLASSE »
@@ -104,7 +105,7 @@ export default function InventaireLogistique() {
     setSelectedCarte(carte);
     // « NON CLASSE » / vide : champ vide pour éviter à l'opérateur de l'effacer avant saisie.
     setRangement(isRangementVide(carte.rangement) ? '' : carte.rangement);
-    setNumSecu(carte.num_secu || '');
+    setNumSecu(formatNumSecu(carte.num_secu));
     setContact(formatContactForDisplay(carte.contact));
     setResults([]);
     
@@ -274,7 +275,7 @@ export default function InventaireLogistique() {
                               Né(e) le {c.date_de_naissance || '—'} à <span style={{ color: '#a855f7', fontWeight: 600 }}>{c.lieu_de_naissance || '—'}</span>
                             </div>
                             <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace', marginTop: 2 }}>
-                              N° CMU : {c.num_secu || 'NON RENSEIGNÉ'}
+                              N° CMU : {formatNumSecu(c.num_secu) || 'NON RENSEIGNÉ'}
                             </div>
                           </div>
                         </div>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Package, User, Calendar, MapPin, Phone, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Cloud, CloudDownload, X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 interface SearchResultsProps {
   results: any[];
@@ -390,7 +391,7 @@ export function SearchResults({
                     {carte.num_secu && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-muted)' }}>
                         <ShieldCheck size={14} />
-                        N° CMU : {carte.num_secu}
+                        N° CMU : {formatNumSecu(carte.num_secu)}
                       </div>
                     )}
                     {carte.lieu_enrolement && (

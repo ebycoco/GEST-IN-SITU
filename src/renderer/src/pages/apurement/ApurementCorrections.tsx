@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { History, Search, ChevronLeft, ChevronRight, CheckCircle2, Clock3, AlertTriangle, Pencil, Undo2, X, RotateCcw } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 const PAGE_SIZE = 20;
 const ADMIN_ROLES = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE'];
@@ -180,7 +181,7 @@ export default function ApurementCorrections() {
                       <td style={{ padding: '16px 20px' }}>
                         <div style={{ fontWeight: 600, color: 'white' }}>{r.noms} {r.prenoms}</div>
                         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {r.num_secu || '—'}{r.rangement ? ` · ${r.rangement}` : ''}
+                          {formatNumSecu(r.num_secu) || '—'}{r.rangement ? ` · ${r.rangement}` : ''}
                         </div>
                         {r.apurement_correction_par && (
                           <div style={{ marginTop: 4, fontSize: 11, color: '#f59e0b' }}>

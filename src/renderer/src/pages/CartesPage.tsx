@@ -11,6 +11,7 @@ import toast from 'react-hot-toast';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { ICarte } from '../../../shared/types';
+import { formatNumSecu } from '../../../shared/utils/numSecu';
 
 interface Stats {
   total: number;
@@ -92,7 +93,7 @@ const MemoRow = React.memo(({ index, style, data }: { index: number; style: Reac
 
       <div style={{ width: 160, display: 'flex', flexDirection: 'column', gap: 2 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'rgba(255,255,255,0.85)', fontFamily: 'monospace' }}>
-          <Hash size={12} style={{ color: 'var(--text-muted)', opacity: 0.6 }} /> {c.num_secu || '—'}
+          <Hash size={12} style={{ color: 'var(--text-muted)', opacity: 0.6 }} /> {formatNumSecu(c.num_secu) || '—'}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}>
           <Phone size={11} style={{ opacity: 0.6 }} /> {c.contact || '—'}
@@ -746,7 +747,7 @@ export default function CartesPage() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <DetailRow label="N° Sécurité" value={selected.num_secu} icon={Hash} />
+                <DetailRow label="N° Sécurité" value={formatNumSecu(selected.num_secu)} icon={Hash} />
                 <DetailRow label="Contact" value={selected.contact} icon={Phone} />
                 <DetailRow label="Rangement" value={selected.rangement} icon={MapPin} />
                 {/* P1-5 (audit agent-9) : centre actuel de la carte, résolu via le state
@@ -1030,7 +1031,7 @@ function TransferModal({ carte, onClose, onSuccess }: { carte: ICarte; onClose: 
               <div style={{ fontSize: 16, fontWeight: 800, color: 'white', textTransform: 'uppercase' }}>{carte.noms} {carte.prenoms}</div>
               <div style={{ display: 'flex', gap: 14, marginTop: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                  <Hash size={10} /> {carte.num_secu || '—'}
+                  <Hash size={10} /> {formatNumSecu(carte.num_secu) || '—'}
                 </div>
               </div>
             </div>

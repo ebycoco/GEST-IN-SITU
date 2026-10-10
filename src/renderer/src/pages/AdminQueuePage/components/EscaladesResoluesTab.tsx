@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuthStore } from '../../../stores/authStore';
 import { Search, ChevronLeft, ChevronRight, CheckCircle, Archive } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 // Onglet ADMIN_CENTRE (Correctif 5) : visibilité des signalements que CE centre a escaladés au
 // site (cartes:escaladerAuSite -> log CARTE_ABSENTE_ESCALADEE) et qui ont depuis été résolus,
@@ -161,7 +162,7 @@ export const EscaladesResoluesTab = () => {
                 {carte.noms} {carte.prenoms}
               </h4>
               <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
-                <span>N° Sécu : {carte.num_secu || 'Non renseigné'}</span>
+                <span>N° Sécu : {formatNumSecu(carte.num_secu) || 'Non renseigné'}</span>
                 {/* action_at (et non updated_at) : migration lot 2 — getEscaladesResoluesCentre()
                     renvoie toujours SELECT c.* (donc les deux colonnes), mais action_at est
                     l'horodatage fiable de la résolution, jamais réécrit par la synchro réseau. */}

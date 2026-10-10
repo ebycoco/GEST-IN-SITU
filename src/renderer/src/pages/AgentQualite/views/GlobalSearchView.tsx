@@ -5,6 +5,7 @@ import { useAuthStore } from '../../../stores/authStore';
 import { useQualityUIStore } from '../../../stores/qualityUIStore';
 import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { AdvancedSearchBar } from '../../../components/Quality/AdvancedSearchBar';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 export default function GlobalSearchView() {
   const { user, activeSiteId } = useAuthStore();
@@ -136,7 +137,7 @@ export default function GlobalSearchView() {
                     <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{r.contact || '-'}</span>
                   </td>
                   <td style={{ paddingTop: 12, paddingBottom: 12 }}>
-                    <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{r.num_secu || '-'}</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 13 }}>{formatNumSecu(r.num_secu) || '-'}</span>
                   </td>
                   <td style={{ textAlign: 'right', paddingRight: 20, paddingTop: 12, paddingBottom: 12 }}>
                     <button

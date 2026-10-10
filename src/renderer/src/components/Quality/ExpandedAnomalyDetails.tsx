@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { RefreshCw, Save, Edit3, Phone, MapPin, ShieldAlert, Fingerprint, AlertCircle } from 'lucide-react';
 import DateInput from '../DateInput';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 export interface IAnomalyRecord {
   id_carte?: number;
@@ -247,11 +248,11 @@ export function ExpandedAnomalyDetails({ record, isResolving, onSaveField, color
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, fontSize: 14 }}>
-              <span>{record.num_secu || <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}</span>
+              <span>{formatNumSecu(record.num_secu) || <span style={{ color: '#ff7675', fontSize: 13 }}>Donnée manquante</span>}</span>
               <button
                 className="btn btn-secondary"
                 style={{ padding: '2px 8px', fontSize: 11, border: '1px solid rgba(112,161,255,0.4)', color: '#70a1ff', background: 'rgba(112,161,255,0.08)' }}
-                onClick={(e) => { e.stopPropagation(); startEdit('num_secu', record.num_secu?.replace(/\D/g, '') || ''); }}
+                onClick={(e) => { e.stopPropagation(); startEdit('num_secu', formatNumSecu(record.num_secu).replace(/\D/g, '')); }}
               >
                 <Edit3 size={10} style={{ marginRight: 3 }} />Modifier
               </button>

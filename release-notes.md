@@ -8,6 +8,8 @@
 
 - **Page « Sans rangement » : saisie plus fluide** — la touche Entrée dans le champ contact d'une ligne dont le rangement est vide place désormais le curseur sur le rangement de cette ligne (au lieu d'un message d'erreur), et les rangements/contacts déjà saisis mais non enregistrés sur les autres lignes ne sont plus perdus quand une ligne est enregistrée. Les champs contact et rangement sont aussi mieux repérables pour les lecteurs d'écran.
 
+- **N° de sécurité sociale : plus d'affichage en notation scientifique** — un numéro corrompu par Excel et enregistré sous la forme `3,84E+12` s'affiche désormais en 13 chiffres (`3840000000000`) dans toute l'application (listes, recherches, fiches, portails Qualité/Apurement/Logistique/Vérification, fenêtres de délivrance) ainsi que dans les exports CSV et Excel. Il s'agit d'un affichage seul : la valeur stockée n'est pas modifiée. Les champs de correction se préremplissent aussi avec les 13 chiffres (ils se préremplissaient auparavant avec un numéro faux, `38412`, car la virgule et l'exposant étaient retirés).
+
 ### 🛠️ Corrections & Fiabilité
 
 - **Rangement + contact : traçabilité et avertissement de doublon** — la modification d'un contact depuis les écrans « Inventaire logistique » et « Sans rangement » est désormais journalisée (ancien et nouveau contact, auteur, dans la même transaction que la mise à jour). Si le contact saisi rend la fiche strictement identique à une autre carte du site, l'enregistrement reste possible mais un avertissement précise que la fiche reste en local tant que le doublon n'est pas résolu dans le portail Qualité (auparavant, un succès était affiché sans mention de ce blocage d'envoi).

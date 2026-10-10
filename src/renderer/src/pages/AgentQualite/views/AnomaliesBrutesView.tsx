@@ -6,6 +6,7 @@ import { useQualityUIStore } from '../../../stores/qualityUIStore';
 import { confirmService } from '../../../components/confirmService';
 import { PaginationInput } from '../../../components/PaginationInput';
 import { ExpandedAnomalyDetails } from '../../../components/Quality/ExpandedAnomalyDetails';
+import { formatNumSecu } from '../../../../../shared/utils/numSecu';
 
 export default function AnomaliesBrutesView() {
   const { user, activeSiteId } = useAuthStore();
@@ -181,7 +182,7 @@ export default function AnomaliesBrutesView() {
                           {row?.id && (expandedId === row.id ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />)}
                           <div>
                             <div style={{ fontWeight: 600, color: 'white' }}>{row?.noms || '-'} {row?.prenoms || '-'}</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Num Sécu: {row?.num_secu || '-'}</div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Num Sécu: {formatNumSecu(row?.num_secu) || '-'}</div>
                           </div>
                         </div>
                       </td>

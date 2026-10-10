@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { PackageSearch, CheckCircle, AlertTriangle, ArrowRight } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
+import { formatNumSecu } from '../../../../shared/utils/numSecu';
 
 export default function InventairePhysiqueScan() {
   const { user } = useAuthStore();
@@ -178,7 +179,7 @@ export default function InventairePhysiqueScan() {
                 {c.success ? (
                   <>
                     <div style={{ fontWeight: 700, color: 'white' }}>{c.noms} {c.prenoms}</div>
-                    <div style={{ fontSize: 12, color: '#10b981' }}>N° Sécu: {c.num_secu} | Vers: {c.rangement}</div>
+                    <div style={{ fontSize: 12, color: '#10b981' }}>N° Sécu: {formatNumSecu(c.num_secu)} | Vers: {c.rangement}</div>
                   </>
                 ) : (
                   <>

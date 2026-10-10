@@ -3,6 +3,7 @@ import { Clock, CheckCircle, AlertTriangle, Search, MapPin, RefreshCw, ListCheck
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { EscaladesResoluesTab } from './AdminQueuePage/components/EscaladesResoluesTab';
+import { formatNumSecu } from '../../../shared/utils/numSecu';
 
 export default function AdminQueuePage() {
   const { user, activeSiteId } = useAuthStore();
@@ -400,7 +401,7 @@ export default function AdminQueuePage() {
                       {r.noms} {r.prenoms}
                     </h4>
                     <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
-                      <span>N° Sécu : {r.num_secu || 'Non renseigné'}</span>
+                      <span>N° Sécu : {formatNumSecu(r.num_secu) || 'Non renseigné'}</span>
                       <span>Né(e) le : {r.date_de_naissance || 'N/A'} à {r.lieu_de_naissance || 'N/A'}</span>
                     </div>
                   </div>
@@ -581,7 +582,7 @@ export default function AdminQueuePage() {
                       {r.noms} {r.prenoms}
                     </h4>
                     <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
-                      <span>N° Sécu : {r.num_secu || 'Non renseigné'}</span>
+                      <span>N° Sécu : {formatNumSecu(r.num_secu) || 'Non renseigné'}</span>
                       <span>Dernier rangement : <strong>{r.rangement || 'Non classé'}</strong></span>
                       {r.site_nom && <span>Centre : {r.site_nom}</span>}
                     </div>
