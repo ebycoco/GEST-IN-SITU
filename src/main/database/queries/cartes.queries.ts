@@ -1072,6 +1072,12 @@ export function annulerDeclarationDoublon(
  * centre_attendu calculable), conformément à la définition exacte de l'anomalie validée avec
  * l'utilisateur (cas exclus : rangement vide/NON CLASSE, ou rangement sans préfixe matchant).
  *
+ * Cartes DELIVRE et DOUBLON exclues du résultat (pré-filtre SQL, statut NULL conservé) : ce sont
+ * les mêmes statuts que les verrous de corrigerCentreCarte() ci-dessous, qui les refuse
+ * (décision produit non renégociable) — la page n'existe que pour débloquer la délivrance, une
+ * carte déjà délivrée ou déclarée en doublon n'a rien à débloquer et ne doit donc pas être
+ * proposée à la correction.
+ *
  * Lecture seule. Cloisonnement site_id obligatoire en paramètre (jamais dérivé d'une re-requête
  * directe sur t_users — §3 CLAUDE.md) : le handler IPC (cartes:getCartesMalCentrees) dérive ce
  * paramètre via getSecureCurrentUser()/resolveScopedSiteId, jamais du paramètre client brut.
@@ -1131,6 +1137,7 @@ export function getCartesMalCentrees(siteId: number): Array<{
       AND rangement IS NOT NULL
       AND TRIM(rangement) != ''
       AND UPPER(TRIM(rangement)) != 'NON CLASSE'
+      AND (statut IS NULL OR statut NOT IN ('DELIVRE', 'DOUBLON'))
   `).all(siteId) as any[];
 
   const anomalies: any[] = [];

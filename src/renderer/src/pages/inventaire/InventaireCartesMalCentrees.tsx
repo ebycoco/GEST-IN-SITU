@@ -6,6 +6,7 @@ import { confirmService } from '../../components/confirmService';
 import { PaginationInput } from '../../components/PaginationInput';
 import DateInput from '../../components/DateInput';
 import { normalizeDate } from '../../../../shared/utils/date';
+import { cleanIpcErrorMessage } from './phoneFormat';
 
 // Pagination CÔTÉ RENDERER uniquement (slice d'un tableau déjà entièrement chargé en mémoire) —
 // pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts:1057-1129)
@@ -45,10 +46,8 @@ interface CarteMalCentree {
  * ouvert aux 4 rôles du hub (décision produit validée), au même titre que
  * stats:getInventaireOverview.
  *
- * Cartes DOUBLON/DELIVRE : non corrigibles ici (verrous serveur dans corrigerCentreCarte()) —
- * l'action "Corriger" reste affichée pour ces lignes (transparence : la carte est bien
- * mal-centrée, l'agent doit comprendre pourquoi elle reste bloquée) mais l'erreur serveur
- * explicite remonte via toast si l'agent tente quand même la correction.
+ * Cartes DOUBLON/DELIVRE : non corrigibles (verrous serveur dans corrigerCentreCarte()) et donc
+ * déjà exclues de la liste par getCartesMalCentrees() — l'écran ne les reçoit jamais.
  *
  * 3 champs de recherche (reproduits à l'identique de InventaireLogistique.tsx, "CLASSEMENT
  * LOGISTIQUE") : libre (Nom/Prénom) + Date/Lieu de naissance facultatifs. Contrairement à
@@ -178,8 +177,9 @@ export default function InventaireCartesMalCentrees() {
       // Notifie le reste du hub (compteurs InventaireLayout.tsx, etc.) — même pattern que
       // InventaireLogistique.tsx/InventaireApurement.tsx.
       window.dispatchEvent(new CustomEvent('app:data-updated'));
-    } catch (err: any) {
-      toast.error(`Erreur : ${err.message || err}`);
+    } catch (err: unknown) {
+      // cleanIpcErrorMessage retire le préfixe technique Electron « Error invoking remote method ».
+      toast.error(`Erreur : ${cleanIpcErrorMessage(err)}`);
     } finally {
       setCorrectingId(null);
     }
@@ -268,39 +268,37 @@ export default function InventaireCartesMalCentrees() {
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Identité</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Centre actuel</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Centre attendu</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Statut</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
+                  <th style={{ padding: '12px 10px', minWidth: 160, fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Identité</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Centre actuel</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Centre attendu</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Statut</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {pagedRows.map((r) => {
-                  const isLocked = r.statut === 'DOUBLON' || r.statut === 'DELIVRE';
                   return (
                     <tr key={r.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '12px 10px', minWidth: 160 }}>
                         <div style={{ fontWeight: 600, color: 'white' }}>{r.noms} {r.prenoms}</div>
                       </td>
-                      <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
-                      <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.rangement}</td>
-                      <td style={{ padding: '16px 24px', color: '#f87171' }}>{r.nom_centre_actuel || 'Aucun'}</td>
-                      <td style={{ padding: '16px 24px', color: '#34d399', fontWeight: 600 }}>{r.nom_centre_attendu}</td>
-                      <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.statut}</td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{r.rangement}</td>
+                      <td style={{ padding: '12px 10px', color: '#f87171' }}>{r.nom_centre_actuel || 'Aucun'}</td>
+                      <td style={{ padding: '12px 10px', color: '#34d399', fontWeight: 600 }}>{r.nom_centre_attendu}</td>
+                      <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{r.statut}</td>
+                      <td style={{ padding: '12px 10px' }}>
                         <button
                           onClick={() => handleCorriger(r)}
                           disabled={correctingId === r.id_carte}
-                          title={isLocked ? `Carte ${r.statut} — la correction sera refusée par le serveur, contactez un administrateur.` : undefined}
                           style={{
                             padding: '8px 14px', borderRadius: 10, border: 'none', fontWeight: 700, fontSize: 12,
                             cursor: correctingId === r.id_carte ? 'not-allowed' : 'pointer',
                             opacity: correctingId === r.id_carte ? 0.6 : 1,
-                            background: isLocked ? 'rgba(248, 113, 113, 0.15)' : 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
-                            color: isLocked ? '#f87171' : 'white'
+                            background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)',
+                            color: 'white'
                           }}
                         >
                           {correctingId === r.id_carte ? 'Correction...' : 'Corriger'}

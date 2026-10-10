@@ -8,4 +8,6 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Cartes mal-centrées : les cartes déjà délivrées ou déclarées en doublon ne sont plus listées** — elles apparaissaient avec un bouton « Corriger » que le serveur refusait systématiquement après confirmation (la correction du centre d'une carte délivrée ou en doublon reste volontairement impossible) ; la liste ne propose plus que des cartes réellement corrigibles. Le message d'erreur n'affiche plus le préfixe technique d'Electron, et le tableau est resserré pour que la colonne « Identité » ne soit plus écrasée.
+
 - **Rangement + contact : un numéro de plus de 10 chiffres n'est plus tronqué en silence** — côté serveur, il est refusé au lieu d'enregistrer un numéro faux (ex. `07080900101` devenait `7080900101`). Côté écran, un collage de plus de 10 chiffres n'est plus raccourci : le champ reste inchangé et un message demande de vérifier les chiffres. Un contact déjà enregistré avec plus de 10 chiffres s'affiche tel quel, avec une bordure d'alerte, et ne bloque pas l'enregistrement du rangement tant qu'il n'est pas modifié. Les messages d'erreur de ces deux écrans n'affichent plus le préfixe technique d'Electron.
