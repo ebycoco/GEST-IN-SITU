@@ -130,6 +130,17 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
     }, [w, h]);
     await env.window.waitForTimeout(600);
   }
+  /** Rétablit la taille demandée si la fenêtre a été redimensionnée entre-temps (la fenêtre peut se re-maximiser après le login). */
+  async function ensureSize(w: number, h: number): Promise<void> {
+    for (let i = 0; i < 12; i++) {
+      const vw = await env.window.evaluate(() => window.innerWidth);
+      if (Math.abs(vw - w) <= 2) break;
+      await setContentSize(w, h);
+      await env.window.waitForTimeout(500);
+    }
+    await env.window.waitForTimeout(600);
+    expect(Math.abs((await env.window.evaluate(() => window.innerWidth)) - w)).toBeLessThanOrEqual(2);
+  }
   async function getSitesCalls(): Promise<number> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return env.app.evaluate(() => (globalThis as any).__getSitesCalls as number);
@@ -163,19 +174,46 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
       };
     });
   }
+  /** Ligne 1 du badge : pastille, « LICENCE », « Pro » entiers et non tronqués (dans le badge, l'aside et avant le bouton de repli). */
+  async function readLine1(): Promise<{ parts: { t: string; sw: number; cw: number; right: number }[]; line1Right: number; badgeRight: number; asideRight: number; toggleLeft: number; headerHeight: number }> {
+    return env.window.evaluate(() => {
+      const b = document.querySelector('.sidebar-header [role="status"]') as HTMLElement;
+      const line1 = b.firstElementChild as HTMLElement;
+      const a = (document.querySelector('aside.sidebar') as HTMLElement).getBoundingClientRect();
+      const t = (document.querySelector('.sidebar-toggle-btn') as HTMLElement).getBoundingClientRect();
+      const parts = Array.from(line1.children).map((c) => {
+        const e = c as HTMLElement;
+        return { t: (e.innerText || '(pastille)').trim(), sw: e.scrollWidth, cw: e.clientWidth, right: Math.round(e.getBoundingClientRect().right) };
+      });
+      return {
+        parts, line1Right: Math.round(line1.getBoundingClientRect().right), badgeRight: Math.round(b.getBoundingClientRect().right),
+        asideRight: Math.round(a.right), toggleLeft: Math.round(t.left),
+        headerHeight: Math.round((document.querySelector('.sidebar-header') as HTMLElement).getBoundingClientRect().height)
+      };
+    });
+  }
   async function dotColor(): Promise<string> {
     return badge().locator('span').first().evaluate((el) => getComputedStyle(el).backgroundColor);
   }
-  async function readBadge(): Promise<{ text: string; dot: string; title: string | null; describedBy: string | null; hidden: string }> {
+  /**
+   * Lecture du badge. Source UNIQUE de l'infobulle = attribut `title` du conteneur role="status".
+   * `describedByCount` = nombre d'éléments portant aria-describedby dans le badge (conteneur compris) ;
+   * `tipTextNodes` = nombre d'éléments du DOM (hors attributs) dont le texte contient une phrase d'infobulle
+   * (un span masqué dupliquant l'infobulle serait compté ici) ; `ariaLabel*` : aucune autre source accessible.
+   */
+  async function readBadge(): Promise<{ text: string; dot: string; title: string | null; describedByCount: number; tipTextNodes: number; ariaLabel: string | null; ariaLabelledby: string | null }> {
     const text = ((await badge().innerText()) || '').replace(/\s+/g, ' ').trim();
     const title = await badge().getAttribute('title');
-    const describedBy = await badge().getAttribute('aria-describedby');
-    const hidden = describedBy
-      ? (((await env.window.locator(`[id="${describedBy}"]`).textContent()) || '').trim())
-      : '';
-    return { text, dot: await dotColor(), title, describedBy, hidden };
+    const extra = await env.window.evaluate(() => {
+      const b = document.querySelector('.sidebar-header [role="status"]') as HTMLElement;
+      const describedByCount = (b.hasAttribute('aria-describedby') ? 1 : 0) + b.querySelectorAll('[aria-describedby]').length;
+      const tipTextNodes = Array.from(document.querySelectorAll('aside.sidebar *')).filter((e) => /Pour renouveler/i.test(e.textContent || '') && e.children.length === 0).length
+        + (/Pour renouveler/i.test(b.textContent || '') ? 1 : 0);
+      return { describedByCount, tipTextNodes, ariaLabel: b.getAttribute('aria-label'), ariaLabelledby: b.getAttribute('aria-labelledby') };
+    });
+    return { text, dot: await dotColor(), title, ...extra };
   }
-  /** Vérifie un cas sur le badge déjà affiché ; `tip` = infobulle attendue pour ce rôle. */
+  /** Vérifie un cas sur le badge déjà affiché ; `tipText` = infobulle exacte attendue pour ce rôle quand c.tip. */
   async function assertCase(c: Case, tipText: string): Promise<string> {
     await expect(badge()).toBeVisible({ timeout: 15000 });
     const b = await readBadge();
@@ -185,15 +223,16 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
     expect(b.dot).toBe(palette[c.color]);
     if (c.soon) expect(b.text).toContain('Expire bientôt');
     else expect(b.text).not.toContain('Expire bientôt');
-    if (c.tip) {
-      expect(b.title).toBe(tipText);
-      expect(b.describedBy).toBeTruthy();
-      expect(b.hidden).toBe(tipText);
-    } else {
-      expect(b.title).toBeNull();
-      expect(b.describedBy).toBeNull();
-    }
-    return `${c.label} | texte="${b.text}" | pastille=${b.dot} | title=${b.title} | aria="${b.hidden}"`;
+    // Texte de l'infobulle : jamais dans le texte rendu (innerText) du badge
+    expect(b.text).not.toMatch(/renouveler/i);
+    if (c.tip) expect(b.title).toBe(tipText); // title exact du rôle (warning / critical / undefined)
+    else expect(b.title).toBeNull(); // aucun attribut title sinon
+    // Source UNIQUE : ni aria-describedby, ni span masqué dupliquant l'infobulle, ni autre nom accessible
+    expect(b.describedByCount).toBe(0);
+    expect(b.tipTextNodes).toBe(0);
+    expect(b.ariaLabel).toBeNull();
+    expect(b.ariaLabelledby).toBeNull();
+    return `${c.label} | texte="${b.text}" | pastille=${b.dot} | title=${b.title} | aria-describedby=${b.describedByCount} | texteInfobulleDansDOM=${b.tipTextNodes}`;
   }
 
   // ── 0. Palette de référence (couleurs d'état résolues par le navigateur) ──
@@ -388,6 +427,7 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
       for (const [tag, nom] of [['court', 'ZZTEST_SITE'], ['long', longName]] as const) {
         await dbQuery('UPDATE t_sites SET nom = ? WHERE id = ?', [nom, env.seed.siteId]);
         await fireDataUpdated();
+        await ensureSize(w, h);
         await expect(badge()).toBeVisible();
         const mm = await metrics();
         results[tag] = mm;
@@ -397,6 +437,12 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
         expect(soonInfo.text.replace(/\s+/g, ' ').trim()).toBe('Expire bientôt');
         expect(soonInfo.sw).toBeLessThanOrEqual(soonInfo.cw);
         expect(soonInfo.right).toBeLessThanOrEqual(soonInfo.asideRight);
+        expect(soonInfo.lines).toBe(1); // « Expire bientôt » sur UNE seule ligne
+        const l1 = await readLine1();
+        console.log(`[SIDEBAR_QA] ligne1 critique ${w}x${h} ${tag} ${JSON.stringify(l1)}`);
+        expect(l1.parts.map((p) => p.t)).toEqual(['(pastille)', 'LICENCE', 'Pro']);
+        for (const p of l1.parts) { expect(p.sw).toBeLessThanOrEqual(p.cw); expect(p.right).toBeLessThanOrEqual(l1.asideRight); }
+        expect(l1.line1Right).toBeLessThanOrEqual(l1.badgeRight); // « Pro » non coupé par le conteneur
         expect(mm.docOverflow).toBeLessThanOrEqual(0);
         expect(mm.headerOverflow).toBeLessThanOrEqual(0);
         expect(mm.toggle.r).toBeLessThanOrEqual(mm.aside.r);
@@ -415,11 +461,15 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
       await setSiteLicence(env.seed.siteId, CASES[1].expiry, 0);
       await dbQuery('UPDATE t_sites SET nom = ? WHERE id = ?', ['ZZTEST_SITE', env.seed.siteId]);
       await fireDataUpdated();
+      await ensureSize(w, h);
       const orange = await metrics();
       const dh = (results.court.header.b - results.court.header.t) - (orange.header.b - orange.header.t);
-      console.log(`[SIDEBAR_QA] ${w}x${h} hauteur en-tête critique-orange = ${dh}px`);
-      expect(dh).toBeGreaterThanOrEqual(0);
+      const hCrit = results.court.header.b - results.court.header.t, hOrange = orange.header.b - orange.header.t;
+      console.log(`[SIDEBAR_QA] ${w}x${h} hauteur en-tête critique=${hCrit}px orange=${hOrange}px écart=${dh}px`);
+      // Mesuré avec police 11 px : écart 18-19 px (1 ligne de ~13 px + gap 2 + arrondis) ; borne resserrée 15..20.
+      expect(dh).toBeGreaterThanOrEqual(15);
       expect(dh).toBeLessThanOrEqual(20);
+      expect(hCrit).toBeLessThanOrEqual(120); // mesuré 114 (1024) / 118 (1366)
       await logout();
     });
   }
@@ -445,6 +495,69 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
       await shot(`etat_${c.label}_1366`);
     }
     expect(new Set(Object.values(hs)).size).toBe(1);
+    await logout();
+  });
+
+  // ── 4d. Lisibilité (police >= 11 px, couleur du libellé, contraste WCAG contre le fond RÉEL de l'en-tête) ──
+  test('Lisibilité — font-size >= 11 px, « LICENCE » en --text-primary, contraste WCAG mesuré (état critique)', async () => {
+    await setSiteLicence(env.seed.siteId, CASES[2].expiry, 0);
+    await setContentSize(1366, 768);
+    await login('administrateurSite');
+    await waitSidebar();
+    await expect(badge()).toBeVisible();
+    const m = await env.window.evaluate(() => {
+      const b = document.querySelector('.sidebar-header [role="status"]') as HTMLElement;
+      const spans = Array.from(b.querySelectorAll('span')) as HTMLElement[];
+      const byText = (re: RegExp) => spans.find((e) => re.test((e.textContent || '').trim()))!;
+      const parse = (c: string): [number, number, number, number] => {
+        const m = c.match(/rgba?\(([^)]+)\)/);
+        if (!m) return [0, 0, 0, 0];
+        const p = m[1].split(/[ ,\/]+/).filter(Boolean).map(Number);
+        return [p[0], p[1], p[2], p.length > 3 ? p[3] : 1];
+      };
+      const lum = ([r, g, b2]: number[]) => {
+        const f = (v: number) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+        return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b2);
+      };
+      const ratio = (a: number[], bg: number[]) => { const la = lum(a), lb = lum(bg); return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05); };
+      // Fond RÉEL : on remonte les parents ; couleur unie opaque sinon dégradé (toutes les étapes extraites, la plus CLAIRE = pire cas).
+      let bgs: number[][] = []; let bgSrc = '';
+      for (let n: HTMLElement | null = b; n; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        const bc = parse(cs.backgroundColor);
+        if (bc[3] > 0.99) { bgs = [bc]; bgSrc = `${n.tagName.toLowerCase()}.${n.className} backgroundColor ${cs.backgroundColor}`; break; }
+        if (cs.backgroundImage && cs.backgroundImage !== 'none') {
+          bgs = (cs.backgroundImage.match(/rgba?\([^)]+\)/g) || []).map(parse).filter((c) => c[3] > 0.99);
+          if (bgs.length) { bgSrc = `${n.tagName.toLowerCase()}.${n.className} backgroundImage ${cs.backgroundImage}`; break; }
+        }
+      }
+      const worstBg = bgs.slice().sort((x, y) => lum(y) - lum(x))[0];
+      const info = (e: HTMLElement) => {
+        const cs = getComputedStyle(e);
+        return { color: cs.color, fontSize: parseFloat(cs.fontSize), fontWeight: cs.fontWeight, contrast: worstBg ? Math.round(ratio(parse(cs.color), worstBg) * 100) / 100 : -1 };
+      };
+      const tmp = document.createElement('span'); tmp.style.color = 'var(--text-primary)'; document.body.appendChild(tmp);
+      const textPrimary = getComputedStyle(tmp).color; tmp.remove();
+      const proBg = getComputedStyle(byText(/^Pro$/)).backgroundColor;
+      const pro = info(byText(/^Pro$/));
+      return {
+        licence: info(byText(/^Licence$/i)), pro: { ...pro, background: proBg, contrastOnPill: Math.round(ratio(parse(getComputedStyle(byText(/^Pro$/)).color), parse(proBg)) * 100) / 100 },
+        soon: info(byText(/Expire bientôt/)), textPrimary, bgSrc, bgStops: bgs
+      };
+    });
+    console.log(`[SIDEBAR_QA] lisibilite ${JSON.stringify(m)}`);
+    expect(m.licence.fontSize).toBeGreaterThanOrEqual(11);
+    expect(m.pro.fontSize).toBeGreaterThanOrEqual(11);
+    expect(m.soon.fontSize).toBeGreaterThanOrEqual(11);
+    expect(m.soon.fontWeight).toBe('700');
+    expect(m.licence.color).toBe(m.textPrimary); // var(--text-primary) résolue
+    expect(m.licence.color).toBe('rgb(232, 234, 246)'); // valeur relevée du thème (#e8eaf6)
+    expect(m.bgStops.length).toBeGreaterThan(0); // fond réel identifié
+    // Contraste : 4.5:1 = cible WCAG AA pour du texte de 11 px (mesure ; « Expire bientôt » rouge consigné, voir rapport)
+    expect(m.licence.contrast).toBeGreaterThanOrEqual(4.5);
+    expect(m.soon.contrast).toBeGreaterThanOrEqual(4.5); // rouge sur fond sombre : 4.97 relevé (marge faible)
+    expect(m.pro.contrastOnPill).toBeGreaterThanOrEqual(4.5);
+    await shot('lisibilite_critique');
     await logout();
   });
 
@@ -543,7 +656,7 @@ test.describe.serial('QA Terrain — badge Licence de la Sidebar (agent-13)', ()
   test('Console renderer — aucune erreur/avertissement lié au badge, à React (clés, hooks, aria)', async () => {
     const all = consoleMsgs.filter((m) => ['error', 'warning', 'pageerror'].includes(m.type));
     console.log(`[SIDEBAR_QA] ${consoleMsgs.length} messages console, erreurs/warnings: ${all.map((m) => `${m.type}: ${m.text.slice(0, 160)}`).join(' || ') || 'aucun'}`);
-    const bad = all.filter((m) => m.type === 'pageerror' || /LicenseSidebarBadge|license|Rules of Hooks|Warning:|aria-describedby/i.test(m.text));
+    const bad = all.filter((m) => m.type === 'pageerror' || /LicenseSidebarBadge|license|Rules of Hooks|Warning:/i.test(m.text));
     expect(bad).toEqual([]);
   });
 });
