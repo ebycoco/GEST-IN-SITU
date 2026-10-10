@@ -10,6 +10,7 @@ import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '..
 import { insertAuditLog } from './audit.queries';
 import { logAudit } from '../../utils/audit';
 import { recordPresenceLogin } from '../../sync/presence.service';
+import { isLicenseExpired } from '../../../shared/utils/license';
 
 // Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
 // Reflète côté serveur la restriction déjà appliquée côté UI (AgentsPage.visibleRoles) :
@@ -108,9 +109,9 @@ export async function authenticateUser(login: string, password: string): Promise
     }
 
     if (user.site_is_permanent !== 1 && user.site_expiry_date) {
-      const now = new Date();
-      const expiry = new Date(user.site_expiry_date);
-      if (now > expiry) {
+      // Règle A1 (shared/utils/license.ts) : la date d'échéance est le dernier jour utilisable,
+      // blocage seulement à partir du lendemain 00:00 UTC.
+      if (isLicenseExpired(user.site_expiry_date, new Date())) {
         throw new Error('LICENCE_EXPIREE');
       }
     }

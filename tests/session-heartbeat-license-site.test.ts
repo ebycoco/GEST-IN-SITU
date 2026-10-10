@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -40,6 +40,7 @@ describe('refreshSecureCurrentUser() — détection site suspendu / licence expi
   const SITE_SUSPENDED_ID = 911;
   const SITE_EXPIRED_ID = 912;
   const SITE_PERMANENT_ID = 913;
+  const SITE_LASTDAY_ID = 914;
 
   beforeAll(async () => {
     connection = await import('../src/main/database/connection');
@@ -65,6 +66,11 @@ describe('refreshSecureCurrentUser() — détection site suspendu / licence expi
 
     db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, statut_actif, sync_id) VALUES ('agent.permanent', 'hash', 'OPERATEUR_SAISIE', ?, 1, 'agent-permanent')`).run(SITE_PERMANENT_ID);
     db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES ((SELECT id_user FROM t_users WHERE login = ?), ?)').run('agent.permanent', 'OPERATEUR_SAISIE');
+
+    // Règle A1 : échéance saisie 2026-10-10 (minuit UTC) = dernier jour utilisable.
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, is_permanent, expiry_date, sync_id) VALUES (?, 'SITE_LASTDAY', 'SITE_LASTDAY', 1, 0, '2026-10-10T00:00:00.000Z', 'site-sync-914')`).run(SITE_LASTDAY_ID);
+    db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, statut_actif, sync_id) VALUES ('agent.lastday', 'hash', 'OPERATEUR_SAISIE', ?, 1, 'agent-lastday')`).run(SITE_LASTDAY_ID);
+    db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES ((SELECT id_user FROM t_users WHERE login = ?), ?)').run('agent.lastday', 'OPERATEUR_SAISIE');
 
     db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, statut_actif, sync_id) VALUES ('super.admin', 'hash', 'SUPER ADMIN', ?, 1, 'super-admin-910')`).run(SITE_SUSPENDED_ID);
     db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES ((SELECT id_user FROM t_users WHERE login = ?), ?)').run('super.admin', 'SUPER ADMIN');
@@ -115,6 +121,66 @@ describe('refreshSecureCurrentUser() — détection site suspendu / licence expi
     const result = heartbeat.refreshSecureCurrentUser();
     expect(result.licenseExpired).toBe(false);
     expect(result.siteSuspended).toBe(false);
+  });
+
+  describe('règle A1 — la date d\'échéance est le dernier jour utilisable (jour calendaire UTC)', () => {
+    // Seul Date est simulé : les timers réels (setInterval du heartbeat) restent inchangés.
+    const refreshAt = (iso: string) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(iso));
+      const idUser = (db.prepare('SELECT id_user FROM t_users WHERE login = ?').get('agent.lastday') as any).id_user;
+      heartbeat.startSessionHeartbeat({ login: 'agent.lastday', role: 'OPERATEUR_SAISIE', site_id: SITE_LASTDAY_ID, id_user: idUser }, 'tok-a1');
+      return heartbeat.refreshSecureCurrentUser();
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('site expirant « aujourd\'hui » (08:00 UTC) : la session n\'est PAS coupée', () => {
+      expect(refreshAt('2026-10-10T08:00:00.000Z').licenseExpired).toBe(false);
+    });
+
+    it('site expirant « aujourd\'hui » (23:59:59.999 UTC) : la session n\'est PAS coupée', () => {
+      expect(refreshAt('2026-10-10T23:59:59.999Z').licenseExpired).toBe(false);
+    });
+
+    it('site expiré « hier » (lendemain 00:00:00.000 UTC) : la session est coupée', () => {
+      expect(refreshAt('2026-10-11T00:00:00.000Z').licenseExpired).toBe(true);
+    });
+  });
+
+  describe('règle A1 — authenticateUser (login)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const insertLoginUser = async (login: string, siteId: number) => {
+      const { hashPassword } = await import('../src/main/auth/local-auth');
+      db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, statut_actif, sync_id) VALUES (?, ?, 'OPERATEUR_SAISIE', ?, 1, ?)`)
+        .run(login, hashPassword('Pw-test-1'), siteId, `sync-${login}`);
+    };
+
+    it('jour J (08:00 UTC) : le login n\'est PAS bloqué par LICENCE_EXPIREE', async () => {
+      const users = await import('../src/main/database/queries/users.queries');
+      await insertLoginUser('login.lastday', SITE_LASTDAY_ID);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
+      let err: unknown = null;
+      try {
+        await users.authenticateUser('login.lastday', 'Pw-test-1');
+      } catch (e) {
+        err = e;
+      }
+      expect(String((err as Error | null)?.message ?? '')).not.toContain('LICENCE_EXPIREE');
+    });
+
+    it('lendemain 00:00 UTC : le login est bloqué (LICENCE_EXPIREE)', async () => {
+      const users = await import('../src/main/database/queries/users.queries');
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-11T00:00:00.000Z'));
+      await expect(users.authenticateUser('login.lastday', 'Pw-test-1')).rejects.toThrow('LICENCE_EXPIREE');
+    });
   });
 
   it('SUPER ADMIN est exempté de la vérification, même rattaché à un site suspendu', () => {

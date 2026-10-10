@@ -5,6 +5,7 @@ import { networkMonitor } from '../sync/network-monitor';
 import { getDatabase } from '../database/connection';
 import { resolveGrantedRoles } from '../database/queries/users.queries';
 import { heartbeatPresence, PresenceUserRef } from '../sync/presence.service';
+import { isLicenseExpired, getLicenseDaysLeft } from '../../shared/utils/license';
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 let currentSessionToken: string | null = null;
@@ -66,18 +67,24 @@ function checkAndPushLicenseExpiryWarning(user: any): void {
 
     if (!site || site.is_permanent === 1 || !site.expiry_date) return;
 
+    // Règle A1 (shared/utils/license.ts) : daysLeft en jours calendaires UTC, 0 le jour même
+    // de l'échéance (dernier jour utilisable) ; déjà expiré (lendemain 00:00 UTC) => hors fenêtre.
     const now = new Date();
-    const expiry = new Date(site.expiry_date);
-    const timeDiff = expiry.getTime() - now.getTime();
-    const daysLeft = Math.ceil(timeDiff / (1000 * 3600 * 24));
+    if (isLicenseExpired(site.expiry_date, now)) return;
+    const daysLeft = getLicenseDaysLeft(site.expiry_date, now);
 
-    // Hors fenêtre (trop tôt, ou déjà expiré — cf. commentaire ci-dessus).
-    if (daysLeft < 0 || daysLeft > 3) return;
+    // Hors fenêtre (date non parsable, ou trop tôt).
+    if (daysLeft === null || daysLeft < 0 || daysLeft > 3) return;
 
-    const formattedDate = expiry.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+    // Date affichée = date d'échéance saisie, en UTC (aucun décalage de fuseau). Le suffixe
+    // « (dernier jour inclus) » lève l'ambiguïté de « expire le » : la licence reste valable
+    // toute la journée indiquée. Le préfixe « Attention, votre licence expire le » est conservé.
+    const formattedDate = new Date(site.expiry_date).toLocaleDateString('fr-FR', {
+      day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC'
+    });
     const message = user.role === 'ADMINISTRATEUR_SITE'
-      ? `Attention, votre licence expire le ${formattedDate}. Veuillez contacter le super administrateur pour procéder au renouvellement.`
-      : `Attention, votre licence expire le ${formattedDate}. Veuillez en informer l'administrateur du site pour le renouvellement.`;
+      ? `Attention, votre licence expire le ${formattedDate} (dernier jour inclus). Veuillez contacter le super administrateur pour procéder au renouvellement.`
+      : `Attention, votre licence expire le ${formattedDate} (dernier jour inclus). Veuillez en informer l'administrateur du site pour le renouvellement.`;
     const reappearMs = user.role === 'ADMINISTRATEUR_SITE' ? 60 * 1000 : 5 * 60 * 1000;
 
     BrowserWindow.getAllWindows().forEach(w => w.webContents.send('license:expiryWarning', {
@@ -319,9 +326,8 @@ export function refreshSecureCurrentUser(): {
       }
 
       if (site.is_permanent !== 1 && site.expiry_date) {
-        const now = new Date();
-        const expiry = new Date(site.expiry_date);
-        if (now > expiry) {
+        // Règle A1 : dernier jour utilisable = date d'échéance ; blocage dès le lendemain 00:00 UTC.
+        if (isLicenseExpired(site.expiry_date, new Date())) {
           return { changed: false, revoked: false, disabled: false, siteSuspended: false, licenseExpired: true };
         }
       }
