@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { OnlineBadge } from '../../../components/OnlineBadge';
+import { LicenseStatusCard } from './LicenseStatusCard';
 import { StatsKpi, AgentPerformance, DetailedSyncStats } from '../../../../../shared/types';
 import { useAutoDownstreamPreference } from '../../../hooks/useAutoDownstreamPreference';
 
@@ -588,6 +589,10 @@ export function SiteAdminView({
           </button>
         </div>
       </div>
+
+      {activeTab === 'system' && (user?.role === 'SUPER ADMIN' || user?.role === 'ADMINISTRATEUR_SITE') && (activeSiteId || user?.site_id) && (
+        <LicenseStatusCard refreshToken={lastSyncAt ? lastSyncAt.getTime() : null} />
+      )}
 
       {isStatsLoading && (!stats || stats.total === undefined) ? (
         <div className="glass-card animate-fade-in" style={{ padding: 48, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 24, textAlign: 'center', minHeight: 420, border: '1px solid rgba(255, 215, 0, 0.15)', background: 'rgba(10, 14, 39, 0.6)' }}>

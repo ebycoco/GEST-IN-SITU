@@ -70,6 +70,9 @@ export interface ISite {
   is_active: number;
   max_centres: number;
   sync_id: string;
+  // Licence (colonnes t_sites existantes) — ajout purement additif, lecture seule côté UI.
+  expiry_date?: string | null;
+  is_permanent?: number | boolean | null;
   created_at?: string;
   updated_at?: string;
 }
