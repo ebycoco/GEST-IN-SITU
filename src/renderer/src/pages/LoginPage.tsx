@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/authStore';
 import { Shield, Eye, EyeOff, Loader, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
+import { buildWelcomeMessage, type WelcomeUser } from './loginWelcome';
 
 export default function LoginPage() {
   const [login, setLogin] = useState('');
@@ -18,8 +19,9 @@ export default function LoginPage() {
   }, []);
 
 
-  const proceedToDashboard = (_user: any) => {
-    toast.success('Bienvenue dans GESTION CARTES IN-SITU !');
+  const proceedToDashboard = (user: WelcomeUser | null | undefined) => {
+    // Toast personnalisé (nom, sinon prénom, sinon repli) — voir loginWelcome.ts
+    toast.success(buildWelcomeMessage(user));
     // Le composant RoleRedirect (route index '/') gère la redirection
     // dynamique selon le rôle. Évite les routes hardcodées incorrectes.
     navigate('/');
@@ -177,7 +179,7 @@ export default function LoginPage() {
 
         if (roles.length > 1) {
           // Multi-rôle → page dédiée de sélection
-          toast.success('Bienvenue ! Sélectionnez votre rôle pour cette session.');
+          toast.success(buildWelcomeMessage(user, { multiRole: true }));
           navigate('/role-selector');
         } else {
           proceedToDashboard(user);
