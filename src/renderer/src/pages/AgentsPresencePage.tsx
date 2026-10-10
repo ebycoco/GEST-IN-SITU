@@ -3,6 +3,7 @@ import { Users, RefreshCw, WifiOff, Clock, MapPin, ShieldAlert, CheckCircle2, Ch
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { AgentPresenceRow } from '../../../shared/types';
+import { computeStatus, computeLogoutCell, type PresenceStatus } from './agentsPresenceStatus';
 
 // ============================================================================
 // Page "Présence des Agents" (Pilotage & Monitoring, réservée SUPER ADMIN /
@@ -13,8 +14,6 @@ import { AgentPresenceRow } from '../../../shared/types';
 // tout le calcul En ligne / Inactif / Hors ligne se fait ici, côté renderer,
 // à partir des timestamps bruts.
 // ============================================================================
-
-type PresenceStatus = 'EN_LIGNE' | 'INACTIF' | 'HORS_LIGNE';
 
 const STATUS_META: Record<PresenceStatus, { label: string; color: string; bg: string; border: string }> = {
   EN_LIGNE: { label: 'En ligne', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.3)' },
@@ -34,40 +33,14 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN_CENTRE: 'Admin Centre',
 };
 
-// Seuils validés (plan d'impact, non renégociables ici) :
-//  - En ligne  : last_heartbeat_at < 5 min
-//  - Inactif   : last_heartbeat_at < 5 min MAIS last_action_at >= 10 min (ou absent)
-//  - Hors ligne: last_logout_at plus récent que last_heartbeat_at, OU last_heartbeat_at
-//                absent/>= 15 min
-const HEARTBEAT_ONLINE_MAX_MIN = 5;
-const HEARTBEAT_OFFLINE_MIN = 15;
-const ACTION_STALE_MIN = 10;
+// Seuils (logique pure dans agentsPresenceStatus.ts, constantes HEARTBEAT_*) :
+//  - En ligne  : last_heartbeat_at < 6 min (tick de présence de 2 min)
+//  - Inactif   : last_heartbeat_at entre 6 et 15 min
+//  - Hors ligne: last_logout_at >= last_heartbeat_at, OU last_heartbeat_at absent/>= 15 min
+// last_action_at ne participe plus au statut (colonne "Dernière action" informative).
 const POLL_INTERVAL_MS = 45000; // 45s (fourchette 30-60s demandée par le plan)
 const CLOCK_TICK_MS = 30000; // recalcule les badges même sans nouvelle donnée serveur
 const PAGE_SIZE = 10; // pagination CÔTÉ CLIENT du tableau "Détail par agent" (aucune requête serveur)
-
-function computeStatus(row: AgentPresenceRow, nowMs: number): PresenceStatus {
-  const heartbeatMs = row.last_heartbeat_at ? new Date(row.last_heartbeat_at).getTime() : null;
-  const logoutMs = row.last_logout_at ? new Date(row.last_logout_at).getTime() : null;
-  const actionMs = row.last_action_at ? new Date(row.last_action_at).getTime() : null;
-
-  if (!heartbeatMs || isNaN(heartbeatMs)) return 'HORS_LIGNE';
-  if (logoutMs && !isNaN(logoutMs) && logoutMs >= heartbeatMs) return 'HORS_LIGNE';
-
-  const heartbeatAgeMin = (nowMs - heartbeatMs) / 60000;
-  if (heartbeatAgeMin >= HEARTBEAT_OFFLINE_MIN) return 'HORS_LIGNE';
-
-  // Zone intermédiaire (5-15 min de battement) non explicitement tranchée par les seuils
-  // validés (qui ne couvrent que < 5 min = En ligne et >= 15 min = Hors ligne) : traitée
-  // par prudence comme Inactif, au même titre qu'une action utilisateur devenue silencieuse
-  // (>= 10 min ou absente) alors que le battement est encore frais.
-  const actionAgeMin = actionMs && !isNaN(actionMs) ? (nowMs - actionMs) / 60000 : Infinity;
-  if (heartbeatAgeMin >= HEARTBEAT_ONLINE_MAX_MIN || actionAgeMin >= ACTION_STALE_MIN) {
-    return 'INACTIF';
-  }
-
-  return 'EN_LIGNE';
-}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -415,6 +388,7 @@ export default function AgentsPresencePage() {
                 {paginatedRows.map((row) => {
                   const status = computeStatus(row, now);
                   const meta = STATUS_META[status];
+                  const logoutCell = computeLogoutCell(row, status);
                   const centreNom = row.centre_id != null ? (centreNameById[row.centre_id] || `Centre #${row.centre_id}`) : '—';
                   const siteNom = isSuperAdmin && row.site_id != null ? (siteNameById[row.site_id] || `Site #${row.site_id}`) : null;
 
@@ -433,7 +407,20 @@ export default function AgentsPresencePage() {
                       <td>{row.role ? (ROLE_LABELS[row.role] || row.role) : '—'}</td>
                       <td>{centreNom}</td>
                       <td>{formatDateTime(row.last_login_at)}</td>
-                      <td>{status === 'HORS_LIGNE' ? formatDateTime(row.last_logout_at) : '—'}</td>
+                      <td>
+                        {logoutCell.kind === 'none' && '—'}
+                        {logoutCell.kind === 'logout' && formatDateTime(logoutCell.at)}
+                        {logoutCell.kind === 'closed' && (
+                          logoutCell.lastSignAt ? (
+                            <>
+                              <div>Fermé sans déconnexion</div>
+                              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                                Dernier signe : {formatDateTime(logoutCell.lastSignAt)}
+                              </div>
+                            </>
+                          ) : '—'
+                        )}
+                      </td>
                       <td>
                         {row.last_action_label ? (
                           <>
