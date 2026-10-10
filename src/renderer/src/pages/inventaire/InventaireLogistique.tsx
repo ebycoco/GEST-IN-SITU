@@ -4,7 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
 import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
-import { formatNumSecu } from '../../../../shared/utils/numSecu';
+import { formatNumSecu, resolveNumSecuToSendWhenAbsent } from '../../../../shared/utils/numSecu';
 
 /**
  * Vrai si la carte n'a pas de rangement exploitable : vide, NULL/undefined ou « NON CLASSE »
@@ -105,7 +105,9 @@ export default function InventaireLogistique() {
     setSelectedCarte(carte);
     // « NON CLASSE » / vide : champ vide pour éviter à l'opérateur de l'effacer avant saisie.
     setRangement(isRangementVide(carte.rangement) ? '' : carte.rangement);
-    setNumSecu(formatNumSecu(carte.num_secu));
+    // L'input n'est visible que si la fiche n'a pas de n° sécu : rien à préremplir (évite tout
+    // n° « fabriqué » à partir d'une notation scientifique stockée).
+    setNumSecu('');
     setContact(formatContactForDisplay(carte.contact));
     setResults([]);
     
@@ -140,7 +142,7 @@ export default function InventaireLogistique() {
       setLoading(true);
       const saveRes = await window.api.cartes.updateRangementEtFiche(selectedCarte.id_carte, {
         rangement: rangement.trim().toUpperCase(),
-        num_secu: numSecu.trim() || undefined,
+        num_secu: resolveNumSecuToSendWhenAbsent(selectedCarte.num_secu, numSecu),
         contact: contactDecision.contact
       });
       toast.success('Rangement mis à jour avec succès.');

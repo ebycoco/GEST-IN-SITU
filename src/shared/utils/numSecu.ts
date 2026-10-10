@@ -12,13 +12,18 @@
  * @param value Valeur brute de t_cartes.num_secu.
  * @returns Les 13 chiffres reconstruits, sinon la valeur d'origine ('' si null/undefined).
  */
-const SCIENTIFIC_RE = /^(\d+)(?:[.,](\d+))?[eE]\+?(\d+)$/;
+// Conversion : la partie entière doit commencer par [1-9] (« 0,384E+12 » n'est pas un n° valide).
+const SCIENTIFIC_RE = /^([1-9]\d*)(?:[.,](\d+))?[eE]\+?(\d+)$/;
+// Détection large (mantisse quelconque, convertible ou non) : sert à décider du préremplissage.
+const SCIENTIFIC_SHAPE_RE = /^\d+(?:[.,]\d+)?[eE]\+?\d+$/;
 const NUM_SECU_LENGTH = 13;
 const MAX_PLAUSIBLE_EXPONENT = 30;
 
 export function formatNumSecu(value: string | null | undefined): string {
   if (value === null || value === undefined) return '';
-  const trimmed = String(value).trim();
+  // Typage strict : une valeur non-chaîne (nombre venu d'une source mal typée) est stringifiée sans lever.
+  if (typeof value !== 'string') return String(value);
+  const trimmed = value.trim();
   const match = SCIENTIFIC_RE.exec(trimmed);
   if (!match) return value;
 
@@ -36,4 +41,49 @@ export function formatNumSecu(value: string | null | undefined): string {
 
   const result = digits + '0'.repeat(integerLength - digits.length);
   return result.length === NUM_SECU_LENGTH ? result : value;
+}
+
+/**
+ * Vrai si la valeur BRUTE stockée a la forme mantisse/exposant (« 3,84E+12 », « 0,384E+12 »),
+ * qu'elle soit convertible en 13 chiffres ou non : dans tous les cas c'est une corruption
+ * Excel, jamais un vrai n° exploitable. PURE.
+ */
+export function isScientificNumSecu(value: string | null | undefined): boolean {
+  if (value === null || value === undefined) return false;
+  return SCIENTIFIC_SHAPE_RE.test(String(value).trim());
+}
+
+/**
+ * Valeur de préremplissage d'un champ d'ÉDITION de n° sécu dans le portail Qualité :
+ * vide si la valeur stockée est en notation scientifique (l'opérateur doit saisir le vrai n°),
+ * sinon la valeur brute stockée ('' si null/undefined). Ne fabrique jamais un n° à partir
+ * d'une notation scientifique. PURE.
+ */
+export function getNumSecuEditDefault(raw: string | null | undefined): string {
+  if (raw === null || raw === undefined) return '';
+  if (isScientificNumSecu(raw)) return '';
+  return String(raw);
+}
+
+/**
+ * Vrai uniquement si le n° sécu courant du formulaire diffère de la valeur préremplie
+ * (comparaison après trim). Règle : ne JAMAIS envoyer un num_secu que l'utilisateur n'a
+ * pas modifié lui-même. PURE.
+ */
+export function shouldSendNumSecu(current: string | null | undefined, initial: string | null | undefined): boolean {
+  return (current ?? '').trim() !== (initial ?? '').trim();
+}
+
+/**
+ * Page Sans rangement : le champ n° sécu n'est affiché (donc saisissable) que si la fiche n'en
+ * a aucun. Renvoie la valeur saisie (trimée) à envoyer, ou undefined si le champ est caché
+ * (n° déjà stocké) ou laissé vide. PURE.
+ */
+export function resolveNumSecuToSendWhenAbsent(
+  storedNumSecu: string | null | undefined,
+  inputValue: string | null | undefined
+): string | undefined {
+  if (storedNumSecu) return undefined;
+  const trimmed = (inputValue ?? '').trim();
+  return trimmed || undefined;
 }

@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import SaisiePage, { FormState } from '../../SaisiePage';
 import { useAuthStore } from '../../../stores/authStore';
 import { useCacheStore } from '../../../stores/cacheStore';
-import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { formatNumSecu, shouldSendNumSecu } from '../../../../../shared/utils/numSecu';
 
 interface SaisieEditModalProps {
   carte: any;
@@ -43,8 +43,12 @@ export default function SaisieEditModal({ carte, onClose, onSuccess }: SaisieEdi
     const carteId = carte.id_carte;
     if (!carteId) throw new Error("ID de la carte manquant");
 
+    // num_secu n'est envoyé que s'il a été modifié par rapport à la valeur préremplie (affichage
+    // converti) : sinon une notation scientifique ne doit jamais être réécrite en n° « fabriqué ».
+    const { num_secu: currentNumSecu, ...dataSansNumSecu } = data;
     const payload = {
-      ...data,
+      ...dataSansNumSecu,
+      ...(shouldSendNumSecu(currentNumSecu, initialData?.num_secu) ? { num_secu: currentNumSecu } : {}),
       lieu_enrolement: data.poste, // Maps form UI "poste" back to DB "lieu_enrolement"
       centre_id: data.centre_id, // Ensure centre_id is preserved if edited by ADMIN_SITE
     };

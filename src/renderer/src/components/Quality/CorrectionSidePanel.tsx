@@ -4,7 +4,7 @@ import { confirmService } from '../confirmService';
 import DateInput from '../DateInput';
 import toast from 'react-hot-toast';
 import { normalizeDate } from '../../../../shared/utils/date';
-import { formatNumSecu } from '../../../../shared/utils/numSecu';
+import { getNumSecuEditDefault, shouldSendNumSecu } from '../../../../shared/utils/numSecu';
 
 export interface ICarte {
   id_carte?: number;
@@ -38,7 +38,9 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
         lieu_de_naissance: record.lieu_de_naissance || '',
         contact: record.contact || '',
         rangement: record.rangement || (record as any).code_rangement || '',
-        num_secu: formatNumSecu(record.num_secu),
+        // Valeur stockée en notation scientifique (corruption Excel) : champ vide, l'opérateur saisit
+        // le vrai n°. Sinon valeur brute (jamais un n° « fabriqué » à partir de l'affichage converti).
+        num_secu: getNumSecuEditDefault(record.num_secu),
       });
     }
   }, [record]);
@@ -51,7 +53,7 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
 
   const handleSave = async () => {
     const isSensitiveModif = 
-      (record.num_secu && formData.num_secu !== formatNumSecu(record.num_secu)) || 
+      (record.num_secu && formData.num_secu !== getNumSecuEditDefault(record.num_secu)) || 
       (record.noms && formData.noms !== record.noms);
 
     if (isSensitiveModif) {
@@ -83,6 +85,14 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
       //   jamais de l'ISO) : on le convertit en AAAA-MM-JJ avec normalizeDate, le même
       //   utilitaire déjà utilisé par InvalidFormatView.tsx/SaisiePage.tsx pour cette
       //   conversion, avant de l'envoyer au backend.
+      // Même principe pour le n° sécu : jamais envoyé s'il est resté égal à la valeur préremplie
+      // (vide si la valeur stockée est en notation scientifique). Évite d'écrire un n° non saisi
+      // par l'opérateur ; côté serveur l'absence de num_secu laisse la valeur stockée intacte
+      // (branche standard) ou conserve celle de l'anomalie (fusion {...anomaly, ...data}).
+      if (!shouldSendNumSecu(finalData.num_secu, getNumSecuEditDefault(record.num_secu))) {
+        delete finalData.num_secu;
+      }
+
       const originalDate = record.date_de_naissance || '';
       if (finalData.date_de_naissance === originalDate) {
         delete finalData.date_de_naissance;
@@ -204,6 +214,6 @@ export function CorrectionSidePanel({ isOpen, onClose, record, anomalieType, onS
 }
 
 function isSensitiveModifWarning(formData: Partial<ICarte>, record: ICarte) {
-  return (record.num_secu && formData.num_secu !== formatNumSecu(record.num_secu)) || 
+  return (record.num_secu && formData.num_secu !== getNumSecuEditDefault(record.num_secu)) || 
          (record.noms && formData.noms !== record.noms);
 }
