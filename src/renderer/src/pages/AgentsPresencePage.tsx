@@ -260,12 +260,12 @@ export default function AgentsPresencePage() {
           color: var(--text-muted);
           text-transform: uppercase;
           letter-spacing: 0.05em;
-          padding: 12px 16px;
+          padding: 12px 10px;
           border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         }
         .presence-table td {
           font-size: 13px;
-          padding: 14px 16px;
+          padding: 14px 10px;
           border-bottom: 1px solid rgba(255, 255, 255, 0.04);
           color: var(--text-secondary);
           vertical-align: middle;
@@ -395,14 +395,14 @@ export default function AgentsPresencePage() {
                   return (
                     <tr key={row.sync_id}>
                       <td>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 8px', borderRadius: 20, fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                           <span className="presence-dot" style={{ backgroundColor: meta.color }} />
                           {meta.label}
                         </span>
                       </td>
                       <td>
-                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>{displayName(row)}</div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{row.login}{siteNom ? ` · ${siteNom}` : ''}</div>
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)', overflowWrap: 'anywhere' }}>{displayName(row)}</div>
+                        <div style={{ fontSize: 11, color: 'var(--text-muted)', overflowWrap: 'anywhere' }}>{row.login}{siteNom ? ` · ${siteNom}` : ''}</div>
                       </td>
                       <td>{row.role ? (ROLE_LABELS[row.role] || row.role) : '—'}</td>
                       <td>{centreNom}</td>
