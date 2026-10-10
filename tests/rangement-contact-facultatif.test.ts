@@ -22,7 +22,7 @@ describe('updateRangementEtFiche — contact facultatif', () => {
   let queries: typeof import('../src/main/database/queries/cartes.queries');
   let db: import('better-sqlite3').Database;
   const SITE_ID = 941;
-  const logistique = { role: 'OPERATEUR_LOGISTIQUE', site_id: SITE_ID, id_user: 9, login: 'logi.test' };
+  const logistique = { role: 'OPERATEUR_LOGISTIQUE', site_id: SITE_ID, login: 'logi.test' };
 
   const insert = (suffix: string, contact: string) =>
     Number(db.prepare(`
@@ -101,4 +101,75 @@ describe('updateRangementEtFiche — contact facultatif', () => {
       expect(row(id).contact).toBe(expected);
     }
   );
+
+  describe('P1-1 — audit CONTACT_CARTE_MODIFIE', () => {
+    const logs = (id: number) => db.prepare(
+      `SELECT * FROM t_logs WHERE action = 'CONTACT_CARTE_MODIFIE' AND valeur_apres LIKE ?`
+    ).all(`%"id_carte":${id},%`) as Array<{ detail: string; valeur_avant: string; valeur_apres: string; is_dirty: number; sync_id: string; site_id: number; login_user: string }>;
+
+    it('contact modifié : une ligne t_logs avec ancien et nouveau contact', () => {
+      const id = insert('L1', '0700000011');
+      queries.updateRangementEtFiche(id, { rangement: 'R-L1', contact: '0708090011' }, logistique);
+      const l = logs(id);
+      expect(l).toHaveLength(1);
+      expect(JSON.parse(l[0].valeur_apres)).toEqual({ id_carte: id, contact_avant: '0700000011', contact_apres: '0708090011' });
+      expect(JSON.parse(l[0].valeur_avant)).toEqual({ id_carte: id, contact: '0700000011' });
+      expect(l[0].detail).toContain('0700000011 -> 0708090011');
+      expect(l[0].is_dirty).toBe(1);
+      expect(l[0].sync_id).toBeTruthy();
+      expect(l[0].site_id).toBe(SITE_ID);
+      expect(l[0].login_user).toBe('logi.test');
+    });
+
+    it.each([[undefined], [''], ['   ']])('contact absent/vide (%j) : aucune ligne', (val) => {
+      const id = insert(`L2${String(val).length}`, '0700000012');
+      queries.updateRangementEtFiche(id, { rangement: 'R-L2', contact: val }, logistique);
+      expect(logs(id)).toHaveLength(0);
+    });
+
+    it('contact inchangé : aucune ligne', () => {
+      const id = insert('L3', '0700000013');
+      queries.updateRangementEtFiche(id, { rangement: 'R-L3', contact: '+225 0700000013' }, logistique);
+      expect(logs(id)).toHaveLength(0);
+    });
+
+    it('contact invalide : erreur, aucune ligne', () => {
+      const id = insert('L4', '0700000014');
+      expect(() => queries.updateRangementEtFiche(id, { rangement: 'R-L4', contact: '123' }, logistique)).toThrow();
+      expect(logs(id)).toHaveLength(0);
+    });
+  });
+
+  describe('P1-2 — doublonBloqueSync', () => {
+    const outboxCount = (syncId: string) =>
+      (db.prepare('SELECT COUNT(*) as c FROM t_outbox WHERE id = ?').get(syncId) as { c: number }).c;
+
+    it('contact créant un doublon strict : true, rien en t_outbox, écritures conservées', () => {
+      // Carte témoin déjà porteuse de la clé qui sera produite.
+      const autre = insert('DUPX', '0709000001');
+      db.prepare('UPDATE t_cartes SET prenoms = ?, cle_doublon = ? WHERE id_carte = ?').run('PDUP', 'DUPONT|PDUP|1990-01-01|ABIDJAN|0709000002', autre);
+      const id = insert('DUP', '');
+      const res = queries.updateRangementEtFiche(id, { rangement: 'R-D', contact: '0709000002' }, logistique);
+      expect(res.doublonBloqueSync).toBe(true);
+      expect(res.changes).toBe(1);
+      expect(typeof res.lastInsertRowid).toBe('number');
+      expect(() => structuredClone(res)).not.toThrow();
+      expect(outboxCount(`sync-ctc-DUP`)).toBe(0);
+      const r = row(id);
+      expect(r.rangement).toBe('R-D');
+      expect(r.contact).toBe('0709000002');
+    });
+
+    it('contact sans doublon : false et t_outbox alimentée', () => {
+      const id = insert('NODUP', '');
+      const res = queries.updateRangementEtFiche(id, { rangement: 'R-N', contact: '0709000003' }, logistique);
+      expect(res.doublonBloqueSync).toBe(false);
+      expect(outboxCount('sync-ctc-NODUP')).toBeGreaterThan(0);
+    });
+
+    it('sans contact écrit : false', () => {
+      const id = insert('NOCT', '0709000004');
+      expect(queries.updateRangementEtFiche(id, { rangement: 'R-C' }, logistique).doublonBloqueSync).toBe(false);
+    });
+  });
 });

@@ -141,8 +141,11 @@ export default function InventaireSansRangement() {
     }
     try {
       setSavingId(carte.id_carte);
-      await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value, contact: contactDecision.contact });
+      const saveRes = await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value, contact: contactDecision.contact });
       toast.success(`Rangement enregistré pour ${carte.noms} ${carte.prenoms}.`);
+      if (saveRes?.doublonBloqueSync === true) {
+        toast('Ce contact crée un doublon avec une autre carte : la fiche reste en local tant que le doublon n\'est pas résolu dans le portail Qualité.', { icon: '⚠️', duration: 7000 });
+      }
       // Retrait local immédiat de la ligne traitée (pas d'attente d'un rechargement complet).
       setRows(prev => prev.filter(r => r.id_carte !== carte.id_carte));
       setTotalItems(prev => Math.max(0, prev - 1));

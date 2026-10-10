@@ -2260,7 +2260,10 @@ export function updateRangementEtFiche(
   // Relecture préalable (site_id/centre_id) pour recalculer centre_id à partir du nouveau
   // rangement — cloisonnement §3 : le siteId utilisé pour resolveCentreIdFromPrefix est
   // TOUJOURS celui de la carte relue ici, jamais celui de l'utilisateur courant.
-  const carteAvant = db.prepare('SELECT site_id, centre_id FROM t_cartes WHERE id_carte = ?').get(id) as { site_id: number; centre_id: number | null } | undefined;
+  // P1-1 : noms/prenoms/contact relus ici AVANT l'UPDATE pour l'audit CONTACT_CARTE_MODIFIE
+  // (ancien contact, sinon écrasé sans trace).
+  const carteAvant = db.prepare('SELECT site_id, centre_id, contact, noms, prenoms FROM t_cartes WHERE id_carte = ?').get(id) as
+    { site_id: number; centre_id: number | null; contact: string | null; noms: string | null; prenoms: string | null } | undefined;
 
   const sets: string[] = ['updated_at = ?', 'action_at = ?', 'is_dirty = 1', 'rangement = ?'];
   const params: any[] = [now, now, newRangement];
@@ -2335,12 +2338,61 @@ export function updateRangementEtFiche(
       }
     }
 
+    // P1-1 : trace d'audit du contact, dans la MÊME transaction. Uniquement si un contact a été
+    // réellement écrit ET que la valeur diffère de l'ancienne. Même gestion d'erreur que l'INSERT
+    // voisin (try/catch + log.error : un échec de journalisation ne casse pas la mutation).
+    // Pas d'enqueueOutbox dédié pour la ligne t_logs (même choix que CENTRE_CARTE_RECALCULE).
+    const ancienContact = (carteAvant?.contact ?? '').trim();
+    if (carteAvant && newContact !== null && result.changes > 0 && ancienContact !== newContact) {
+      const identite = `${carteAvant.noms ?? ''} ${carteAvant.prenoms ?? ''}`.trim();
+      const detailContact = `Contact modifié pour la carte ID ${id}${identite ? ` (${identite})` : ''} : ${ancienContact || '(vide)'} -> ${newContact}.`;
+      try {
+        db.prepare(`
+          INSERT INTO t_logs (id_user, login_user, action, detail, valeur_avant, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+          VALUES (?, ?, 'CONTACT_CARTE_MODIFIE', ?, ?, ?, ?, 1, ?, ?)
+        `).run(
+          currentUser?.id_user || null,
+          currentUser?.login || 'SYSTEM',
+          detailContact,
+          JSON.stringify({ id_carte: id, contact: ancienContact || null }),
+          JSON.stringify({ id_carte: id, contact_avant: ancienContact || null, contact_apres: newContact }),
+          uuidv4(),
+          carteAvant.site_id,
+          newCentreId
+        );
+      } catch (err) {
+        log.error('Failed to log CONTACT_CARTE_MODIFIE:', err);
+      }
+    }
+
     return result;
   });
   const res = runTx();
 
   autoEnqueueCorrection(id);
-  return res;
+
+  // P1-2 : avertissement doublon strict (non bloquant). autoEnqueueCorrection() (inchangée)
+  // abandonne silencieusement l'enfilage t_outbox si un doublon strict existe ; on relit ici
+  // EXACTEMENT son critère (cle_doublon non vide et != '||||', COUNT > 1 sur le site) pour que
+  // l'écran puisse prévenir l'utilisateur. Uniquement quand un contact a été écrit.
+  let doublonBloqueSync = false;
+  if (newContact !== null && res.changes > 0) {
+    try {
+      const card = db.prepare('SELECT site_id, cle_doublon FROM t_cartes WHERE id_carte = ?').get(id) as
+        { site_id: number | null; cle_doublon: string | null } | undefined;
+      if (card && card.site_id && card.cle_doublon && card.cle_doublon !== '' && card.cle_doublon !== '||||') {
+        const strictDup = db.prepare(
+          'SELECT COUNT(*) as c FROM t_cartes WHERE site_id = ? AND cle_doublon = ?'
+        ).get(card.site_id, card.cle_doublon) as { c: number };
+        doublonBloqueSync = strictDup.c > 1;
+      }
+    } catch (err) {
+      log.warn(`[RangementFiche] Détection doublon strict impossible pour la carte ${id} : ${err}`);
+    }
+  }
+
+  // Retour sérialisable IPC : lastInsertRowid (number|bigint) converti en number.
+  return { changes: res.changes, lastInsertRowid: Number(res.lastInsertRowid), doublonBloqueSync };
 }
 
 export function searchCombinedInventaire(siteId: number, queryNomsPrenoms: string, dateNaissance?: string, lieuNaissance?: string) {

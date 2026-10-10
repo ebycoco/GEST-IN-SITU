@@ -8,6 +8,8 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Rangement + contact : traçabilité et avertissement de doublon** — la modification d'un contact depuis les écrans « Inventaire logistique » et « Sans rangement » est désormais journalisée (ancien et nouveau contact, auteur, dans la même transaction que la mise à jour). Si le contact saisi rend la fiche strictement identique à une autre carte du site, l'enregistrement reste possible mais un avertissement précise que la fiche reste en local tant que le doublon n'est pas résolu dans le portail Qualité (auparavant, un succès était affiché sans mention de ce blocage d'envoi).
+
 - **Cartes mal-centrées : les cartes déjà délivrées ou déclarées en doublon ne sont plus listées** — elles apparaissaient avec un bouton « Corriger » que le serveur refusait systématiquement après confirmation (la correction du centre d'une carte délivrée ou en doublon reste volontairement impossible) ; la liste ne propose plus que des cartes réellement corrigibles. Le message d'erreur n'affiche plus le préfixe technique d'Electron, et le tableau est resserré pour que la colonne « Identité » ne soit plus écrasée.
 
 - **Rangement + contact : un numéro de plus de 10 chiffres n'est plus tronqué en silence** — côté serveur, il est refusé au lieu d'enregistrer un numéro faux (ex. `07080900101` devenait `7080900101`). Côté écran, un collage de plus de 10 chiffres n'est plus raccourci : le champ reste inchangé et un message demande de vérifier les chiffres. Un contact déjà enregistré avec plus de 10 chiffres s'affiche tel quel, avec une bordure d'alerte, et ne bloque pas l'enregistrement du rangement tant qu'il n'est pas modifié. Les messages d'erreur de ces deux écrans n'affichent plus le préfixe technique d'Electron.

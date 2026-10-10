@@ -137,12 +137,15 @@ export default function InventaireLogistique() {
 
     try {
       setLoading(true);
-      await window.api.cartes.updateRangementEtFiche(selectedCarte.id_carte, {
+      const saveRes = await window.api.cartes.updateRangementEtFiche(selectedCarte.id_carte, {
         rangement: rangement.trim().toUpperCase(),
         num_secu: numSecu.trim() || undefined,
         contact: contactDecision.contact
       });
       toast.success('Rangement mis à jour avec succès.');
+      if (saveRes?.doublonBloqueSync === true) {
+        toast('Ce contact crée un doublon avec une autre carte : la fiche reste en local tant que le doublon n\'est pas résolu dans le portail Qualité.', { icon: '⚠️', duration: 7000 });
+      }
       resetState();
       // Notifie InventaireLayout.tsx pour recalculer dirtyCartesCount/conformeCartesCount, qui
       // pilotent l'état enabled/disabled du bouton "Envoyer les corrections" — même pattern
