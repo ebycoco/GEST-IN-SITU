@@ -334,10 +334,11 @@ export default function InventaireLogistique() {
 
             {/* Contact facultatif (jamais obligatoire) — vide = contact existant conservé */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>
+              <label htmlFor="logistique-contact-input" style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>
                 CONTACT <span style={{ fontWeight: 400 }}>(facultatif)</span>
               </label>
               <input
+                id="logistique-contact-input"
                 className="form-input"
                 style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: isOverlongContact(contact) ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
                 type="text"
@@ -362,8 +363,9 @@ export default function InventaireLogistique() {
 
             {/* Nouveau Rangement */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>CLASSEMENT / NOUVEAU RANGEMENT <span style={{ color: '#ffd700' }}>*</span></label>
+              <label htmlFor="logistique-rangement-input" style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>CLASSEMENT / NOUVEAU RANGEMENT <span style={{ color: '#ffd700' }}>*</span></label>
               <input
+                id="logistique-rangement-input"
                 ref={rangementInputRef}
                 className="form-input"
                 style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', height: 46, padding: '0 16px', outline: 'none', textTransform: 'uppercase', fontWeight: 700, fontSize: 18, color: '#ffd700' }}

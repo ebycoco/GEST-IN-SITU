@@ -6,6 +6,8 @@
 
 - **Inventaire logistique : champ « Nouveau rangement » vide pour une carte « NON CLASSE »** — le champ n'est plus prérempli avec `NON CLASSE` (l'opérateur devait l'effacer avant de saisir le bon rangement) ; une carte avec un vrai rangement le conserve. Dans la liste des résultats, une carte « NON CLASSE » affiche désormais le badge « Sans rangement », comme une carte sans rangement.
 
+- **Page « Sans rangement » : saisie plus fluide** — la touche Entrée dans le champ contact d'une ligne dont le rangement est vide place désormais le curseur sur le rangement de cette ligne (au lieu d'un message d'erreur), et les rangements/contacts déjà saisis mais non enregistrés sur les autres lignes ne sont plus perdus quand une ligne est enregistrée. Les champs contact et rangement sont aussi mieux repérables pour les lecteurs d'écran.
+
 ### 🛠️ Corrections & Fiabilité
 
 - **Rangement + contact : traçabilité et avertissement de doublon** — la modification d'un contact depuis les écrans « Inventaire logistique » et « Sans rangement » est désormais journalisée (ancien et nouveau contact, auteur, dans la même transaction que la mise à jour). Si le contact saisi rend la fiche strictement identique à une autre carte du site, l'enregistrement reste possible mais un avertissement précise que la fiche reste en local tant que le doublon n'est pas résolu dans le portail Qualité (auparavant, un succès était affiché sans mention de ce blocage d'envoi).

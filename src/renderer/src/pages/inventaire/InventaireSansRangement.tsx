@@ -38,7 +38,7 @@ interface CarteSansRangement {
  * 10 caractères, masque géré par DateInput) pour éviter de filtrer sur une date partielle ; le
  * backend normalise ensuite ce format vers l'ISO stocké en base (cf. commentaire ajouté dans
  * getSansRangementPage()). Tout changement de critère recale currentPage à 1.
- * Écriture : queries.updateRangementEtFiche() (cartes.queries.ts:2044-2117) via le handler IPC
+ * Écriture : queries.updateRangementEtFiche() (cartes.queries.ts) via le handler IPC
  * cartes:updateRangementEtFiche, réutilisée telle quelle (déjà transactionnelle, déjà ouverte à
  * OPERATEUR_LOGISTIQUE, recalcule déjà centre_id à partir du préfixe de rangement).
  *
@@ -94,10 +94,21 @@ export default function InventaireSansRangement() {
       // présentes en page 1 (bug corrigé par ce ticket).
       const newTotalPages = Math.max(1, Math.ceil(nextTotal / ITEMS_PER_PAGE));
       setCurrentPage(prev => Math.min(prev, newTotalPages));
-      // Réinitialisation des valeurs éditées sur la page courante uniquement (Low-Memory §2 :
-      // pas de rétention indéfinie de valeurs pour des lignes déjà quittées).
-      setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
-      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, formatContactForDisplay(r.contact)])));
+      // Valeurs éditées, limitées au lot courant (Low-Memory §2 : pas de rétention indéfinie de
+      // valeurs pour des lignes déjà quittées — les id absents du nouveau lot sont purgés).
+      // - Rechargement NON silencieux (montage, changement de page/recherche/filtre, bouton
+      //   « Actualiser ») : réinitialisation complète, comme avant (contexte de saisie changé).
+      // - Rechargement SILENCIEUX (app:data-updated, notamment après handleSave d'une autre ligne) :
+      //   on conserve les saisies non enregistrées des lignes toujours présentes (par id_carte) et on
+      //   n'initialise que les lignes nouvelles. Formes fonctionnelles de setState : aucune fermeture
+      //   obsolète sur editValues/contactValues (absents des dépendances du useCallback).
+      if (silent) {
+        setEditValues(prev => Object.fromEntries(nextRows.map(r => [r.id_carte, prev[r.id_carte] ?? ''])));
+        setContactValues(prev => Object.fromEntries(nextRows.map(r => [r.id_carte, prev[r.id_carte] ?? formatContactForDisplay(r.contact)])));
+      } else {
+        setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
+        setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, formatContactForDisplay(r.contact)])));
+      }
     } catch (err) {
       console.error('Erreur lors du chargement des cartes sans rangement :', err);
       toast.error('Erreur lors du chargement des cartes sans rangement.');
@@ -298,7 +309,19 @@ export default function InventaireSansRangement() {
                             if (res.tooLong) toast.error(CONTACT_TOO_LONG_MESSAGE);
                             setContactValues(prev => ({ ...prev, [r.id_carte]: res.value }));
                           }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}
+                          aria-label={`Contact (facultatif) de ${r.noms} ${r.prenoms}`}
+                          onKeyDown={(e) => {
+                            if (e.key !== 'Enter') return;
+                            // Rangement de CETTE ligne vide : focus sur son champ rangement (sans toast),
+                            // retrouvé via la ligne <tr> parente (aucun état/ref supplémentaire). Sinon
+                            // enregistrement comme avant.
+                            if (!(editValues[r.id_carte] ?? '').trim()) {
+                              e.preventDefault();
+                              e.currentTarget.closest('tr')?.querySelector<HTMLInputElement>('input[data-champ="rangement"]')?.focus();
+                              return;
+                            }
+                            handleSave(r);
+                          }}
                           placeholder="+225 01 02 03 04 05"
                           style={{
                             width: 170, padding: '8px 10px', borderRadius: 8, fontSize: 13,
@@ -311,6 +334,8 @@ export default function InventaireSansRangement() {
                         <input
                           type="text"
                           value={value}
+                          data-champ="rangement"
+                          aria-label={`Rangement de ${r.noms} ${r.prenoms}`}
                           disabled={isSaving}
                           onChange={(e) => setEditValues(prev => ({ ...prev, [r.id_carte]: e.target.value }))}
                           onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}

@@ -9,7 +9,7 @@ import { normalizeDate } from '../../../../shared/utils/date';
 import { cleanIpcErrorMessage } from './phoneFormat';
 
 // Pagination CÔTÉ RENDERER uniquement (slice d'un tableau déjà entièrement chargé en mémoire) —
-// pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts:1057-1129)
+// pas de LIMIT/OFFSET SQL possible ici : getCartesMalCentrees() (cartes.queries.ts)
 // calcule un index de routage préfixe→centre en mémoire TypeScript et applique le filtre
 // "mal centrée" (expected.centre_id !== row.centre_id) APRÈS la lecture SQL complète, donc hors
 // du WHERE. Une vraie pagination SQL nécessiterait de restructurer cet algorithme (hors périmètre

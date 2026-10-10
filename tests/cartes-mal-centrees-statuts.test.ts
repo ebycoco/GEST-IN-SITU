@@ -80,17 +80,13 @@ describe('getCartesMalCentrees — exclusion DELIVRE/DOUBLON', () => {
     expect(centreB1).toBeGreaterThan(0);
   });
 
-  it('statut NULL (ou autre statut) n\'est pas exclu par erreur', () => {
-    // La colonne statut peut être NOT NULL/avoir un DEFAULT : on teste NULL si le schéma le permet,
-    // sinon un statut quelconque non verrouillé.
-    let nullInserted = true;
-    try {
-      insertCarte('NULLSTAT', SITE_A, null, centreA2);
-    } catch {
-      nullInserted = false;
-      insertCarte('NULLSTAT', SITE_A, 'EN ATTENTE', centreA2);
-    }
+  it('statut NULL n\'est pas exclu par erreur', () => {
+    // schema.ts : `statut TEXT DEFAULT 'EN STOCK' CHECK(statut IN (...))` — colonne nullable (un CHECK
+    // évalué à NULL passe). L'INSERT d'un statut NULL explicite doit donc réussir ; s'il lève, le test
+    // échoue (pas de repli silencieux).
+    expect(() => insertCarte('NULLSTAT', SITE_A, null, centreA2)).not.toThrow();
+    const stored = db.prepare('SELECT statut FROM t_cartes WHERE id_carte = ?').get(ids.NULLSTAT) as { statut: string | null };
+    expect(stored.statut).toBeNull();
     expect(queries.getCartesMalCentrees(SITE_A).map(r => r.id_carte)).toContain(ids.NULLSTAT);
-    expect(typeof nullInserted).toBe('boolean');
   });
 });
