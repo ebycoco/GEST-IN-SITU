@@ -161,19 +161,19 @@ describe('refreshSecureCurrentUser() — détection site suspendu / licence expi
         .run(login, hashPassword('Pw-test-1'), siteId, `sync-${login}`);
     };
 
-    it('jour J (08:00 UTC) : le login n\'est PAS bloqué par LICENCE_EXPIREE', async () => {
-      const users = await import('../src/main/database/queries/users.queries');
-      await insertLoginUser('login.lastday', SITE_LASTDAY_ID);
-      vi.useFakeTimers({ toFake: ['Date'] });
-      vi.setSystemTime(new Date('2026-10-10T08:00:00.000Z'));
-      let err: unknown = null;
-      try {
-        await users.authenticateUser('login.lastday', 'Pw-test-1');
-      } catch (e) {
-        err = e;
+    it.each(['2026-10-10T08:00:00.000Z', '2026-10-10T23:59:59.999Z'])(
+      'jour J (%s) : le login RÉUSSIT (assertion positive)',
+      async (iso) => {
+        const users = await import('../src/main/database/queries/users.queries');
+        const exists = db.prepare('SELECT 1 FROM t_users WHERE login = ?').get('login.lastday');
+        if (!exists) await insertLoginUser('login.lastday', SITE_LASTDAY_ID);
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date(iso));
+        const user = await users.authenticateUser('login.lastday', 'Pw-test-1');
+        expect(user).toBeTruthy();
+        expect((user as { login: string }).login).toBe('login.lastday');
       }
-      expect(String((err as Error | null)?.message ?? '')).not.toContain('LICENCE_EXPIREE');
-    });
+    );
 
     it('lendemain 00:00 UTC : le login est bloqué (LICENCE_EXPIREE)', async () => {
       const users = await import('../src/main/database/queries/users.queries');

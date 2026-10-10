@@ -103,6 +103,70 @@ describe('helpers de licence (règle A1)', () => {
     expect(isLicenseExpired(null, NOW)).toBe(false);
   });
 
+  // Formats d'échéance que Supabase (timestamptz) / SQLite peuvent produire. Attendus calculés à la
+  // main (littéraux ISO), indépendamment de license.ts : échéance du 10/10/2026 => limite
+  // 2026-10-11T00:00:00.000Z.
+  describe('formats d\'échéance équivalents au 10/10/2026 UTC', () => {
+    const LIMIT_ISO = '2026-10-11T00:00:00.000Z';
+    const LIMIT_MS = new Date(LIMIT_ISO).getTime();
+    it.each([
+      ['date seule', '2026-10-10'],
+      ['ISO avec Z', '2026-10-10T00:00:00.000Z'],
+      ['ISO +00:00 (supabase-js)', '2026-10-10T00:00:00+00:00'],
+      ['Postgres brut +00', '2026-10-10 00:00:00+00'],
+      ['ISO microsecondes +00:00', '2026-10-10T00:00:00.000000+00:00']
+    ])('%s : limite, bornes et daysLeft', (_label, value) => {
+      expect(getLicenseLimitMs(value)).toBe(LIMIT_MS);
+      expect(isLicenseExpired(value, new Date('2026-10-10T23:59:59.999Z'))).toBe(false);
+      expect(isLicenseExpired(value, new Date(LIMIT_ISO))).toBe(true);
+      expect(getLicenseDaysLeft(value, new Date('2026-10-10T08:00:00.000Z'))).toBe(0);
+      expect(computeLicenseStatus(value, 0, new Date('2026-10-10T08:00:00.000Z'))).toEqual({ state: 'critical', daysLeft: 0 });
+      expect(computeLicenseStatus(value, 0, new Date(LIMIT_ISO)).state).toBe('expired');
+    });
+
+    // Seul le jour calendaire UTC de l'INSTANT compte (comportement voulu). Aucun circuit
+    // d'écriture actuel ne produit un offset non nul ; ces cas figent le comportement.
+    it('offset -05:00 : 2026-10-10T23:30-05:00 = 2026-10-11T04:30Z => jour UTC 11 => limite 12/10 00:00Z', () => {
+      expect(getLicenseLimitMs('2026-10-10T23:30:00-05:00')).toBe(Date.UTC(2026, 9, 12));
+      expect(getLicenseLimitMs('2026-10-10T23:30:00-05:00')).toBe(new Date('2026-10-12T00:00:00.000Z').getTime());
+    });
+
+    it('offset +02:00 : 2026-10-10T00:00+02:00 = 2026-10-09T22:00Z => jour UTC 9 => limite 10/10 00:00Z', () => {
+      expect(getLicenseLimitMs('2026-10-10T00:00:00+02:00')).toBe(new Date('2026-10-10T00:00:00.000Z').getTime());
+      expect(isLicenseExpired('2026-10-10T00:00:00+02:00', new Date('2026-10-10T00:00:00.000Z'))).toBe(true);
+      expect(isLicenseExpired('2026-10-10T00:00:00+02:00', new Date('2026-10-09T23:59:59.999Z'))).toBe(false);
+    });
+
+    // Format SQLite SANS fuseau : `new Date()` l'interprète en heure LOCALE du poste. Limite connue
+    // (sans effet à Abidjan UTC+0 ; aucun chemin d'écriture connu ne produit ce format). Le test
+    // reste indépendant du fuseau de la machine : seules des propriétés invariantes sont vérifiées.
+    it('SQLite sans fuseau "2026-10-10 00:00:00" : ne lève pas, limite = début de jour UTC cohérente', () => {
+      const v = '2026-10-10 00:00:00';
+      expect(() => getLicenseLimitMs(v)).not.toThrow();
+      const limit = getLicenseLimitMs(v);
+      expect(limit).not.toBeNull();
+      expect((limit as number) % DAY).toBe(0);
+      // Jour UTC attendu dérivé du même parsing local que le code (indépendant du fuseau).
+      const parsed = new Date(v);
+      const expectedLimit = Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()) + DAY;
+      expect(limit).toBe(expectedLimit);
+      // Cohérence expiration / limite et état parmi les valeurs possibles.
+      expect(isLicenseExpired(v, new Date((limit as number) - 1))).toBe(false);
+      expect(isLicenseExpired(v, new Date(limit as number))).toBe(true);
+      const st = computeLicenseStatus(v, 0, new Date('2026-10-10T08:00:00.000Z'));
+      expect(['critical', 'expired']).toContain(st.state);
+      expect([0, 1, -1]).toContain(st.daysLeft);
+    });
+
+    it('chaîne vide / espaces / nombre : ne lèvent pas', () => {
+      expect(computeLicenseStatus('', 0, NOW)).toEqual({ state: 'undefined', daysLeft: null });
+      expect(computeLicenseStatus('   ', 0, NOW)).toEqual({ state: 'undefined', daysLeft: null });
+      expect(() => computeLicenseStatus(1760054400000 as unknown as string, 0, NOW)).not.toThrow();
+      const r = computeLicenseStatus(1760054400000 as unknown as string, 0, NOW);
+      expect(['ok', 'warning', 'critical', 'expired', 'invalid']).toContain(r.state);
+    });
+  });
+
   it('getLicenseDaysLeft : jours calendaires UTC (0 jour J, 1 la veille, négatif après)', () => {
     expect(getLicenseDaysLeft(EXPIRY, new Date('2026-10-10T23:59:59.999Z'))).toBe(0);
     expect(getLicenseDaysLeft(EXPIRY, new Date('2026-10-09T00:00:00.000Z'))).toBe(1);
