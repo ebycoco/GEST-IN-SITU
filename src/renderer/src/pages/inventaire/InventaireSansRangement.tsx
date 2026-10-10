@@ -5,6 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { PaginationInput } from '../../components/PaginationInput';
 import DateInput from '../../components/DateInput';
 import { useDebounce } from '../../hooks/useDebounce';
+import { formatPhoneInput, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -96,7 +97,7 @@ export default function InventaireSansRangement() {
       // Réinitialisation des valeurs éditées sur la page courante uniquement (Low-Memory §2 :
       // pas de rétention indéfinie de valeurs pour des lignes déjà quittées).
       setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
-      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, r.contact || ''])));
+      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, formatPhoneInput(r.contact || '')])));
     } catch (err) {
       console.error('Erreur lors du chargement des cartes sans rangement :', err);
       toast.error('Erreur lors du chargement des cartes sans rangement.');
@@ -130,13 +131,17 @@ export default function InventaireSansRangement() {
       toast.error('Veuillez saisir un rangement avant d\'enregistrer.');
       return;
     }
+    // Contact envoyé (chiffres seuls) seulement si non vide ET modifié par rapport à la fiche (une
+    // valeur historique non conforme ne doit pas bloquer le rangement). Saisi et != 10 chiffres :
+    // toast clair, aucun appel IPC.
+    const contactDecision = resolveContactToSend(contactValues[carte.id_carte] ?? '', carte.contact);
+    if (contactDecision.error) {
+      toast.error(contactDecision.error);
+      return;
+    }
     try {
       setSavingId(carte.id_carte);
-      // Contact envoyé seulement si non vide ET modifié par rapport à la fiche (une valeur
-      // historique non conforme ne doit pas bloquer l'enregistrement du rangement).
-      const contactValue = (contactValues[carte.id_carte] ?? '').trim();
-      const contactToSend = (contactValue && contactValue !== (carte.contact || '').trim()) ? contactValue : undefined;
-      await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value, contact: contactToSend });
+      await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value, contact: contactDecision.contact });
       toast.success(`Rangement enregistré pour ${carte.noms} ${carte.prenoms}.`);
       // Retrait local immédiat de la ligne traitée (pas d'attente d'un rechargement complet).
       setRows(prev => prev.filter(r => r.id_carte !== carte.id_carte));
@@ -157,7 +162,7 @@ export default function InventaireSansRangement() {
       // valeur lue de façon synchrone par le code qui suit dans le même tick.
       window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
-      toast.error(`Erreur : ${err.message || err}`);
+      toast.error(`Erreur : ${cleanIpcErrorMessage(err)}`);
     } finally {
       setSavingId(null);
     }
@@ -258,13 +263,13 @@ export default function InventaireSansRangement() {
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
               <thead>
                 <tr style={{ background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Nom</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Prénom</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Date de Naissance</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Contact <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span></th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
-                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Nom</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Prénom</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Date de Naissance</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Contact <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span></th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
+                  <th style={{ padding: '12px 10px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -273,27 +278,27 @@ export default function InventaireSansRangement() {
                   const value = editValues[r.id_carte] ?? '';
                   return (
                     <tr key={r.id_carte} style={{ borderBottom: '1px solid rgba(255,255,255,0.02)' }}>
-                      <td style={{ padding: '16px 24px', fontWeight: 600, color: 'white' }}>{r.noms}</td>
-                      <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.prenoms}</td>
-                      <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
-                      <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{formatBirthDate(r.date_de_naissance)}</td>
-                      <td style={{ padding: '16px 12px' }}>
+                      <td style={{ padding: '12px 10px', fontWeight: 600, color: 'white' }}>{r.noms}</td>
+                      <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{r.prenoms}</td>
+                      <td style={{ padding: '12px 10px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
+                      <td style={{ padding: '12px 10px', color: 'var(--text-secondary)' }}>{formatBirthDate(r.date_de_naissance)}</td>
+                      <td style={{ padding: '12px 10px' }}>
                         <input
                           type="text"
                           inputMode="numeric"
                           value={contactValues[r.id_carte] ?? ''}
                           disabled={isSaving}
-                          onChange={(e) => setContactValues(prev => ({ ...prev, [r.id_carte]: e.target.value }))}
+                          onChange={(e) => setContactValues(prev => ({ ...prev, [r.id_carte]: formatPhoneInput(e.target.value) }))}
                           onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}
-                          placeholder="0708090010"
+                          placeholder="+225 01 02 03 04 05"
                           style={{
-                            width: 120, padding: '8px 10px', borderRadius: 8, fontSize: 13,
+                            width: 170, padding: '8px 10px', borderRadius: 8, fontSize: 13,
                             border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
                             color: 'white', outline: 'none'
                           }}
                         />
                       </td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '12px 10px' }}>
                         <input
                           type="text"
                           value={value}
@@ -302,13 +307,13 @@ export default function InventaireSansRangement() {
                           onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}
                           placeholder="Ex: A-12-034"
                           style={{
-                            width: 160, padding: '8px 10px', borderRadius: 8, fontSize: 13,
+                            width: 130, padding: '8px 10px', borderRadius: 8, fontSize: 13,
                             border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
                             color: 'white', outline: 'none'
                           }}
                         />
                       </td>
-                      <td style={{ padding: '16px 24px' }}>
+                      <td style={{ padding: '12px 10px' }}>
                         <button
                           onClick={() => handleSave(r)}
                           disabled={isSaving || !value.trim()}

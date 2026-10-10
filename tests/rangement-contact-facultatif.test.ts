@@ -80,4 +80,25 @@ describe('updateRangementEtFiche — contact facultatif', () => {
     expect(r.rangement).toBeNull();
     expect(r.contact).toBe('0700000004');
   });
+
+  it.each([['07080900101'], ['070809001012'], ['0708090010a'], ['+225 07 08 09 00 10 1']])(
+    'contact %j (11/12 chiffres, lettre ou 14 chiffres) : refusé sans aucune écriture',
+    (val) => {
+      const id = insert(`E${val.length}${val.charCodeAt(val.length - 1)}`, '0700000005');
+      expect(() => queries.updateRangementEtFiche(id, { rangement: 'R-5', contact: val }, logistique))
+        .toThrow('Le contact doit faire exactement 10 chiffres locaux.');
+      const r = row(id);
+      expect(r.rangement).toBeNull();
+      expect(r.contact).toBe('0700000005');
+    }
+  );
+
+  it.each([['0708090010', '0708090010'], ['+2250708090010', '0708090010'], ['225 07 08 09 00 10', '0708090010']])(
+    'contact %j (10 chiffres ou +225 + 10) : accepté',
+    (val, expected) => {
+      const id = insert(`F${val.length}`, '');
+      queries.updateRangementEtFiche(id, { rangement: 'R-6', contact: val }, logistique);
+      expect(row(id).contact).toBe(expected);
+    }
+  );
 });

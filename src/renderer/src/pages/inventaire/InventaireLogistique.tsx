@@ -3,6 +3,7 @@ import { Search, MapPin, CheckCircle, Package, ArrowRight, ShieldAlert, AlertTri
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
+import { formatPhoneInput, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
 
 export default function InventaireLogistique() {
   const { user } = useAuthStore();
@@ -93,7 +94,7 @@ export default function InventaireLogistique() {
     setSelectedCarte(carte);
     setRangement(carte.rangement || '');
     setNumSecu(carte.num_secu || '');
-    setContact(carte.contact || '');
+    setContact(formatPhoneInput(carte.contact || ''));
     setResults([]);
     
     // Si la carte n'a pas de numéro de sécu, on focus d'abord sur sécu, sinon rangement
@@ -114,14 +115,21 @@ export default function InventaireLogistique() {
       return;
     }
 
+    // Contact : envoyé (chiffres seuls) seulement si non vide ET modifié par rapport à la fiche ;
+    // une valeur historique non conforme déjà en base ne bloque pas le rangement. Si saisi et
+    // différent de 10 chiffres : toast clair, aucun appel IPC.
+    const contactDecision = resolveContactToSend(contact, selectedCarte.contact);
+    if (contactDecision.error) {
+      toast.error(contactDecision.error);
+      return;
+    }
+
     try {
       setLoading(true);
       await window.api.cartes.updateRangementEtFiche(selectedCarte.id_carte, {
         rangement: rangement.trim().toUpperCase(),
         num_secu: numSecu.trim() || undefined,
-        // Envoyé seulement si non vide ET modifié par rapport à la fiche : une valeur historique
-        // non conforme déjà en base ne doit pas bloquer l'enregistrement du rangement.
-        contact: (contact.trim() && contact.trim() !== (selectedCarte.contact || '').trim()) ? contact.trim() : undefined
+        contact: contactDecision.contact
       });
       toast.success('Rangement mis à jour avec succès.');
       resetState();
@@ -130,7 +138,7 @@ export default function InventaireLogistique() {
       // que MissingDataView.tsx/DoublonsView.tsx (AgentQualite).
       window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
-      toast.error(`Erreur : ${err.message || err}`);
+      toast.error(`Erreur : ${cleanIpcErrorMessage(err)}`);
     } finally {
       setLoading(false);
     }
@@ -320,9 +328,9 @@ export default function InventaireLogistique() {
                 style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
                 type="text"
                 inputMode="numeric"
-                placeholder="Ex: 0708090010"
+                placeholder="+225 01 02 03 04 05"
                 value={contact}
-                onChange={e => setContact(e.target.value)}
+                onChange={e => setContact(formatPhoneInput(e.target.value))}
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();

@@ -2234,6 +2234,16 @@ export function updateRangementEtFiche(
   // laisse aucune écriture partielle.
   let newContact: string | null = null;
   if (fields.contact !== undefined && fields.contact.trim() !== '') {
+    // Pré-contrôle sur le contact BRUT : normalizeContact() tronque silencieusement au-delà de 10
+    // chiffres (11/12 chiffres => derniers 10), ce qui enregistrerait un numéro faux. On exige donc
+    // exactement 10 chiffres, ou 13 commençant par 225 (forme +225XXXXXXXXXX), et aucune lettre.
+    // normalizeContact() lui-même (partagé import/synchro) n'est pas modifié.
+    const rawDigits = fields.contact.replace(/\D/g, '');
+    const hasLetters = /[A-Za-z]/.test(fields.contact);
+    const rawOk = rawDigits.length === 10 || (rawDigits.length === 13 && rawDigits.startsWith('225'));
+    if (hasLetters || !rawOk) {
+      throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
+    }
     newContact = normalizeContact(fields.contact);
     if (!/^\d{10}$/.test(newContact)) {
       throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
