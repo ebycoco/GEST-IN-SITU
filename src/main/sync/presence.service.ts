@@ -155,6 +155,26 @@ function shouldLogFkWarn(key: string): boolean {
   return true;
 }
 
+/** Dernière tentative de login par sync_id (mémoire process uniquement, aucun timer, aucune
+ * persistance — cf. D2). Sert à rejouer `last_login_at` (ISO d'origine, jamais "now" du battement)
+ * dans les battements tant que l'upsert de login n'a pas été CONFIRMÉ écrit : login échoué (FK
+ * user_sync_id non encore remontée, 23503) ou perdu (réseau non ONLINE → no-op). Une fois un upsert
+ * incluant last_login_at réussi, `confirmed` passe à true et les battements suivants ne renvoient
+ * plus last_login_at (payload minimal, pas d'écrasement inutile).
+ * Borne mémoire : 200 entrées max, éviction de la plus ancienne (ordre d'insertion de la Map). */
+const LOGIN_ATTEMPT_MAX_KEYS = 200;
+const lastLoginAttempt = new Map<string, { iso: string; confirmed: boolean }>();
+
+function rememberLoginAttempt(syncId: string, iso: string): void {
+  // delete + set : un nouveau login ré-insère la clé en fin de Map (donc la plus récente).
+  lastLoginAttempt.delete(syncId);
+  if (lastLoginAttempt.size >= LOGIN_ATTEMPT_MAX_KEYS) {
+    const oldest = lastLoginAttempt.keys().next().value;
+    if (oldest !== undefined) lastLoginAttempt.delete(oldest);
+  }
+  lastLoginAttempt.set(syncId, { iso, confirmed: false });
+}
+
 // ─── Types publics ──────────────────────────────────────────────────────────
 
 /** Identité minimale d'un utilisateur, telle que fournie par l'appelant
@@ -224,6 +244,12 @@ export function heartbeatPresence(user: PresenceUserRef): void {
  * un SUPER ADMIN ou ADMINISTRATEUR_SITE se connectant n'écrit donc plus de ligne de présence.
  */
 export function recordPresenceLogin(user: PresenceUserRef): void {
+  // Mémorisation AU MOMENT DE L'APPEL (avant tout échec réseau/FK) de l'horodatage du login, pour
+  // que les battements suivants puissent rejouer last_login_at si cet upsert est perdu.
+  // Rôles non suivis ignorés (gating identique à _upsertPresence) : rien à rejouer, pas de Map polluée.
+  if ((PRESENCE_ROLES as unknown as string[]).includes(user.role)) {
+    rememberLoginAttempt(user.sync_id, new Date().toISOString());
+  }
   setImmediate(() => {
     _upsertPresence(user, { includeLogin: true, isLogin: true }).catch(() => {
       /* filet de sécurité : _upsertPresence catche déjà tout en interne */
@@ -483,13 +509,28 @@ async function _upsertPresence(
       payload.centre_id = user.centre_id;
       payload.role = user.role;
     }
+    // last_login_at : login → ISO mémorisé à l'appel (≈ now, repli nowIso si absent) ; battement →
+    // ISO mémorisé UNIQUEMENT tant que le login n'est pas confirmé écrit (jamais "now" du battement).
+    const attempt = lastLoginAttempt.get(user.sync_id);
+    let sentLoginIso: string | null = null;
     if (opts.isLogin) {
-      payload.last_login_at = nowIso;
+      sentLoginIso = attempt?.iso ?? nowIso;
+    } else if (opts.includeLogin && attempt && !attempt.confirmed) {
+      sentLoginIso = attempt.iso;
+    }
+    if (sentLoginIso) {
+      payload.last_login_at = sentLoginIso;
     }
 
     const { error } = await supabase
       .from(PRESENCE_TABLE)
       .upsert(payload, { onConflict: 'user_sync_id' });
+
+    if (!error && sentLoginIso) {
+      // Confirmation seulement si aucun NOUVEAU login n'a remplacé l'ISO pendant l'appel en vol.
+      const current = lastLoginAttempt.get(user.sync_id);
+      if (current && current.iso === sentLoginIso) current.confirmed = true;
+    }
 
     if (error) {
       if (error.code === '23503') {
