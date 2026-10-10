@@ -5,6 +5,16 @@ import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
 import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
 
+/**
+ * Vrai si la carte n'a pas de rangement exploitable : vide, NULL/undefined ou « NON CLASSE »
+ * (insensible à la casse et aux espaces, même règle que cartes.queries.ts). Fonction pure,
+ * locale au fichier : sert à vider le champ de saisie et à afficher le badge « Sans rangement ».
+ */
+const isRangementVide = (rangement: string | null | undefined): boolean => {
+  const val = (rangement ?? '').trim();
+  return val === '' || val.toUpperCase() === 'NON CLASSE';
+};
+
 export default function InventaireLogistique() {
   const { user } = useAuthStore();
   const siteId = user?.site_id || 1;
@@ -92,7 +102,8 @@ export default function InventaireLogistique() {
 
   const selectCard = (carte: any) => {
     setSelectedCarte(carte);
-    setRangement(carte.rangement || '');
+    // « NON CLASSE » / vide : champ vide pour éviter à l'opérateur de l'effacer avant saisie.
+    setRangement(isRangementVide(carte.rangement) ? '' : carte.rangement);
     setNumSecu(carte.num_secu || '');
     setContact(formatContactForDisplay(carte.contact));
     setResults([]);
@@ -234,7 +245,7 @@ export default function InventaireLogistique() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   {results.map((c, idx) => {
-                    const hasRangement = !!c.rangement;
+                    const hasRangement = !isRangementVide(c.rangement);
                     return (
                       <div
                         key={c.id_carte}
