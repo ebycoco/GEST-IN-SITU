@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import iconLogo from '../../assets/icon.png';
+import { LicenseSidebarBadge } from './LicenseSidebarBadge';
 
 
 export default function Sidebar() {
@@ -282,6 +283,8 @@ export default function Sidebar() {
             >
               {displaySubtitle}
             </div>
+            {/* Badge Licence : site déjà chargé par la Sidebar, masqué pour SUPER ADMIN et lorsque la barre est repliée (sidebar-text masqué) */}
+            <LicenseSidebarBadge site={currentSite} role={user?.role} />
           </div>
         </div>
         <button className="sidebar-toggle-btn" onClick={() => setIsCollapsed(!isCollapsed)} style={{ flexShrink: 0 }}>
