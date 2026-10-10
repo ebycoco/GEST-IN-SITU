@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { PaginationInput } from '../../components/PaginationInput';
 import DateInput from '../../components/DateInput';
 import { useDebounce } from '../../hooks/useDebounce';
-import { formatPhoneInput, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
+import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -97,7 +97,7 @@ export default function InventaireSansRangement() {
       // Réinitialisation des valeurs éditées sur la page courante uniquement (Low-Memory §2 :
       // pas de rétention indéfinie de valeurs pour des lignes déjà quittées).
       setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
-      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, formatPhoneInput(r.contact || '')])));
+      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, formatContactForDisplay(r.contact)])));
     } catch (err) {
       console.error('Erreur lors du chargement des cartes sans rangement :', err);
       toast.error('Erreur lors du chargement des cartes sans rangement.');
@@ -288,12 +288,18 @@ export default function InventaireSansRangement() {
                           inputMode="numeric"
                           value={contactValues[r.id_carte] ?? ''}
                           disabled={isSaving}
-                          onChange={(e) => setContactValues(prev => ({ ...prev, [r.id_carte]: formatPhoneInput(e.target.value) }))}
+                          title={isOverlongContact(contactValues[r.id_carte]) ? 'Contact historique non conforme (plus de 10 chiffres) : à corriger.' : undefined}
+                          onChange={(e) => {
+                            // Jamais de troncature silencieuse : collage > 10 chiffres => valeur inchangée + toast.
+                            const res = applyPhoneChange(contactValues[r.id_carte] ?? '', e.target.value);
+                            if (res.tooLong) toast.error(CONTACT_TOO_LONG_MESSAGE);
+                            setContactValues(prev => ({ ...prev, [r.id_carte]: res.value }));
+                          }}
                           onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}
                           placeholder="+225 01 02 03 04 05"
                           style={{
                             width: 170, padding: '8px 10px', borderRadius: 8, fontSize: 13,
-                            border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
+                            border: isOverlongContact(contactValues[r.id_carte]) ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
                             color: 'white', outline: 'none'
                           }}
                         />

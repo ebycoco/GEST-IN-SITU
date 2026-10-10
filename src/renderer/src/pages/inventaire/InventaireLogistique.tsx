@@ -3,7 +3,7 @@ import { Search, MapPin, CheckCircle, Package, ArrowRight, ShieldAlert, AlertTri
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../stores/authStore';
 import DateInput from '../../components/DateInput';
-import { formatPhoneInput, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
+import { formatContactForDisplay, applyPhoneChange, isOverlongContact, CONTACT_TOO_LONG_MESSAGE, resolveContactToSend, cleanIpcErrorMessage } from './phoneFormat';
 
 export default function InventaireLogistique() {
   const { user } = useAuthStore();
@@ -94,7 +94,7 @@ export default function InventaireLogistique() {
     setSelectedCarte(carte);
     setRangement(carte.rangement || '');
     setNumSecu(carte.num_secu || '');
-    setContact(formatPhoneInput(carte.contact || ''));
+    setContact(formatContactForDisplay(carte.contact));
     setResults([]);
     
     // Si la carte n'a pas de numéro de sécu, on focus d'abord sur sécu, sinon rangement
@@ -325,12 +325,18 @@ export default function InventaireLogistique() {
               </label>
               <input
                 className="form-input"
-                style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
+                style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: isOverlongContact(contact) ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
                 type="text"
                 inputMode="numeric"
+                title={isOverlongContact(contact) ? 'Contact historique non conforme (plus de 10 chiffres) : à corriger.' : undefined}
                 placeholder="+225 01 02 03 04 05"
                 value={contact}
-                onChange={e => setContact(formatPhoneInput(e.target.value))}
+                onChange={e => {
+                  // Jamais de troncature silencieuse : collage > 10 chiffres => valeur inchangée + toast.
+                  const res = applyPhoneChange(contact, e.target.value);
+                  if (res.tooLong) toast.error(CONTACT_TOO_LONG_MESSAGE);
+                  setContact(res.value);
+                }}
                 onKeyDown={e => {
                   if (e.key === 'Enter') {
                     e.preventDefault();

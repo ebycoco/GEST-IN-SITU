@@ -6,4 +6,4 @@
 
 ### 🛠️ Corrections & Fiabilité
 
-- **Rangement + contact : un numéro de 11 ou 12 chiffres n'est plus tronqué en silence** — il est refusé côté serveur au lieu d'enregistrer un numéro faux (ex. `07080900101` devenait `7080900101`). Les messages d'erreur de ces deux écrans n'affichent plus le préfixe technique d'Electron.
+- **Rangement + contact : un numéro de plus de 10 chiffres n'est plus tronqué en silence** — côté serveur, il est refusé au lieu d'enregistrer un numéro faux (ex. `07080900101` devenait `7080900101`). Côté écran, un collage de plus de 10 chiffres n'est plus raccourci : le champ reste inchangé et un message demande de vérifier les chiffres. Un contact déjà enregistré avec plus de 10 chiffres s'affiche tel quel, avec une bordure d'alerte, et ne bloque pas l'enregistrement du rangement tant qu'il n'est pas modifié. Les messages d'erreur de ces deux écrans n'affichent plus le préfixe technique d'Electron.
