@@ -94,6 +94,60 @@ const LAST_ACTION_LOGS_LIMIT = 2000;
  */
 const knownInvalidSiteIdPresence = new Set<string>();
 
+/** Colonnes de t_user_presence portant une contrainte FK. */
+export type PresenceFkColumn = 'user_sync_id' | 'site_id' | 'centre_id';
+
+const FK_TABLE_TO_COLUMN: Record<string, PresenceFkColumn> = {
+  t_users: 'user_sync_id',
+  t_sites: 'site_id',
+  t_centres: 'centre_id',
+};
+
+/**
+ * Identifie la colonne FK violée d'une erreur Postgres 23503 sur t_user_presence.
+ * Fonction pure (aucun effet de bord). Ordre de priorité :
+ *  1. nom de contrainte dans error.message (`t_user_presence_<col>_fkey`) — format réellement
+ *     renvoyé par PostgREST (confirmé par agent-13 sur un vrai Postgres) ;
+ *  2. ancien motif `Key (col)=` dans error.details (rétro-compatibilité) ;
+ *  3. table citée dans error.details (`Key is not present in table "t_xxx"`) en dernier recours.
+ * Retourne null si rien ne correspond (l'appelant ne doit alors PAS mettre en cache).
+ */
+export function identifyViolatedFkColumn(
+  error: { message?: string | null; details?: string | null } | null | undefined
+): PresenceFkColumn | null {
+  const message = error?.message ?? '';
+  const details = error?.details ?? '';
+
+  const fromConstraint = /t_user_presence_(user_sync_id|site_id|centre_id)_fkey/.exec(message)?.[1];
+  if (fromConstraint) return fromConstraint as PresenceFkColumn;
+
+  const fromKey = /Key \(([a-zA-Z_]+)\)=/.exec(details)?.[1];
+  if (fromKey === 'user_sync_id' || fromKey === 'site_id' || fromKey === 'centre_id') return fromKey;
+
+  const fromTable = /table "(t_users|t_sites|t_centres)"/.exec(details)?.[1];
+  if (fromTable) return FK_TABLE_TO_COLUMN[fromTable];
+
+  return null;
+}
+
+/** Anti-spam des logs FK non mis en cache : 1 log / clé / 10 min, Map bornée (pas de timer). */
+const FK_WARN_INTERVAL_MS = 10 * 60 * 1000;
+const FK_WARN_MAX_KEYS = 200;
+const lastFkWarnAt = new Map<string, number>();
+
+function shouldLogFkWarn(key: string): boolean {
+  const now = Date.now();
+  const last = lastFkWarnAt.get(key);
+  if (last !== undefined && now - last < FK_WARN_INTERVAL_MS) return false;
+  if (lastFkWarnAt.size >= FK_WARN_MAX_KEYS && !lastFkWarnAt.has(key)) {
+    // Borne mémoire : on évince la plus ancienne entrée (ordre d'insertion de la Map).
+    const oldest = lastFkWarnAt.keys().next().value;
+    if (oldest !== undefined) lastFkWarnAt.delete(oldest);
+  }
+  lastFkWarnAt.set(key, now);
+  return true;
+}
+
 // ─── Types publics ──────────────────────────────────────────────────────────
 
 /** Identité minimale d'un utilisateur, telle que fournie par l'appelant
@@ -441,7 +495,9 @@ async function _upsertPresence(
         // PostgrestError) confirmée via Context7 /supabase/postgrest-js ; le contenu textuel
         // exact reste une convention Postgres core non re-testée ici en conditions réelles
         // (cf. repli ci-dessous si le format s'avérait différent).
-        const violatedColumn = /Key \(([a-zA-Z_]+)\)=/.exec(error.details ?? '')?.[1];
+        // Correctif : PostgREST ne renvoie pas `Key (col)=` dans details sur ce cas réel ; la
+        // colonne est désormais déduite du nom de contrainte (message) puis, en repli, de details.
+        const violatedColumn = identifyViolatedFkColumn(error);
 
         if (violatedColumn === 'site_id') {
           // Cas historique (cf. knownInvalidSiteIdPresence ci-dessus) : dégradation propre,
@@ -456,14 +512,18 @@ async function _upsertPresence(
           // — un cache indexé sur site_id figerait ce cas à tort. La fréquence faible du
           // heartbeat (toutes les 2 min) rend une nouvelle tentative au tick suivant
           // acceptable plutôt que de risquer un blocage silencieux permanent.
-          log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}) : ${violatedColumn} orphelin (contrainte FK violée, colonne identifiée via error.details). Non mis en cache, nouvelle tentative au prochain tick.`);
+          // Ex: agent connecté avant la remontée de son compte sur t_users cloud : la présence
+          // reprend dès que le compte existe. Log limité (1 / 10 min / clé) contre le spam.
+          if (shouldLogFkWarn(`${user.sync_id}:${violatedColumn}`)) {
+            log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}) : ${violatedColumn} orphelin (contrainte FK violée). Non mis en cache, nouvelle tentative au prochain tick.`);
+          }
         } else {
-          // error.details absent ou de format imprévu : repli explicite sur l'ancien
-          // comportement (traité comme site_id orphelin) plutôt qu'un comportement
-          // silencieux incohérent — mais signalé distinctement dans le log pour ne pas
-          // masquer un diagnostic potentiellement faux.
-          knownInvalidSiteIdPresence.add(invalidSiteKey);
-          log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}, site_id=${user.site_id ?? 'null'}) : contrainte FK violée (23503), colonne fautive non identifiable depuis error.details ("${error.details ?? ''}"). Repli : traité comme site_id orphelin (comportement précédent).`);
+          // Colonne non identifiable : PAS de cache (l'ancien repli qui cachait à tort rendait
+          // l'agent invisible toute la session). Un battement perdu est moins grave : simple
+          // log (limité) et retentative au tick suivant.
+          if (shouldLogFkWarn(`${user.sync_id}:unknown`)) {
+            log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} abandonné (user_sync_id=${user.sync_id}) : contrainte FK violée (23503), colonne fautive non identifiable (message="${error.message ?? ''}", details="${error.details ?? ''}"). Non mis en cache, nouvelle tentative au prochain tick.`);
+          }
         }
       } else {
         log.warn(`[PresenceService] upsert ${PRESENCE_TABLE} échoué (user_sync_id=${user.sync_id}) :`, error.message);
