@@ -17,6 +17,8 @@ export default function InventaireLogistique() {
   const [selectedCarte, setSelectedCarte] = useState<any | null>(null);
   const [rangement, setRangement] = useState('');
   const [numSecu, setNumSecu] = useState('');
+  // Contact facultatif (jamais bloquant) : prérempli depuis la fiche, envoyé seulement si non vide.
+  const [contact, setContact] = useState('');
   const [loading, setLoading] = useState(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -91,6 +93,7 @@ export default function InventaireLogistique() {
     setSelectedCarte(carte);
     setRangement(carte.rangement || '');
     setNumSecu(carte.num_secu || '');
+    setContact(carte.contact || '');
     setResults([]);
     
     // Si la carte n'a pas de numéro de sécu, on focus d'abord sur sécu, sinon rangement
@@ -115,7 +118,10 @@ export default function InventaireLogistique() {
       setLoading(true);
       await window.api.cartes.updateRangementEtFiche(selectedCarte.id_carte, {
         rangement: rangement.trim().toUpperCase(),
-        num_secu: numSecu.trim() || undefined
+        num_secu: numSecu.trim() || undefined,
+        // Envoyé seulement si non vide ET modifié par rapport à la fiche : une valeur historique
+        // non conforme déjà en base ne doit pas bloquer l'enregistrement du rangement.
+        contact: (contact.trim() && contact.trim() !== (selectedCarte.contact || '').trim()) ? contact.trim() : undefined
       });
       toast.success('Rangement mis à jour avec succès.');
       resetState();
@@ -134,6 +140,7 @@ export default function InventaireLogistique() {
     setSelectedCarte(null);
     setRangement('');
     setNumSecu('');
+    setContact('');
     setSearchQuery('');
     setFilterDateNaissance('');
     setFilterLieuNaissance('');
@@ -302,6 +309,28 @@ export default function InventaireLogistique() {
                 />
               </div>
             )}
+
+            {/* Contact facultatif (jamais obligatoire) — vide = contact existant conservé */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <label style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)' }}>
+                CONTACT <span style={{ fontWeight: 400 }}>(facultatif)</span>
+              </label>
+              <input
+                className="form-input"
+                style={{ width: '100%', borderRadius: 12, background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(255,255,255,0.08)', color: 'white', height: 46, padding: '0 16px', outline: 'none' }}
+                type="text"
+                inputMode="numeric"
+                placeholder="Ex: 0708090010"
+                value={contact}
+                onChange={e => setContact(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (rangementInputRef.current) rangementInputRef.current.focus();
+                  }
+                }}
+              />
+            </div>
 
             {/* Nouveau Rangement */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -166,7 +166,7 @@ const api = {
       ipcRenderer.invoke('cartes:updateQuickFields', id, fields),
     searchQuickLogistique: (siteId: number, critere: string, dateNaissance?: string, lieuNaissance?: string): Promise<Partial<ICarte>[]> =>
       ipcRenderer.invoke('cartes:searchQuickLogistique', siteId, critere, dateNaissance, lieuNaissance),
-    updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string }): Promise<any> =>
+    updateRangementEtFiche: (id: number, fields: { rangement: string, num_secu?: string, contact?: string }): Promise<any> =>
       ipcRenderer.invoke('cartes:updateRangementEtFiche', id, fields),
     getCartesMalCentrees: (siteId?: number): Promise<any[]> =>
       ipcRenderer.invoke('cartes:getCartesMalCentrees', siteId),

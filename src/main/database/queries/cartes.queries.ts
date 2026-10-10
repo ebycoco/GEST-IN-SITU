@@ -2210,7 +2210,7 @@ export function searchQuickLogistique(siteId: number, critere: string, dateNaiss
   }
 
   return db.prepare(`
-    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, rangement, statut, statut_physique
+    SELECT id_carte, noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu, contact, rangement, statut, statut_physique
     FROM t_cartes
     ${where}
     ORDER BY noms ASC, prenoms ASC, id_carte ASC
@@ -2220,12 +2220,25 @@ export function searchQuickLogistique(siteId: number, critere: string, dateNaiss
 
 export function updateRangementEtFiche(
   id: number,
-  fields: { rangement: string, num_secu?: string },
+  fields: { rangement: string, num_secu?: string, contact?: string },
   currentUser?: { role?: string; site_id?: number; centre_id?: number; id_user?: number; login?: string }
 ) {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const newRangement = fields.rangement.trim().toUpperCase();
+
+  // Contact facultatif : n'est pris en compte que s'il est non vide après trim. Absent/vide =>
+  // le contact existant n'est JAMAIS touché (pas d'écrasement par vide). Normalisé comme
+  // updateQuickFields()/createCarte() (normalizeContact) puis validé par la même règle que
+  // updateCarte() (10 chiffres locaux). Validation faite AVANT toute écriture : une erreur ne
+  // laisse aucune écriture partielle.
+  let newContact: string | null = null;
+  if (fields.contact !== undefined && fields.contact.trim() !== '') {
+    newContact = normalizeContact(fields.contact);
+    if (!/^\d{10}$/.test(newContact)) {
+      throw new Error('Le contact doit faire exactement 10 chiffres locaux.');
+    }
+  }
 
   // Relecture préalable (site_id/centre_id) pour recalculer centre_id à partir du nouveau
   // rangement — cloisonnement §3 : le siteId utilisé pour resolveCentreIdFromPrefix est
@@ -2250,6 +2263,11 @@ export function updateRangementEtFiche(
     params.push(fields.num_secu.trim());
   }
 
+  if (newContact !== null) {
+    sets.push('contact = ?');
+    params.push(newContact);
+  }
+
   params.push(id);
 
   // Atomicité (skill moteur-sync-offline-first / audit non-régression P1) : l'UPDATE et
@@ -2258,6 +2276,21 @@ export function updateRangementEtFiche(
   // autoEnqueueCorrection() reste hors transaction, comportement inchangé.
   const runTx = db.transaction(() => {
     const result = db.prepare(`UPDATE t_cartes SET ${sets.join(', ')} WHERE id_carte = ?`).run(...params);
+
+    if (newContact !== null && result.changes > 0) {
+      // Le contact compose cle_doublon / cle_doublon_flex : recalcul dans la MÊME transaction,
+      // même formule que updateQuickFields(), sur les valeurs réellement stockées.
+      const c = db.prepare(
+        'SELECT noms, prenoms, date_de_naissance, lieu_de_naissance, contact FROM t_cartes WHERE id_carte = ?'
+      ).get(id) as { noms: string | null; prenoms: string | null; date_de_naissance: string | null; lieu_de_naissance: string | null; contact: string | null };
+      const noms = removeAccents(c.noms || '');
+      const prenoms = removeAccents(c.prenoms || '');
+      const ddn = c.date_de_naissance || '';
+      const lieuN = removeAccents(c.lieu_de_naissance || '');
+      const contact = normalizeContact(c.contact || '');
+      db.prepare('UPDATE t_cartes SET cle_doublon = ?, cle_doublon_flex = ? WHERE id_carte = ?')
+        .run(`${noms}|${prenoms}|${ddn}|${lieuN}|${contact}`, `${noms}|${prenoms}|${ddn}|${contact}`, id);
+    }
 
     if (carteAvant && centreChanged) {
       // t_logs — mêmes colonnes que l'INSERT réel de corrigerCentreCarte() (cartes.queries.ts

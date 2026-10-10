@@ -14,6 +14,7 @@ interface CarteSansRangement {
   prenoms: string;
   num_secu: string | null;
   date_de_naissance: string | null;
+  contact?: string | null;
 }
 
 /**
@@ -49,6 +50,8 @@ export default function InventaireSansRangement() {
 
   const [rows, setRows] = useState<CarteSansRangement[]>([]);
   const [editValues, setEditValues] = useState<Record<number, string>>({});
+  // Contact facultatif par ligne (prérempli depuis la fiche, jamais obligatoire).
+  const [contactValues, setContactValues] = useState<Record<number, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [savingId, setSavingId] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -93,6 +96,7 @@ export default function InventaireSansRangement() {
       // Réinitialisation des valeurs éditées sur la page courante uniquement (Low-Memory §2 :
       // pas de rétention indéfinie de valeurs pour des lignes déjà quittées).
       setEditValues(Object.fromEntries(nextRows.map(r => [r.id_carte, ''])));
+      setContactValues(Object.fromEntries(nextRows.map(r => [r.id_carte, r.contact || ''])));
     } catch (err) {
       console.error('Erreur lors du chargement des cartes sans rangement :', err);
       toast.error('Erreur lors du chargement des cartes sans rangement.');
@@ -128,7 +132,11 @@ export default function InventaireSansRangement() {
     }
     try {
       setSavingId(carte.id_carte);
-      await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value });
+      // Contact envoyé seulement si non vide ET modifié par rapport à la fiche (une valeur
+      // historique non conforme ne doit pas bloquer l'enregistrement du rangement).
+      const contactValue = (contactValues[carte.id_carte] ?? '').trim();
+      const contactToSend = (contactValue && contactValue !== (carte.contact || '').trim()) ? contactValue : undefined;
+      await window.api.cartes.updateRangementEtFiche(carte.id_carte, { rangement: value, contact: contactToSend });
       toast.success(`Rangement enregistré pour ${carte.noms} ${carte.prenoms}.`);
       // Retrait local immédiat de la ligne traitée (pas d'attente d'un rechargement complet).
       setRows(prev => prev.filter(r => r.id_carte !== carte.id_carte));
@@ -254,6 +262,7 @@ export default function InventaireSansRangement() {
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Prénom</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>N° Sécu</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Date de Naissance</th>
+                  <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Contact <span style={{ textTransform: 'none', fontWeight: 400 }}>(facultatif)</span></th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Rangement</th>
                   <th style={{ padding: '16px 24px', fontSize: 12, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 600 }}>Action</th>
                 </tr>
@@ -268,6 +277,22 @@ export default function InventaireSansRangement() {
                       <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{r.prenoms}</td>
                       <td style={{ padding: '16px 24px', fontFamily: 'monospace', color: '#6ee7b7' }}>{r.num_secu || '—'}</td>
                       <td style={{ padding: '16px 24px', color: 'var(--text-secondary)' }}>{formatBirthDate(r.date_de_naissance)}</td>
+                      <td style={{ padding: '16px 12px' }}>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={contactValues[r.id_carte] ?? ''}
+                          disabled={isSaving}
+                          onChange={(e) => setContactValues(prev => ({ ...prev, [r.id_carte]: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(r); }}
+                          placeholder="0708090010"
+                          style={{
+                            width: 120, padding: '8px 10px', borderRadius: 8, fontSize: 13,
+                            border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)',
+                            color: 'white', outline: 'none'
+                          }}
+                        />
+                      </td>
                       <td style={{ padding: '16px 24px' }}>
                         <input
                           type="text"
