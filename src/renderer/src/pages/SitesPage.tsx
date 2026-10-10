@@ -511,7 +511,7 @@ export default function SitesPage() {
                           <span style={{ color: 'var(--accent-green)', fontSize: 12, fontWeight: 700, background: 'rgba(16, 185, 129, 0.1)', padding: '4px 10px', borderRadius: 12, border: '1px solid rgba(16, 185, 129, 0.2)' }}>PERMANENTE</span>
                         ) : s.expiry_date ? (
                           <span style={{ color: isLicenseExpired(s.expiry_date) ? 'var(--accent-red)' : 'var(--text-muted)', fontSize: 12 }}>
-                            {new Date(s.expiry_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
+                            {new Date(s.expiry_date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' })}
                           </span>
                         ) : (
                           <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>Non définie</span>
