@@ -35,7 +35,7 @@ import { preloadUsersFromCloud } from './sync/downstream';
 import { resetOutboxErrors } from './sync/outbox.service';
 
 import { stopSessionHeartbeat, getSecureCurrentUser } from './auth/session-heartbeat';
-import { recordPresenceLogoutAndWait } from './sync/presence.service';
+import { recordPresenceLogoutAndWait, isPresenceTrackedRole } from './sync/presence.service';
 
 // ─── ISOLATION DEV/PROD DU DOSSIER userData (SQLite + fichiers annexes) ────────
 // Correctif P0 (QA terrain, août 2026) : en mode développement (`npm run dev`),
@@ -269,8 +269,12 @@ function createWindow(): void {
       // fermeture existante est retardée de 1,5 s au pire, jamais bloquée. Sans session /
       // sync_id : aucune attente (comportement inchangé). Sans réseau, la fonction retourne
       // immédiatement. SQLite n'est pas touchée (db.close() de will-quit inchangé).
-      const closingSyncId: string | undefined = getSecureCurrentUser()?.sync_id;
-      if (closingSyncId) {
+      // Filtre de rôle : seul le rôle ACTIF de la session (getSecureCurrentUser(), jamais
+      // une requête t_users — CLAUDE.md §3) suivi par la présence justifie l'attente ;
+      // SUPER ADMIN / ADMINISTRATEUR_SITE n'ont aucune ligne de présence → fermeture directe.
+      const closingUser = getSecureCurrentUser();
+      const closingSyncId: string | undefined = closingUser?.sync_id;
+      if (closingSyncId && isPresenceTrackedRole(closingUser?.role)) {
         isFlushingPresenceOnClose = true;
         void recordPresenceLogoutAndWait(closingSyncId)
           .catch(() => { /* ne rejette jamais ; filet de sécurité */ })

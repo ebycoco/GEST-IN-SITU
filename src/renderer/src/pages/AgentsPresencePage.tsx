@@ -395,7 +395,7 @@ export default function AgentsPresencePage() {
                   return (
                     <tr key={row.sync_id}>
                       <td>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 10px', borderRadius: 20, fontSize: 10, fontWeight: 800, letterSpacing: '0.05em' }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', background: meta.bg, color: meta.color, border: `1px solid ${meta.border}`, padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>
                           <span className="presence-dot" style={{ backgroundColor: meta.color }} />
                           {meta.label}
                         </span>

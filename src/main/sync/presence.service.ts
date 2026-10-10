@@ -63,6 +63,13 @@ const PRESENCE_ROLES = [
   'ADMIN_CENTRE',
 ] as const;
 
+/** Fonction pure : true si le rôle (ACTIF de la session) fait l'objet d'un suivi de présence.
+ * Source unique = PRESENCE_ROLES (utilisée par index.ts pour ne pas attendre le flush de
+ * déconnexion à la fermeture des rôles sans ligne de présence). */
+export function isPresenceTrackedRole(role: string | null | undefined): boolean {
+  return typeof role === 'string' && (PRESENCE_ROLES as readonly string[]).includes(role);
+}
+
 /** Fenêtre de recherche pour la "dernière action" agrégée depuis `t_logs`.
  * Choix technique documenté : 24h borne le volume de lignes remontées tout en
  * couvrant très largement une session de travail terrain (le cas où un agent

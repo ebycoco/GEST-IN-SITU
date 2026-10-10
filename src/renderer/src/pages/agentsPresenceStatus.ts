@@ -26,6 +26,15 @@ export const HEARTBEAT_ONLINE_MAX_MIN = 6;
 // Au-delà de 15 min sans battement, l'application est considérée fermée.
 export const HEARTBEAT_OFFLINE_MIN = 15;
 
+// Horloge de poste agent en avance : le battement est horodaté par le poste agent, pas par
+// le serveur. Un battement « dans le futur » de plus de 2 min est un signe de vie douteux :
+// il est traité comme INACTIF (pas de 4e statut : widgets/compteurs/couleurs en dépendent).
+// En deçà (>= -2 min) c'est une dérive normale, traitée comme âge 0 (EN_LIGNE).
+// LIMITE : une horloge très en avance masque un vrai départ (l'agent reste « Inactif » au
+// lieu de passer « Hors ligne » tant que le battement figé reste dans le futur) ; seule
+// l'heure serveur (now() côté Supabase) corrigerait cela — hors périmètre.
+export const HEARTBEAT_CLOCK_SKEW_TOLERANCE_MIN = 2;
+
 const MS_PER_MIN = 60000;
 
 /** Convertit un timestamp ISO en ms ; null si absent ou invalide (jamais d'exception). */
@@ -43,6 +52,8 @@ export function computeStatus(row: PresenceStatusInput, nowMs: number): Presence
   if (logoutMs !== null && logoutMs >= heartbeatMs) return 'HORS_LIGNE';
 
   const heartbeatAgeMin = (nowMs - heartbeatMs) / MS_PER_MIN;
+  // Battement futur au-delà de la tolérance : signe de vie douteux → INACTIF (cf. ci-dessus).
+  if (heartbeatAgeMin < -HEARTBEAT_CLOCK_SKEW_TOLERANCE_MIN) return 'INACTIF';
   if (heartbeatAgeMin >= HEARTBEAT_OFFLINE_MIN) return 'HORS_LIGNE';
   if (heartbeatAgeMin >= HEARTBEAT_ONLINE_MAX_MIN) return 'INACTIF';
   return 'EN_LIGNE';

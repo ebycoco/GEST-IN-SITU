@@ -4,6 +4,7 @@ import {
   computeLogoutCell,
   HEARTBEAT_ONLINE_MAX_MIN,
   HEARTBEAT_OFFLINE_MIN,
+  HEARTBEAT_CLOCK_SKEW_TOLERANCE_MIN,
   type PresenceStatusInput,
 } from '../src/renderer/src/pages/agentsPresenceStatus';
 
@@ -37,6 +38,29 @@ describe('computeStatus - âge du battement', () => {
 
   it('absence de battement -> HORS_LIGNE', () => {
     expect(computeStatus(row(), NOW)).toBe('HORS_LIGNE');
+  });
+});
+
+describe('computeStatus - horloge de poste en avance (battement futur)', () => {
+  const minAhead = (m: number): string => new Date(NOW + m * 60000).toISOString();
+  it('tolérance exportée = 2 min', () => {
+    expect(HEARTBEAT_CLOCK_SKEW_TOLERANCE_MIN).toBe(2);
+  });
+  it.each([
+    [1, 'EN_LIGNE'],
+    [2, 'EN_LIGNE'],
+    [3, 'INACTIF'],
+    [10, 'INACTIF'],
+  ])('battement %s min dans le futur -> %s', (ahead, expected) => {
+    expect(computeStatus(row({ last_heartbeat_at: minAhead(ahead) }), NOW)).toBe(expected);
+  });
+  it('logout >= battement futur -> HORS_LIGNE (priorité inchangée)', () => {
+    expect(computeStatus(row({ last_heartbeat_at: minAhead(10), last_logout_at: minAhead(10) }), NOW)).toBe('HORS_LIGNE');
+    expect(computeStatus(row({ last_heartbeat_at: minAhead(10), last_logout_at: minAhead(11) }), NOW)).toBe('HORS_LIGNE');
+  });
+  it('INACTIF futur -> cellule déconnexion vide', () => {
+    const r = row({ last_heartbeat_at: minAhead(10) });
+    expect(computeLogoutCell(r, computeStatus(r, NOW))).toEqual({ kind: 'none' });
   });
 });
 
