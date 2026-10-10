@@ -320,6 +320,21 @@ test.describe.serial('QA Terrain CLOUD — Présence des Agents (/agents/presenc
     }
     console.log(`[agent13][P0-FINDING] Table t_user_presence disponible sur le projet Supabase dev/staging = ${userPresenceTableExists}`);
 
+    // Mirror cloud de l'opérateur local (FK user_sync_id -> t_users.sync_id) posé AVANT tout login.
+    {
+      const mrows = await dbQuery(
+        `SELECT sync_id, login, site_id, centre_id, role, nom_user, prenom_user FROM t_users WHERE login = 'E2E_OPERATEUR_VERIFICATION'`
+      );
+      const u = mrows[0];
+      const { error: mirrorErr } = await supabaseDev.from('t_users').insert({
+        login: u.login, password_hash: 'ZZTEST_MIRROR_NOT_A_REAL_HASH', role: u.role,
+        nom_user: u.nom_user, prenom_user: u.prenom_user, statut_actif: 1,
+        site_id: u.site_id, centre_id: u.centre_id, sync_id: u.sync_id
+      });
+      expect(mirrorErr, `Échec mirroring cloud de l'opérateur local : ${mirrorErr?.message}`).toBeNull();
+      mirroredOperatorSyncId = u.sync_id;
+    }
+
     console.log(`[agent13][CLOUD] Site A (local) id=${env.seed.siteId} centre=${env.seed.centreId} | Site B (cloud-only) id=${siteBId} centre=${centreBId}`);
   });
 
@@ -464,7 +479,9 @@ test.describe.serial('QA Terrain CLOUD — Présence des Agents (/agents/presenc
     );
     const { window } = env;
 
-    // Récupère l'identité réelle (sync_id) de l'opérateur seedé localement.
+    // Identité réelle (sync_id) de l'opérateur seedé localement — le mirror cloud a été posé
+    // au test 0 (AVANT le login du test 1, sinon le 1er login échoue en FK 23503 et la combinaison
+    // est mise en cache négatif par presence.service jusqu'au redémarrage de l'app).
     const rows = await dbQuery(
       `SELECT sync_id, login, site_id, centre_id, role, nom_user, prenom_user FROM t_users WHERE login = 'E2E_OPERATEUR_VERIFICATION'`
     );
@@ -472,25 +489,10 @@ test.describe.serial('QA Terrain CLOUD — Présence des Agents (/agents/presenc
     const opUser = rows[0];
     mirroredOperatorSyncId = opUser.sync_id;
 
-    // Mirror cloud : cet opérateur doit exister dans t_users côté cloud pour
-    // que l'upsert t_user_presence (FK ON DELETE CASCADE sur t_users.sync_id)
-    // ne soit pas rejeté silencieusement.
-    const { error: mirrorErr } = await supabaseDev.from('t_users').insert({
-      login: opUser.login,
-      password_hash: 'ZZTEST_MIRROR_NOT_A_REAL_HASH',
-      role: opUser.role,
-      nom_user: opUser.nom_user,
-      prenom_user: opUser.prenom_user,
-      statut_actif: 1,
-      site_id: opUser.site_id,
-      centre_id: opUser.centre_id,
-      sync_id: opUser.sync_id
-    });
-    expect(mirrorErr, `Échec mirroring cloud de l'opérateur local : ${mirrorErr?.message}`).toBeNull();
-
     // Aucune ligne de présence avant login.
     const before = await supabaseDev.from('t_user_presence').select('*').eq('user_sync_id', opUser.sync_id).maybeSingle();
-    expect(before.data).toBeNull();
+    // Le login du test 1 (RBAC) a déjà créé la ligne (mirror posé au test 0) : on la consigne.
+    console.log(`[agent13][WRITE-PATH] Ligne avant login du test 4 (créée par le login du test 1) = ${JSON.stringify(before.data)}`);
 
     const beforeLoginTime = Date.now();
     await window.waitForURL(/#\/login/, { timeout: 20000 });

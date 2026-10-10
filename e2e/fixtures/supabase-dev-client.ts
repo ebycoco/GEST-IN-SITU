@@ -26,9 +26,9 @@
  */
 import { createClient } from '@supabase/supabase-js';
 
-export const E2E_CLOUD_SUPABASE_URL = 'https://zddibqgutigwxjwbojmn.supabase.co';
+export const E2E_CLOUD_SUPABASE_URL = 'https://ajadkziqaskadlzboeqo.supabase.co';
 export const E2E_CLOUD_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpkZGlicWd1dGlnd3hqd2Jvam1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU1OTI1MjksImV4cCI6MjEwMTE2ODUyOX0.bDbPfWF6Isudw_5XOrNI0qHFxQaZMDk4hLtEUAHlIS8';
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqYWRremlxYXNrYWRsemJvZXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2NTU4MTksImV4cCI6MjEwNzIzMTgxOX0.D3rFCGoeCi_L9lnY7XbQ4n5q7DSDuMlFLX0I2_8uWv4';
 
 export const supabaseDev = createClient(E2E_CLOUD_SUPABASE_URL, E2E_CLOUD_SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
