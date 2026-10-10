@@ -86,6 +86,29 @@ export default function App() {
   // à sa seule création/annulation — seul son callback (setLicenseWarningVisible) doit re-render.
   const licenseWarningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Réinitialisation de la bannière de licence à la déconnexion (manuelle, forcée via
+  // onSessionExpired, ou session expirée) : sans cela, licenseWarning/licenseWarningVisible
+  // et le minuteur de réapparition survivent au logout et la bannière reste affichée sur
+  // /login puis chez le compte suivant (le main, lui, cesse bien d'émettre après logout).
+  // Ne réagit QU'À LA TRANSITION utilisateur non-null -> null (ref du hasUser précédent) :
+  // au login, le main émet 'license:expiryWarning' DANS le handler auth:login
+  // (startSessionHeartbeat), donc avant que authStore.login ne fasse set({ user }) ; ce push
+  // arrive alors que user est encore null et ne doit jamais être effacé. Aucune transition
+  // vers null n'a lieu à ce moment-là, donc le push légitime est préservé.
+  const hasUser = useAuthStore(s => s.user !== null);
+  const hadUserRef = useRef(false);
+  useEffect(() => {
+    if (hadUserRef.current && !hasUser) {
+      if (licenseWarningTimeoutRef.current) {
+        clearTimeout(licenseWarningTimeoutRef.current);
+        licenseWarningTimeoutRef.current = null;
+      }
+      setLicenseWarning(null);
+      setLicenseWarningVisible(false);
+    }
+    hadUserRef.current = hasUser;
+  }, [hasUser]);
+
   useEffect(() => {
     checkAuth();
 

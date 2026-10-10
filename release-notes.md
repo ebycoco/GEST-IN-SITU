@@ -16,6 +16,8 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Bannière d'expiration de licence : elle ne reste plus affichée après la déconnexion** — la bannière « Attention, votre licence expire le… » (3 derniers jours) persistait sur l'écran de connexion après une déconnexion, y compris pour le compte qui se connectait ensuite (un super administrateur, ou un compte d'un autre site). Elle est désormais effacée à toute déconnexion (manuelle, forcée ou session expirée), et son minuteur de réapparition est annulé ; elle s'affiche toujours normalement à la connexion suivante d'un compte concerné.
+
 - **Rangement + contact : traçabilité et avertissement de doublon** — la modification d'un contact depuis les écrans « Inventaire logistique » et « Sans rangement » est désormais journalisée (ancien et nouveau contact, auteur, dans la même transaction que la mise à jour). Si le contact saisi rend la fiche strictement identique à une autre carte du site, l'enregistrement reste possible mais un avertissement précise que la fiche reste en local tant que le doublon n'est pas résolu dans le portail Qualité (auparavant, un succès était affiché sans mention de ce blocage d'envoi).
 
 - **Cartes mal-centrées : les cartes déjà délivrées ou déclarées en doublon ne sont plus listées** — elles apparaissaient avec un bouton « Corriger » que le serveur refusait systématiquement après confirmation (la correction du centre d'une carte délivrée ou en doublon reste volontairement impossible) ; la liste ne propose plus que des cartes réellement corrigibles. Le message d'erreur n'affiche plus le préfixe technique d'Electron, et le tableau est resserré pour que la colonne « Identité » ne soit plus écrasée.
