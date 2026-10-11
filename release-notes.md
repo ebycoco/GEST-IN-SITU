@@ -18,6 +18,8 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Synchronisation automatique des comptes : plus de blocage après un renommage de login, et plus d'écrasement des modifications locales** — le cycle de fond (toutes les 3 minutes) identifie désormais les agents par leur identifiant de synchronisation. Un login renommé par un administrateur ne bloque plus la mise à jour des comptes (mots de passe, rôles, désactivation de la session), et une modification locale pas encore envoyée ou un compte supprimé en attente ne sont plus écrasés. Le message du bouton « Télécharger les agents » indique aussi le nombre d'agents ignorés et de conflits de login.
+
 - **Gestion des agents : « Télécharger les agents » ne tombe plus en échec quand un login a été renommé** — le téléchargement identifie désormais chaque agent par son identifiant de synchronisation (et non plus par son seul login). Un agent en échec ou en conflit n'empêche plus la mise à jour des autres ; les modifications locales non encore envoyées et les comptes supprimés en attente ne sont plus écrasés ni ressuscités. Le résultat indique le nombre d'agents ignorés et de conflits.
 
 - **Connexion : un agent connecté n'est plus déconnecté quand un administrateur renomme son login** — la vérification du statut du compte côté cloud se fait désormais par identifiant de synchronisation (et non plus par le seul login), et un compte simplement introuvable côté cloud n'est plus désactivé localement : seule une désactivation explicite l'est.

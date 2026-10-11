@@ -270,7 +270,14 @@ export default function AgentsPage() {
     try {
       const res = await window.api.sync.pullAgents(Number(siteIdToUse), userContext);
       if (res.success) {
-        toast.success(`✅ Téléchargement réussi : ${res.count} profil(s) d'agent(s) récupéré(s) ou mis à jour.`, { id: toastId, duration: 5000 });
+        // Champs additifs (L2-1b) non déclarés dans le type préload : lecture via cast local.
+        const extra = res as { skipped?: number; conflicts?: number };
+        const skippedN = extra.skipped ?? 0;
+        const conflictsN = extra.conflicts ?? 0;
+        const detail = (skippedN > 0 || conflictsN > 0)
+          ? ` (${skippedN} ignoré(s), ${conflictsN} conflit(s) de login)`
+          : '';
+        toast.success(`✅ Téléchargement réussi : ${res.count} profil(s) d'agent(s) récupéré(s) ou mis à jour.${detail}`, { id: toastId, duration: detail ? 8000 : 5000 });
         await loadData();
       } else {
         toast.error(`Échec du téléchargement : ${res.message || 'Erreur inconnue'}`, { id: toastId });

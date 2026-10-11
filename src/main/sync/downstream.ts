@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { getSecureCurrentUser } from '../auth/session-heartbeat';
+import { upsertCloudUser, type UpsertCloudUserAction } from './users-sync.helper';
 
 // ─── Signal explicite "site introuvable côté cloud" (correctif bug production 2026-08-30) ──
 // Avant ce correctif, runDownstream()/syncUsersFromCloud() retournaient silencieusement 0
@@ -733,68 +734,10 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     return 0;
   }
 
-  // ── Garde de validation des rôles autorisés (identiques à la contrainte CHECK SQLite) ──
-  const validRoles = [
-    'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
-    'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-    'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
-  ];
-
-  // ─── FILET DE SÉCURITÉ FK (t_users) ─────────────────────────────────────────
-  // Même logique que pour t_cartes : un utilisateur Supabase peut référencer un
-  // site_id ou centre_id absent de t_sites / t_centres locaux (base fraîche).
-  // Le PRAGMA OFF/finally garantit que la FK ne bloque pas et est toujours réactivée.
-  // ─────────────────────────────────────────────────────────────────────────────
-  let count = 0;
-  db.exec('PRAGMA foreign_keys = OFF;');
-  try {
-    db.transaction(() => {
-      // INSERT ... ON CONFLICT DO UPDATE : met à jour le password_hash et les infos
-      // si le compte existe déjà localement, au lieu de l'ignorer silencieusement.
-      const insertStmt = db.prepare(`
-        INSERT INTO t_users 
-          (login, password_hash, role, nom_user, prenom_user, statut_actif, site_id, centre_id, sync_id, is_dirty)
-        VALUES 
-          (@login, @password_hash, @role, @nom_user, @prenom_user, 1, @site_id, @centre_id, @sync_id, 0)
-        ON CONFLICT(login) DO UPDATE SET
-          password_hash = excluded.password_hash,
-          role          = excluded.role,
-          nom_user      = excluded.nom_user,
-          prenom_user   = excluded.prenom_user,
-          statut_actif  = excluded.statut_actif,
-          centre_id     = excluded.centre_id,
-          sync_id       = COALESCE(t_users.sync_id, excluded.sync_id),
-          is_dirty      = 0,
-          synced_at     = datetime('now')
-      `);
-
-      for (const u of cloudUsers) {
-        // Validation stricte du rôle avant toute tentative d'insertion (évite le crash SQLite silencieux)
-        if (!validRoles.includes(u.role)) {
-          log.warn(`[syncUsersFromCloud] Rôle invalide ignoré pour "${u.login}": "${u.role}". Rôles acceptés : ${validRoles.join(', ')}.`);
-          log.warn(`⚠️ [SYNC] Compte "${u.login}" ignoré : rôle Supabase "${u.role}" non reconnu par l'application.`);
-          continue;
-        }
-
-        const result = insertStmt.run({
-          login: u.login,
-          password_hash: u.password_hash,
-          role: u.role,
-          nom_user: u.nom_user || '',
-          prenom_user: u.prenom_user || '',
-          site_id: u.site_id,
-          centre_id: u.centre_id || null,
-          sync_id: u.sync_id
-        });
-        if (result.changes > 0) count++;
-      }
-    })();
-  } finally {
-    // Réactivation inconditionnelle des contraintes FK après la transaction
-    db.exec('PRAGMA foreign_keys = ON;');
-  }
-
-  // ── Synchronisation descendante des rôles multiples (t_user_roles) ──
+  // ── Rôles multiples cloud (t_user_roles) : lus AVANT l'upsert pour être passés au helper ──
+  // (échec de lecture = non bloquant : roles non fournis => t_user_roles local non remplacé).
+  const rolesMap = new Map<string, string[]>();
+  let rolesFetched = false;
   const userSyncIds = cloudUsers.map(u => u.sync_id).filter(Boolean);
   if (userSyncIds.length > 0) {
     try {
@@ -802,30 +745,12 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
         .from('t_user_roles')
         .select('user_sync_id, role')
         .in('user_sync_id', userSyncIds);
-
       if (!rolesErr && cloudRoles) {
-        db.exec('PRAGMA foreign_keys = OFF;');
-        try {
-          db.transaction(() => {
-            for (const u of cloudUsers) {
-              if (!u.sync_id && !u.login) continue;
-              const localRow = db.prepare('SELECT id_user FROM t_users WHERE sync_id = ? OR login = ?').get(u.sync_id, u.login) as { id_user: number } | undefined;
-              if (localRow) {
-                db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localRow.id_user);
-                const userRoles = cloudRoles.filter(r => r.user_sync_id === u.sync_id);
-                for (const r of userRoles) {
-                  if (validRoles.includes(r.role)) {
-                    db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, r.role);
-                  }
-                }
-                if (u.role && validRoles.includes(u.role)) {
-                  db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, u.role);
-                }
-              }
-            }
-          })();
-        } finally {
-          db.exec('PRAGMA foreign_keys = ON;');
+        rolesFetched = true;
+        for (const r of cloudRoles) {
+          const arr = rolesMap.get(r.user_sync_id) || [];
+          arr.push(r.role);
+          rolesMap.set(r.user_sync_id, arr);
         }
       } else if (rolesErr) {
         log.warn(`[syncUsersFromCloud] Erreur lors de la récupération des multi-rôles depuis Supabase : ${rolesErr.message}`);
@@ -833,6 +758,49 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     } catch (roleCatchErr: any) {
       log.warn(`[syncUsersFromCloud] Exception lors du rapatriement de t_user_roles : ${roleCatchErr.message}`);
     }
+  }
+
+  // ─── LOT 2 / L2-1c : chaque ligne passe par upsertCloudUser (savepoint par ligne, jamais d'exception) ───
+  // Pas de transaction englobante : un conflit/échec n'annule pas les autres lignes. Les lignes locales
+  // sales / en outbox / supprimées (-1) ne sont plus écrasées. PRAGMA foreign_keys OFF/ON conservé
+  // (le helper ne gère pas les PRAGMA). Low-Memory : chunks de 200 avec cession de boucle.
+  const summary: Record<UpsertCloudUserAction, number> = {
+    inserted: 0, updated: 0, adopted: 0, renamed: 0,
+    skipped_dirty: 0, skipped_pending_outbox: 0, skipped_deleted: 0,
+    skipped_conflict: 0, skipped_invalid: 0
+  };
+  const CHUNK = 200;
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    for (let i = 0; i < cloudUsers.length; i += CHUNK) {
+      for (const u of cloudUsers.slice(i, i + CHUNK)) {
+        const rolesForUser = rolesFetched && u.sync_id ? (rolesMap.get(u.sync_id) || []) : undefined;
+        const res = upsertCloudUser(db, {
+          login: u.login,
+          password_hash: u.password_hash,
+          role: u.role,
+          nom_user: u.nom_user,
+          prenom_user: u.prenom_user,
+          site_id: u.site_id,
+          centre_id: u.centre_id || null,
+          statut_actif: u.statut_actif,
+          sync_id: u.sync_id,
+          roles: rolesForUser
+        }, { statutFromCloud: true });
+        summary[res.action]++;
+      }
+      if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+  } catch (upsertErr: any) {
+    // Filet ultime : ne jamais remonter (sinon syncCurrentUserActiveStatus/refreshSecureCurrentUser sautés).
+    log.error(`[syncUsersFromCloud] Exception inattendue pendant l'upsert des comptes : ${upsertErr?.message || upsertErr}`);
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+  const count = summary.inserted + summary.updated + summary.adopted + summary.renamed;
+  const skipped = summary.skipped_dirty + summary.skipped_pending_outbox + summary.skipped_deleted + summary.skipped_invalid;
+  if (skipped > 0 || summary.skipped_conflict > 0) {
+    log.warn(`[syncUsersFromCloud] Site ${siteId} : ${skipped} ignoré(s), ${summary.skipped_conflict} conflit(s) de login. Résumé : ${JSON.stringify(summary)}`);
   }
 
   if (count > 0) {
