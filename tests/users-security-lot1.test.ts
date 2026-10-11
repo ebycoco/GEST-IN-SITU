@@ -128,7 +128,9 @@ describe('LOT 1 — sécurité des comptes agents (users.queries)', () => {
 
     it('login supprimé (soft-delete statut -1 / is_dirty -1) = recréable', () => {
       const adm = mk('adm.a', 'ADMINISTRATEUR_SITE', SITE_A);
-      mk('supprime', 'OPERATEUR_SAISIE', SITE_B, { active: -1 });
+      // LOT 1b (P2-1) : la ligne supprimée doit être du MÊME site que l'appelant non SUPER ADMIN
+      // (le cas cross-site est désormais refusé, cf. users-security-lot1b.test.ts).
+      mk('supprime', 'OPERATEUR_SAISIE', SITE_A, { active: -1 });
       db.prepare("UPDATE t_users SET is_dirty = -1 WHERE login = 'supprime'").run();
       uq.createUser({ login: 'supprime', password: 'neuf123', roles: ['OPERATEUR_VERIFICATION'], nom_user: 'Neuf', prenom_user: 'Compte' }, caller(adm));
       const r = row('supprime');
@@ -270,9 +272,12 @@ describe('LOT 1 — sécurité des comptes agents (users.queries)', () => {
 
     it('dernier ADMINISTRATEUR_SITE actif : non désactivable (update / delete) ni supprimable par un ADMIN_CENTRE/ADMINISTRATEUR_SITE', () => {
       const lastAdm = mk('adm.seul', 'ADMINISTRATEUR_SITE', SITE_A);
-      const ac = mk('ac.a', 'ADMIN_CENTRE', SITE_A, { centre: centreA });
-      expect(() => uq.updateUser(lastAdm.id_user, { statut_actif: 0 }, caller(ac))).toThrow('dernier administrateur');
-      expect(() => uq.updateUser(lastAdm.id_user, { roles: ['OPERATEUR_SAISIE'] }, caller(ac))).toThrow('dernier administrateur');
+      // LOT 1b (P1-3) : un ADMIN_CENTRE ne peut plus viser un administrateur de site du tout (refus
+      // plus précoce) ; la garde « dernier administrateur » est donc exercée via un appelant
+      // ADMINISTRATEUR_SITE (session distincte du compte cible, comme le test hardDelete ci-dessous).
+      const ac = { id_user: 999998, role: 'ADMINISTRATEUR_SITE', site_id: SITE_A, login: 'x' };
+      expect(() => uq.updateUser(lastAdm.id_user, { statut_actif: 0 }, ac)).toThrow('dernier administrateur');
+      expect(() => uq.updateUser(lastAdm.id_user, { roles: ['OPERATEUR_SAISIE'] }, ac)).toThrow('dernier administrateur');
       expect(row('adm.seul').statut_actif).toBe(1);
       expect(rolesOf(lastAdm.id_user)).toEqual(['ADMINISTRATEUR_SITE']);
     });
@@ -281,8 +286,8 @@ describe('LOT 1 — sécurité des comptes agents (users.queries)', () => {
       const lastAdm = mk('adm.seul', 'ADMINISTRATEUR_SITE', SITE_A);
       mk('adm.b', 'ADMINISTRATEUR_SITE', SITE_B);
       mk('adm.inactif', 'ADMINISTRATEUR_SITE', SITE_A, { active: 0 });
-      const ac = mk('ac.a', 'ADMIN_CENTRE', SITE_A, { centre: centreA });
-      expect(() => uq.updateUser(lastAdm.id_user, { statut_actif: 0 }, caller(ac))).toThrow('dernier administrateur');
+      const ac = { id_user: 999998, role: 'ADMINISTRATEUR_SITE', site_id: SITE_A, login: 'x' }; // cf. LOT 1b (P1-3)
+      expect(() => uq.updateUser(lastAdm.id_user, { statut_actif: 0 }, ac)).toThrow('dernier administrateur');
     });
 
     it('avec un autre administrateur actif présent : désactivation OK (update) et suppression OK', () => {

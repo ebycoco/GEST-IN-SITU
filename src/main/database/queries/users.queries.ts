@@ -41,6 +41,60 @@ function assertRolesAssignable(creatorRole: string, roles: string[]): void {
   }
 }
 
+// ── Helpers LOT 1b (audit agent-9 : logins, cibles SUPER ADMIN) ─────────────────────────
+const LOGIN_TAKEN_MESSAGE = "Ce login est déjà utilisé. Choisissez-en un autre.";
+const FORBIDDEN_TARGET_MESSAGE = "Accès non autorisé aux données de ce site";
+
+type Db = NonNullable<ReturnType<typeof getDatabase>>;
+type LoginMatch = { id_user: number; login: string; sync_id: string; statut_actif: number; site_id: number | null };
+
+/** Login saisi : chaîne obligatoire, trim + normalisation Unicode NFC (forme stockée), non vide. */
+function normalizeLoginInput(raw: unknown): string {
+  if (typeof raw !== 'string') throw new Error("Le login est obligatoire.");
+  const login = raw.trim().normalize('NFC');
+  if (!login) throw new Error("Le login est obligatoire.");
+  return login;
+}
+
+/** Clé d'unicité d'un login : NFC + minuscules Unicode (« É » = « é », NFC = NFD). */
+function loginKey(login: string): string {
+  return login.normalize('NFC').toLowerCase();
+}
+
+/**
+ * Comptes dont le login est équivalent (clé NFC + minuscules) à `login`, hors `excludeId`.
+ * Impact mémoire : un SELECT de 5 colonnes sur t_users (une ligne par agent, ordre de grandeur
+ * de quelques centaines de lignes) puis comparaison en JS, uniquement lors d'une création ou d'un
+ * changement de login (opérations d'administration rares, jamais sur le chemin de login).
+ * Limite documentée : la contrainte UNIQUE(login) du schéma reste binaire (non modifiée) ;
+ * l'unicité « insensible à la casse/Unicode » est donc garantie par cette garde applicative
+ * uniquement (les écritures hors users.queries, ex. synchro cloud, ne passent pas par elle).
+ */
+function findLoginMatches(db: Db, login: string, excludeId?: number): LoginMatch[] {
+  const key = loginKey(login);
+  const rows = db.prepare('SELECT id_user, login, sync_id, statut_actif, site_id FROM t_users').all() as LoginMatch[];
+  return rows.filter(r => r.id_user !== excludeId && loginKey(r.login) === key);
+}
+
+/** Le compte détient-il ce rôle (colonne `role` OU ligne t_user_roles) ? Lecture du COMPTE CIBLE. */
+function userHoldsRole(db: Db, userId: number, role: string): boolean {
+  return !!db.prepare(
+    `SELECT 1 FROM t_users u WHERE u.id_user = @uid AND (u.role = @role OR EXISTS (SELECT 1 FROM t_user_roles r WHERE r.id_user = u.id_user AND r.role = @role))`
+  ).get({ uid: userId, role });
+}
+
+/**
+ * Défense en profondeur : un appelant non SUPER ADMIN ne peut jamais viser (modifier, désactiver,
+ * supprimer, réinitialiser le mot de passe de) un compte détenant le rôle SUPER ADMIN, même
+ * rattaché à son site. N'inspecte que la CIBLE ; le rôle de l'appelant vient du caller de session.
+ */
+function assertTargetNotSuperAdmin(db: Db, targetId: number, caller?: { role: string }): void {
+  if (!caller || caller.role === 'SUPER ADMIN') return;
+  if (userHoldsRole(db, targetId, 'SUPER ADMIN')) {
+    throw new Error(FORBIDDEN_TARGET_MESSAGE);
+  }
+}
+
 export function seedUserFromCloud(userData: {
   login: string;
   password_hash: string;
@@ -233,12 +287,30 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
     }
   }
 
+  // LOT 1b (P0-1) : rôles validés AVANT tout calcul. Le rôle principal (t_users.role, celui qui fait
+  // foi au login) doit appartenir aux rôles attribués, et l'ensemble (rôles + principal) est soumis à
+  // assertRolesAssignable : un `data.role` isolé (ex. 'SUPER ADMIN') ne contourne plus la liste des rôles.
+  if (data.roles !== undefined && (!Array.isArray(data.roles) || data.roles.some(r => typeof r !== 'string'))) {
+    throw new Error("Format de rôles invalide.");
+  }
+  if (data.role !== undefined && typeof data.role !== 'string') {
+    throw new Error("Format de rôles invalide.");
+  }
+  const inputRoles = (data.roles as string[] | undefined) || (data.role ? [data.role as string] : ['OPERATEUR_SAISIE']);
+  if (inputRoles.length === 0) {
+    throw new Error("Au moins un rôle est requis.");
+  }
+  if (data.role && !inputRoles.includes(data.role as string)) {
+    throw new Error("Le rôle principal doit faire partie des rôles attribués.");
+  }
+  const primaryRole = (data.role as string) || inputRoles[0];
+  assertRolesAssignable(creator.role, [...new Set([...inputRoles, primaryRole])]);
+
+  // LOT 1b (P2-2) : login normalisé (trim + NFC) et obligatoire.
+  const loginValue = normalizeLoginInput(data.login);
+
   const hash = hashPassword(data.password as string);
   const syncId = uuidv4();
-  const inputRoles = (data.roles as string[]) || (data.role ? [data.role as string] : ['OPERATEUR_SAISIE']);
-  const primaryRole = (data.role as string) || inputRoles[0];
-
-  assertRolesAssignable(creator.role, inputRoles);
 
   const transaction = db.transaction(() => {
     // LOT 1 : un login déjà utilisé (comparaison insensible à la casse) est TOUJOURS refusé,
@@ -248,11 +320,26 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
     // purge (statut_actif = -1, soft-delete de hardDeleteUser) reste recréable — sa ligne occupe
     // encore la contrainte UNIQUE(login), elle est donc réutilisée (ancien comportement
     // conservé pour ce seul cas, sync_id préservé pour la propagation cloud).
-    const sameLogin = db.prepare('SELECT id_user, sync_id, statut_actif FROM t_users WHERE login = ? COLLATE NOCASE').all(data.login) as { id_user: number; sync_id: string; statut_actif: number }[];
+    // LOT 1b (P2-2) : comparaison NFC + minuscules Unicode côté code (findLoginMatches).
+    // LOT 1b (P2-1) : une ligne -1 n'est réutilisable que dans le périmètre de l'appelant.
+    const sameLogin = findLoginMatches(db, loginValue);
     if (sameLogin.some(u => u.statut_actif !== -1)) {
-      throw new Error("Ce login est déjà utilisé. Choisissez-en un autre.");
+      throw new Error(LOGIN_TAKEN_MESSAGE);
     }
-    const existing = sameLogin[0];
+    let existing: LoginMatch | undefined;
+    if (sameLogin.length === 1) {
+      existing = sameLogin[0];
+    } else if (sameLogin.length > 1) {
+      // Plusieurs lignes supprimées (casse/forme différente) : on ne réutilise que celle dont le
+      // login est strictement identique, sinon refus propre (jamais d'erreur UNIQUE brute).
+      existing = sameLogin.find(u => u.login === loginValue);
+      if (!existing) throw new Error(LOGIN_TAKEN_MESSAGE);
+    }
+    if (existing && creator.role !== 'SUPER ADMIN') {
+      if (existing.site_id !== creator.site_id || userHoldsRole(db, existing.id_user, 'SUPER ADMIN')) {
+        throw new Error(LOGIN_TAKEN_MESSAGE);
+      }
+    }
 
     const outboxItems: Array<{ id: string; table: string; operation: 'INSERT' | 'UPDATE' | 'DELETE'; payload: Record<string, unknown> }> = [];
 
@@ -265,7 +352,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
         WHERE id_user = @id
       `).run({
         id: existing.id_user,
-        login: data.login,
+        login: loginValue,
         hash,
         role: primaryRole,
         nom_user: data.nom_user || '',
@@ -287,7 +374,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
         operation: 'UPDATE',
         payload: {
           sync_id: userSyncId,
-          login: data.login,
+          login: loginValue,
           password_hash: hash,
           role: primaryRole,
           nom_user: data.nom_user || '',
@@ -322,7 +409,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
       INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, site_id, sync_id, is_dirty)
       VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @site_id, @sync_id, 1)
     `).run({ 
-      login: data.login, 
+      login: loginValue, 
       hash, 
       role: primaryRole, 
       nom_user: data.nom_user || '', 
@@ -345,7 +432,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
       operation: 'INSERT',
       payload: {
         sync_id: syncId,
-        login: data.login,
+        login: loginValue,
         password_hash: hash,
         role: primaryRole,
         nom_user: data.nom_user || '',
@@ -381,7 +468,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   insertAuditLog(
     caller.login || creator?.role || 'SYSTEM',
     'AGENT',
-    `[CREATION] Agent ${data.login} créé avec succès.`
+    `[CREATION] Agent ${loginValue} créé avec succès.`
   );
 
   // Couverture CRUD_SYNC_WHITELIST (décision utilisateur validée) : la création (ou
@@ -392,7 +479,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   logAudit(
     caller.login || creator?.role || 'SYSTEM',
     'UTILISATEUR_CREE',
-    JSON.stringify({ login: data.login, role: primaryRole, site_id: targetSiteId, centre_id: targetCentreId })
+    JSON.stringify({ login: loginValue, role: primaryRole, site_id: targetSiteId, centre_id: targetCentreId })
   );
 
   return txResult.result;
@@ -400,7 +487,7 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
 
 // ── Gardes de sécurité LOT 1 « sécurité des comptes agents » ────────────────────────────
 // Appelant de session sécurisée (getSecureCurrentUser()) : id_user + rôle ACTIF + site.
-type UserCaller = { id_user?: number; role: string; site_id?: number; login?: string };
+type UserCaller = { id_user?: number; role: string; site_id?: number; centre_id?: number; login?: string };
 
 // Prédicat SQL « le compte u est administrateur de site » (rôle primaire OU rôle additionnel
 // t_user_roles) — porte sur le COMPTE CIBLE, pas sur la portée de l'appelant (CLAUDE.md §3).
@@ -448,11 +535,44 @@ export function assertDeactivationAllowed(targetId: number, caller?: UserCaller)
 export function updateUser(id: number, data: Record<string, unknown>, creator?: UserCaller) {
   const db = getDatabase()!;
 
-  const targetRow = db.prepare('SELECT site_id, role, login FROM t_users WHERE id_user = ?').get(id) as { site_id?: number; role?: string; login?: string } | undefined;
+  const targetRow = db.prepare('SELECT site_id, centre_id, role, login FROM t_users WHERE id_user = ?').get(id) as { site_id?: number; centre_id?: number | null; role?: string; login?: string } | undefined;
+
+  // LOT 1b (P2-3) : password_hash n'est JAMAIS accepté de l'extérieur — seul le hash calculé ici
+  // à partir de data.password (hashPassword) est posé. Aucun appelant interne ne le fournit
+  // (le seul appelant de updateUser est le handler users:update).
+  delete data.password_hash;
+
+  // LOT 1b (P1-2) : statut_actif validé AVANT toute garde, strictement 0 ou 1 numérique
+  // (Number("0x1") === 1 contournait les gardes alors que SQLite aurait stocké le TEXTE ; -1 est
+  // réservé à hardDeleteUser). Le type number garanti rend toute normalisation ultérieure inutile.
+  if (data.statut_actif !== undefined) {
+    const st = data.statut_actif;
+    if (typeof st !== 'number' || !Number.isInteger(st) || (st !== 0 && st !== 1)) {
+      throw new Error("Valeur de statut invalide.");
+    }
+  }
 
   if (creator && creator.role !== 'SUPER ADMIN') {
     if (!targetRow || targetRow.site_id !== creator.site_id) {
-      throw new Error("Accès non autorisé aux données de ce site");
+      throw new Error(FORBIDDEN_TARGET_MESSAGE);
+    }
+    // LOT 1b (P1-1) : cible SUPER ADMIN interdite à un non-SUPER ADMIN (même rattachée au site).
+    assertTargetNotSuperAdmin(db, id, creator);
+
+    // LOT 1b (P1-3) : un ADMIN_CENTRE reste cantonné à SON centre et ne vise ni un administrateur de
+    // site ni un autre ADMIN_CENTRE. Le centre de l'appelant vient du caller de session.
+    if (creator.role === 'ADMIN_CENTRE') {
+      if (creator.centre_id == null || targetRow.centre_id !== creator.centre_id
+          || userHoldsRole(db, id, 'ADMINISTRATEUR_SITE') || userHoldsRole(db, id, 'ADMIN_CENTRE')) {
+        throw new Error(FORBIDDEN_TARGET_MESSAGE);
+      }
+      if (data.centre_id !== undefined) {
+        const c = data.centre_id;
+        if (c !== null && c !== '' && c !== 0 && Number(c) !== creator.centre_id) {
+          throw new Error("Accès non autorisé : cet agent doit rester dans votre centre.");
+        }
+        data.centre_id = creator.centre_id; // centre forcé
+      }
     }
   }
 
@@ -481,7 +601,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
       assertNotLastSiteAdmin(id, creator);
     }
     // Désactivation (statut_actif != 1) : auto-désactivation + dernier administrateur.
-    if (data.statut_actif !== undefined && Number(data.statut_actif) !== 1) {
+    if (data.statut_actif !== undefined && data.statut_actif !== 1) {
       assertDeactivationAllowed(id, creator);
     }
     // Centre : tout appelant non SUPER ADMIN ne peut affecter qu'un centre de SON site.
@@ -504,11 +624,12 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
     }
   }
 
-  // Login : unicité insensible à la casse (hors le compte lui-même).
-  if (typeof data.login === 'string' && data.login !== targetRow?.login) {
-    const taken = db.prepare('SELECT 1 FROM t_users WHERE login = ? COLLATE NOCASE AND id_user != ?').get(data.login, id);
-    if (taken) {
-      throw new Error("Ce login est déjà utilisé. Choisissez-en un autre.");
+  // Login : trim + NFC, non vide, unicité NFC/minuscules Unicode (hors le compte lui-même) — LOT 1b P2-2.
+  if (data.login !== undefined) {
+    const newLogin = normalizeLoginInput(data.login);
+    data.login = newLogin;
+    if (newLogin !== targetRow?.login && findLoginMatches(db, newLogin, id).length > 0) {
+      throw new Error(LOGIN_TAKEN_MESSAGE);
     }
   }
 
@@ -653,6 +774,8 @@ export function deleteUser(id: number, creator?: UserCaller) {
     if (!target || target.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
+    // LOT 1b (P1-1) : cible SUPER ADMIN interdite à un non-SUPER ADMIN.
+    assertTargetNotSuperAdmin(db, id, creator);
   }
 
   // LOT 1 : pas d'auto-désactivation, pas de retrait du dernier administrateur de site.
@@ -706,6 +829,8 @@ export function hardDeleteUser(id: number, creator?: UserCaller) {
     if (!target || target.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
+    // LOT 1b (P1-1) : cible SUPER ADMIN interdite à un non-SUPER ADMIN.
+    assertTargetNotSuperAdmin(db, id, creator);
   }
 
   // LOT 1 : pas d'auto-suppression, pas de retrait du dernier administrateur de site.
@@ -789,6 +914,8 @@ export function resetAgentPassword(targetUserId: number, caller: { id_user: numb
   if (caller.role === 'ADMINISTRATEUR_SITE' && caller.site_id !== target.site_id) {
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }
+  // LOT 1b (P1-1) : cible SUPER ADMIN interdite à un non-SUPER ADMIN (même rattachée au site).
+  assertTargetNotSuperAdmin(db, targetUserId, caller);
 
   // SEC fix : l'ancienne implémentation réutilisait une valeur FIXE (DEFAULT_TEMP_PASSWORD
   // ou 'cnam2026!'), identique à chaque réinitialisation pour tout agent — un attaquant
