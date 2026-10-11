@@ -377,7 +377,7 @@ export default function AgentsPage() {
     const userToDel = users.find(u => u.id_user === id);
     const isConfirmed = await confirmService.confirm({
       title: "Suppression définitive",
-      message: "ATTENTION: Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT cet utilisateur de la base de données ? Cette action est irréversible.",
+      message: "ATTENTION: Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT cet utilisateur de la base de données ? Cette action est irréversible. Si l'agent a une activité enregistrée, il sera désactivé au lieu d'être supprimé.",
       isDanger: true,
       requirePassword: true,
       actionName: `Suppression définitive de l'agent ${userToDel?.login || id}`
@@ -385,8 +385,13 @@ export default function AgentsPage() {
     if (!isConfirmed) return;
 
     try {
-      await window.api.users.hardDelete(id);
-      toast.success('Utilisateur supprimé définitivement');
+      const res = await window.api.users.hardDelete(id);
+      if (res?.outcome === 'deactivated') {
+        // L2-3 : agent avec activité métier -> désactivé côté main au lieu d'être supprimé.
+        toast.success("Cet agent a une activité enregistrée (cartes ou actions) : il ne peut pas être supprimé définitivement. Il a été désactivé à la place.");
+      } else {
+        toast.success('Utilisateur supprimé définitivement');
+      }
       await loadData();
     } catch (err: any) {
       toast.error('Erreur: ' + cleanIpcError(err));

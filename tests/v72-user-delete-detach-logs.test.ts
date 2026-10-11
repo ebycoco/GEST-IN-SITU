@@ -56,7 +56,7 @@ describe('Suppression définitive d\'un agent ayant des logs (FK t_logs canoniqu
       `INSERT INTO t_users (login, password_hash, role, site_id, sync_id) VALUES (?, 'x', 'OPERATEUR_VERIFICATION', ?, ?)`
     ).run(login, SITE_ID, syncId).lastInsertRowid);
     db.prepare(`INSERT INTO t_user_roles (id_user, role) VALUES (?, 'OPERATEUR_VERIFICATION'), (?, 'OPERATEUR_QUALITE')`).run(id, id);
-    const ins = db.prepare(`INSERT INTO t_logs (id_user, login_user, action, detail, site_id, sync_id, is_dirty) VALUES (?, ?, 'CARTE_DELIVREE', ?, ?, ?, ?)`);
+    const ins = db.prepare(`INSERT INTO t_logs (id_user, login_user, action, detail, site_id, sync_id, is_dirty) VALUES (?, ?, 'LOGIN', ?, ?, ?, ?)`);
     for (let i = 0; i < 3; i++) ins.run(id, login, `detail ${i}`, SITE_ID, `log-${syncId}-${i}`, i % 2);
     return { id, syncId, login };
   }

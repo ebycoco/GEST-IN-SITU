@@ -119,7 +119,7 @@ declare global {
         create: (data: any) => Promise<any>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
-        hardDelete: (id: number) => Promise<boolean>;
+        hardDelete: (id: number) => Promise<{ changes?: number; outcome: 'deleted' | 'deactivated' }>;
         resetAgentPassword: (targetUserId: number) => Promise<{ success: boolean; temporaryPassword: string }>;
       };
       logs: {

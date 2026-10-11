@@ -3640,6 +3640,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       throw new Error("Accès non autorisé : rôle insuffisant pour supprimer définitivement un agent.");
     }
     const res = await queries.hardDeleteUser(id, secureUser);
+    // L2-3 : si l'agent a une activité métier, hardDeleteUser l'a DÉSACTIVÉ (outcome 'deactivated')
+    // au lieu de le supprimer : l'audit doit refléter la désactivation réelle, pas une suppression.
+    if (res.outcome === 'deactivated') {
+      queries.insertAuditLog(
+        secureUser.login || 'ADMIN',
+        'VALIDATION',
+        `Désactivation du compte utilisateur ID ${id} (suppression définitive impossible : activité enregistrée).`
+      );
+      // Même événement/type que users:delete (désactivation) — type déjà présent dans la whitelist.
+      logAudit(
+        secureUser.login || 'ADMIN',
+        'UTILISATEUR_SUPPRIME',
+        JSON.stringify({ id_user: id, type: 'desactivation' })
+      );
+      return res;
+    }
     queries.insertAuditLog(
       secureUser.login || 'ADMIN',
       'VALIDATION',

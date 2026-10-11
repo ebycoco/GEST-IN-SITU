@@ -835,7 +835,32 @@ export function deleteUser(id: number, creator?: UserCaller) {
   return result;
 }
 
-export function hardDeleteUser(id: number, creator?: UserCaller) {
+export type HardDeleteOutcome = 'deleted' | 'deactivated';
+
+/**
+ * L2-3 : heuristique PRUDENTE d'activité métier locale d'un agent (en cas de doute : activité).
+ * Lecture seule, deux requêtes bornées par LIMIT 1 :
+ *  1. t_cartes.created_by = id local (indexé) ;
+ *  2. t_cartes : login de l'agent dans agent_saisie / agent_distributeur / agent_signalement_absence /
+ *     agent_resolution_absence / doublon_declare_par / doublon_annule_par / apurement_correction_par /
+ *     apurement_annulation_par (colonnes texte non indexées : un seul balayage, arrêt au 1er hit) ;
+ *  3. t_logs de l'agent (id_user ou login_user) dont l'action n'est pas 'LOGIN'.
+ * Les ids locaux et cloud étant indépendants, ce test ne prédit pas toujours le 23503 cloud
+ * (filet prévu séparément côté outbox).
+ */
+function agentHasBusinessActivity(db: ReturnType<typeof getDatabase> & object, id: number, login: string): boolean {
+  if (db.prepare('SELECT 1 FROM t_cartes WHERE created_by = ? LIMIT 1').get(id)) return true;
+  if (db.prepare(`SELECT 1 FROM t_cartes WHERE
+      agent_saisie = @l COLLATE NOCASE OR agent_distributeur = @l COLLATE NOCASE
+      OR agent_signalement_absence = @l COLLATE NOCASE OR agent_resolution_absence = @l COLLATE NOCASE
+      OR doublon_declare_par = @l COLLATE NOCASE OR doublon_annule_par = @l COLLATE NOCASE
+      OR apurement_correction_par = @l COLLATE NOCASE OR apurement_annulation_par = @l COLLATE NOCASE
+      LIMIT 1`).get({ l: login })) return true;
+  if (db.prepare("SELECT 1 FROM t_logs WHERE (id_user = @i OR login_user = @l) AND action <> 'LOGIN' LIMIT 1").get({ i: id, l: login })) return true;
+  return false;
+}
+
+export function hardDeleteUser(id: number, creator?: UserCaller): { changes: number; outcome: HardDeleteOutcome } {
   const db = getDatabase()!;
 
   if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
@@ -856,9 +881,57 @@ export function hardDeleteUser(id: number, creator?: UserCaller) {
   // LOT 1 : pas d'auto-suppression, pas de retrait du dernier administrateur de site.
   assertDeactivationAllowed(id, creator);
 
-  const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string | null; login: string } | undefined;
-  if (!user) return { changes: 0 };
+  const user = db.prepare('SELECT sync_id, login, password_hash, role FROM t_users WHERE id_user = ?').get(id) as { sync_id: string | null; login: string; password_hash: string; role: string } | undefined;
+  if (!user) return { changes: 0, outcome: 'deleted' as HardDeleteOutcome };
   const userSyncId = user.sync_id;
+
+  // L2-3 : un agent ayant une activité métier locale n'est JAMAIS supprimé (le DELETE cloud
+  // échouerait en 23503 sur les FK t_cartes.created_by / t_logs.id_user et laisserait une ligne
+  // zombie -1). On le désactive à la place (statut 0, UPDATE outbox comme deleteUser) ; idempotent
+  // si l'agent est déjà désactivé. Les gardes ci-dessus (rôle, site, auto, dernier admin, SUPER
+  // ADMIN, cible -1) ont déjà été appliquées. Lecture seule + une écriture : pas de transaction
+  // supplémentaire nécessaire (même modèle que deleteUser).
+  if (agentHasBusinessActivity(db, id, user.login)) {
+    insertAuditLog(
+      creator?.login || 'ADMIN',
+      'VALIDATION',
+      `[DESACTIVATION] Par ${creator?.login || 'ADMIN'} sur t_users (ID: ${id}) : suppression définitive remplacée par une désactivation (activité enregistrée).`
+    );
+    const upd = db.prepare("UPDATE t_users SET statut_actif = 0, updated_at = datetime('now'), is_dirty = 1 WHERE id_user = ?").run(id);
+    if (upd.changes === 0) {
+      throw new Error("Accès non autorisé aux données de ce site");
+    }
+    if (userSyncId) {
+      // Si l'INSERT de l'agent est encore en attente (jamais synchronisé), on y reporte
+      // statut_actif = 0 (enqueueOutbox remplace le payload intégralement : un UPDATE partiel
+      // écraserait l'INSERT et perdrait site_id/etc.). Sinon : UPDATE au payload t_users complet.
+      const pendingInsert = db.prepare("SELECT payload FROM t_outbox WHERE id = ? AND table_name = 't_users' AND operation = 'INSERT' AND status = 'PENDING'").get(userSyncId) as { payload: string } | undefined;
+      let queued = false;
+      if (pendingInsert) {
+        try {
+          const p = JSON.parse(pendingInsert.payload) as Record<string, unknown>;
+          enqueueOutbox(userSyncId, 't_users', 'INSERT', { ...p, statut_actif: 0 });
+          queued = true;
+        } catch {
+          queued = false; // payload illisible : repli sur l'UPDATE complet ci-dessous
+        }
+      }
+      if (!queued) {
+        enqueueOutbox(userSyncId, 't_users', 'UPDATE', {
+          sync_id: userSyncId,
+          login: user.login,
+          password_hash: user.password_hash,
+          role: user.role,
+          statut_actif: 0,
+          updated_at: new Date().toISOString()
+        });
+      }
+      if (networkMonitor.getState() === 'ONLINE') {
+        scheduleOutboxProcessing();
+      }
+    }
+    return { changes: upd.changes, outcome: 'deactivated' as HardDeleteOutcome };
+  }
 
   // Trace d'audit
   insertAuditLog(
@@ -899,7 +972,7 @@ export function hardDeleteUser(id: number, creator?: UserCaller) {
     }
   }
 
-  return result;
+  return { ...result, outcome: 'deleted' as HardDeleteOutcome };
 }
 
 // SEC fix : génère un mot de passe temporaire aléatoire, unique par appel, communicable
