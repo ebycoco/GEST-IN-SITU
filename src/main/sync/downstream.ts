@@ -882,22 +882,49 @@ export async function syncCurrentUserActiveStatus(login: string, siteId: number)
     controller.abort();
   }, 10000);
 
+  // L2-0 : identité stable = sync_id local (un admin peut renommer le login côté cloud).
+  // Le login ne sert que de repli (compte local jamais synchronisé, sans sync_id).
+  let localSyncId: string | null = null;
+  try {
+    const localRow = getDatabase()?.prepare('SELECT sync_id FROM t_users WHERE login = ?').get(login) as { sync_id: string | null } | undefined;
+    localSyncId = localRow?.sync_id || null;
+  } catch {
+    localSyncId = null;
+  }
+
   let cloudRow: { login: string; statut_actif: number } | null = null;
   try {
-    const { data, error } = await supabase
-      .from('t_users')
-      .select('login, statut_actif')
-      .eq('login', login)
-      .eq('site_id', siteId)
-      .abortSignal(controller.signal);
+    if (localSyncId) {
+      const { data, error } = await supabase
+        .from('t_users')
+        .select('login, statut_actif')
+        .eq('sync_id', localSyncId)
+        .eq('site_id', siteId)
+        .abortSignal(controller.signal);
+      if (error) {
+        clearTimeout(timeoutId);
+        log.warn(`[syncCurrentUserActiveStatus] Erreur Supabase pour "${login}" : ${error.message}`);
+        return;
+      }
+      cloudRow = data && data.length > 0 ? data[0] : null;
+    }
+
+    if (!cloudRow) {
+      const { data, error } = await supabase
+        .from('t_users')
+        .select('login, statut_actif')
+        .eq('login', login)
+        .eq('site_id', siteId)
+        .abortSignal(controller.signal);
+      if (error) {
+        clearTimeout(timeoutId);
+        log.warn(`[syncCurrentUserActiveStatus] Erreur Supabase pour "${login}" : ${error.message}`);
+        return;
+      }
+      cloudRow = data && data.length > 0 ? data[0] : null;
+    }
 
     clearTimeout(timeoutId);
-
-    if (error) {
-      log.warn(`[syncCurrentUserActiveStatus] Erreur Supabase pour "${login}" : ${error.message}`);
-      return;
-    }
-    cloudRow = data && data.length > 0 ? data[0] : null;
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError' || err.message?.includes('aborted') || controller.signal.aborted) {
@@ -908,16 +935,22 @@ export async function syncCurrentUserActiveStatus(login: string, siteId: number)
     return;
   }
 
-  // Compte présent côté Cloud et actif : rien à faire.
-  if (cloudRow && cloudRow.statut_actif === 1) {
+  // L2-0 : « non trouvé » (renommage, RLS, ligne absente) n'est PAS une preuve de
+  // désactivation -> aucune action locale (fail-open). Seule une réponse cloud
+  // explicite statut_actif <= 0 (0 désactivé, -1 supprimé) pour la bonne ligne désactive.
+  if (!cloudRow || typeof cloudRow.statut_actif !== 'number' || cloudRow.statut_actif >= 1) {
     return;
   }
 
-  // Compte absent côté Cloud (supprimé) OU désactivé : réplique locale ciblée,
+  // Compte explicitement désactivé côté Cloud : réplique locale ciblée,
   // strictement mono-colonne, sans toucher is_dirty ni aucune autre colonne.
   try {
     const db = getDatabase()!;
-    db.prepare(`UPDATE t_users SET statut_actif = 0 WHERE login = ?`).run(login);
+    if (localSyncId) {
+      db.prepare(`UPDATE t_users SET statut_actif = 0 WHERE sync_id = ?`).run(localSyncId);
+    } else {
+      db.prepare(`UPDATE t_users SET statut_actif = 0 WHERE login = ?`).run(login);
+    }
     log.warn(`[syncCurrentUserActiveStatus] Compte "${login}" désactivé/supprimé côté Cloud — statut_actif réaligné localement à 0.`);
   } catch (err: any) {
     log.warn(`[syncCurrentUserActiveStatus] Exception lors de la mise à jour locale de "${login}" : ${err.message || err}`);
