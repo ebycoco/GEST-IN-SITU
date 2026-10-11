@@ -1,10 +1,21 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { Shield, Eye, EyeOff, Loader, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
 import { buildWelcomeMessage, type WelcomeUser } from './loginWelcome';
+import {
+  normalizeNetworkState,
+  shouldShowOfflineBanner,
+  startBoundedPoll,
+  type NetworkKind
+} from './loginFirstLaunch';
+
+// Sondage du rapatriement des comptes (premier démarrage) : le vrai téléchargement est fait par
+// le SyncEngine (runSyncInitiale -> preloadUsersFromCloud), quelques secondes après le démarrage.
+const FIRST_LAUNCH_POLL_INTERVAL_MS = 1500;
+const FIRST_LAUNCH_POLL_TIMEOUT_MS = 60000;
 
 export default function LoginPage() {
   const [login, setLogin] = useState('');
@@ -70,6 +81,28 @@ export default function LoginPage() {
   const [isOnline, setIsOnline] = useState(window.navigator.onLine);
   const [setupStatus, setSetupStatus] = useState<'idle' | 'pulling' | 'success' | 'failed'>('idle');
   const [setupMessage, setSetupMessage] = useState('');
+  // Dernier verdict réseau du main (null tant qu'aucun événement reçu) — sert à distinguer un
+  // vrai hors-ligne d'un échec de configuration alors que le réseau est en ligne.
+  const [mainNetworkKind, setMainNetworkKind] = useState<NetworkKind | null>(null);
+
+  // Annulation du sondage en cours + identifiant de la tentative courante : toute nouvelle
+  // tentative (ou le démontage) invalide la précédente, donc aucun sondage cumulé ni timer orphelin.
+  const cancelPollRef = useRef<(() => void) | null>(null);
+  const setupRunIdRef = useRef(0);
+  const setupPullingRef = useRef(false);
+
+  // Nettoyage au démontage uniquement (l'effet réseau ci-dessous se ré-exécute à chaque
+  // changement d'état et ne doit pas interrompre un sondage en cours).
+  useEffect(() => {
+    return () => {
+      setupRunIdRef.current += 1;
+      setupPullingRef.current = false;
+      if (cancelPollRef.current) {
+        cancelPollRef.current();
+        cancelPollRef.current = null;
+      }
+    };
+  }, []);
 
   const [appVersion, setAppVersion] = useState('');
 
@@ -113,9 +146,14 @@ export default function LoginPage() {
     let unsubscribeSync: (() => void) | undefined;
     if (window.api?.sync?.onStatusChanged) {
       unsubscribeSync = window.api.sync.onStatusChanged((status: any) => {
-        const netState = status?.state === 'online' || status?.state === 'connected';
+        // Le main émet les états en MAJUSCULES (ONLINE/OFFLINE/PROBING/DEGRADED/PERMANENT_OFFLINE).
+        // DEGRADED compte comme en ligne ; PROBING (transitoire) ne modifie pas l'affichage.
+        const kind = normalizeNetworkState(status?.state);
+        if (kind === 'unknown') return;
+        setMainNetworkKind(kind);
+        const netState = kind === 'online';
         setIsOnline(netState);
-        if (netState && isFirstLaunch && setupStatus !== 'success' && setupStatus !== 'pulling') {
+        if (netState && isFirstLaunch && setupStatus !== 'success' && setupStatus !== 'pulling' && !setupPullingRef.current) {
           triggerFirstLaunchSetup();
         }
       });
@@ -127,38 +165,89 @@ export default function LoginPage() {
       if (unsubscribeSync) unsubscribeSync();
     };
   }, [isFirstLaunch, setupStatus]);
+  /**
+   * Configuration du premier démarrage.
+   *
+   * Flux asynchrone : forcePing -> forceGlobal -> sondage borné de checkFirstLaunch.
+   * forceGlobal ne télécharge rien sur base vide : le rapatriement réel des comptes est fait par
+   * le SyncEngine (runSyncInitiale -> preloadUsersFromCloud). On reste donc en 'pulling' et on
+   * sonde toutes les 1,5 s (setTimeout enchaînés, 60 s max) jusqu'à ce que t_users soit rempli.
+   *
+   * Annulation/anti-cumul : chaque appel invalide le précédent (setupRunIdRef) et annule son
+   * sondage ; le démontage fait de même (effet dédié). Aucun listener IPC n'est ajouté ici.
+   */
   const triggerFirstLaunchSetup = async () => {
+    if (cancelPollRef.current) {
+      cancelPollRef.current();
+      cancelPollRef.current = null;
+    }
+    setupRunIdRef.current += 1;
+    const runId = setupRunIdRef.current;
+    const isStale = () => runId !== setupRunIdRef.current;
+
+    setupPullingRef.current = true;
     setSetupStatus('pulling');
     setSetupMessage("🟡 Connexion en cours... (Vérification du réseau Supabase)");
+    const fail = (message: string) => {
+      setupPullingRef.current = false;
+      setSetupStatus('failed');
+      setSetupMessage(message);
+    };
     try {
       const pingRes = await window.api.sync.forcePing();
+      if (isStale()) return;
       if (!pingRes || !pingRes.success || pingRes.state === 'OFFLINE') {
-        setSetupStatus('failed');
-        setSetupMessage("🔴 Échec de la configuration — Le réseau Supabase est actuellement injoignable.");
+        fail("🔴 Échec de la configuration — Le réseau Supabase est actuellement injoignable.");
         return;
       }
 
       setSetupMessage("🟡 Connexion établie — Téléchargement et configuration de la base de données...");
       // Pull global de la synchronisation de démarrage (site + centres + agents)
       const syncRes = await window.api.sync.forceGlobal();
-      if (syncRes && syncRes.success) {
-        const check = await window.api.app.checkFirstLaunch();
-        if (!check.isFirstLaunch) {
-          setSetupStatus('success');
-          setSetupMessage("🟢 Configuration réussie — Vous pouvez maintenant vous connecter.");
-          toast.success("Configuration initiale terminée !");
-        } else {
-          setSetupStatus('failed');
-          setSetupMessage("🔴 Échec de la configuration — Aucun compte agent récupéré depuis Supabase.");
-        }
-      } else {
-        setSetupStatus('failed');
-        setSetupMessage("🔴 Échec de la configuration — Impossible de contacter le cloud Supabase.");
+      if (isStale()) return;
+      if (!syncRes || !syncRes.success) {
+        fail("🔴 Échec de la configuration — Impossible de contacter le cloud Supabase.");
+        return;
       }
+
+      const isConfigured = async (): Promise<boolean> => {
+        const check = await window.api.app.checkFirstLaunch();
+        return !!check && !check.isFirstLaunch;
+      };
+      const onConfigured = () => {
+        setupPullingRef.current = false;
+        setSetupStatus('success');
+        setSetupMessage("🟢 Configuration réussie — Vous pouvez maintenant vous connecter.");
+        toast.success("Configuration initiale terminée !");
+      };
+
+      // Les comptes sont peut-être déjà arrivés : un contrôle immédiat évite d'attendre 1,5 s.
+      if (await isConfigured()) {
+        if (isStale()) return;
+        onConfigured();
+        return;
+      }
+      if (isStale()) return;
+
+      setSetupMessage("🟡 Connexion établie — Rapatriement des comptes agents en cours...");
+      cancelPollRef.current = startBoundedPoll({
+        check: isConfigured,
+        intervalMs: FIRST_LAUNCH_POLL_INTERVAL_MS,
+        timeoutMs: FIRST_LAUNCH_POLL_TIMEOUT_MS,
+        onDone: (outcome) => {
+          cancelPollRef.current = null;
+          if (isStale()) return;
+          if (outcome === 'success') {
+            onConfigured();
+          } else {
+            fail("🔴 Échec de la configuration — Aucun compte agent récupéré depuis Supabase.");
+          }
+        }
+      });
     } catch (err: any) {
       console.error(err);
-      setSetupStatus('failed');
-      setSetupMessage("🔴 Échec de la configuration — Une erreur réseau est survenue lors de la configuration.");
+      if (isStale()) return;
+      fail("🔴 Échec de la configuration — Une erreur réseau est survenue lors de la configuration.");
     }
   };
 
@@ -221,6 +310,14 @@ export default function LoginPage() {
     }
   };
 
+  // « Hors-ligne » réel conservé ; en échec de configuration réseau OK, le message de config prime.
+  const showOfflineBanner = shouldShowOfflineBanner({
+    isOnline,
+    setupStatus,
+    navigatorOnLine: window.navigator.onLine,
+    mainNetworkKind
+  });
+
   return (
     <div className="login-page">
       <div className="login-card animate-slide-up">
@@ -249,7 +346,7 @@ export default function LoginPage() {
                 lineHeight: '1.4',
                 transition: 'all 0.3s ease',
                 border: '1px solid transparent',
-                ...(!isOnline ? {
+                ...(showOfflineBanner ? {
                   backgroundColor: 'rgba(239, 68, 68, 0.15)',
                   color: '#fca5a5',
                   borderColor: 'rgba(239, 68, 68, 0.3)'
@@ -268,7 +365,7 @@ export default function LoginPage() {
                 })
               }}
             >
-              {!isOnline ? (
+              {showOfflineBanner ? (
                 "🔴 Hors-ligne — Une connexion Internet est requise pour la première configuration de l'application."
               ) : (
                 setupMessage || "🟡 Connexion établie — Préparation de la base de données..."
