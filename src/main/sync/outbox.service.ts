@@ -5,6 +5,7 @@ import { getDatabase } from '../database/connection';
 import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
+import { insertAuditLog } from '../database/queries/audit.queries';
 
 // ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
 /**
@@ -405,7 +406,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // ── Dispatcher selon le type d'opération ─────────────────────────────
         // INSERT / UPDATE → upsert idempotent sur sync_id
         // DELETE          → suppression ciblée par sync_id
-        let supabaseError: { message: string } | null = null;
+        let supabaseError: { message: string; code?: string; details?: string | null } | null = null;
 
         if (entry.operation === 'DELETE') {
           // Un payload DELETE ne contient que { sync_id } (ou { user_sync_id } pour t_user_roles)
@@ -486,6 +487,28 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         }
 
         if (supabaseError) {
+          // ── Filet de sécurité L2-3b : DELETE cloud de t_users refusé par une FK (23503) ──
+          // Strictement limité à t_users + DELETE + erreur FK identifiée sans ambiguïté ; toute
+          // autre table/opération/erreur suit le traitement historique ci-dessous, inchangé.
+          if (
+            entry.table_name === 't_users' &&
+            entry.operation === 'DELETE' &&
+            _isForeignKeyViolation(supabaseError)
+          ) {
+            const failedSyncId = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
+            if (failedSyncId) {
+              try {
+                _handleUserDeleteForeignKeyViolation(db, entry.id, failedSyncId, supabaseError.message);
+                processed++;
+                onEntryProcessed?.({ tableName: entry.table_name, success: true });
+                continue;
+              } catch (fkHandlerErr: any) {
+                // Échec du filet : on retombe sur le traitement historique (aucune régression).
+                log.error(`[OutboxService] Filet FK t_users en échec (sync_id=${failedSyncId}) :`, fkHandlerErr.message || fkHandlerErr);
+              }
+            }
+          }
+
           const isNetworkError = _isTransientNetworkError(supabaseError.message);
 
           if (isNetworkError) {
@@ -919,6 +942,91 @@ function _clearLocalDirtyFlag(
     }
   } catch (err: any) {
     log.error(`[OutboxService] Erreur lors de la remise à zéro locale de is_dirty pour ${tableName} (sync_id=${syncIdValue}) :`, err.message || err);
+  }
+}
+
+/**
+ * Détecte sans ambiguïté un échec de clé étrangère PostgreSQL (SQLSTATE 23503) renvoyé par
+ * PostgREST/supabase-js. PostgrestError expose `code`, `message`, `details`, `hint` (Context7
+ * /supabase/postgrest-js) ; `code` peut néanmoins être absent selon le chemin d'erreur, d'où le
+ * repli sur le texte PostgreSQL « violates foreign key constraint ». Une erreur réseau/transitoire
+ * ou toute autre erreur (42501, 23505...) ne correspond jamais à ce test.
+ */
+function _isForeignKeyViolation(err: { message?: string; code?: string; details?: string | null }): boolean {
+  if (err.code === '23503') return true;
+  const text = `${err.message || ''} ${err.details || ''}`.toLowerCase();
+  return text.includes('violates foreign key constraint');
+}
+
+/**
+ * Filet de sécurité L2-3b : le DELETE cloud d'un agent (t_users) a été refusé par une FK
+ * (t_cartes.created_by / t_logs.id_user → t_users sans ON DELETE) : l'agent a une activité côté
+ * cloud que le contrôle local n'a pas pu prévoir. La ligne locale zombie (statut_actif = -1,
+ * is_dirty = -1) est rendue visible et désactivée (statut_actif = 0, is_dirty = 1) et un UPDATE
+ * t_users complet (statut_actif 0) est enfilé pour que le cloud, qui contient l'agent ACTIF,
+ * passe aussi à 0 (sinon la synchro descendante le réactiverait) ; l'entrée DELETE est clôturée (SYNCED).
+ *
+ * Course DELETE/recréation : la ligne locale est relue dans la même transaction que l'écriture ;
+ * elle n'est modifiée que si statut_actif = -1. Si elle a été recréée/réactivée entre-temps (ou
+ * n'existe plus), seule l'entrée DELETE est clôturée, sans effet destructeur. La clôture est
+ * gardée sur operation = 'DELETE' pour ne jamais écraser une entrée ré-enfilée (INSERT/UPDATE
+ * partageant le même id). Jamais de suppression physique ; t_user_roles et leurs entrées outbox
+ * ne sont pas touchés.
+ */
+function _handleUserDeleteForeignKeyViolation(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  outboxId: string,
+  syncId: string,
+  cloudMessage: string
+): void {
+  const { reactivated } = db.transaction(() => {
+    const row = db.prepare('SELECT id_user, login, password_hash, role, statut_actif FROM t_users WHERE sync_id = ?').get(syncId) as
+      | { id_user: number; login: string; password_hash: string; role: string; statut_actif: number }
+      | undefined;
+    let reactivatedLogin: string | null = null;
+    if (row && row.statut_actif === -1) {
+      // is_dirty = 1 + UPDATE enfilé : le cloud contient l'agent ACTIF ; sans cela la synchro
+      // descendante (upsertCloudUser, règles « ligne propre ») le réactiverait localement.
+      db.prepare(
+        "UPDATE t_users SET statut_actif = 0, is_dirty = 1, updated_at = datetime('now') WHERE sync_id = ? AND statut_actif = -1"
+      ).run(syncId);
+      reactivatedLogin = row.login;
+    }
+    // Clôture du DELETE d'abord (gardée sur operation = 'DELETE'), puis ré-enfilage de l'UPDATE
+    // sur le même id : état final = UNE entrée UPDATE PENDING pour ce sync_id.
+    db.prepare(
+      "UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL WHERE id = ? AND operation = 'DELETE'"
+    ).run(outboxId);
+    if (row && reactivatedLogin !== null) {
+      enqueueOutbox(syncId, 't_users', 'UPDATE', {
+        sync_id: syncId,
+        login: row.login,
+        password_hash: row.password_hash,
+        role: row.role,
+        statut_actif: 0,
+        updated_at: new Date().toISOString()
+      });
+      const queued = db.prepare("SELECT 1 FROM t_outbox WHERE id = ? AND operation = 'UPDATE' AND status = 'PENDING'").get(syncId);
+      if (!queued) throw new Error("Enfilage de l'UPDATE de désactivation impossible");
+    }
+    return { reactivated: reactivatedLogin };
+  })();
+
+  if (reactivated !== null) {
+    log.warn(
+      `[OutboxService] Suppression cloud de l'agent "${reactivated}" (sync_id=${syncId}) refusée (clé étrangère) : ` +
+      `activité enregistrée côté cloud. Agent désactivé localement au lieu d'être supprimé. Détail : ${cloudMessage}`
+    );
+    insertAuditLog(
+      'SYSTEM',
+      'VALIDATION',
+      `[DESACTIVATION] Suppression définitive de l'agent "${reactivated}" (sync_id=${syncId}) refusée par le cloud (activité enregistrée côté cloud) : agent désactivé au lieu d'être supprimé.`
+    );
+  } else {
+    log.warn(
+      `[OutboxService] Suppression cloud de t_users (sync_id=${syncId}) refusée (clé étrangère) mais la ligne locale n'est plus en statut -1 ` +
+      `(recréée/réactivée ou absente) : entrée DELETE clôturée sans modification locale.`
+    );
   }
 }
 
