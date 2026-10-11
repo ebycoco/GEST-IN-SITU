@@ -18,7 +18,7 @@
 
 ### 🛠️ Corrections & Fiabilité
 
-- **Première installation : l'écran de connexion n'affiche plus « Hors-ligne » à tort et attend la récupération des comptes** — sur un poste neuf avec Internet, la page de connexion pouvait afficher « Hors-ligne — Une connexion Internet est requise » sans formulaire alors que les comptes étaient en cours de téléchargement. Le bandeau reflète désormais l'état réel du réseau, et la page attend (jusqu'à 60 secondes) l'arrivée des comptes avant de conclure à un échec, au lieu d'exiger de cliquer sur « Réessayer la connexion ».
+- **Première installation : l'écran de connexion n'affiche plus « Hors-ligne » à tort et attend la récupération des comptes** — sur un poste neuf avec Internet, la page de connexion pouvait afficher « Hors-ligne — Une connexion Internet est requise » sans formulaire alors que les comptes étaient en cours de téléchargement. Le bandeau reflète désormais l'état réel du réseau, et la page attend (jusqu'à 60 secondes) l'arrivée des comptes avant de conclure à un échec, au lieu d'exiger de cliquer sur « Réessayer la connexion ». Les relances automatiques sont espacées et plafonnées (plus de rafale d'appels), et le formulaire s'affiche dès que les comptes sont arrivés, sans rechargement.
 
 - **Démarrage : le préchargement des comptes ne bloque plus sur un login renommé et n'écrase plus les modifications locales** — au lancement de l'application, les comptes du cloud sont désormais appliqués agent par agent (identifiés par leur identifiant de synchronisation) : un login renommé ou un conflit n'empêche plus la mise à jour des autres comptes, et une modification locale non envoyée ou un compte supprimé en attente ne sont plus écrasés.
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
 import { Shield, Eye, EyeOff, Loader, Info } from 'lucide-react';
@@ -6,16 +6,26 @@ import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
 import { buildWelcomeMessage, type WelcomeUser } from './loginWelcome';
 import {
+  canAutoRetry,
   normalizeNetworkState,
+  recordAttempt,
+  runFirstLaunchSetup,
   shouldShowOfflineBanner,
-  startBoundedPoll,
-  type NetworkKind
+  type AutoRetryState,
+  type NetworkKind,
+  type SetupFailureReason
 } from './loginFirstLaunch';
 
 // Sondage du rapatriement des comptes (premier démarrage) : le vrai téléchargement est fait par
 // le SyncEngine (runSyncInitiale -> preloadUsersFromCloud), quelques secondes après le démarrage.
 const FIRST_LAUNCH_POLL_INTERVAL_MS = 1500;
 const FIRST_LAUNCH_POLL_TIMEOUT_MS = 60000;
+
+const SETUP_FAILURE_MESSAGES: Record<SetupFailureReason, string> = {
+  unreachable: "🔴 Échec de la configuration — Le réseau Supabase est actuellement injoignable.",
+  network_error: "🔴 Échec de la configuration — Une erreur réseau est survenue lors de la configuration.",
+  no_accounts: "🔴 Échec de la configuration — Aucun compte agent récupéré depuis Supabase."
+};
 
 export default function LoginPage() {
   const [login, setLogin] = useState('');
@@ -85,21 +95,85 @@ export default function LoginPage() {
   // vrai hors-ligne d'un échec de configuration alors que le réseau est en ligne.
   const [mainNetworkKind, setMainNetworkKind] = useState<NetworkKind | null>(null);
 
-  // Annulation du sondage en cours + identifiant de la tentative courante : toute nouvelle
-  // tentative (ou le démontage) invalide la précédente, donc aucun sondage cumulé ni timer orphelin.
-  const cancelPollRef = useRef<(() => void) | null>(null);
-  const setupRunIdRef = useRef(0);
+  // Annulation de la configuration en cours (sondage inclus) : un seul run actif à la fois
+  // (setupPullingRef) ; le démontage annule tout, donc aucun timer ni callback orphelin.
+  const cancelSetupRef = useRef<(() => void) | null>(null);
   const setupPullingRef = useRef(false);
+  // Miroirs en ref de l'état React : les écouteurs (DOM + IPC) sont posés UNE SEULE fois et lisent
+  // ces refs, au lieu de se ré-abonner / relancer la détection à chaque changement d'état
+  // (cause de la boucle d'appels IPC corrigée ici).
+  const isFirstLaunchRef = useRef(false);
+  const setupStatusRef = useRef<'idle' | 'pulling' | 'success' | 'failed'>('idle');
+  const lastNetworkKindRef = useRef<NetworkKind | null>(null);
+  // Politique de redéclenchement AUTOMATIQUE (retour en ligne) : >= 10 s entre deux tentatives,
+  // 5 tentatives auto au maximum ; ensuite seul le bouton manuel relance.
+  const autoRetryRef = useRef<AutoRetryState>({ attempts: 0, lastAttemptAt: null });
 
-  // Nettoyage au démontage uniquement (l'effet réseau ci-dessous se ré-exécute à chaque
-  // changement d'état et ne doit pas interrompre un sondage en cours).
+  const applyStatus = useCallback((status: 'idle' | 'pulling' | 'success' | 'failed', message: string) => {
+    setupStatusRef.current = status;
+    setSetupStatus(status);
+    setSetupMessage(message);
+  }, []);
+
+  /**
+   * Configuration du premier démarrage (voir runFirstLaunchSetup dans loginFirstLaunch.ts).
+   *
+   * Flux asynchrone : contrôle -> forcePing -> forceGlobal (non décisif) -> sondage borné de
+   * checkFirstLaunch (1,5 s, 60 s max), seul juge. Garde : un run déjà actif => appel ignoré.
+   * Un échec ('failed') ne redéclenche JAMAIS rien par lui-même. Sortie d'impasse : dès que
+   * t_users est rempli, isFirstLaunch repasse à false et le formulaire s'affiche sans rechargement.
+   */
+  const triggerFirstLaunchSetup = useCallback(() => {
+    if (setupPullingRef.current) return;
+    if (cancelSetupRef.current) {
+      cancelSetupRef.current();
+      cancelSetupRef.current = null;
+    }
+    setupPullingRef.current = true;
+    applyStatus('pulling', "🟡 Rapatriement des comptes agents en cours...");
+    cancelSetupRef.current = runFirstLaunchSetup({
+      forcePing: () => window.api.sync.forcePing(),
+      forceGlobal: () => window.api.sync.forceGlobal(),
+      checkFirstLaunch: () => window.api.app.checkFirstLaunch(),
+      intervalMs: FIRST_LAUNCH_POLL_INTERVAL_MS,
+      timeoutMs: FIRST_LAUNCH_POLL_TIMEOUT_MS,
+      onConfigured: () => {
+        cancelSetupRef.current = null;
+        setupPullingRef.current = false;
+        isFirstLaunchRef.current = false;
+        setIsFirstLaunch(false);
+        applyStatus('success', "🟢 Configuration réussie — Vous pouvez maintenant vous connecter.");
+        toast.success("Configuration initiale terminée !");
+      },
+      onFailed: (reason: SetupFailureReason) => {
+        cancelSetupRef.current = null;
+        setupPullingRef.current = false;
+        applyStatus('failed', SETUP_FAILURE_MESSAGES[reason]);
+      }
+    });
+  }, [applyStatus]);
+
+  /** Redéclenchement automatique : soumis à la politique (délai minimal + plafond). */
+  const maybeAutoRetry = useCallback(() => {
+    if (!isFirstLaunchRef.current || setupPullingRef.current || setupStatusRef.current === 'success') return;
+    const now = Date.now();
+    if (!canAutoRetry(autoRetryRef.current, now)) return;
+    autoRetryRef.current = recordAttempt(autoRetryRef.current, now, true);
+    triggerFirstLaunchSetup();
+  }, [triggerFirstLaunchSetup]);
+
+  const handleManualRetry = () => {
+    autoRetryRef.current = recordAttempt(autoRetryRef.current, Date.now(), false);
+    triggerFirstLaunchSetup();
+  };
+
+  // Nettoyage au démontage uniquement.
   useEffect(() => {
     return () => {
-      setupRunIdRef.current += 1;
       setupPullingRef.current = false;
-      if (cancelPollRef.current) {
-        cancelPollRef.current();
-        cancelPollRef.current = null;
+      if (cancelSetupRef.current) {
+        cancelSetupRef.current();
+        cancelSetupRef.current = null;
       }
     };
   }, []);
@@ -112,28 +186,27 @@ export default function LoginPage() {
     }
   }, []);
 
+  // 1. Détection du premier démarrage : UNE seule fois au montage.
   useEffect(() => {
-    // 1. Détection premier démarrage
+    let disposed = false;
     if (window.api?.app?.checkFirstLaunch) {
       window.api.app.checkFirstLaunch().then((res) => {
-        if (res && res.isFirstLaunch) {
-          setIsFirstLaunch(true);
-          // Si déjà en ligne, initier directement la configuration
-          if (window.navigator.onLine) {
-            triggerFirstLaunchSetup();
-          }
-        }
+        if (disposed || !res || !res.isFirstLaunch) return;
+        isFirstLaunchRef.current = true;
+        setIsFirstLaunch(true);
+        // Déjà en ligne : tentative initiale (compte comme tentative auto, sous la même politique).
+        if (window.navigator.onLine) maybeAutoRetry();
       }).catch(console.error);
     }
+    return () => { disposed = true; };
+  }, [maybeAutoRetry]);
 
-    // 3. Écouteurs de connectivité
+  // 2. Écouteurs de connectivité : posés une seule fois (callbacks stables => aucun ré-abonnement
+  // ni relance en cascade), nettoyés au démontage.
+  useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      if (isFirstLaunch && setupStatus !== 'success' && setupStatus !== 'pulling') {
-        triggerFirstLaunchSetup();
-      }
-      // Re-tenter en cas de reconnexion
-
+      maybeAutoRetry();
     };
     const handleOffline = () => {
       setIsOnline(false);
@@ -142,7 +215,6 @@ export default function LoginPage() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Écouteur réseau optionnel via le moniteur IPC s'il existe
     let unsubscribeSync: (() => void) | undefined;
     if (window.api?.sync?.onStatusChanged) {
       unsubscribeSync = window.api.sync.onStatusChanged((status: any) => {
@@ -150,12 +222,12 @@ export default function LoginPage() {
         // DEGRADED compte comme en ligne ; PROBING (transitoire) ne modifie pas l'affichage.
         const kind = normalizeNetworkState(status?.state);
         if (kind === 'unknown') return;
+        const previous = lastNetworkKindRef.current;
+        lastNetworkKindRef.current = kind;
         setMainNetworkKind(kind);
-        const netState = kind === 'online';
-        setIsOnline(netState);
-        if (netState && isFirstLaunch && setupStatus !== 'success' && setupStatus !== 'pulling' && !setupPullingRef.current) {
-          triggerFirstLaunchSetup();
-        }
+        setIsOnline(kind === 'online');
+        // Seule une TRANSITION vers « en ligne » peut relancer (les ONLINE répétés sont ignorés).
+        if (kind === 'online' && previous !== 'online') maybeAutoRetry();
       });
     }
 
@@ -164,92 +236,7 @@ export default function LoginPage() {
       window.removeEventListener('offline', handleOffline);
       if (unsubscribeSync) unsubscribeSync();
     };
-  }, [isFirstLaunch, setupStatus]);
-  /**
-   * Configuration du premier démarrage.
-   *
-   * Flux asynchrone : forcePing -> forceGlobal -> sondage borné de checkFirstLaunch.
-   * forceGlobal ne télécharge rien sur base vide : le rapatriement réel des comptes est fait par
-   * le SyncEngine (runSyncInitiale -> preloadUsersFromCloud). On reste donc en 'pulling' et on
-   * sonde toutes les 1,5 s (setTimeout enchaînés, 60 s max) jusqu'à ce que t_users soit rempli.
-   *
-   * Annulation/anti-cumul : chaque appel invalide le précédent (setupRunIdRef) et annule son
-   * sondage ; le démontage fait de même (effet dédié). Aucun listener IPC n'est ajouté ici.
-   */
-  const triggerFirstLaunchSetup = async () => {
-    if (cancelPollRef.current) {
-      cancelPollRef.current();
-      cancelPollRef.current = null;
-    }
-    setupRunIdRef.current += 1;
-    const runId = setupRunIdRef.current;
-    const isStale = () => runId !== setupRunIdRef.current;
-
-    setupPullingRef.current = true;
-    setSetupStatus('pulling');
-    setSetupMessage("🟡 Connexion en cours... (Vérification du réseau Supabase)");
-    const fail = (message: string) => {
-      setupPullingRef.current = false;
-      setSetupStatus('failed');
-      setSetupMessage(message);
-    };
-    try {
-      const pingRes = await window.api.sync.forcePing();
-      if (isStale()) return;
-      if (!pingRes || !pingRes.success || pingRes.state === 'OFFLINE') {
-        fail("🔴 Échec de la configuration — Le réseau Supabase est actuellement injoignable.");
-        return;
-      }
-
-      setSetupMessage("🟡 Connexion établie — Téléchargement et configuration de la base de données...");
-      // Pull global de la synchronisation de démarrage (site + centres + agents)
-      const syncRes = await window.api.sync.forceGlobal();
-      if (isStale()) return;
-      if (!syncRes || !syncRes.success) {
-        fail("🔴 Échec de la configuration — Impossible de contacter le cloud Supabase.");
-        return;
-      }
-
-      const isConfigured = async (): Promise<boolean> => {
-        const check = await window.api.app.checkFirstLaunch();
-        return !!check && !check.isFirstLaunch;
-      };
-      const onConfigured = () => {
-        setupPullingRef.current = false;
-        setSetupStatus('success');
-        setSetupMessage("🟢 Configuration réussie — Vous pouvez maintenant vous connecter.");
-        toast.success("Configuration initiale terminée !");
-      };
-
-      // Les comptes sont peut-être déjà arrivés : un contrôle immédiat évite d'attendre 1,5 s.
-      if (await isConfigured()) {
-        if (isStale()) return;
-        onConfigured();
-        return;
-      }
-      if (isStale()) return;
-
-      setSetupMessage("🟡 Connexion établie — Rapatriement des comptes agents en cours...");
-      cancelPollRef.current = startBoundedPoll({
-        check: isConfigured,
-        intervalMs: FIRST_LAUNCH_POLL_INTERVAL_MS,
-        timeoutMs: FIRST_LAUNCH_POLL_TIMEOUT_MS,
-        onDone: (outcome) => {
-          cancelPollRef.current = null;
-          if (isStale()) return;
-          if (outcome === 'success') {
-            onConfigured();
-          } else {
-            fail("🔴 Échec de la configuration — Aucun compte agent récupéré depuis Supabase.");
-          }
-        }
-      });
-    } catch (err: any) {
-      console.error(err);
-      if (isStale()) return;
-      fail("🔴 Échec de la configuration — Une erreur réseau est survenue lors de la configuration.");
-    }
-  };
+  }, [maybeAutoRetry]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -388,7 +375,7 @@ export default function LoginPage() {
               <button 
                 type="button" 
                 className="btn btn-secondary" 
-                onClick={triggerFirstLaunchSetup}
+                onClick={handleManualRetry}
                 style={{ marginTop: 8 }}
               >
                 Réessayer la connexion

@@ -118,3 +118,143 @@ export function startBoundedPoll(options: BoundedPollOptions): () => void {
     }
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Redéclenchement automatique borné (anti-tempête d'appels IPC)
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface AutoRetryState {
+  /** Nombre de tentatives AUTOMATIQUES déjà lancées (la tentative initiale du montage compte). */
+  attempts: number;
+  /** Horodatage (ms) de la dernière tentative, automatique ou manuelle ; null si aucune. */
+  lastAttemptAt: number | null;
+}
+
+export interface AutoRetryPolicy {
+  minIntervalMs: number;
+  maxAutoAttempts: number;
+}
+
+export const DEFAULT_AUTO_RETRY_POLICY: AutoRetryPolicy = { minIntervalMs: 10000, maxAutoAttempts: 5 };
+
+/**
+ * Un redéclenchement AUTOMATIQUE (retour en ligne) n'est permis que si le plafond n'est pas atteint
+ * et si la dernière tentative date d'au moins `minIntervalMs`. Fonction pure : l'appelant tient
+ * l'état (`AutoRetryState`) dans un ref et le met à jour via `recordAttempt`. Le bouton manuel
+ * n'est jamais soumis à cette politique.
+ */
+export function canAutoRetry(
+  state: AutoRetryState,
+  now: number,
+  policy: AutoRetryPolicy = DEFAULT_AUTO_RETRY_POLICY
+): boolean {
+  if (state.attempts >= policy.maxAutoAttempts) return false;
+  if (state.lastAttemptAt !== null && now - state.lastAttemptAt < policy.minIntervalMs) return false;
+  return true;
+}
+
+/** Enregistre une tentative (auto => compteur +1 ; manuelle => seul l'horodatage avance). */
+export function recordAttempt(state: AutoRetryState, now: number, auto: boolean): AutoRetryState {
+  return { attempts: auto ? state.attempts + 1 : state.attempts, lastAttemptAt: now };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Orchestration de la configuration de premier démarrage
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** 'unreachable' = réseau Supabase injoignable ; 'network_error' = exception du ping ;
+ *  'no_accounts' = réseau OK mais aucun compte rapatrié dans le délai. */
+export type SetupFailureReason = 'unreachable' | 'network_error' | 'no_accounts';
+
+export interface FirstLaunchSetupDeps {
+  forcePing: () => Promise<{ success?: boolean; state?: unknown } | null | undefined>;
+  forceGlobal: () => Promise<unknown>;
+  checkFirstLaunch: () => Promise<{ isFirstLaunch?: boolean } | null | undefined>;
+  /** t_users est rempli : l'appelant doit repasser son état « premier démarrage » à false. */
+  onConfigured: () => void;
+  onFailed: (reason: SetupFailureReason) => void;
+  intervalMs: number;
+  timeoutMs: number;
+}
+
+/**
+ * Déroule la configuration : (0) contrôle immédiat -> forcePing -> forceGlobal -> contrôle ->
+ * sondage borné. Retourne une fonction d'annulation (aucun callback après annulation).
+ *
+ * Décision clé : `checkFirstLaunch` (t_users non vide) est le SEUL juge. Le résultat de
+ * `forceGlobal` (undefined, {success}) et ses exceptions (ex. « Accès refusé. Session invalide. »
+ * levé quand le SyncEngine a déjà rapatrié les comptes) sont journalisés mais ne ferment jamais
+ * la configuration. Seul le garde forcePing (OFFLINE / exception) peut échouer avant le sondage.
+ * Mémoire/flux : aucun listener ajouté, un seul timer vivant (voir startBoundedPoll).
+ */
+export function runFirstLaunchSetup(deps: FirstLaunchSetupDeps): () => void {
+  let cancelled = false;
+  let cancelPoll: (() => void) | null = null;
+
+  const isConfigured = async (): Promise<boolean> => {
+    try {
+      const check = await deps.checkFirstLaunch();
+      return !!check && check.isFirstLaunch === false;
+    } catch (err) {
+      console.debug('[FIRST LAUNCH] checkFirstLaunch en erreur (essai ignoré):', err);
+      return false;
+    }
+  };
+
+  const run = async (): Promise<void> => {
+    if (await isConfigured()) {
+      if (!cancelled) deps.onConfigured();
+      return;
+    }
+    if (cancelled) return;
+
+    try {
+      const pingRes = await deps.forcePing();
+      if (cancelled) return;
+      if (!pingRes || !pingRes.success || normalizeNetworkState(pingRes.state) === 'offline') {
+        deps.onFailed('unreachable');
+        return;
+      }
+    } catch (err) {
+      console.warn('[FIRST LAUNCH] forcePing en erreur:', err);
+      if (!cancelled) deps.onFailed('network_error');
+      return;
+    }
+
+    try {
+      const res = await deps.forceGlobal();
+      console.debug('[FIRST LAUNCH] forceGlobal terminé (non décisif):', res);
+    } catch (err) {
+      console.warn('[FIRST LAUNCH] forceGlobal en erreur (non décisif):', err);
+    }
+    if (cancelled) return;
+
+    if (await isConfigured()) {
+      if (!cancelled) deps.onConfigured();
+      return;
+    }
+    if (cancelled) return;
+
+    cancelPoll = startBoundedPoll({
+      check: isConfigured,
+      intervalMs: deps.intervalMs,
+      timeoutMs: deps.timeoutMs,
+      onDone: (outcome) => {
+        cancelPoll = null;
+        if (cancelled) return;
+        if (outcome === 'success') deps.onConfigured();
+        else deps.onFailed('no_accounts');
+      }
+    });
+  };
+
+  void run();
+
+  return () => {
+    cancelled = true;
+    if (cancelPoll) {
+      cancelPoll();
+      cancelPoll = null;
+    }
+  };
+}
