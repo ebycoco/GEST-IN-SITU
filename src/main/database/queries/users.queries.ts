@@ -532,9 +532,24 @@ export function assertDeactivationAllowed(targetId: number, caller?: UserCaller)
   assertNotLastSiteAdmin(targetId, caller);
 }
 
+/**
+ * LOT 1c (P2-1) : une cible en statut -1 (supprimée définitivement, en attente de purge/sync) est
+ * traitée comme inexistante par update/delete/hardDelete/reset — sinon un admin la ressusciterait
+ * (statut_actif 1 ou 0) en contournant les règles de recréation de createUser (même site, jamais
+ * ex-SUPER ADMIN). Lecture seule, exécutée AVANT toute écriture ; la recréation légitime passe
+ * uniquement par createUser (qui lit la ligne -1 par son propre chemin).
+ */
+function assertTargetNotDeleted(db: ReturnType<typeof getDatabase> & object, id: number): void {
+  const r = db.prepare('SELECT statut_actif FROM t_users WHERE id_user = ?').get(id) as { statut_actif?: number } | undefined;
+  if (r && r.statut_actif === -1) {
+    throw new Error("Utilisateur introuvable.");
+  }
+}
+
 export function updateUser(id: number, data: Record<string, unknown>, creator?: UserCaller) {
   const db = getDatabase()!;
 
+  assertTargetNotDeleted(db, id);
   const targetRow = db.prepare('SELECT site_id, centre_id, role, login FROM t_users WHERE id_user = ?').get(id) as { site_id?: number; centre_id?: number | null; role?: string; login?: string } | undefined;
 
   // LOT 1b (P2-3) : password_hash n'est JAMAIS accepté de l'extérieur — seul le hash calculé ici
@@ -769,6 +784,8 @@ export function deleteUser(id: number, creator?: UserCaller) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour désactiver un agent.");
   }
 
+  assertTargetNotDeleted(db, id); // LOT 1c (P2-1) : cible -1 = introuvable (deleteUser la repasserait à 0)
+
   if (creator && creator.role !== 'SUPER ADMIN') {
     const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
     if (!target || target.site_id !== creator.site_id) {
@@ -823,6 +840,8 @@ export function hardDeleteUser(id: number, creator?: UserCaller) {
   if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer définitivement un agent.");
   }
+
+  assertTargetNotDeleted(db, id); // LOT 1c (P2-1) : cible déjà -1 = introuvable (évite un DELETE outbox redondant)
 
   if (creator && creator.role !== 'SUPER ADMIN') {
     const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
@@ -910,7 +929,8 @@ export function resetAgentPassword(targetUserId: number, caller: { id_user: numb
   if (!target) {
     throw new Error("L'agent cible n'existe pas.");
   }
-  
+  assertTargetNotDeleted(db, targetUserId); // LOT 1c (P2-1) : cible -1 = introuvable, aucun reset de mot de passe
+
   if (caller.role === 'ADMINISTRATEUR_SITE' && caller.site_id !== target.site_id) {
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }

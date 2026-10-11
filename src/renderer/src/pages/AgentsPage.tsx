@@ -27,6 +27,16 @@ const AVAILABLE_ROLES = [
   { value: 'ADMIN_CENTRE', label: 'Administrateur de Centre (Local)' },
 ];
 
+/**
+ * LOT 1c (P2-2) : retire le préfixe technique Electron « Error invoking remote method '<canal>': Error: »
+ * des erreurs IPC pour n'afficher que le message métier. Helper local à la page (pas d'utilitaire
+ * partagé touché) ; pur, synchrone, sans effet de bord.
+ */
+const cleanIpcError = (err: unknown): string => {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  return raw.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '').trim();
+};
+
 export default function AgentsPage() {
   const { user: userContext, activeSiteId } = useAuthStore();
   
@@ -130,7 +140,7 @@ export default function AgentsPage() {
         }
       );
     } catch (err: any) {
-      toast.error('Erreur: ' + err.message);
+      toast.error('Erreur: ' + cleanIpcError(err));
     }
   };
   
@@ -352,7 +362,7 @@ export default function AgentsPage() {
       toast.success(`Utilisateur ${newStatus === 1 ? 'activé' : 'désactivé'}`);
       await loadData();
     } catch (err: any) {
-      toast.error('Erreur: ' + err.message);
+      toast.error('Erreur: ' + cleanIpcError(err));
     }
   };
 
@@ -372,7 +382,7 @@ export default function AgentsPage() {
       toast.success('Utilisateur supprimé définitivement');
       await loadData();
     } catch (err: any) {
-      toast.error('Erreur: ' + err.message);
+      toast.error('Erreur: ' + cleanIpcError(err));
     }
   };
 
@@ -421,7 +431,7 @@ export default function AgentsPage() {
       closeModal();
       await loadData();
     } catch (err: any) {
-      toast.error('Erreur: ' + err.message);
+      toast.error('Erreur: ' + cleanIpcError(err));
     }
   };
 
