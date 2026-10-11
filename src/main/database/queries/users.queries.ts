@@ -11,6 +11,7 @@ import { insertAuditLog } from './audit.queries';
 import { logAudit } from '../../utils/audit';
 import { recordPresenceLogin } from '../../sync/presence.service';
 import { isLicenseExpired } from '../../../shared/utils/license';
+import { upsertCloudUser, type UpsertCloudUserAction } from '../../sync/users-sync.helper';
 
 // Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
 // Reflète côté serveur la restriction déjà appliquée côté UI (AgentsPage.visibleRoles) :
@@ -1082,7 +1083,7 @@ export function updateSelfProfile(userId: number, data: { nom_user?: string; pre
   return { success: true };
 }
 
-export async function pullAgentsFromCloud(siteId: number, centreId?: number): Promise<{ success: boolean; count: number; message?: string }> {
+export async function pullAgentsFromCloud(siteId: number, centreId?: number): Promise<{ success: boolean; count: number; message?: string; skipped?: number; conflicts?: number; summary?: Record<UpsertCloudUserAction, number> }> {
   const db = getDatabase()!;
   const supabase = getSupabaseClient();
   if (!supabase) {
@@ -1131,97 +1132,68 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
       rolesMap.set(r.user_sync_id, roles);
     }
 
-    let count = 0;
-    db.transaction(() => {
-      const insertStmt = db.prepare(`
-        INSERT INTO t_users (
-          login, password_hash, role, nom_user, prenom_user, email, telephone,
-          statut_actif, site_id, centre_id, sync_id, is_dirty, synced_at
-        ) VALUES (
-          @login, @password_hash, @role, @nom_user, @prenom_user, @email, @telephone,
-          @statut_actif, @site_id, @centre_id, @sync_id, 0, datetime('now')
-        )
-        ON CONFLICT(login) DO UPDATE SET
-          password_hash = excluded.password_hash,
-          role = excluded.role,
-          nom_user = excluded.nom_user,
-          prenom_user = excluded.prenom_user,
-          email = excluded.email,
-          telephone = excluded.telephone,
-          statut_actif = excluded.statut_actif,
-          centre_id = excluded.centre_id,
-          sync_id = COALESCE(t_users.sync_id, excluded.sync_id),
-          is_dirty = 0,
-          synced_at = datetime('now');
-      `);
+    // LOT 2 / L2-1b : chaque ligne passe par upsertCloudUser (savepoint par ligne, jamais d'exception) ;
+    // aucune transaction englobante : une ligne en échec/conflit n'annule pas les autres.
+    // Low-Memory : traitement par chunks de 200 avec cession de la boucle d'événements entre chunks.
+    const summary: Record<UpsertCloudUserAction, number> = {
+      inserted: 0, updated: 0, adopted: 0, renamed: 0,
+      skipped_dirty: 0, skipped_pending_outbox: 0, skipped_deleted: 0,
+      skipped_conflict: 0, skipped_invalid: 0
+    };
+    const centreNameStmt = db.prepare('SELECT nom FROM t_centres WHERE id = ?');
+    const updateContactStmt = db.prepare('UPDATE t_users SET email = ?, telephone = ? WHERE id_user = ?');
+    const CHUNK = 200;
 
-      for (const u of cloudUsers) {
-        // Validation stricte du rôle (Agent 6 QA constraint check)
-        const validRoles = [
-          'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
-          'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
-        ];
-        if (!validRoles.includes(u.role)) {
-          log.warn(`[pullAgentsFromCloud] Rôle invalide ignoré pour ${u.login}: ${u.role}`);
-          continue;
-        }
-
-        let finalCentreId = u.centre_id || null;
+    for (let i = 0; i < cloudUsers.length; i += CHUNK) {
+      for (const u of cloudUsers.slice(i, i + CHUNK)) {
+        // Centre : inexistant localement -> NULL (évite FOREIGN KEY) ; ADMIN_CENTRE : remap par nom vers son centre.
+        let finalCentreId: number | null = u.centre_id || null;
         if (finalCentreId) {
-          // Vérifier si le centre existe localement. S'il n'existe pas encore (synchro incomplète), 
-          // on l'ignore temporairement pour éviter une erreur de FOREIGN KEY constraint failed.
-          const checkLocal = db.prepare('SELECT id FROM t_centres WHERE id = ?').get(finalCentreId);
-          if (!checkLocal) {
+          const cloudCentre = centreNameStmt.get(finalCentreId) as { nom: string } | undefined;
+          if (!cloudCentre) {
             log.warn(`[pullAgentsFromCloud] Le centre ${finalCentreId} n'existe pas localement. L'utilisateur ${u.login} sera importé sans centre pour l'instant.`);
             finalCentreId = null;
-          }
-        }
-
-        if (finalCentreId && centreId) {
-          const cloudCentre = db.prepare('SELECT nom FROM t_centres WHERE id = ?').get(finalCentreId) as { nom: string } | undefined;
-          const adminCentre = db.prepare('SELECT nom FROM t_centres WHERE id = ?').get(centreId) as { nom: string } | undefined;
-          if (cloudCentre && adminCentre && cloudCentre.nom.toUpperCase().trim() === adminCentre.nom.toUpperCase().trim()) {
-            finalCentreId = centreId;
-          }
-        }
-
-        const result = insertStmt.run({
-          login: u.login,
-          password_hash: u.password_hash,
-          role: u.role,
-          nom_user: u.nom_user || '',
-          prenom_user: u.prenom_user || '',
-          email: u.email || null,
-          telephone: u.telephone || null,
-          statut_actif: u.statut_actif !== undefined ? u.statut_actif : 1,
-          site_id: u.site_id,
-          centre_id: finalCentreId,
-          sync_id: u.sync_id || null
-        });
-        if (result.changes > 0) {
-          count++;
-        }
-
-        // --- Synchronisation des multi-rôles ---
-        if (u.sync_id) {
-          const cloudRolesForUser = rolesMap.get(u.sync_id);
-          if (cloudRolesForUser && cloudRolesForUser.length > 0) {
-            const localUser = db.prepare('SELECT id_user FROM t_users WHERE login = ?').get(u.login) as { id_user: number } | undefined;
-            if (localUser) {
-              db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localUser.id_user);
-              const insertRoleStmt = db.prepare('INSERT INTO t_user_roles (id_user, role) VALUES (?, ?)');
-              for (const r of cloudRolesForUser) {
-                insertRoleStmt.run(localUser.id_user, r);
-              }
+          } else if (centreId) {
+            const adminCentre = centreNameStmt.get(centreId) as { nom: string } | undefined;
+            if (adminCentre && cloudCentre.nom.toUpperCase().trim() === adminCentre.nom.toUpperCase().trim()) {
+              finalCentreId = centreId;
             }
           }
         }
-      }
-    })();
 
-    log.info(`[pullAgentsFromCloud] ${count} utilisateur(s) importé(s)/mis à jour pour le site ${siteId}.`);
-    return { success: true, count };
+        const rolesForUser = u.sync_id ? rolesMap.get(u.sync_id) : undefined;
+        const res = upsertCloudUser(db, {
+          login: u.login,
+          password_hash: u.password_hash,
+          role: u.role,
+          nom_user: u.nom_user,
+          prenom_user: u.prenom_user,
+          site_id: u.site_id,
+          centre_id: finalCentreId,
+          statut_actif: u.statut_actif,
+          sync_id: u.sync_id,
+          roles: rolesForUser && rolesForUser.length > 0 ? rolesForUser : undefined
+        }, { statutFromCloud: true });
+        summary[res.action]++;
+
+        // email/telephone ne sont pas gérés par le helper : complément uniquement pour une ligne réellement écrite.
+        if ((res.action === 'inserted' || res.action === 'updated' || res.action === 'renamed' || res.action === 'adopted') && res.id_user !== undefined) {
+          try {
+            updateContactStmt.run(u.email || null, u.telephone || null, res.id_user);
+          } catch (contactErr: any) {
+            log.warn(`[pullAgentsFromCloud] email/téléphone non mis à jour pour "${u.login}" : ${contactErr.message || contactErr}`);
+          }
+        }
+      }
+      if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
+    }
+
+    const count = summary.inserted + summary.updated + summary.adopted + summary.renamed;
+    const skipped = summary.skipped_dirty + summary.skipped_pending_outbox + summary.skipped_deleted + summary.skipped_invalid;
+    const conflicts = summary.skipped_conflict;
+    // Résumé sans donnée sensible (jamais de password_hash).
+    log.info(`[pullAgentsFromCloud] Site ${siteId} : ${JSON.stringify(summary)} (count=${count}).`);
+    return { success: true, count, skipped, conflicts, summary };
   } catch (e: any) {
     log.error(`[pullAgentsFromCloud] Exception : ${e.message || e}`);
     return { success: false, count: 0, message: e.message || String(e) };

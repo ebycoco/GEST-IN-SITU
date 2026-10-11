@@ -18,6 +18,8 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Gestion des agents : « Télécharger les agents » ne tombe plus en échec quand un login a été renommé** — le téléchargement identifie désormais chaque agent par son identifiant de synchronisation (et non plus par son seul login). Un agent en échec ou en conflit n'empêche plus la mise à jour des autres ; les modifications locales non encore envoyées et les comptes supprimés en attente ne sont plus écrasés ni ressuscités. Le résultat indique le nombre d'agents ignorés et de conflits.
+
 - **Connexion : un agent connecté n'est plus déconnecté quand un administrateur renomme son login** — la vérification du statut du compte côté cloud se fait désormais par identifiant de synchronisation (et non plus par le seul login), et un compte simplement introuvable côté cloud n'est plus désactivé localement : seule une désactivation explicite l'est.
 
 - **Gestion des agents : un compte supprimé définitivement ne peut plus être réactivé ni modifié** — une modification, désactivation, suppression ou réinitialisation de mot de passe visant un compte déjà supprimé est désormais refusée (« Utilisateur introuvable »). Seule la recréation du compte par un administrateur autorisé reste possible. Les messages d'erreur de la page (doublon de login, etc.) n'affichent plus le préfixe technique.
