@@ -1,11 +1,11 @@
 /**
- * QA terrain agent-13 — validation VIVANTE de 0e0a1aa : LoginPage « première configuration »
+ * QA terrain agent-13 — validation VIVANTE de c8fd467 : LoginPage « première configuration »
  * (bandeau hors-ligne fiable + attente bornée du rapatriement des comptes).
  * Supabase DEV ajadkziqaskadlzboeqo UNIQUEMENT (build dist-e2e-cloud, --mode e2e). JAMAIS la production.
  * userData isolé (mkdtemp). Données cloud préfixées ZZTEST_LF_, sites/centres 9011.. ; nettoyage en afterAll.
  */
 import { test, expect, _electron as electron } from '@playwright/test';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, unlinkSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync, mkdtempSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'child_process';
@@ -25,8 +25,6 @@ const check = (name: string, ok: boolean, detail = '') => { results.push({ name,
 const sy = (t: string) => `zztest-lf-${t}-${Date.now()}`;
 const ROOT = resolve(__dirname, '../..');
 const ENTRY = process.env.QA_ENTRY || join(ROOT, 'dist-e2e-cloud', 'main', 'index.js');
-const FETCH_PRELOAD = process.env.QA_FETCH_PRELOAD || '';
-const FLAG = join(tmpdir(), 'qa-lf-fetch-offline.flag');
 const shot = (env: E2EEnvironment, name: string) => env.window.screenshot({ path: join(SHOT_DIR, `agent13-LF-${name}.png`) }).catch(() => undefined);
 
 async function sqlExec(env: E2EEnvironment, sqls: string[]) {
@@ -45,10 +43,6 @@ async function launch(env: E2EEnvironment, opts: { disableSync?: boolean; offlin
   const base: Record<string, string> = { ...(process.env as Record<string, string>) };
   delete base.GEST_IN_SITU_E2E_DISABLE_SYNC;
   if (opts.disableSync) base.GEST_IN_SITU_E2E_DISABLE_SYNC = '1';
-  base.QA_FETCH_FLAG = FLAG;
-  base.NODE_OPTIONS = `--require ${FETCH_PRELOAD.replace(/\\/g, '/')}`;
-  try { unlinkSync(FLAG); } catch { /* */ }
-  if (opts.offlineFromStart) writeFileSync(FLAG, '1');
   env.app = await electron.launch({ args: [ENTRY, `--user-data-dir=${env.userDataDir}`], env: base });
   if (opts.offlineFromStart) {
     // émulation réseau Electron (net.request du NetworkMonitor + renderer) dès que app est prête
@@ -109,7 +103,7 @@ async function sample(env: E2EEnvironment, tStart: number, until: (p: Pt) => boo
 }
 const rateOver = async (env: E2EEnvironment, ch: string, ms: number) => { const a = (await ipcCalls(env, ch)).length; await sleep(ms); return (await ipcCalls(env, ch)).length - a; };
 
-test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa, cloud dev)', () => {
+test.describe.serial('QA terrain — LoginPage première configuration (c8fd467, cloud dev)', () => {
   test.setTimeout(2_400_000);
   let HASH = ''; let failed = false;
   const envs: E2EEnvironment[] = [];
@@ -160,7 +154,6 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
       const lc = await supabaseDev.from('t_centres').select('id');
       log('CLEANUP cloud: users=', J(left.data), 'sites=', J(ls.data), 'centres=', J(lc.data), 'créés(logins)=', J(created));
     } catch (e) { console.error('[LF] cleanup échec', e); }
-    try { unlinkSync(FLAG); } catch { /* */ }
     /* userData conservés pour diagnostic */
   });
 
@@ -168,14 +161,13 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
     expect(E2E_CLOUD_SUPABASE_URL).toContain('ajadkziqaskadlzboeqo');
     expect(E2E_CLOUD_SUPABASE_URL).not.toContain('itvyayakwgzvfqvdrgyv');
     expect(existsSync(ENTRY)).toBe(true);
-    expect(existsSync(FETCH_PRELOAD)).toBe(true);
     const scan = (dir: string): string[] => readdirSync(dir).flatMap((f) => { const p = join(dir, f); return statSync(p).isDirectory() ? scan(p) : [p]; });
     const files = scan(join(ROOT, 'dist-e2e-cloud')).filter((f) => /\.(js|html|json|map)$/.test(f));
     const bad = files.filter((f) => readFileSync(f, 'utf8').includes('itvyayakwgzvfqvdrgyv'));
     expect(bad).toEqual([]);
     const withRef = files.filter((f) => /\.js$/.test(f) && readFileSync(f, 'utf8').includes('ajadkziqaskadlzboeqo'));
     const rend = files.filter((f) => f.includes('renderer') && /\.js$/.test(f) && readFileSync(f, 'utf8').includes('Rapatriement des comptes agents en cours'));
-    check('00 build e2e: ref prod absent, ref dev présent, bundle renderer contient le correctif 0e0a1aa', withRef.length > 0 && bad.length === 0 && rend.length > 0, `dev=${withRef.length} prod=0 renderer-fix=${rend.length}`);
+    check('00 build e2e: ref prod absent, ref dev présent, bundle renderer contient le correctif c8fd467', withRef.length > 0 && bad.length === 0 && rend.length > 0, `dev=${withRef.length} prod=0 renderer-fix=${rend.length}`);
     const pre = await cloudUsers();
     log('comptes cloud dev AVANT (tous):', J(pre));
     check('00 cloud dev: aucun compte préexistant hors ZZTEST_ (cloud "vide" exploitable pour S2)', pre.filter((l: string) => !l.startsWith('ZZTEST_')).length === 0, J(pre));
@@ -229,7 +221,11 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
     check('S1 le formulaire de login apparaît sans Réessayer/reload', r.done, `délai depuis fenêtre ${(r.at / 1000).toFixed(1)} s ; depuis lancement ${((r.at + tWin) / 1000).toFixed(1)} s`);
     check('S1 jamais de bandeau "Hors-ligne" pendant la phase', !texts.some((t) => t && /Hors-ligne/.test(t)), J(texts));
     check('S1 messages attendus observés (Connexion/Rapatriement) avant le formulaire', texts.some((t) => t && /Rapatriement|Connexion/.test(t)), J(texts));
-    log('forcePing/forceGlobal/cfl appels =', (await ipcCalls(env, 'sync:forcePing')).length, (await ipcCalls(env, 'sync:forceGlobal')).length, (await ipcCalls(env, 'app:checkFirstLaunch')).length);
+    const s1p = (await ipcCalls(env, 'sync:forcePing')).length, s1g = (await ipcCalls(env, 'sync:forceGlobal')).length, s1c = (await ipcCalls(env, 'app:checkFirstLaunch')).length;
+    log('MESURE S1 forcePing/forceGlobal/cfl =', s1p, s1g, s1c, '(attendu ~1/~1/~3-5)');
+    check('S1 compteurs IPC bornés (forcePing<=2, forceGlobal<=2, checkFirstLaunch<=8)', s1p <= 2 && s1g <= 2 && s1c <= 8, `${s1p}/${s1g}/${s1c}`);
+    await sleep(5000);
+    check('S1 aucun appel de configuration après apparition du formulaire (5 s)', (await ipcCalls(env, 'sync:forcePing')).length === s1p && (await ipcCalls(env, 'app:checkFirstLaunch')).length === s1c, `${(await ipcCalls(env, 'sync:forcePing')).length}/${(await ipcCalls(env, 'app:checkFirstLaunch')).length}`);
     const cnt = (await sqlRead(env, 'SELECT COUNT(*) c FROM t_users'))[0].c;
     check('S1 base locale : comptes rapatriés (>0)', cnt > 0, 'c=' + cnt);
     const lr = await loginUi(env, P + 'OP', PWD, false);
@@ -239,29 +235,64 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
     await closeApp(env);
   });
 
-  test('S2 base vide + cloud sans compte : attente bornée 60 s attendue (message config), pas de boucle, reprise une fois les comptes ajoutés', async () => {
+  test('S2 base vide + cloud sans compte : 90 s, compteurs, Réessayer stable, pas de boucle', async () => {
     await cloudDeleteZZ();
     log('comptes cloud avant S2 =', J(await cloudUsers()));
     const env = await freshEnv(true);
     await launch(env);
     const tS = Date.now();
     const r = await sample(env, tS, (p) => !!p.text && /Aucun compte agent récupéré/.test(p.text), 90000, 250);
-    log('TIMELINE S2 =', J(r.tl.slice(0, 12)), '... nb transitions =', r.tl.length);
+    log('TIMELINE S2 =', J(r.tl.slice(0, 12)), '... nb transitions =', r.tl.length, 'atteint à', r.at);
     await shot(env, 'S2-cloud-vide');
     const dl = async (ch: string) => (await ipcCalls(env, ch)).length;
-    const n0 = await dl('sync:forcePing'); const g0 = await dl('sync:forceGlobal');
-    await sleep(10000);
-    const n1 = await dl('sync:forcePing'); const g1 = await dl('sync:forceGlobal');
-    log('cloud vide : forcePing +', n1 - n0, 'forceGlobal +', g1 - g0, 'en 10 s ; total forcePing =', n1, '; checkFirstLaunch total =', await dl('app:checkFirstLaunch'));
+    // stabilité du bouton Réessayer : on marque le nœud DOM et on le surveille 6 s
+    const btn = env.window.getByRole('button', { name: /Réessayer la connexion/ });
+    const present0 = await btn.count();
+    await env.window.evaluate(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => /Réessayer la connexion/.test(x.textContent || '')); if (b) (b as any).__qaTag = 'T'; });
+    let lost = 0, bannerChanges = 0, lastB: string | null | undefined;
+    for (let i = 0; i < 40; i++) {
+      const ok = await env.window.evaluate(() => { const b = Array.from(document.querySelectorAll('button')).find((x) => /Réessayer la connexion/.test(x.textContent || '')); return !!b && (b as any).__qaTag === 'T'; }).catch(() => false);
+      if (!ok) lost++;
+      const bt = await banner(env); if (lastB !== undefined && bt !== lastB) bannerChanges++; lastB = bt;
+      await sleep(150);
+    }
+    const remain = Math.max(0, 90000 - (Date.now() - tS));
+    await sleep(remain);
+    const p90 = await dl('sync:forcePing'), g90 = await dl('sync:forceGlobal'), c90 = await dl('app:checkFirstLaunch');
+    log('MESURE S2 à ~90 s : forcePing', p90, 'forceGlobal', g90, 'checkFirstLaunch', c90, '(attendu ~1 / ~1 / ~43-45)');
+    log('Réessayer présent=', present0, 'perdu/remplacé sur 40 échantillons =', lost, 'changements de bandeau =', bannerChanges);
     const msgs = r.tl.map((p) => p.text);
-    check('S2 attente bornée : message "Aucun compte agent récupéré" atteint', r.done, J(msgs.slice(-3)));
-    check('S2 pas d échec immédiat "Impossible de contacter le cloud" (forceGlobal OK)', !msgs.some((m) => m && /Impossible de contacter le cloud/.test(m)), J(msgs.slice(0, 6)));
-    check('S2 pas de boucle forcePing (<= 20 en 10 s)', n1 - n0 <= 20, '+' + (n1 - n0));
+    check('S2 message "Aucun compte agent récupéré" atteint vers 60 s', r.done && r.at >= 50000 && r.at <= 75000, 'at=' + r.at);
+    check('S2 bouton Réessayer présent et stable (même nœud DOM, 6 s)', present0 === 1 && lost === 0 && bannerChanges === 0, `present=${present0} lost=${lost} bannerChanges=${bannerChanges}`);
+    check('S2 compteurs forcePing<=2, forceGlobal<=2 sur 90 s', p90 <= 2 && g90 <= 2, `${p90}/${g90}`);
+    check('S2 checkFirstLaunch ~43-45 sur 90 s (tolérance 35-55)', c90 >= 35 && c90 <= 55, 'cfl=' + c90);
+    check('S2 pas d échec "Impossible de contacter le cloud"', !msgs.some((m) => m && /Impossible de contacter le cloud/.test(m)), J(msgs.slice(0, 6)));
     check('S2 jamais "Hors-ligne" alors que le réseau est en ligne', !msgs.some((m) => m && /Hors-ligne/.test(m)), J(msgs.slice(0, 6)));
+    // S5 : 3 clics rapides sur Réessayer -> un seul run actif
+    const bp = await dl('sync:forcePing'), bg = await dl('sync:forceGlobal');
+    const tClick = Date.now();
+    for (let i = 0; i < 3; i++) { await btn.click({ timeout: 3000 }).catch((e: any) => log('clic', i, 'échec', String(e).slice(0, 80))); await sleep(150); }
+    await sleep(3000);
+    const dp = (await dl('sync:forcePing')) - bp, dg = (await dl('sync:forceGlobal')) - bg;
+    log('MESURE S5 après 3 clics rapides : forcePing +', dp, 'forceGlobal +', dg, '; bandeau', J(await banner(env)));
+    await shot(env, 'S5-apres-3-clics');
+    check('S5 3 clics rapides => un seul run (forcePing<=1, forceGlobal<=1)', dp <= 1 && dg <= 1, `+${dp}/+${dg}`);
+    const bp2 = await dl('sync:forcePing');
+    await sleep(8000);
+    check('S5/S2 pas de boucle après relance (forcePing +<=1 en 8 s)', (await dl('sync:forcePing')) - bp2 <= 1, '+' + ((await dl('sync:forcePing')) - bp2));
+    // attendre la fin du run relancé (60 s) pour décrire l'état final
+    const rEnd = await sample(env, tClick, (p) => !!p.text && /Aucun compte agent récupéré/.test(p.text), 75000, 500);
+    log('état après relance : atteint=', rEnd.done, 'à', rEnd.at, 'timeline', J(rEnd.tl.slice(0, 5)));
+    // limite connue : compte ajouté après l'échec
     await cIns('OP', {});
-    const r2 = await sample(env, Date.now(), (p) => p.form, 70000, 500);
-    log('TIMELINE S2b (compte ajouté au cloud) =', J(r2.tl.slice(0, 8)), 'transitions=', r2.tl.length);
-    check('S2 une fois des comptes au cloud : le formulaire apparaît (sans reload)', r2.done, 'users locaux=' + (await sqlRead(env, 'SELECT COUNT(*) c FROM t_users'))[0].c);
+    const r2 = await sample(env, Date.now(), (p) => p.form, 20000, 500);
+    log('S2b (compte ajouté au cloud après échec) : formulaire sans action =', r2.done);
+    const pc = await dl('sync:forcePing');
+    if (!r2.done) {
+      await btn.click({ timeout: 3000 }).catch(() => undefined);
+      const r3 = await sample(env, Date.now(), (p) => p.form, 45000, 500);
+      log('S2c après clic Réessayer : formulaire =', r3.done, 'forcePing +', (await dl('sync:forcePing')) - pc, 'forceGlobal total', await dl('sync:forceGlobal'), 'users locaux=', (await sqlRead(env, 'SELECT COUNT(*) c FROM t_users'))[0].c);
+    }
     log('main.log Preload =', J(appLog(env).split(String.fromCharCode(10)).filter((l) => /Preload:|runSyncInitiale/i.test(l)).slice(-6).map((l) => l.slice(0, 200))));
     await closeApp(env);
   });
@@ -291,7 +322,11 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
     await shot(env, 'S3-retour-en-ligne');
     const pingAfter = (await ipcCalls(env, 'sync:forcePing')).length - pingBefore;
     const globalAfter = (await ipcCalls(env, 'sync:forceGlobal')).length - globalBefore;
-    log('forcePing +', pingAfter, 'forceGlobal +', globalAfter);
+    log('MESURE S3 retour en ligne : forcePing +', pingAfter, 'forceGlobal +', globalAfter, '; appels forcePing (ms depuis retour)', J((await ipcCalls(env, 'sync:forcePing')).map((x) => x - tBack)));
+    const offPing = (await ipcCalls(env, 'sync:forcePing'));
+    const gaps = offPing.slice(1).map((x, i) => x - offPing[i]);
+    log('écarts entre forcePing consécutifs (ms) =', J(gaps));
+    check('S3 pas de rafale : forcePing total <= 6, écarts >= 9 s', offPing.length <= 6 && gaps.every((g) => g >= 9000), `n=${offPing.length} gaps=${J(gaps)}`);
     check('S3 retour en ligne : le formulaire apparaît sans action (reprise automatique)', r2.done, `délai ${(r2.at / 1000).toFixed(1)} s`);
     check('S3 reprise : pas de doublon de configuration (forceGlobal <= 2)', globalAfter <= 2, `forcePing+${pingAfter} forceGlobal+${globalAfter}`);
     const nPoll = await rateOver(env, 'app:checkFirstLaunch', 6000);
@@ -314,6 +349,10 @@ test.describe.serial('QA terrain — LoginPage première configuration (0e0a1aa,
     const l1 = await loginUi(env, 'E2E_ADMINISTRATEUR_SITE', PWD, false);
     check('S4 connexion OK', l1.ok === true, J(l1));
     await sleep(1500);
+    const q = async () => [(await ipcCalls(env, 'app:checkFirstLaunch')).length, (await ipcCalls(env, 'sync:forcePing')).length, (await ipcCalls(env, 'sync:forceGlobal')).length];
+    const q0 = await q(); await sleep(8000); const q1 = await q();
+    log('MESURE S4 après login : cfl/forcePing/forceGlobal avant/après 8 s =', J(q0), J(q1));
+    check('S4 aucun appel IPC de configuration après login (8 s)', J(q0) === J(q1), J([q0, q1]));
     await logoutUi(env);
     await offlineOn(env);
     await sleep(2000);
