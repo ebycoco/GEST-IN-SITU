@@ -241,19 +241,31 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   assertRolesAssignable(creator.role, inputRoles);
 
   const transaction = db.transaction(() => {
-    const existing = db.prepare('SELECT id_user, sync_id FROM t_users WHERE login = ?').get(data.login) as { id_user: number; sync_id: string } | undefined;
-    
+    // LOT 1 : un login déjà utilisé (comparaison insensible à la casse) est TOUJOURS refusé,
+    // sans rien modifier et sans révéler le site/rôle du compte existant (l'ancien « upsert par
+    // login » écrasait mot de passe/rôle/site d'un compte existant, y compris d'un autre site
+    // ou d'un SUPER ADMIN). Seule exception : un compte supprimé définitivement en attente de
+    // purge (statut_actif = -1, soft-delete de hardDeleteUser) reste recréable — sa ligne occupe
+    // encore la contrainte UNIQUE(login), elle est donc réutilisée (ancien comportement
+    // conservé pour ce seul cas, sync_id préservé pour la propagation cloud).
+    const sameLogin = db.prepare('SELECT id_user, sync_id, statut_actif FROM t_users WHERE login = ? COLLATE NOCASE').all(data.login) as { id_user: number; sync_id: string; statut_actif: number }[];
+    if (sameLogin.some(u => u.statut_actif !== -1)) {
+      throw new Error("Ce login est déjà utilisé. Choisissez-en un autre.");
+    }
+    const existing = sameLogin[0];
+
     const outboxItems: Array<{ id: string; table: string; operation: 'INSERT' | 'UPDATE' | 'DELETE'; payload: Record<string, unknown> }> = [];
 
     if (existing) {
       const userSyncId = existing.sync_id || syncId;
       const result = db.prepare(`
-        UPDATE t_users 
-        SET password_hash = @hash, role = @role, nom_user = @nom_user, prenom_user = @prenom_user,
+        UPDATE t_users
+        SET login = @login, password_hash = @hash, role = @role, nom_user = @nom_user, prenom_user = @prenom_user,
             statut_actif = 1, centre_id = @centre_id, site_id = @site_id, sync_id = @sync_id, is_dirty = 1
         WHERE id_user = @id
       `).run({
         id: existing.id_user,
+        login: data.login,
         hash,
         role: primaryRole,
         nom_user: data.nom_user || '',
@@ -386,35 +398,139 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   return txResult.result;
 }
 
-export function updateUser(id: number, data: Record<string, unknown>, creator?: { role: string; site_id?: number; login?: string }) {
+// ── Gardes de sécurité LOT 1 « sécurité des comptes agents » ────────────────────────────
+// Appelant de session sécurisée (getSecureCurrentUser()) : id_user + rôle ACTIF + site.
+type UserCaller = { id_user?: number; role: string; site_id?: number; login?: string };
+
+// Prédicat SQL « le compte u est administrateur de site » (rôle primaire OU rôle additionnel
+// t_user_roles) — porte sur le COMPTE CIBLE, pas sur la portée de l'appelant (CLAUDE.md §3).
+const IS_SITE_ADMIN_SQL = `(u.role = 'ADMINISTRATEUR_SITE' OR EXISTS (SELECT 1 FROM t_user_roles r WHERE r.id_user = u.id_user AND r.role = 'ADMINISTRATEUR_SITE'))`;
+
+/**
+ * Refuse qu'un utilisateur désactive / supprime son PROPRE compte (côté serveur : l'id cible est
+ * comparé à l'id de la session sécurisée transmise par le handler). Sans `caller.id_user`
+ * (appel interne), aucune vérification (comportement historique inchangé).
+ */
+export function assertNotSelfTarget(targetId: number, caller?: UserCaller): void {
+  if (caller && caller.id_user !== undefined && caller.id_user === targetId) {
+    throw new Error("Action refusée : vous ne pouvez pas désactiver ni supprimer votre propre compte.");
+  }
+}
+
+/**
+ * Refuse de retirer le DERNIER administrateur de site actif d'un site (désactivation,
+ * suppression ou retrait du rôle ADMINISTRATEUR_SITE). Choix documenté : la règle ne s'applique
+ * qu'aux appelants NON SUPER ADMIN (le support SUPER ADMIN n'est jamais bloqué). Sans effet si
+ * la cible n'est pas un administrateur de site actuellement actif.
+ */
+export function assertNotLastSiteAdmin(targetId: number, caller?: UserCaller): void {
+  if (!caller || caller.role === 'SUPER ADMIN') return;
   const db = getDatabase()!;
-  
+  const target = db.prepare(
+    `SELECT u.site_id, u.statut_actif, ${IS_SITE_ADMIN_SQL} AS is_admin FROM t_users u WHERE u.id_user = ?`
+  ).get(targetId) as { site_id: number | null; statut_actif: number; is_admin: number } | undefined;
+  if (!target || target.statut_actif !== 1 || !target.is_admin || target.site_id == null) return;
+
+  const others = db.prepare(
+    `SELECT COUNT(*) AS n FROM t_users u WHERE u.site_id = ? AND u.statut_actif = 1 AND u.id_user != ? AND ${IS_SITE_ADMIN_SQL}`
+  ).get(target.site_id, targetId) as { n: number };
+  if (others.n === 0) {
+    throw new Error("Action refusée : ce compte est le dernier administrateur actif du site. Désignez d'abord un autre administrateur de site.");
+  }
+}
+
+/** Désactivation / suppression d'un compte : cumul des deux gardes ci-dessus. */
+export function assertDeactivationAllowed(targetId: number, caller?: UserCaller): void {
+  assertNotSelfTarget(targetId, caller);
+  assertNotLastSiteAdmin(targetId, caller);
+}
+
+export function updateUser(id: number, data: Record<string, unknown>, creator?: UserCaller) {
+  const db = getDatabase()!;
+
+  const targetRow = db.prepare('SELECT site_id, role, login FROM t_users WHERE id_user = ?').get(id) as { site_id?: number; role?: string; login?: string } | undefined;
+
   if (creator && creator.role !== 'SUPER ADMIN') {
-    const target = db.prepare('SELECT site_id FROM t_users WHERE id_user = ?').get(id) as { site_id?: number } | undefined;
-    if (!target || target.site_id !== creator.site_id) {
+    if (!targetRow || targetRow.site_id !== creator.site_id) {
       throw new Error("Accès non autorisé aux données de ce site");
     }
   }
-  
+
+  // ── Validations préalables (aucune écriture avant qu'elles passent toutes) ──────────
+  // Rôles : seuls les rôles NOUVELLEMENT attribués (absents des rôles actuels de la cible)
+  // sont soumis à assertRolesAssignable. Un rôle déjà détenu (ex. ADMINISTRATEUR_SITE
+  // renvoyé tel quel par le formulaire alors que sa case est masquée) n'est jamais refusé,
+  // mais un rôle que l'appelant ne peut pas attribuer ne peut toujours pas être AJOUTÉ.
+  // data.role seul (sans roles[]) est validé de la même façon (élévation SUPER ADMIN fermée).
+  if (data.roles !== undefined && !Array.isArray(data.roles)) {
+    throw new Error("Format de rôles invalide.");
+  }
+  const inputRoles = data.roles as string[] | undefined;
+  if (inputRoles && inputRoles.length === 0) {
+    throw new Error("Au moins un rôle est requis.");
+  }
+  if (creator) {
+    const requested = new Set<string>(inputRoles ?? []);
+    if (typeof data.role === 'string' && data.role) requested.add(data.role);
+    const current = new Set<string>(getUserRoles(id));
+    if (targetRow?.role) current.add(targetRow.role);
+    assertRolesAssignable(creator.role, [...requested].filter(r => !current.has(r)));
+
+    // Retrait du rôle ADMINISTRATEUR_SITE au dernier administrateur du site : refusé.
+    if (inputRoles && !inputRoles.includes('ADMINISTRATEUR_SITE')) {
+      assertNotLastSiteAdmin(id, creator);
+    }
+    // Désactivation (statut_actif != 1) : auto-désactivation + dernier administrateur.
+    if (data.statut_actif !== undefined && Number(data.statut_actif) !== 1) {
+      assertDeactivationAllowed(id, creator);
+    }
+    // Centre : tout appelant non SUPER ADMIN ne peut affecter qu'un centre de SON site.
+    if (creator.role !== 'SUPER ADMIN' && data.centre_id) {
+      const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(Number(data.centre_id)) as { site_id?: number } | undefined;
+      if (!centre || centre.site_id !== creator.site_id) {
+        throw new Error("Accès non autorisé : Ce centre n'appartient pas à votre site.");
+      }
+    }
+    // Site : changement réservé au SUPER ADMIN, vers un site existant.
+    if (data.site_id !== undefined) {
+      if (creator.role !== 'SUPER ADMIN') {
+        if (Number(data.site_id) !== targetRow?.site_id) {
+          throw new Error("Accès non autorisé : seul un SUPER ADMIN peut changer le site d'un agent.");
+        }
+        delete data.site_id; // valeur identique à l'actuelle : champ ignoré
+      } else if (!db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(Number(data.site_id))) {
+        throw new Error("Site cible introuvable.");
+      }
+    }
+  }
+
+  // Login : unicité insensible à la casse (hors le compte lui-même).
+  if (typeof data.login === 'string' && data.login !== targetRow?.login) {
+    const taken = db.prepare('SELECT 1 FROM t_users WHERE login = ? COLLATE NOCASE AND id_user != ?').get(data.login, id);
+    if (taken) {
+      throw new Error("Ce login est déjà utilisé. Choisissez-en un autre.");
+    }
+  }
+
   if (data.password) {
     data.password_hash = hashPassword(data.password as string);
     delete data.password;
   }
 
-  const inputRoles = data.roles as string[] | undefined;
-  if (inputRoles && inputRoles.length > 0) {
-    if (creator) {
-      assertRolesAssignable(creator.role, inputRoles);
-    }
+  if (inputRoles) {
     data.role = inputRoles[0];
   }
   delete data.roles;
-  
+
+  // sync_id, is_dirty et last_login ne sont plus modifiables via cette fonction : sync_id est
+  // l'identité de sync, is_dirty est déjà forcé à 1 par la requête, last_login est écrit par
+  // authenticateUser. site_id n'atteint ce point que pour un SUPER ADMIN (validé ci-dessus)
+  // ou un appel interne sans creator (comportement historique).
   const allowedUserColumns = [
-    'login', 'password_hash', 'role', 'nom_user', 'prenom_user', 
-    'statut_actif', 'site_id', 'centre_id', 'sync_id', 'is_dirty', 'last_login'
+    'login', 'password_hash', 'role', 'nom_user', 'prenom_user',
+    'statut_actif', 'site_id', 'centre_id'
   ];
-  
+
   const filteredKeys = Object.keys(data).filter(k => allowedUserColumns.includes(k));
   
   const transaction = db.transaction(() => {
@@ -525,9 +641,9 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   return txResult.result;
 }
 
-export function deleteUser(id: number, creator?: { role: string; site_id?: number; login?: string }) {
+export function deleteUser(id: number, creator?: UserCaller) {
   const db = getDatabase()!;
-  
+
   if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour désactiver un agent.");
   }
@@ -538,6 +654,9 @@ export function deleteUser(id: number, creator?: { role: string; site_id?: numbe
       throw new Error("Accès non autorisé aux données de ce site");
     }
   }
+
+  // LOT 1 : pas d'auto-désactivation, pas de retrait du dernier administrateur de site.
+  assertDeactivationAllowed(id, creator);
 
   // Trace d'audit
   const user = db.prepare('SELECT sync_id, login, password_hash, role FROM t_users WHERE id_user = ?').get(id) as { sync_id: string; login: string; password_hash: string; role: string } | undefined;
@@ -575,9 +694,9 @@ export function deleteUser(id: number, creator?: { role: string; site_id?: numbe
   return result;
 }
 
-export function hardDeleteUser(id: number, creator?: { role: string; site_id?: number; login?: string }) {
+export function hardDeleteUser(id: number, creator?: UserCaller) {
   const db = getDatabase()!;
-  
+
   if (creator && !['SUPER ADMIN', 'ADMINISTRATEUR_SITE'].includes(creator.role)) {
     throw new Error("Accès non autorisé : Rôle insuffisant pour supprimer définitivement un agent.");
   }
@@ -588,6 +707,9 @@ export function hardDeleteUser(id: number, creator?: { role: string; site_id?: n
       throw new Error("Accès non autorisé aux données de ce site");
     }
   }
+
+  // LOT 1 : pas d'auto-suppression, pas de retrait du dernier administrateur de site.
+  assertDeactivationAllowed(id, creator);
 
   const user = db.prepare('SELECT sync_id, login FROM t_users WHERE id_user = ?').get(id) as { sync_id: string | null; login: string } | undefined;
   if (!user) return { changes: 0 };
