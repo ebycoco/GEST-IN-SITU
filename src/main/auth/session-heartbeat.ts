@@ -289,6 +289,52 @@ export function setActiveRole(role: string): boolean {
   return true;
 }
 
+type SessionUserRow = { login: string; sync_id: string | null; statut_actif: number; role: string; nom_user: string; prenom_user: string };
+
+/**
+ * L2-0b : retrouve la ligne locale du compte de la session par clé STABLE (id_user), le login
+ * (renommable côté cloud) ne servant qu'en repli quand la session n'a pas d'id_user.
+ * Garde anti-réutilisation d'id : si la session connaît un sync_id et que la ligne trouvée en
+ * porte un autre, c'est un autre compte -> traité comme introuvable (fail-closed).
+ * Un ancien login repris par un AUTRE compte n'est jamais confondu avec la session.
+ */
+function findSessionUserRow(db: import('better-sqlite3').Database): SessionUserRow | undefined {
+  const cols = 'login, sync_id, statut_actif, role, nom_user, prenom_user';
+  let row: SessionUserRow | undefined;
+  if (secureCurrentUser.id_user !== undefined && secureCurrentUser.id_user !== null) {
+    row = db.prepare(`SELECT ${cols} FROM t_users WHERE id_user = ?`).get(secureCurrentUser.id_user) as SessionUserRow | undefined;
+  } else {
+    row = db.prepare(`SELECT ${cols} FROM t_users WHERE login = ?`).get(secureCurrentUser.login) as SessionUserRow | undefined;
+  }
+  if (row && secureCurrentUser.sync_id && row.sync_id && row.sync_id !== secureCurrentUser.sync_id) {
+    return undefined;
+  }
+  return row;
+}
+
+/**
+ * L2-0b : login COURANT de la session (après un éventuel renommage), lecture + alignement du
+ * login de session uniquement. Utilisé par le SyncEngine avant syncCurrentUserActiveStatus.
+ * Ne décide aucune fermeture de session (réservée à refreshSecureCurrentUser). Retourne le
+ * login mémorisé si la ligne est introuvable/DB indisponible, ou null sans session.
+ */
+export function resolveCurrentSessionLogin(): string | null {
+  if (!secureCurrentUser) return currentUserLogin;
+  try {
+    const db = getDatabase();
+    if (db) {
+      const row = findSessionUserRow(db);
+      if (row?.login && row.login !== secureCurrentUser.login) {
+        secureCurrentUser.login = row.login;
+        currentUserLogin = row.login;
+      }
+    }
+  } catch (e) {
+    log.warn('[Session] resolveCurrentSessionLogin : lecture impossible, login mémorisé conservé.', e);
+  }
+  return currentUserLogin;
+}
+
 /**
  * Rafraîchit l'instantané en mémoire de la session serveur (`secureCurrentUser`) à partir
  * de l'état LOCAL SQLite (`t_users`/`t_user_roles`), déjà tenu à jour par le cycle dédié
@@ -342,16 +388,22 @@ export function refreshSecureCurrentUser(): {
     return { changed: false, revoked: false, disabled: false, siteSuspended: false, licenseExpired: false };
   }
 
-  const row = db.prepare(
-    'SELECT statut_actif, role, nom_user, prenom_user FROM t_users WHERE login = ?'
-  ).get(secureCurrentUser.login) as
-    | { statut_actif: number; role: string; nom_user: string; prenom_user: string }
-    | undefined;
+  const row = findSessionUserRow(db);
 
   // Compte introuvable en local (suppression) : traité par prudence comme désactivé, sans
   // muter les champs de cantonnement (cf. invariant ci-dessus).
   if (!row) {
     return { changed: false, revoked: false, disabled: true, siteSuspended: false, licenseExpired: false };
+  }
+
+  // L2-0b : le compte a été retrouvé par id_user (clé stable). Si son login a été renommé
+  // (cycle de fond / upsertCloudUser), on aligne le login de session pour que présence,
+  // audit et syncCurrentUserActiveStatus utilisent le login courant. Mutation in place
+  // du seul champ `login` + variable module-level ; aucun champ de cantonnement touché.
+  if (row.login && row.login !== secureCurrentUser.login) {
+    log.info(`[Session] Login de la session mis à jour après renommage : "${secureCurrentUser.login}" -> "${row.login}".`);
+    secureCurrentUser.login = row.login;
+    currentUserLogin = row.login;
   }
 
   if (row.statut_actif !== 1) {

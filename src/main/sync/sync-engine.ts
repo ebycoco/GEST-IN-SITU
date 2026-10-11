@@ -7,7 +7,7 @@ import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, 
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
-import { refreshSecureCurrentUser, getCurrentGrantedRoles, getCurrentUserLogin, stopSessionHeartbeat, getSecureCurrentUser } from '../auth/session-heartbeat';
+import { refreshSecureCurrentUser, getCurrentGrantedRoles, resolveCurrentSessionLogin, stopSessionHeartbeat, getSecureCurrentUser } from '../auth/session-heartbeat';
 import { recordPresenceLogout } from './presence.service';
 
 // ─── INTERVALLE DU CYCLE DOWNSTREAM AUTOMATIQUE (POST-LOGIN) ────────────────
@@ -463,7 +463,8 @@ class SyncEngine extends EventEmitter {
       // indéfiniment actif en local tant que l'app n'est pas fermée/rouverte.
       // Skip silencieux si aucune session n'est active sur ce poste (getCurrentUserLogin
       // retourne null après logout/avant login).
-      const currentLogin = getCurrentUserLogin();
+      // L2-0b : login COURANT (résolu par id_user, aligné après un renommage cloud->local).
+      const currentLogin = resolveCurrentSessionLogin();
       if (currentLogin) {
         await syncCurrentUserActiveStatus(currentLogin, siteId);
       }
