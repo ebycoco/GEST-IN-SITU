@@ -18,6 +18,8 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Démarrage : le préchargement des comptes ne bloque plus sur un login renommé et n'écrase plus les modifications locales** — au lancement de l'application, les comptes du cloud sont désormais appliqués agent par agent (identifiés par leur identifiant de synchronisation) : un login renommé ou un conflit n'empêche plus la mise à jour des autres comptes, et une modification locale non envoyée ou un compte supprimé en attente ne sont plus écrasés.
+
 - **Connexion : un agent connecté n'est plus déconnecté quand un administrateur renomme son login** — la session est désormais suivie par l'identifiant du compte (et non plus par son login), le login de session est aligné après le renommage, et un ancien login repris par un autre compte n'est jamais confondu avec la session. Les désactivations, suppressions et retraits de rôle continuent de fermer la session comme avant.
 
 - **Synchronisation automatique des comptes : plus de blocage après un renommage de login, et plus d'écrasement des modifications locales** — le cycle de fond (toutes les 3 minutes) identifie désormais les agents par leur identifiant de synchronisation. Un login renommé par un administrateur ne bloque plus la mise à jour des comptes (mots de passe, rôles, désactivation de la session), et une modification locale pas encore envoyée ou un compte supprimé en attente ne sont plus écrasés. Le message du bouton « Télécharger les agents » indique aussi le nombre d'agents ignorés et de conflits de login.

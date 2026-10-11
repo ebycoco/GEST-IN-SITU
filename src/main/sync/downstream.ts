@@ -7,7 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { getSecureCurrentUser } from '../auth/session-heartbeat';
-import { upsertCloudUser, type UpsertCloudUserAction } from './users-sync.helper';
+import { upsertCloudUser, VALID_USER_ROLES, type UpsertCloudUserAction } from './users-sync.helper';
 
 // ─── Signal explicite "site introuvable côté cloud" (correctif bug production 2026-08-30) ──
 // Avant ce correctif, runDownstream()/syncUsersFromCloud() retournaient silencieusement 0
@@ -1079,112 +1079,121 @@ export async function preloadUsersFromCloud(): Promise<void> {
 
     log.info(`📥 [SUPABASE] ${cloudUsers.length} utilisateurs récupérés avec succès depuis le cloud.`);
 
+    // ─── LOT 2 / L2-1d : chaque compte passe par upsertCloudUser (savepoint par ligne, jamais d'exception) ───
+    // Sites/centres sont déjà assurés localement plus haut (étapes 1-2) : l'insertion d'un compte d'un autre site
+    // est donc possible sur base fraîche. Pas de transaction englobante : un conflit/échec n'annule pas les autres
+    // comptes. Les lignes locales sales / en outbox / supprimées (-1) ne sont plus écrasées. Aucune passe
+    // « disparus » ici (la lecture couvre tous les sites). PRAGMA foreign_keys OFF/ON conservé avec finally.
+    // Rôles multiples cloud : passés au helper seulement si leur lecture a réussi.
+    const rolesMap = new Map<string, string[]>();
+    const rolesFetched = !rolesErr && !!cloudRoles;
+    if (rolesFetched) {
+      for (const r of cloudRoles as { user_sync_id: string; role: string }[]) {
+        const arr = rolesMap.get(r.user_sync_id) || [];
+        arr.push(r.role);
+        rolesMap.set(r.user_sync_id, arr);
+      }
+    } else if (rolesErr) {
+      log.warn(`Preload: Erreur lors du pré-chargement de t_user_roles : ${rolesErr.message}`);
+    }
+
+    const summary: Record<UpsertCloudUserAction, number> = {
+      inserted: 0, updated: 0, adopted: 0, renamed: 0,
+      skipped_dirty: 0, skipped_pending_outbox: 0, skipped_deleted: 0,
+      skipped_conflict: 0, skipped_invalid: 0
+    };
+    let superAdminFallback = 0;
+    const CHUNK = 200;
     db.exec('PRAGMA foreign_keys = OFF;');
     try {
-      db.transaction(() => {
-        const insertStmt = db.prepare(`
-          INSERT INTO t_users (
-            login, password_hash, role, nom_user, prenom_user, email, telephone, 
-            statut_actif, site_id, centre_id, poste_id, avatar_url, last_login, 
-            created_at, updated_at, sync_id, is_dirty
-          ) VALUES (
-            @login, @password_hash, @role, @nom_user, @prenom_user, @email, @telephone, 
-            @statut_actif, @site_id, @centre_id, @poste_id, @avatar_url, @last_login, 
-            @created_at, @updated_at, @sync_id, 0
-          )
-          ON CONFLICT(login) DO UPDATE SET
-            password_hash = excluded.password_hash,
-            role = excluded.role,
-            nom_user = excluded.nom_user,
-            prenom_user = excluded.prenom_user,
-            email = excluded.email,
-            telephone = excluded.telephone,
-            statut_actif = excluded.statut_actif,
-            site_id = COALESCE(t_users.site_id, excluded.site_id),
-            centre_id = COALESCE(t_users.centre_id, excluded.centre_id),
-            sync_id = COALESCE(t_users.sync_id, excluded.sync_id),
-            updated_at = excluded.updated_at
-          WHERE t_users.is_dirty = 0
-        `);
+      for (let i = 0; i < cloudUsers.length; i += CHUNK) {
+        for (const u of cloudUsers.slice(i, i + CHUNK)) {
+          try {
+            const rolesForUser = rolesFetched && u.sync_id ? (rolesMap.get(u.sync_id) || []) : undefined;
+            const res = upsertCloudUser(db, {
+              login: u.login,
+              password_hash: u.password_hash,
+              role: u.role,
+              nom_user: u.nom_user,
+              prenom_user: u.prenom_user,
+              site_id: u.site_id ?? null,
+              centre_id: u.centre_id || null,
+              statut_actif: u.statut_actif,
+              sync_id: u.sync_id,
+              roles: rolesForUser
+            }, { statutFromCloud: true });
 
-        // Validation des rôles également dans preload pour éviter les violations de contrainte CHECK
-        const validRolesPreload = [
-          'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
-          'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-          'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
-        ];
+            let action = res.action;
+            let idUser = res.id_user;
+            let freshInsert = res.action === 'inserted';
 
-        for (const u of cloudUsers) {
-          if (!validRolesPreload.includes(u.role)) {
-            log.warn(`[preloadUsersFromCloud] Rôle invalide ignoré pour "${u.login}": "${u.role}".`);
-            log.warn(`⚠️ [PRELOAD] Compte "${u.login}" ignoré : rôle "${u.role}" non reconnu.`);
-            continue;
+            // Comportement historique conservé : un SUPER ADMIN cloud sans site (site_id NULL) doit pouvoir
+            // être préchargé. Le helper refuse l'insertion sans site local ; à ce stade aucune ligne locale
+            // ne porte ce sync_id ni ce login (le helper n'atteint la vérification du site qu'en absence de
+            // cible), l'INSERT direct est donc sûr (même protections : validé rôle, mot de passe, sync_id, statut != -1).
+            if (
+              res.action === 'skipped_invalid' && u.role === 'SUPER ADMIN' && u.site_id == null &&
+              u.statut_actif !== -1 && typeof u.login === 'string' && u.login &&
+              typeof u.sync_id === 'string' && u.sync_id && typeof u.password_hash === 'string' && u.password_hash &&
+              /^site .* absent localement$/.test(res.reason || '')
+            ) {
+              const r2 = db.transaction(() => {
+                const ins = db.prepare(`
+                  INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, site_id, centre_id, sync_id, is_dirty, synced_at)
+                  VALUES (?, ?, 'SUPER ADMIN', ?, ?, ?, NULL, NULL, ?, 0, datetime('now'))
+                `).run(u.login, u.password_hash, u.nom_user || '', u.prenom_user || '', u.statut_actif === 0 ? 0 : 1, u.sync_id);
+                const id = Number(ins.lastInsertRowid);
+                if (rolesForUser) {
+                  const insRole = db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)');
+                  for (const r of rolesForUser) if (VALID_USER_ROLES.includes(r)) insRole.run(id, r);
+                }
+                db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(id, 'SUPER ADMIN');
+                return id;
+              })();
+              action = 'inserted';
+              idUser = r2;
+              freshInsert = true;
+              superAdminFallback++;
+            }
+            summary[action]++;
+
+            // Colonnes étendues (hors helper) : uniquement pour une ligne réellement écrite et propre.
+            // Historique : email/telephone/updated_at écrasés à la mise à jour ; poste/avatar/last_login/created_at
+            // seulement à l'insertion.
+            if (idUser !== undefined && (action === 'inserted' || action === 'updated' || action === 'adopted' || action === 'renamed')) {
+              if (freshInsert) {
+                db.prepare(`
+                  UPDATE t_users SET email = ?, telephone = ?, poste_id = ?, avatar_url = ?, last_login = ?,
+                    created_at = COALESCE(?, created_at), updated_at = COALESCE(?, updated_at)
+                  WHERE id_user = ? AND is_dirty = 0
+                `).run(u.email || null, u.telephone || null, u.poste_id || null, u.avatar_url || null, u.last_login || null,
+                  u.created_at || null, u.updated_at || null, idUser);
+              } else {
+                db.prepare(`UPDATE t_users SET email = ?, telephone = ?, updated_at = ? WHERE id_user = ? AND is_dirty = 0`)
+                  .run(u.email || null, u.telephone || null, u.updated_at || null, idUser);
+              }
+            }
+          } catch (rowErr: any) {
+            summary.skipped_invalid++;
+            log.warn(`Preload: compte "${u?.login ?? '?'}" ignoré (exception) : ${rowErr?.message || rowErr}`);
           }
-          insertStmt.run({
-            login: u.login,
-            password_hash: u.password_hash,
-            role: u.role,
-            nom_user: u.nom_user || null,
-            prenom_user: u.prenom_user || null,
-            email: u.email || null,
-            telephone: u.telephone || null,
-            statut_actif: u.statut_actif !== undefined ? u.statut_actif : 1,
-            site_id: u.site_id !== undefined && u.site_id !== null ? u.site_id : null,
-            centre_id: u.centre_id || null,
-            poste_id: u.poste_id || null,
-            avatar_url: u.avatar_url || null,
-            last_login: u.last_login || null,
-            created_at: u.created_at || null,
-            updated_at: u.updated_at || null,
-            sync_id: u.sync_id || null
-          });
         }
-      })();
-      log.info(`Preload: ${cloudUsers.length} utilisateurs synchronisés (INSERT ON CONFLICT) avec succès.`);
-      logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_users', count: cloudUsers.length });
+        if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
+      }
+    } catch (upsertErr: any) {
+      // Filet ultime : le préchargement ne doit jamais remonter d'exception au démarrage.
+      log.error(`Preload: Exception inattendue pendant l'upsert des comptes : ${upsertErr?.message || upsertErr}`);
     } finally {
       db.exec('PRAGMA foreign_keys = ON;');
       log.info('Preload: Contraintes de clés étrangères (foreign_keys) réactivées.');
     }
-
-    // ── Synchronisation descendante des rôles multiples pour tous les comptes préchargés ──
-    try {
-      if (!rolesErr && cloudRoles) {
-        db.exec('PRAGMA foreign_keys = OFF;');
-        try {
-          db.transaction(() => {
-            const validRolesPreload = [
-              'SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE',
-              'OPERATEUR_VERIFICATION', 'OPERATEUR_QUALITE', 'OPERATEUR_SAISIE',
-              'OPERATEUR_LOGISTIQUE', 'OPERATEUR_INVENTAIRE', 'OPERATEUR_APUREMENT'
-            ];
-            for (const u of cloudUsers) {
-              if (!u.sync_id && !u.login) continue;
-              const localRow = db.prepare('SELECT id_user FROM t_users WHERE sync_id = ? OR login = ?').get(u.sync_id, u.login) as { id_user: number } | undefined;
-              if (localRow) {
-                db.prepare('DELETE FROM t_user_roles WHERE id_user = ?').run(localRow.id_user);
-                const userRoles = cloudRoles.filter(r => r.user_sync_id === u.sync_id);
-                for (const r of userRoles) {
-                  if (validRolesPreload.includes(r.role)) {
-                    db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, r.role);
-                  }
-                }
-                if (u.role && validRolesPreload.includes(u.role)) {
-                  db.prepare('INSERT OR IGNORE INTO t_user_roles (id_user, role) VALUES (?, ?)').run(localRow.id_user, u.role);
-                }
-              }
-            }
-          })();
-          log.info(`Preload: ${cloudRoles.length} multi-rôles synchronisés dans t_user_roles.`);
-        } finally {
-          db.exec('PRAGMA foreign_keys = ON;');
-        }
-      } else if (rolesErr) {
-        log.warn(`Preload: Erreur lors du pré-chargement de t_user_roles : ${rolesErr.message}`);
-      }
-    } catch (roleCatchErr: any) {
-      log.warn(`Preload: Exception lors du pré-chargement de t_user_roles : ${roleCatchErr.message}`);
+    const writtenCount = summary.inserted + summary.updated + summary.adopted + summary.renamed;
+    const skippedCount = summary.skipped_dirty + summary.skipped_pending_outbox + summary.skipped_deleted + summary.skipped_invalid;
+    log.info(`Preload: ${writtenCount}/${cloudUsers.length} utilisateurs synchronisés via upsertCloudUser. Résumé : ${JSON.stringify(summary)}${superAdminFallback ? ` (dont ${superAdminFallback} SUPER ADMIN sans site)` : ''}`);
+    if (skippedCount > 0 || summary.skipped_conflict > 0) {
+      log.warn(`Preload: ${skippedCount} compte(s) ignoré(s), ${summary.skipped_conflict} conflit(s) de login.`);
     }
+    logAudit('SYSTEM', 'SYS_BOOTSTRAP_INIT', { table: 't_users', count: writtenCount });
   } catch (err: any) {
     log.error('Preload: Exception attrapée lors de la synchronisation des utilisateurs (mode hors-ligne ou erreur réseau) :', err.message || err);
   } finally {
