@@ -110,6 +110,38 @@ function guardLocalRow(db: Database.Database, local: LocalUserRow, cloudSyncId: 
   return null;
 }
 
+// ── Journalisation plafonnée des comptes ignorés (diagnostic, aucun effet sur la synchro) ──
+// Budget par fenêtre de rafale : au-delà de SKIP_LOG_MAX lignes, les suivantes sont comptées puis résumées.
+const SKIP_LOG_MAX = 20;
+const SKIP_LOG_WINDOW_MS = 5000;
+let skipLogCount = 0;
+let skipLogSuppressed = 0;
+let skipLogTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Émet le résumé des lignes non détaillées et réinitialise la fenêtre. Exporté pour les tests. */
+export function flushSkipLogSummary(): void {
+  if (skipLogTimer) { clearTimeout(skipLogTimer); skipLogTimer = null; }
+  if (skipLogSuppressed > 0) {
+    log.info(`[users-sync.helper] ... ${skipLogSuppressed} autre(s) compte(s) ignoré(s) non détaillé(s) (plafond ${SKIP_LOG_MAX} lignes)`);
+  }
+  skipLogCount = 0;
+  skipLogSuppressed = 0;
+}
+
+function logSkippedUser(login: string, res: UpsertCloudUserResult): void {
+  if (res.action !== 'skipped_dirty' && res.action !== 'skipped_pending_outbox' && res.action !== 'skipped_deleted') return;
+  if (!skipLogTimer) {
+    skipLogTimer = setTimeout(flushSkipLogSummary, SKIP_LOG_WINDOW_MS);
+    (skipLogTimer as any).unref?.();
+  }
+  if (skipLogCount < SKIP_LOG_MAX) {
+    skipLogCount++;
+    log.info(`[users-sync.helper] Compte ignoré (${res.action}) login="${login}" id_user=${res.id_user ?? '-'} : ${res.reason ?? ''}`);
+  } else {
+    skipLogSuppressed++;
+  }
+}
+
 export function upsertCloudUser(
   db: Database.Database,
   cloudRow: CloudUserRow,
@@ -122,6 +154,7 @@ export function upsertCloudUser(
     if (res.action === 'skipped_conflict') {
       log.warn(`[users-sync.helper] Conflit sur "${loginForLog}" : ${res.reason}`);
     }
+    logSkippedUser(loginForLog, res);
     return res;
   } catch (err: any) {
     log.warn(`[users-sync.helper] Ligne "${loginForLog}" en échec (ignorée) : ${err?.message || err}`);

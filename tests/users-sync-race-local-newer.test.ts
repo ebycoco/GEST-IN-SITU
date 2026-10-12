@@ -171,4 +171,46 @@ describe('course lecture cloud / push : local plus récent (users-sync.helper)',
     await downstream.syncUsersFromCloud(SITE);
     expect(row(id)).toMatchObject({ nom_user: 'CloudNom', role: 'OPERATEUR_QUALITE', statut_actif: 1 });
   });
+
+  it('journalisation : chaque raison de skip est tracée avec le login, sans fuite de hash, plafonnée à 20 + résumé', async () => {
+    const log = (await import('electron-log')).default;
+    const spy = vi.spyOn(log, 'info').mockImplementation(() => undefined);
+    helper.flushSkipLogSummary();
+    spy.mockClear();
+    const k = uid();
+    const dirty = local(`lg_d_${k}`, `sid-lgd-${k}`, null);
+    db.prepare('UPDATE t_users SET is_dirty = 1 WHERE id_user = ?').run(dirty);
+    const del = local(`lg_x_${k}`, `sid-lgx-${k}`, null);
+    db.prepare('UPDATE t_users SET statut_actif = -1, is_dirty = -1 WHERE id_user = ?').run(del);
+    const newer = local(`lg_n_${k}`, `sid-lgn-${k}`, `datetime('now')`);
+    const pend = local(`lg_p_${k}`, `sid-lgp-${k}`, null);
+    db.prepare(`INSERT INTO t_outbox (id, table_name, operation, payload, status) VALUES (?, 't_users', 'UPDATE', '{}', 'PENDING')`)
+      .run(`sid-lgp-${k}`);
+    void newer; void pend;
+    const mk = (l: string, s: string) => cloudRow(l, s, { password_hash: 'SECRET-HASH-XYZ' }) as any;
+    helper.upsertCloudUser(db, mk(`lg_d_${k}`, `sid-lgd-${k}`), { readAt: Date.now() });
+    helper.upsertCloudUser(db, mk(`lg_x_${k}`, `sid-lgx-${k}`), { readAt: Date.now() });
+    helper.upsertCloudUser(db, mk(`lg_n_${k}`, `sid-lgn-${k}`), { readAt: Date.now() });
+    helper.upsertCloudUser(db, mk(`lg_p_${k}`, `sid-lgp-${k}`), { readAt: Date.now() });
+    const lines = spy.mock.calls.map(c => String(c[0]));
+    expect(lines.some(l => l.includes(`lg_d_${k}`) && l.includes('is_dirty=1'))).toBe(true);
+    expect(lines.some(l => l.includes(`lg_x_${k}`) && l.includes('supprimée (-1)'))).toBe(true);
+    expect(lines.some(l => l.includes(`lg_n_${k}`) && l.includes('local plus récent'))).toBe(true);
+    expect(lines.some(l => l.includes(`lg_p_${k}`) && l.includes('t_outbox'))).toBe(true);
+    expect(lines.join(' | ')).not.toContain('SECRET-HASH-XYZ');
+    expect(lines.join(' | ')).not.toContain('old-hash');
+
+    // plafond : 30 comptes sales -> au plus 20 lignes détaillées (4 déjà consommées) puis un résumé
+    helper.flushSkipLogSummary(); spy.mockClear();
+    for (let i = 0; i < 30; i++) {
+      const id = local(`lg_m${i}_${k}`, `sid-lgm${i}-${k}`, null);
+      db.prepare('UPDATE t_users SET is_dirty = 1 WHERE id_user = ?').run(id);
+      helper.upsertCloudUser(db, mk(`lg_m${i}_${k}`, `sid-lgm${i}-${k}`));
+    }
+    const detail = spy.mock.calls.map(c => String(c[0])).filter(l => l.includes('Compte ignoré'));
+    expect(detail.length).toBe(20);
+    helper.flushSkipLogSummary();
+    expect(spy.mock.calls.map(c => String(c[0])).some(l => l.includes('10 autre(s) compte(s) ignoré(s)'))).toBe(true);
+    spy.mockRestore();
+  });
 });
