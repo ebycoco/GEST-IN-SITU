@@ -34,6 +34,13 @@ export interface CloudUserRow {
 export interface UpsertCloudUserOptions {
   /** true (défaut) : statut_actif = valeur cloud (0/1). false : forcé à 1 (ex. flux ne ramenant que les comptes actifs). */
   statutFromCloud?: boolean;
+  /**
+   * Instant (ms epoch, horloge locale du poste) où la lecture cloud dont provient `cloudRow` a DÉMARRÉ.
+   * Si la ligne locale a été marquée synchronisée (synced_at, horloge locale aussi) à ou après cet instant
+   * (arrondi à la seconde), la valeur cloud peut être antérieure à un UPDATE tout juste poussé : la ligne est
+   * ignorée (skipped_dirty, « local plus récent ») et sera réalignée au tick suivant. Absent = pas de garde.
+   */
+  readAt?: number;
 }
 
 export type UpsertCloudUserAction =
@@ -56,9 +63,17 @@ interface LocalUserRow {
   statut_actif: number | null;
   sync_id: string | null;
   is_dirty: number | null;
+  synced_at: string | null;
 }
 
-const LOCAL_COLS = 'id_user, login, role, site_id, centre_id, statut_actif, sync_id, is_dirty';
+const LOCAL_COLS = 'id_user, login, role, site_id, centre_id, statut_actif, sync_id, is_dirty, synced_at';
+
+/** synced_at local (datetime('now') UTC « YYYY-MM-DD HH:MM:SS », ou ISO) -> ms epoch ; NaN si illisible. */
+function parseLocalTs(ts: string | null | undefined): number {
+  if (!ts) return NaN;
+  const iso = ts.includes('T') ? ts : ts.replace(' ', 'T') + 'Z';
+  return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z');
+}
 
 function hasPendingOutbox(db: Database.Database, syncId: string | null | undefined): boolean {
   if (!syncId) return false;
@@ -73,7 +88,7 @@ function hasPendingOutbox(db: Database.Database, syncId: string | null | undefin
 }
 
 /** Vérifie les gardes « ligne locale intouchable ». Retourne un résultat de skip ou null. */
-function guardLocalRow(db: Database.Database, local: LocalUserRow, cloudSyncId: string): UpsertCloudUserResult | null {
+function guardLocalRow(db: Database.Database, local: LocalUserRow, cloudSyncId: string, readAt?: number): UpsertCloudUserResult | null {
   if (local.statut_actif === -1 || local.is_dirty === -1) {
     return { action: 'skipped_deleted', id_user: local.id_user, reason: 'ligne locale supprimée (-1), jamais ressuscitée' };
   }
@@ -82,6 +97,15 @@ function guardLocalRow(db: Database.Database, local: LocalUserRow, cloudSyncId: 
   }
   if (hasPendingOutbox(db, local.sync_id) || hasPendingOutbox(db, cloudSyncId)) {
     return { action: 'skipped_pending_outbox', id_user: local.id_user, reason: 'entrée t_outbox PENDING/ERROR pour ce compte' };
+  }
+  // Course lecture cloud / push : la ligne est redevenue propre (UPDATE poussé, synced_at posé) APRÈS le début
+  // de la lecture cloud -> la valeur cloud reçue peut être antérieure à cet UPDATE. Même horloge (poste) des deux
+  // côtés : pas de dérive poste/serveur à tolérer ; seule la troncature à la seconde de synced_at est absorbée.
+  if (typeof readAt === 'number' && Number.isFinite(readAt)) {
+    const ts = parseLocalTs(local.synced_at);
+    if (Number.isFinite(ts) && ts >= Math.floor(readAt / 1000) * 1000) {
+      return { action: 'skipped_dirty', id_user: local.id_user, reason: 'local plus récent que la lecture cloud (synchronisé après le début de la lecture)' };
+    }
   }
   return null;
 }
@@ -136,7 +160,7 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
 
   if (bySync.length === 1) {
     target = bySync[0];
-    const skip = guardLocalRow(db, target, cloud.sync_id);
+    const skip = guardLocalRow(db, target, cloud.sync_id, opts.readAt);
     if (skip) return skip;
     if (target.login !== cloud.login) {
       if (byLogin && byLogin.id_user !== target.id_user) {
@@ -149,7 +173,7 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
       return { action: 'skipped_conflict', id_user: byLogin.id_user, reason: `login "${cloud.login}" local lié à un autre sync_id (${byLogin.sync_id} ≠ ${cloud.sync_id})` };
     }
     target = byLogin;
-    const skip = guardLocalRow(db, target, cloud.sync_id);
+    const skip = guardLocalRow(db, target, cloud.sync_id, opts.readAt);
     if (skip) return skip;
     action = 'adopted';
   }

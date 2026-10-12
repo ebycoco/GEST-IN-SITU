@@ -1167,6 +1167,7 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
   log.info(`[pullAgentsFromCloud] Récupération manuelle des agents pour le site ${siteId} (filtrage par centre local) depuis Supabase...`);
 
   try {
+    const readAt = Date.now(); // début de lecture cloud : garde « local plus récent » du helper
     const { data: cloudUsers, error } = await supabase
       .from('t_users')
       .select('login, password_hash, role, nom_user, prenom_user, email, telephone, site_id, centre_id, sync_id, statut_actif')
@@ -1246,7 +1247,7 @@ export async function pullAgentsFromCloud(siteId: number, centreId?: number): Pr
           statut_actif: u.statut_actif,
           sync_id: u.sync_id,
           roles: rolesForUser && rolesForUser.length > 0 ? rolesForUser : undefined
-        }, { statutFromCloud: true });
+        }, { statutFromCloud: true, readAt });
         summary[res.action]++;
 
         // email/telephone ne sont pas gérés par le helper : complément uniquement pour une ligne réellement écrite.

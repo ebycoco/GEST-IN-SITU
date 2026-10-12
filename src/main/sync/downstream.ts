@@ -702,6 +702,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     controller.abort();
   }, 10000);
 
+  const readAt = Date.now(); // début de lecture cloud : garde « local plus récent » du helper
   let cloudUsers: any[] | null = null;
   try {
     const { data, error } = await supabase
@@ -786,7 +787,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
           statut_actif: u.statut_actif,
           sync_id: u.sync_id,
           roles: rolesForUser
-        }, { statutFromCloud: true });
+        }, { statutFromCloud: true, readAt });
         summary[res.action]++;
       }
       if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
