@@ -192,7 +192,8 @@ test.describe.serial('QA terrain — L2-0b session par id_user (cloud dev)', () 
     idA = (await byLogin(P + 'DEL2')).id_user;
     c0 = refreshCount();
     await fresh(P + 'DEL2');
-    const del = await sqlWrite(A, `DELETE FROM t_user_roles WHERE id_user=${idA}`).then(() => sqlWrite(A, `DELETE FROM t_users WHERE id_user=${idA}`)).catch((e) => ({ err: String(e.message).slice(0, 200) }));
+    // t_logs.id_user -> t_users sans ON DELETE CASCADE (schema.ts:911) : le login a ecrit des lignes d'audit, a purger avant le DELETE.
+    const del = await sqlWrite(A, `DELETE FROM t_logs WHERE id_user=${idA}`).then(() => sqlWrite(A, `DELETE FROM t_user_roles WHERE id_user=${idA}`)).then(() => sqlWrite(A, `DELETE FROM t_users WHERE id_user=${idA}`)).catch((e) => ({ err: String(e.message).slice(0, 200) }));
     log('DEL2 suppression locale =', J(del), J(await sqlRead(A, `SELECT id_user FROM t_users WHERE id_user=${idA}`)));
     expect(await waitRefresh(c0, 60000)).toBe(true);
     h = await hashUi(); s = await snap();
