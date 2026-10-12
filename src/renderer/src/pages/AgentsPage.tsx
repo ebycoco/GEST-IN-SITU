@@ -21,11 +21,32 @@ const AVAILABLE_ROLES = [
   { value: 'OPERATEUR_VERIFICATION', label: 'Opérateur de Vérification (Recherche & Délivrance)' },
   { value: 'OPERATEUR_SAISIE', label: 'Opérateur de Saisie (Nouvelle Saisie)' },
   { value: 'OPERATEUR_LOGISTIQUE', label: 'Opérateur Logistique (Scan, Classement, Apurement)' },
+  { value: 'OPERATEUR_INVENTAIRE', label: 'Opérateur Inventaire (Inventaire physique & stocks)' },
   { value: 'OPERATEUR_QUALITE', label: 'Opérateur Qualité (Correction & Fusion)' },
   { value: 'OPERATEUR_APUREMENT', label: 'Opérateur Apurement (Émargement historique)' },
   { value: 'ADMINISTRATEUR_SITE', label: 'Administrateur de Site (Totalité)' },
   { value: 'ADMIN_CENTRE', label: 'Administrateur de Centre (Local)' },
 ];
+
+// Libellés courts des badges de rôle du tableau (libellé complet en title). Affichage seul.
+const ROLE_SHORT_LABELS: Record<string, string> = {
+  'SUPER ADMIN': 'Super Admin',
+  ADMINISTRATEUR_SITE: 'Admin Site',
+  ADMIN_CENTRE: 'Admin Centre',
+  OPERATEUR_VERIFICATION: 'Vérification',
+  OPERATEUR_SAISIE: 'Saisie',
+  OPERATEUR_LOGISTIQUE: 'Logistique',
+  OPERATEUR_QUALITE: 'Qualité',
+  OPERATEUR_APUREMENT: 'Apurement',
+  OPERATEUR_INVENTAIRE: 'Inventaire',
+};
+
+// Grille unique partagée par l'en-tête et les lignes du tableau Agents
+// (Agent | Rôle | Centre/Site | Contact | Dernière co. | Statut | Actions).
+const AGENTS_GRID_COLUMNS =
+  'minmax(150px, 2fr) minmax(110px, 1.2fr) minmax(110px, 1.2fr) minmax(120px, 1.4fr) minmax(100px, 1.1fr) 84px 148px';
+
+const ELLIPSIS: React.CSSProperties = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 };
 
 /**
  * LOT 1c (P2-2) : retire le préfixe technique Electron « Error invoking remote method '<canal>': Error: »
@@ -566,21 +587,21 @@ export default function AgentsPage() {
       </div>
 
       {/* Stats Dashboard */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
         {[
           { label: 'Total Agents', value: stats.total, icon: Users, color: 'var(--accent-primary)' },
           { label: 'Agents Actifs', value: stats.active, icon: UserCheck, color: 'var(--accent-green)' },
           { label: 'Administrateurs', value: stats.admins, icon: ShieldCheck, color: 'var(--accent-purple)' },
           { label: 'Opérateurs', value: stats.operators, icon: UserX, color: 'var(--text-muted)' }
         ].map((s, i) => (
-          <div key={i} className="card" style={{ padding: '20px 24px', background: 'var(--premium-glass)', border: '1px solid rgba(255,255,255,0.05)' }}>
+          <div key={i} className="card" style={{ padding: '12px 16px', background: 'var(--premium-glass)', border: '1px solid rgba(255,255,255,0.05)' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div>
                 <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 13, fontWeight: 500 }}>{s.label}</p>
-                <h3 style={{ margin: '4px 0 0 0', fontSize: 28, fontWeight: 800 }}>{s.value}</h3>
+                <h3 style={{ margin: '4px 0 0 0', fontSize: 24, fontWeight: 800 }}>{s.value}</h3>
               </div>
-              <div style={{ width: 48, height: 48, borderRadius: 16, background: `${s.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <s.icon size={24} color={s.color} />
+              <div style={{ width: 40, height: 40, borderRadius: 12, background: `${s.color}15`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <s.icon size={20} color={s.color} />
               </div>
             </div>
           </div>
@@ -589,80 +610,86 @@ export default function AgentsPage() {
 
       {/* Agents Table */}
       <div className="table-responsive-wrapper" style={{ overflowX: 'auto', overflowY: 'hidden', width: '100%', borderRadius: 24, border: '1px solid rgba(255,255,255,0.05)' }}>
-        <div style={{ minWidth: 1000, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
+        <div style={{ minWidth: 910, display: 'flex', flexDirection: 'column', background: 'var(--bg-secondary)' }}>
           
           {/* L'En-tête des colonnes (Header) avec son padding de synchronisation */}
-          <div style={{ display: 'flex', alignItems: 'center', padding: '16px 24px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-            <div style={{ flex: 2, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>AGENT / LOGIN</div>
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>RÔLE / ACCÈS</div>
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>SITE</div>
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>CENTRE</div>
-            <div style={{ flex: 1.5, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>CONTACT</div>
-            <div style={{ flex: 1.5, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>DERNIÈRE CO.</div>
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>STATUT</div>
-            <div style={{ flex: 1, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', textAlign: 'right' }}>ACTIONS</div>
+          <div style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID_COLUMNS, columnGap: 10, alignItems: 'center', padding: '12px 12px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+            {['AGENT / LOGIN', 'RÔLE / ACCÈS', 'CENTRE / SITE', 'CONTACT', 'DERNIÈRE CO.', 'STATUT', 'ACTIONS'].map((h, i) => (
+              <div key={h} style={{ ...ELLIPSIS, fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', textAlign: i === 6 ? 'right' : 'left' }}>{h}</div>
+            ))}
           </div>
 
           {/* La liste ou le corps du tableau (si virtualisé ou classique sous forme de lignes) */}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {paginatedUsers.map(u => (
-              <div key={u.id_user} className="table-row-hover" style={{ display: 'flex', alignItems: 'center', padding: '16px 24px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'all 0.2s' }}>
+              <div key={u.id_user} className="table-row-hover" style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID_COLUMNS, columnGap: 10, alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'all 0.2s' }}>
                 
                 {/* AGENT */}
-                <div style={{ flex: 2, display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                   <div style={{ 
-                    width: 40, height: 40, borderRadius: 12, 
+                    width: 34, height: 34, borderRadius: 10, flexShrink: 0,
                     background: u.role === 'SUPER ADMIN' ? 'var(--gradient-primary)' : 'rgba(255,255,255,0.05)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 14, fontWeight: 700, color: 'white'
                   }}>
                     {u.nom_user?.charAt(0)}{u.prenom_user?.charAt(0)}
                   </div>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: 'white' }}>{u.nom_user} {u.prenom_user}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>@{u.login}</div>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div title={`${u.nom_user} ${u.prenom_user}`} style={{ ...ELLIPSIS, fontWeight: 700, fontSize: 13, color: 'white' }}>{u.nom_user} {u.prenom_user}</div>
+                    <div title={`@${u.login}`} style={{ ...ELLIPSIS, fontSize: 12, color: 'var(--text-muted)' }}>@{u.login}</div>
                   </div>
                 </div>
 
                 {/* RÔLE / ACCÈS */}
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
-                  {(u.roles || [u.role]).map(r => (
-                    <span key={r} className={`badge ${r === 'SUPER ADMIN' ? 'badge-primary' : 'badge-outline'}`} style={{ fontSize: 9, fontWeight: 800 }}>
-                      {r}
-                    </span>
-                  ))}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'flex-start', minWidth: 0 }}>
+                  {(u.roles || [u.role]).map(r => {
+                    const isSuper = r === 'SUPER ADMIN';
+                    return (
+                      <span
+                        key={r}
+                        title={AVAILABLE_ROLES.find(ar => ar.value === r)?.label || r}
+                        style={{
+                          fontSize: 11, fontWeight: 700, lineHeight: 1.3, padding: '2px 8px', borderRadius: 6, whiteSpace: 'nowrap',
+                          border: `1px solid ${isSuper ? 'rgba(251, 191, 36, 0.6)' : 'rgba(255,255,255,0.25)'}`,
+                          background: isSuper ? 'rgba(251, 191, 36, 0.15)' : 'rgba(255,255,255,0.06)',
+                          color: isSuper ? '#fbbf24' : 'var(--text-secondary)'
+                        }}
+                      >
+                        {ROLE_SHORT_LABELS[r] || r}
+                      </span>
+                    );
+                  })}
                 </div>
 
-                {/* SITE */}
-                <div style={{ flex: 1, fontSize: 13, color: 'var(--text-secondary)' }}>
-                  {u.site_nom || 'Non spécifié'}
-                </div>
-
-                {/* CENTRE */}
-                <div style={{ flex: 1 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 500, color: 'white' }}>
-                    <MapPin size={12} color="var(--accent-primary)" /> {u.centre_nom || 'Libre'}
+                {/* CENTRE / SITE */}
+                <div style={{ minWidth: 0 }}>
+                  <div title={u.centre_nom || 'Libre'} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 700, color: 'white', minWidth: 0 }}>
+                    <MapPin size={12} color="var(--accent-primary)" style={{ flexShrink: 0 }} />
+                    <span style={ELLIPSIS}>{u.centre_nom || 'Libre'}</span>
+                  </div>
+                  <div title={u.site_nom || 'Non spécifié'} style={{ ...ELLIPSIS, fontSize: 12, color: 'var(--text-muted)', paddingLeft: 18 }}>
+                    {u.site_nom || 'Non spécifié'}
                   </div>
                 </div>
 
                 {/* CONTACT */}
-                <div style={{ flex: 1.5 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {u.email && <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}><Mail size={10} /> {u.email}</div>}
-                    {u.telephone && <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-muted)' }}><Phone size={10} /> {u.telephone}</div>}
-                    {!u.email && !u.telephone && <span style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--text-muted)' }}>Non renseigné</span>}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+                    {u.email && <div title={u.email} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}><Mail size={10} style={{ flexShrink: 0 }} /> <span style={ELLIPSIS}>{u.email}</span></div>}
+                    {u.telephone && <div title={u.telephone} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}><Phone size={10} style={{ flexShrink: 0 }} /> <span style={ELLIPSIS}>{u.telephone}</span></div>}
+                    {!u.email && !u.telephone && <span style={{ fontSize: 12, fontStyle: 'italic', color: 'var(--text-muted)' }}>Non renseigné</span>}
                   </div>
                 </div>
 
                 {/* DERNIÈRE CO. */}
-                <div style={{ flex: 1.5 }}>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
                     <Clock size={12} /> {u.last_login ? new Date(u.last_login).toLocaleString() : 'Jamais'}
                   </div>
                 </div>
 
                 {/* STATUT */}
-                <div style={{ flex: 1 }}>
+                <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{ 
                       width: 8, height: 8, borderRadius: '50%', 
@@ -676,7 +703,7 @@ export default function AgentsPage() {
                 </div>
 
                 {/* ACTIONS */}
-                <div style={{ flex: 1, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexShrink: 0 }}>
                   <button className="btn btn-icon btn-outline btn-sm" onClick={() => openEditModal(u)} title="Modifier">
                     <Edit size={14} />
                   </button>
