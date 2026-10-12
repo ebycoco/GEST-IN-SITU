@@ -12,7 +12,7 @@ import {
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
 import { normalizeEmail, normalizePhone, validateEmail, validatePhone } from '../../../shared/utils/contact';
-import { resolveLastLogin } from './agentsLastLogin';
+import { resolveLastLogin, formatLastLoginShort, lastLoginOriginBadge } from './agentsLastLogin';
 
 interface User extends IUser {
   centre_nom?: string;
@@ -191,8 +191,19 @@ export default function AgentsPage() {
 
   // 3C : validation en direct des coordonnées (mêmes règles que ProfilePage, via shared/utils/contact).
   // Champs facultatifs : vide => null => aucune erreur. Calcul pur et synchrone (négligeable en RAM/CPU).
-  const emailError = useMemo(() => validateEmail(normalizeEmail(formData.email)), [formData.email]);
-  const phoneError = useMemo(() => validatePhone(normalizePhone(formData.telephone)), [formData.telephone]);
+  // P1-A : en édition, les valeurs de contact initiales sont mémorisées à l'ouverture du modal ;
+  // un contact historique invalide NON modifié ne bloque ni n'affiche d'erreur (seule une valeur
+  // qui diffère de l'initiale est validée, et seule celle-ci est envoyée au main).
+  const [initialContact, setInitialContact] = useState<{ email: string; telephone: string }>({ email: '', telephone: '' });
+  const emailChanged = !isEditing || normalizeEmail(formData.email) !== normalizeEmail(initialContact.email);
+  const phoneChanged = !isEditing || normalizePhone(formData.telephone) !== normalizePhone(initialContact.telephone);
+  const rawEmailError = useMemo(() => validateEmail(normalizeEmail(formData.email)), [formData.email]);
+  const rawPhoneError = useMemo(() => validatePhone(normalizePhone(formData.telephone)), [formData.telephone]);
+  const emailError = emailChanged ? rawEmailError : null;
+  const phoneError = phoneChanged ? rawPhoneError : null;
+  // Mention discrète non bloquante : champ historique invalide laissé inchangé.
+  const emailLegacy = !emailChanged && !!rawEmailError;
+  const phoneLegacy = !phoneChanged && !!rawPhoneError;
 
   const toggleRole = (role: string) => {
     const currentRoles = [...formData.roles];
@@ -490,10 +501,11 @@ export default function AgentsPage() {
           roles: formData.roles,
           nom_user: formData.nom_user, 
           prenom_user: formData.prenom_user,
-          email: formData.email,
-          telephone: formData.telephone,
           centre_id: formData.centre_id ? parseInt(formData.centre_id) : null
         };
+        // P1-A : contact envoyé uniquement s'il a changé par rapport à l'ouverture du modal.
+        if (emailChanged) updateData.email = formData.email;
+        if (phoneChanged) updateData.telephone = formData.telephone;
         if (formData.password) updateData.password = formData.password;
         await window.api.users.update(editId, updateData);
         toast.success('Agent modifié avec succès');
@@ -538,6 +550,7 @@ export default function AgentsPage() {
       email: user.email || '',
       telephone: user.telephone || ''
     });
+    setInitialContact({ email: user.email || '', telephone: user.telephone || '' });
     setShowModal(true);
   };
 
@@ -556,6 +569,7 @@ export default function AgentsPage() {
       email: '', 
       telephone: ''
     });
+    setInitialContact({ email: '', telephone: '' });
     setShowPassword(false);
   };
 
@@ -741,17 +755,21 @@ export default function AgentsPage() {
                 <div style={{ minWidth: 0 }}>
                   {(() => {
                     const ll = resolveLastLogin(u.role, u.sync_id, u.last_login, cloudLogins);
-                    const when = ll.iso ? new Date(ll.iso).toLocaleString('fr-FR') : '';
-                    const label = ll.source === 'untracked' ? 'Non suivi' : ll.source === 'never' ? 'Jamais' : when;
+                    const whenFull = ll.iso ? new Date(ll.iso).toLocaleString('fr-FR') : '';
+                    const label = ll.source === 'untracked' ? 'Non suivi' : ll.source === 'never' ? 'Jamais' : formatLastLoginShort(ll.iso);
+                    const badge = lastLoginOriginBadge(ll.source);
                     const tip = ll.source === 'untracked'
                       ? "Ce rôle n'est pas suivi par la présence cloud"
                       : ll.source === 'local'
-                        ? 'Dernière connexion enregistrée sur ce poste (donnée cloud indisponible)'
-                        : ll.source === 'cloud' ? 'Dernière connexion (cloud)' : 'Aucune connexion enregistrée';
+                        ? `${whenFull} - Dernière connexion enregistrée sur ce poste (donnée cloud indisponible)`
+                        : ll.source === 'cloud' ? `${whenFull} - Dernière connexion (cloud)` : 'Aucune connexion enregistrée';
                     return (
                       <div title={tip} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}>
                         <Clock size={12} style={{ flexShrink: 0 }} />
-                        <span style={ELLIPSIS}>{label}{ll.source === 'local' && <span style={{ fontSize: 10, opacity: 0.8 }}> (local)</span>}</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.2 }}>
+                          <span style={ELLIPSIS}>{label}</span>
+                          {badge && <span style={{ fontSize: 10, opacity: 0.7 }}>{badge}</span>}
+                        </div>
                       </div>
                     );
                   })()}
@@ -1001,6 +1019,7 @@ export default function AgentsPage() {
                     />
                   </div>
                   {emailError && <div id="agent-email-err" role="alert" style={{ color: '#ef4444', fontSize: 12, marginTop: 6, lineHeight: 1.3 }}>{emailError}</div>}
+                  {emailLegacy && <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6, lineHeight: 1.3 }}>Format ancien (non bloquant) : modifiez-le pour le corriger.</div>}
                 </div>
                 <div className="form-group" style={{ flex: 1, minWidth: 0 }}>
                   <label className="form-label" htmlFor="agent-tel" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Téléphone</label>
@@ -1020,6 +1039,7 @@ export default function AgentsPage() {
                     />
                   </div>
                   {phoneError && <div id="agent-tel-err" role="alert" style={{ color: '#ef4444', fontSize: 12, marginTop: 6, lineHeight: 1.3 }}>{phoneError}</div>}
+                  {phoneLegacy && <div style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 6, lineHeight: 1.3 }}>Format ancien (non bloquant) : modifiez-le pour le corriger.</div>}
                 </div>
               </div>
 

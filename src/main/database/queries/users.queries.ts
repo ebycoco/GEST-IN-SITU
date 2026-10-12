@@ -672,17 +672,30 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   let contactChanged = false;
   if (data.email !== undefined || data.telephone !== undefined) {
     const current = db.prepare('SELECT email, telephone FROM t_users WHERE id_user = ?').get(id) as { email?: string | null; telephone?: string | null } | undefined;
+    // P1-A : on normalise et on compare à la valeur locale AVANT de valider. Une valeur inchangée
+    // (y compris un contact historique invalide, ex. téléphone sans '+') est ignorée sans validation
+    // et n'est jamais réécrite ; toute valeur qui DIFFÈRE reste validée (aucune valeur invalide écrite).
     if (data.email !== undefined) {
       const email = normalizeEmail(data.email);
-      const err = validateEmail(email);
-      if (err) throw new Error(err);
-      if (email === normalizeEmail(current?.email)) delete data.email; else { data.email = email; contactChanged = true; }
+      if (email === normalizeEmail(current?.email)) {
+        delete data.email;
+      } else {
+        const err = validateEmail(email);
+        if (err) throw new Error(err);
+        data.email = email;
+        contactChanged = true;
+      }
     }
     if (data.telephone !== undefined) {
       const tel = normalizePhone(data.telephone);
-      const err = validatePhone(tel);
-      if (err) throw new Error(err);
-      if (tel === normalizePhone(current?.telephone)) delete data.telephone; else { data.telephone = tel; contactChanged = true; }
+      if (tel === normalizePhone(current?.telephone)) {
+        delete data.telephone;
+      } else {
+        const err = validatePhone(tel);
+        if (err) throw new Error(err);
+        data.telephone = tel;
+        contactChanged = true;
+      }
     }
     // Une seule des deux clés modifiée : le payload outbox porte les deux (valeurs locales à jour).
     if (contactChanged) {
@@ -768,6 +781,32 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
         throw err;
       }
 
+      // P1-B : enqueueOutbox REMPLACE le payload d'une entrée en attente (pas de fusion). Si une
+      // entrée t_users PENDING/ERROR existe pour ce sync_id et porte un contact (modifié hors
+      // ligne), et que cet appel ne change pas le contact, on reporte ces deux clés (valeurs de
+      // l'entrée en attente) dans le nouveau payload pour ne pas les perdre. Lecture seule,
+      // dans la transaction ; toute erreur de lecture/parsing -> aucun report (comportement
+      // historique). Sans contact en attente, le payload reste strictement identique.
+      let pendingContact: { email?: string | null; telephone?: string | null } | null = null;
+      if (!contactChanged) {
+        try {
+          const pending = db.prepare(
+            "SELECT payload FROM t_outbox WHERE id = ? AND table_name = 't_users' AND status IN ('PENDING','ERROR')"
+          ).get(user.sync_id) as { payload?: string } | undefined;
+          if (pending?.payload) {
+            const prev = JSON.parse(pending.payload) as Record<string, unknown>;
+            if ('email' in prev || 'telephone' in prev) {
+              pendingContact = {
+                ...('email' in prev ? { email: normalizeEmail(prev.email) } : {}),
+                ...('telephone' in prev ? { telephone: normalizePhone(prev.telephone) } : {})
+              };
+            }
+          }
+        } catch (e) {
+          console.error('[updateUser] Lecture du contact en attente (outbox) impossible, aucun report :', e);
+        }
+      }
+
       outboxItems.push({
         id: user.sync_id,
         table: 't_users',
@@ -776,8 +815,10 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
           sync_id: user.sync_id,
           ...updatedUser,
           // Contact : inclus UNIQUEMENT si modifié dans cet appel (sinon payload strictement
-          // inchangé -> un toggle de statut ne pousse jamais un contact local périmé).
+          // inchangé -> un toggle de statut ne pousse jamais un contact local périmé),
+          // ou reporté depuis une entrée outbox en attente (P1-B).
           ...(contactChanged ? { email: data.email as string | null, telephone: data.telephone as string | null } : {}),
+          ...(pendingContact ?? {}),
           updated_at: new Date().toISOString()
         }
       });

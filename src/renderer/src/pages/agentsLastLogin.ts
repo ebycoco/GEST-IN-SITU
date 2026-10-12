@@ -53,6 +53,26 @@ export function sqliteUtcToIso(value: string | null | undefined): string | null 
   return Number.isNaN(ms) ? null : new Date(ms).toISOString();
 }
 
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+
+/**
+ * Format court (heure locale du poste) pour la colonne étroite : « jj/mm HH:MM » si l'année est
+ * l'année courante, sinon « jj/mm/aa HH:MM ». ISO invalide/absent -> chaîne vide. `now` injectable (tests).
+ */
+export function formatLastLoginShort(iso: string | null | undefined, now: Date = new Date()): string {
+  const ms = isoToMs(iso);
+  if (ms === null) return '';
+  const d = new Date(ms);
+  const datePart = `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`;
+  const yearPart = d.getFullYear() === now.getFullYear() ? '' : `/${pad2(d.getFullYear() % 100)}`;
+  return `${datePart}${yearPart} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** Libellé d'origine affiché sous la date (null pour cloud/untracked/never : rien à signaler). */
+export function lastLoginOriginBadge(source: LastLoginSource): string | null {
+  return source === 'local' ? '• local' : null;
+}
+
 export function resolveLastLogin(
   primaryRole: string | null | undefined,
   syncId: string | null | undefined,

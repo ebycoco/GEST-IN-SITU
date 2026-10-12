@@ -78,6 +78,7 @@ describe('LOT 3B — contact (email/téléphone) createUser / updateUser', () =>
     db.prepare('DELETE FROM t_user_roles').run();
     db.prepare('DELETE FROM t_users').run();
     db.prepare('DELETE FROM audit_logs').run();
+    db.prepare('DELETE FROM t_outbox').run();
     (outbox.enqueueOutbox as unknown as { mockClear: () => void }).mockClear();
   });
 
@@ -200,6 +201,70 @@ describe('LOT 3B — contact (email/téléphone) createUser / updateUser', () =>
       expect(() => uq.updateUser(foreign.id_user, { email: 'x@ex.ci' }, caller(ac))).toThrow();
       expect(row('foreign').email).toBeNull();
       expect(calls()).toHaveLength(0);
+    });
+
+    // ── Correctifs P1-A (contact historique invalide) ──
+    it('P1-A : téléphone legacy invalide + autre champ => succès, aucune clé contact, valeur legacy intacte', () => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('l1', 'OPERATEUR_SAISIE', SITE_A, { telephone: '0707070707', email: 'pasunemail' });
+      uq.updateUser(t.id_user, { nom_user: 'Nouveau', email: 'pasunemail', telephone: ' 07 07 07 07 07' }, caller(adm));
+      const p = userPayloads()[0].p;
+      expect('email' in p).toBe(false);
+      expect('telephone' in p).toBe(false);
+      expect(row('l1').telephone).toBe('0707070707');
+      expect(row('l1').email).toBe('pasunemail');
+      expect((db.prepare('SELECT nom_user FROM t_users WHERE login = ?').get('l1') as { nom_user: string }).nom_user).toBe('Nouveau');
+    });
+
+    it('P1-A : legacy invalide + nouvelle valeur invalide => rejet, base intacte', () => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('l2', 'OPERATEUR_SAISIE', SITE_A, { telephone: '0707070707' });
+      expect(() => uq.updateUser(t.id_user, { telephone: '0808080808' }, caller(adm))).toThrow(/commencer par '\+'/);
+      expect(row('l2').telephone).toBe('0707070707');
+      expect(calls()).toHaveLength(0);
+    });
+
+    it('P1-A : legacy invalide remplacé par une valeur valide => écrit et poussé', () => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('l3', 'OPERATEUR_SAISIE', SITE_A, { telephone: '0707070707' });
+      uq.updateUser(t.id_user, { telephone: '+225 07 07 07 07 07' }, caller(adm));
+      expect(row('l3').telephone).toBe('+2250707070707');
+      expect(userPayloads()[0].p).toMatchObject({ telephone: '+2250707070707' });
+    });
+
+    // ── Correctifs P1-B (contact en attente dans l'outbox) ──
+    const seedPending = (syncId: string, payload: Record<string, unknown>, status = 'PENDING') =>
+      db.prepare("INSERT OR REPLACE INTO t_outbox (id, table_name, operation, payload, status) VALUES (?, 't_users', 'UPDATE', ?, ?)")
+        .run(syncId, JSON.stringify(payload), status);
+
+    it.each(['PENDING', 'ERROR'])('P1-B : contact en attente (%s) + update statut/nom => payload final garde le contact en attente', (status) => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('p1', 'OPERATEUR_SAISIE', SITE_A, { email: 'pending@ex.ci', telephone: '+2250102030405' });
+      seedPending(t.sync_id, { sync_id: t.sync_id, login: 'p1', email: 'pending@ex.ci', telephone: '+2250102030405' }, status);
+      uq.updateUser(t.id_user, { statut_actif: 0, nom_user: 'Autre' }, caller(adm));
+      expect(userPayloads()[0].p).toMatchObject({ statut_actif: 0, email: 'pending@ex.ci', telephone: '+2250102030405' });
+    });
+
+    it('P1-B : contact en attente puis nouveau changement de contact => la nouvelle valeur l\'emporte', () => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('p2', 'OPERATEUR_SAISIE', SITE_A, { email: 'pending@ex.ci', telephone: '+2250102030405' });
+      seedPending(t.sync_id, { sync_id: t.sync_id, email: 'pending@ex.ci', telephone: '+2250102030405' });
+      uq.updateUser(t.id_user, { email: 'newer@ex.ci' }, caller(adm));
+      expect(userPayloads()[0].p).toMatchObject({ email: 'newer@ex.ci', telephone: '+2250102030405' });
+    });
+
+    it('P1-B : entrée SYNCED ou sans contact => rien reporté ; toggle sans contact en attente => mêmes clés qu\'avant', () => {
+      const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
+      const t = mk('p3', 'OPERATEUR_SAISIE', SITE_A, { email: 'stale@ex.ci' });
+      seedPending(t.sync_id, { sync_id: t.sync_id, email: 'old@ex.ci', telephone: null }, 'SYNCED');
+      uq.updateUser(t.id_user, { statut_actif: 0 }, caller(adm));
+      const k = ['centre_id', 'login', 'nom_user', 'password_hash', 'prenom_user', 'role', 'site_id', 'statut_actif', 'sync_id', 'updated_at'];
+      expect(Object.keys(userPayloads()[0].p).sort()).toEqual(k);
+
+      const t2 = mk('p4', 'OPERATEUR_SAISIE', SITE_A);
+      seedPending(t2.sync_id, { sync_id: t2.sync_id, login: 'p4', statut_actif: 1 });
+      uq.updateUser(t2.id_user, { statut_actif: 0 }, caller(adm));
+      expect(Object.keys(userPayloads()[1].p).sort()).toEqual(k);
     });
 
     it('audit : « Contact modifié » sans valeur d\'email/téléphone', () => {

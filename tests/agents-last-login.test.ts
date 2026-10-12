@@ -14,6 +14,8 @@ vi.mock('../src/main/sync/supabase-client', () => ({
 import {
   resolveLastLogin,
   sqliteUtcToIso,
+  formatLastLoginShort,
+  lastLoginOriginBadge,
   PRESENCE_TRACKED_ROLES,
 } from '../src/renderer/src/pages/agentsLastLogin';
 import { isPresenceTrackedRole } from '../src/main/sync/presence.service';
@@ -62,6 +64,24 @@ describe('sqliteUtcToIso', () => {
     expect(sqliteUtcToIso(null)).toBeNull();
     expect(sqliteUtcToIso('  ')).toBeNull();
     expect(sqliteUtcToIso('xx')).toBeNull();
+  });
+});
+
+describe('formatLastLoginShort / lastLoginOriginBadge', () => {
+  const now = new Date(2026, 9, 12, 12, 0, 0); // heure locale, indépendant du fuseau
+  it('année courante : jj/mm HH:MM (heure locale)', () => {
+    expect(formatLastLoginShort(new Date(2026, 9, 11, 9, 15).toISOString(), now)).toBe('11/10 09:15');
+  });
+  it('autre année : jj/mm/aa HH:MM', () => {
+    expect(formatLastLoginShort(new Date(2025, 0, 5, 18, 3).toISOString(), now)).toBe('05/01/25 18:03');
+  });
+  it('invalide / absent -> chaîne vide', () => {
+    expect(formatLastLoginShort(null, now)).toBe('');
+    expect(formatLastLoginShort('xx', now)).toBe('');
+  });
+  it('repère d\'origine : seulement pour local', () => {
+    expect(lastLoginOriginBadge('local')).toBe('• local');
+    for (const s of ['cloud', 'untracked', 'never'] as const) expect(lastLoginOriginBadge(s)).toBeNull();
   });
 });
 
