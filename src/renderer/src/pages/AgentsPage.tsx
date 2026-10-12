@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { IUser } from '../../../shared/types';
@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
+import { normalizeEmail, normalizePhone, validateEmail, validatePhone } from '../../../shared/utils/contact';
+import { resolveLastLogin } from './agentsLastLogin';
 
 interface User extends IUser {
   centre_nom?: string;
@@ -187,6 +189,11 @@ export default function AgentsPage() {
     telephone: ''
   });
 
+  // 3C : validation en direct des coordonnées (mêmes règles que ProfilePage, via shared/utils/contact).
+  // Champs facultatifs : vide => null => aucune erreur. Calcul pur et synchrone (négligeable en RAM/CPU).
+  const emailError = useMemo(() => validateEmail(normalizeEmail(formData.email)), [formData.email]);
+  const phoneError = useMemo(() => validatePhone(normalizePhone(formData.telephone)), [formData.telephone]);
+
   const toggleRole = (role: string) => {
     const currentRoles = [...formData.roles];
     const index = currentRoles.indexOf(role);
@@ -266,6 +273,51 @@ export default function AgentsPage() {
       .then(setCentres)
       .catch((e) => console.error('[AgentsPage] getCentres error:', e));
   }, [userContext?.role, userContext?.site_id, activeSiteId]);
+
+  // 3D : dernière connexion cloud (Map<sync_id, last_login_at ISO>, seule donnée conservée — RAM).
+  // Un seul appel presence.getAgents() au montage et au clic sur Rafraîchir : PAS de polling et PAS
+  // d'appel dans app:data-updated / onUsersSynced. Sauté si l'état réseau n'est pas ONLINE ; course
+  // contre un timeout de 8 s ; tout échec => Map inchangée (repli local silencieux, sans toast).
+  const CLOUD_LOGIN_TIMEOUT_MS = 8000;
+  const [cloudLogins, setCloudLogins] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const loadCloudLogins = useCallback(async (isCancelled: () => boolean) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!window.api?.presence?.getAgents) return;
+      if (window.api.sync?.getStatus) {
+        const status = await window.api.sync.getStatus();
+        if (isCancelled()) return;
+        if (status && status.state !== 'ONLINE') return; // hors ligne : repli local
+      }
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('presence.getAgents timeout')), CLOUD_LOGIN_TIMEOUT_MS);
+      });
+      const rows = await Promise.race([window.api.presence.getAgents(), timeout]);
+      if (isCancelled()) return;
+      const map = new Map<string, string>();
+      for (const r of rows || []) {
+        if (r.sync_id && r.last_login_at) map.set(r.sync_id, r.last_login_at);
+      }
+      setCloudLogins(map);
+    } catch (e) {
+      // Échec/timeout/accès refusé : silencieux (repli local), simple trace console.
+      console.warn('[AgentsPage] presence.getAgents indisponible, repli sur last_login local:', e);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCloudLogins(() => cancelled);
+    return () => { cancelled = true; };
+  }, [loadCloudLogins]);
 
   const [isPullingAgents, setIsPullingAgents] = useState(false);
   const [isPushingAgents, setIsPushingAgents] = useState(false);
@@ -425,7 +477,11 @@ export default function AgentsPage() {
       toast.error('Veuillez remplir les champs obligatoires');
       return;
     }
-    
+    if (emailError || phoneError) {
+      toast.error(emailError || phoneError || 'Coordonnées invalides');
+      return;
+    }
+
     try {
       if (isEditing && editId) {
         const updateData: any = { 
@@ -577,7 +633,7 @@ export default function AgentsPage() {
           <button 
             className="btn btn-outline" 
             style={{ width: 44, height: 44, padding: 0, borderRadius: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }} 
-            onClick={() => loadData()}
+            onClick={() => { loadData(); void loadCloudLogins(() => !mountedRef.current); }}
             disabled={loading || isPullingAgents || isPushingAgents}
             title="Rafraîchir la liste"
           >
@@ -683,9 +739,22 @@ export default function AgentsPage() {
 
                 {/* DERNIÈRE CO. */}
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
-                    <Clock size={12} /> {u.last_login ? new Date(u.last_login).toLocaleString() : 'Jamais'}
-                  </div>
+                  {(() => {
+                    const ll = resolveLastLogin(u.role, u.sync_id, u.last_login, cloudLogins);
+                    const when = ll.iso ? new Date(ll.iso).toLocaleString('fr-FR') : '';
+                    const label = ll.source === 'untracked' ? 'Non suivi' : ll.source === 'never' ? 'Jamais' : when;
+                    const tip = ll.source === 'untracked'
+                      ? "Ce rôle n'est pas suivi par la présence cloud"
+                      : ll.source === 'local'
+                        ? 'Dernière connexion enregistrée sur ce poste (donnée cloud indisponible)'
+                        : ll.source === 'cloud' ? 'Dernière connexion (cloud)' : 'Aucune connexion enregistrée';
+                    return (
+                      <div title={tip} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', minWidth: 0 }}>
+                        <Clock size={12} style={{ flexShrink: 0 }} />
+                        <span style={ELLIPSIS}>{label}{ll.source === 'local' && <span style={{ fontSize: 10, opacity: 0.8 }}> (local)</span>}</span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* STATUT */}
@@ -815,8 +884,10 @@ export default function AgentsPage() {
               background: 'linear-gradient(145deg, rgba(45, 50, 85, 0.95) 0%, rgba(20, 22, 40, 0.98) 100%)', 
               width: 'min(90vw, 580px)', 
               maxHeight: '90vh',
-              overflowY: 'auto',
-              padding: '32px 48px', 
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              padding: 0,
               borderRadius: 32,
               border: '1px solid rgba(255, 255, 255, 0.15)',
               boxShadow: '0 40px 80px rgba(0, 0, 0, 0.9), 0 0 40px rgba(99, 102, 241, 0.15), inset 0 1px 1px rgba(255, 255, 255, 0.2)',
@@ -826,7 +897,9 @@ export default function AgentsPage() {
           >
             <div style={{ position: 'absolute', top: 32, left: 0, width: 6, height: 32, background: 'var(--gradient-primary)', borderRadius: '0 4px 4px 0' }} />
             
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+            {/* Header fixe (modal-adaptatif-terrain) */}
+            <div style={{ flexShrink: 0, padding: '24px 48px 12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8 }}>
               <div style={{ width: 48, height: 48, borderRadius: 16, background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                 <Users size={24} color="var(--accent-primary)" />
               </div>
@@ -835,12 +908,15 @@ export default function AgentsPage() {
               </h3>
             </div>
             
-            <p style={{ color: 'var(--text-muted)', fontSize: 14, marginBottom: 24, lineHeight: 1.5 }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: 14, margin: 0, lineHeight: 1.5 }}>
               Définissez les informations de connexion et les niveaux d'accès pour ce compte.
             </p>
+            </div>
 
-            <form onSubmit={handleCreateOrUpdate} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              
+            <form onSubmit={handleCreateOrUpdate} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+              {/* Corps défilant */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 48px', display: 'flex', flexDirection: 'column', gap: 20 }}>
+
               <div style={{ display: 'flex', gap: 20 }}>
                 <div className="form-group" style={{ flex: 1 }}>
                   <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Identifiant (Login)<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
@@ -905,6 +981,48 @@ export default function AgentsPage() {
                 </div>
               </div>
 
+              <div style={{ display: 'flex', gap: 20 }}>
+                <div className="form-group" style={{ flex: 1, minWidth: 0 }}>
+                  <label className="form-label" htmlFor="agent-email" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Email</label>
+                  <div style={{ position: 'relative' }}>
+                    <Mail size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      id="agent-email"
+                      className="form-input"
+                      style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: `1px solid ${emailError ? '#ef4444' : 'rgba(255,255,255,0.1)'}`, height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }}
+                      type="text"
+                      inputMode="email"
+                      autoComplete="off"
+                      placeholder="utilisateur@domaine.com"
+                      value={formData.email}
+                      onChange={e => setFormData({ ...formData, email: e.target.value })}
+                      aria-invalid={!!emailError}
+                      aria-describedby={emailError ? 'agent-email-err' : undefined}
+                    />
+                  </div>
+                  {emailError && <div id="agent-email-err" role="alert" style={{ color: '#ef4444', fontSize: 12, marginTop: 6, lineHeight: 1.3 }}>{emailError}</div>}
+                </div>
+                <div className="form-group" style={{ flex: 1, minWidth: 0 }}>
+                  <label className="form-label" htmlFor="agent-tel" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Téléphone</label>
+                  <div style={{ position: 'relative' }}>
+                    <Phone size={18} style={{ position: 'absolute', left: 16, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input
+                      id="agent-tel"
+                      className="form-input"
+                      style={{ width: '100%', paddingLeft: 44, borderRadius: 16, background: 'rgba(255,255,255,0.03)', border: `1px solid ${phoneError ? '#ef4444' : 'rgba(255,255,255,0.1)'}`, height: 48, transition: 'all 0.2s', color: 'white', outline: 'none' }}
+                      type="tel"
+                      autoComplete="off"
+                      placeholder="+225 07 00 00 00 00"
+                      value={formData.telephone}
+                      onChange={e => setFormData({ ...formData, telephone: e.target.value })}
+                      aria-invalid={!!phoneError}
+                      aria-describedby={phoneError ? 'agent-tel-err' : undefined}
+                    />
+                  </div>
+                  {phoneError && <div id="agent-tel-err" role="alert" style={{ color: '#ef4444', fontSize: 12, marginTop: 6, lineHeight: 1.3 }}>{phoneError}</div>}
+                </div>
+              </div>
+
               <div className="form-group">
                 <label className="form-label" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8, display: 'block' }}>Permissions & Rôles multiples (Cochez tout ce qui s'applique)<span style={{ color: '#ef4444', marginLeft: '4px' }}>*</span></label>
                 <div style={{ 
@@ -957,7 +1075,10 @@ export default function AgentsPage() {
                 </div>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 16, marginTop: 16 }}>
+              </div>
+
+              {/* Footer fixe : boutons toujours visibles */}
+              <div style={{ flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: 16, padding: '16px 48px 24px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                 <button type="button" className="btn btn-outline" onClick={closeModal} style={{ borderRadius: 16, padding: '0 28px', height: 52, fontWeight: 600, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent' }}>
                   Annuler
                 </button>
