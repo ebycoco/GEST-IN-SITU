@@ -11,6 +11,7 @@ import { insertAuditLog } from './audit.queries';
 import { logAudit } from '../../utils/audit';
 import { recordPresenceLogin } from '../../sync/presence.service';
 import { isLicenseExpired } from '../../../shared/utils/license';
+import { normalizeEmail, normalizePhone, validateEmail, validatePhone } from '../../../shared/utils/contact';
 import { upsertCloudUser, type UpsertCloudUserAction } from '../../sync/users-sync.helper';
 
 // Rôles que chaque niveau d'administrateur est autorisé à attribuer à un agent.
@@ -310,6 +311,12 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   // LOT 1b (P2-2) : login normalisé (trim + NFC) et obligatoire.
   const loginValue = normalizeLoginInput(data.login);
 
+  // Contact facultatif : validé + normalisé AVANT toute écriture ('' -> NULL).
+  const emailValue = normalizeEmail(data.email);
+  const telephoneValue = normalizePhone(data.telephone);
+  const contactError = validateEmail(emailValue) || validatePhone(telephoneValue);
+  if (contactError) throw new Error(contactError);
+
   const hash = hashPassword(data.password as string);
   const syncId = uuidv4();
 
@@ -349,9 +356,13 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
       const result = db.prepare(`
         UPDATE t_users
         SET login = @login, password_hash = @hash, role = @role, nom_user = @nom_user, prenom_user = @prenom_user,
-            statut_actif = 1, centre_id = @centre_id, site_id = @site_id, sync_id = @sync_id, is_dirty = 1
+            statut_actif = 1, centre_id = @centre_id, site_id = @site_id, sync_id = @sync_id, is_dirty = 1,
+            email = @email, telephone = @telephone
         WHERE id_user = @id
       `).run({
+        // Réinitialisation explicite du contact (NULL si non fourni) : jamais d'héritage de l'ancien compte -1.
+        email: emailValue,
+        telephone: telephoneValue,
         id: existing.id_user,
         login: loginValue,
         hash,
@@ -383,6 +394,8 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
           site_id: targetSiteId,
           centre_id: targetCentreId,
           statut_actif: 1,
+          email: emailValue,
+          telephone: telephoneValue,
           updated_at: new Date().toISOString()
         }
       });
@@ -407,10 +420,12 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
     }
 
     const result = db.prepare(`
-      INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, site_id, sync_id, is_dirty)
-      VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @site_id, @sync_id, 1)
-    `).run({ 
-      login: loginValue, 
+      INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, centre_id, site_id, sync_id, is_dirty, email, telephone)
+      VALUES (@login, @hash, @role, @nom_user, @prenom_user, 1, @centre_id, @site_id, @sync_id, 1, @email, @telephone)
+    `).run({
+      email: emailValue,
+      telephone: telephoneValue,
+      login: loginValue,
       hash, 
       role: primaryRole, 
       nom_user: data.nom_user || '', 
@@ -440,7 +455,9 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
         prenom_user: data.prenom_user || '',
         site_id: targetSiteId,
         centre_id: targetCentreId,
-        statut_actif: 1
+        statut_actif: 1,
+        email: emailValue,
+        telephone: telephoneValue
       }
     });
 
@@ -649,6 +666,31 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
     }
   }
 
+  // Contact (email/téléphone) : validé + normalisé AVANT toute écriture. Une clé n'est conservée
+  // que si elle diffère de la valeur locale actuelle (après normalisation) : une clé absente ou
+  // inchangée est retirée de data -> ni colonne posée, ni clé dans le payload outbox.
+  let contactChanged = false;
+  if (data.email !== undefined || data.telephone !== undefined) {
+    const current = db.prepare('SELECT email, telephone FROM t_users WHERE id_user = ?').get(id) as { email?: string | null; telephone?: string | null } | undefined;
+    if (data.email !== undefined) {
+      const email = normalizeEmail(data.email);
+      const err = validateEmail(email);
+      if (err) throw new Error(err);
+      if (email === normalizeEmail(current?.email)) delete data.email; else { data.email = email; contactChanged = true; }
+    }
+    if (data.telephone !== undefined) {
+      const tel = normalizePhone(data.telephone);
+      const err = validatePhone(tel);
+      if (err) throw new Error(err);
+      if (tel === normalizePhone(current?.telephone)) delete data.telephone; else { data.telephone = tel; contactChanged = true; }
+    }
+    // Une seule des deux clés modifiée : le payload outbox porte les deux (valeurs locales à jour).
+    if (contactChanged) {
+      data.email = data.email !== undefined ? data.email : normalizeEmail(current?.email);
+      data.telephone = data.telephone !== undefined ? data.telephone : normalizePhone(current?.telephone);
+    }
+  }
+
   if (data.password) {
     data.password_hash = hashPassword(data.password as string);
     delete data.password;
@@ -665,7 +707,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   // ou un appel interne sans creator (comportement historique).
   const allowedUserColumns = [
     'login', 'password_hash', 'role', 'nom_user', 'prenom_user',
-    'statut_actif', 'site_id', 'centre_id'
+    'statut_actif', 'site_id', 'centre_id', 'email', 'telephone'
   ];
 
   const filteredKeys = Object.keys(data).filter(k => allowedUserColumns.includes(k));
@@ -733,6 +775,9 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
         payload: {
           sync_id: user.sync_id,
           ...updatedUser,
+          // Contact : inclus UNIQUEMENT si modifié dans cet appel (sinon payload strictement
+          // inchangé -> un toggle de statut ne pousse jamais un contact local périmé).
+          ...(contactChanged ? { email: data.email as string | null, telephone: data.telephone as string | null } : {}),
           updated_at: new Date().toISOString()
         }
       });
@@ -772,7 +817,8 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   insertAuditLog(
     creator?.login || creator?.role || 'SYSTEM',
     'AGENT',
-    `[MODIFICATION] Agent ID ${id} (Login: ${txResult.user?.login || (data.login as string | undefined) || 'Inconnu'}) mis à jour avec succès.`
+    // Jamais d'email/téléphone dans l'audit : seule la mention « contact modifié ».
+    `[MODIFICATION] Agent ID ${id} (Login: ${txResult.user?.login || (data.login as string | undefined) || 'Inconnu'}) mis à jour avec succès.${contactChanged ? ' Contact modifié.' : ''}`
   );
 
   return txResult.result;
