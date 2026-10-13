@@ -2997,7 +2997,7 @@ export function countDrafts(siteId: number, userId: number): number {
  * sont pas des brouillons : elles ne sont pas concernées par cette
  * validation et continuent d'être enfilées normalement.
  */
-export function publishDrafts(siteId: number, userId: number): { publishedCount: number; skippedInvalidDateCount: number } {
+export function publishDrafts(siteId: number, userId: number): { publishedCount: number; skippedInvalidDateCount: number; promotedCount: number } {
   const db = getDatabase()!;
   const now = new Date().toISOString();
 
@@ -3008,10 +3008,14 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
   `).all(siteId, userId) as any[];
 
   if (modifiedCartes.length === 0) {
-    return { publishedCount: 0, skippedInvalidDateCount: 0 };
+    return { publishedCount: 0, skippedInvalidDateCount: 0, promotedCount: 0 };
   }
 
   let skippedInvalidDateCount = 0;
+  // Nombre de brouillons réellement passés de BROUILLON à EN STOCK dans la transaction
+  // (somme des .changes de l'UPDATE ci-dessous) — contrairement à publishedCount, qui inclut
+  // aussi les cartes déjà EN STOCK encore is_dirty=1 ré-enfilées dans l'outbox.
+  let promotedCount = 0;
 
   const tx = db.transaction(() => {
     const updateBrouillonStmt = db.prepare(`
@@ -3028,7 +3032,7 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
           skippedInvalidDateCount++;
           continue;
         }
-        updateBrouillonStmt.run(now, now, carte.id_carte);
+        promotedCount += updateBrouillonStmt.run(now, now, carte.id_carte).changes;
         carte.statut = 'EN STOCK';
         carte.updated_at = now;
         carte.action_at = now;
@@ -3067,5 +3071,5 @@ export function publishDrafts(siteId: number, userId: number): { publishedCount:
     }
   }
 
-  return { publishedCount, skippedInvalidDateCount };
+  return { publishedCount, skippedInvalidDateCount, promotedCount };
 }
