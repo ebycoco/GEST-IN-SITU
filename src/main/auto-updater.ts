@@ -20,6 +20,9 @@ const E2E_DISABLE_SYNC = process.env.GEST_IN_SITU_E2E_DISABLE_SYNC === '1';
 // confirmer que la version installée correspond bien à celle attendue.
 const PENDING_UPDATE_MARKER_FILENAME = 'pending-update.json';
 
+// Intervalle de la recherche périodique de mise à jour (en plus de celle à 10 s du démarrage).
+const PERIODIC_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
 // État de module : mémorise la version prête à être installée dès que
 // l'événement 'update-downloaded' d'electron-updater est reçu. `null` tant
 // qu'aucune mise à jour n'est prête.
@@ -114,6 +117,30 @@ export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
       log.error('[AutoUpdater] Erreur lors de la recherche automatique:', err);
     });
   }, 10000);
+
+  // ─── RECHERCHE PÉRIODIQUE (toutes les 4 h) ─────────────────────────────────
+  // Un poste terrain peut rester ouvert plusieurs jours : sans ceci, une version publiée
+  // après le démarrage ne serait jamais détectée. Gardes : (1) pas de nouvelle recherche
+  // si une mise à jour est déjà téléchargée (updateReadyVersion) ; (2) pas d'empilement si
+  // une vérification périodique précédente est encore en cours ; (3) toute erreur (réseau
+  // absent = cas normal offline-first) est journalisée sans crasher ni notifier l'UI.
+  // Mémoire : un seul timer et un booléen, aucune donnée retenue. unref() : le timer
+  // n'empêche jamais la fermeture du process ; nettoyé aussi au 'before-quit'.
+  let periodicCheckRunning = false;
+  const periodicCheckTimer = setInterval(() => {
+    if (updateReadyVersion !== null || periodicCheckRunning) return;
+    periodicCheckRunning = true;
+    log.info('[AutoUpdater] Recherche périodique (4 h) de mise à jour lancée...');
+    autoUpdater.checkForUpdates()
+      .catch((err: any) => {
+        log.warn('[AutoUpdater] Recherche périodique échouée (non bloquant, réseau probablement indisponible):', err?.message || err);
+      })
+      .finally(() => {
+        periodicCheckRunning = false;
+      });
+  }, PERIODIC_CHECK_INTERVAL_MS);
+  periodicCheckTimer.unref();
+  app.once('before-quit', () => clearInterval(periodicCheckTimer));
 
   ipcMain.handle('updater:check', async () => {
     try {

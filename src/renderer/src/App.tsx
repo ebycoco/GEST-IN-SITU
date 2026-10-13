@@ -33,6 +33,7 @@ import { useEffect, useRef, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import { confirmService } from './components/confirmService';
 import UpdateReadyBanner from './components/UpdateReadyBanner';
+import { saveResumeContext, clearResumeContext } from './utils/resumeAfterUpdate';
 import LicenseExpiryBanner from './components/LicenseExpiryBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import AgentsPresencePage from './pages/AgentsPresencePage';
@@ -97,6 +98,8 @@ export default function App() {
   // vers null n'a lieu à ce moment-là, donc le push légitime est préservé.
   const hasUser = useAuthStore(s => s.user !== null);
   const hadUserRef = useRef(false);
+  // Minuteur de nettoyage de la clé de reprise si la fermeture « Installer maintenant » est annulée.
+  const resumeClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (hadUserRef.current && !hasUser) {
       if (licenseWarningTimeoutRef.current) {
@@ -188,6 +191,10 @@ export default function App() {
         clearTimeout(licenseWarningTimeoutRef.current);
         licenseWarningTimeoutRef.current = null;
       }
+      if (resumeClearTimeoutRef.current) {
+        clearTimeout(resumeClearTimeoutRef.current);
+        resumeClearTimeoutRef.current = null;
+      }
     };
   }, [checkAuth]);
 
@@ -207,11 +214,45 @@ export default function App() {
     }, reappearMs);
   };
 
+  // « Installer maintenant » : confirmation si un agent est connecté, sauvegarde de la route
+  // courante (reprise après mise à jour, cf. utils/resumeAfterUpdate.ts) puis fermeture de la
+  // fenêtre principale. L'installation elle-même est pilotée par le handler 'close' du main
+  // (contrôle synchro/import, dialogue « Forcer / Attendre », puis quitAndInstall). Le bandeau
+  // n'est volontairement pas masqué : si l'utilisateur choisit « Attendre », il peut réessayer.
+  const handleInstallNow = async () => {
+    const currentUser = useAuthStore.getState().user;
+    if (currentUser) {
+      const confirmed = await confirmService.confirm({
+        title: 'Installer la mise à jour',
+        message: "L'application va se fermer pour installer la mise à jour, puis se relancer automatiquement. Vous devrez vous reconnecter. Avez-vous enregistré votre travail ?",
+        confirmText: 'Installer maintenant',
+        cancelText: 'Annuler'
+      });
+      if (!confirmed) return;
+      saveResumeContext(currentUser, window.location.hash);
+    }
+    window.api.window.close();
+    // Filet « Attendre » : si le main annule la fermeture (dialogue synchro/import), l'appli reste
+    // vivante et la clé de reprise resterait 30 min dans localStorage. Si la fermeture est réelle,
+    // le renderer meurt avant l'échéance (flush présence main <= 1,5 s) : le minuteur disparaît avec
+    // lui et la clé est conservée pour la reprise. Un seul minuteur à la fois (annulé au re-clic /
+    // au démontage) ; aucune rétention mémoire notable.
+    if (resumeClearTimeoutRef.current) clearTimeout(resumeClearTimeoutRef.current);
+    resumeClearTimeoutRef.current = setTimeout(() => {
+      resumeClearTimeoutRef.current = null;
+      try {
+        clearResumeContext();
+      } catch {
+        /* localStorage indisponible : sans impact, la clé expire d'elle-même (TTL 30 min) */
+      }
+    }, 5000);
+  };
+
   return (
     <>
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
-      <UpdateReadyBanner visible={updateReady} onAcknowledge={() => setUpdateReady(false)} />
+      <UpdateReadyBanner visible={updateReady} onAcknowledge={() => setUpdateReady(false)} onInstallNow={handleInstallNow} />
       <LicenseExpiryBanner
         message={licenseWarning?.message ?? ''}
         visible={licenseWarningVisible && !!licenseWarning}

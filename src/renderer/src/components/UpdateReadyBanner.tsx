@@ -1,9 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { DownloadCloud, Sparkles, X } from 'lucide-react';
 
 interface UpdateReadyBannerProps {
   visible: boolean;
+  /** « Plus tard » (croix) : masque seulement le bandeau, sans rien déclencher. */
   onAcknowledge: () => void;
+  /**
+   * « Installer maintenant » : déclenche la fermeture de la fenêtre principale, qui lance
+   * l'installation (contrôle synchro/import côté main). Le bandeau n'est PAS masqué ici :
+   * si l'utilisateur choisit « Attendre » dans le dialogue de fermeture, il reste visible.
+   */
+  onInstallNow: () => void | Promise<void>;
 }
 
 /**
@@ -24,8 +31,25 @@ interface UpdateReadyBannerProps {
  * incidence puisque l'installation silencieuse a justement lieu à la
  * fermeture précédente.
  */
-export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateReadyBannerProps) {
+export default function UpdateReadyBanner({ visible, onAcknowledge, onInstallNow }: UpdateReadyBannerProps) {
+  // Garde anti-réentrance (double-clic) : bouton désactivé pendant le traitement, puis
+  // réarmé (cas « Attendre » ou annulation de la confirmation : le bandeau reste affiché).
+  const [busy, setBusy] = useState(false);
   if (!visible) return null;
+
+  const handleInstallNow = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onInstallNow();
+    } catch (err) {
+      console.error('[UpdateReadyBanner] Échec du lancement de l\'installation:', err);
+    } finally {
+      // Délai court : laisse le temps au dialogue de fermeture natif d'apparaître avant
+      // de réarmer le bouton.
+      setTimeout(() => setBusy(false), 1500);
+    }
+  };
 
   return (
     <div
@@ -86,7 +110,7 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
           <button
             onClick={onAcknowledge}
             aria-label="Fermer la notification"
-            title="J'ai compris"
+            title="Plus tard"
             style={{
               flexShrink: 0,
               background: 'transparent',
@@ -107,7 +131,7 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
         {/* Body */}
         <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--text-secondary)' }}>
           <p style={{ margin: 0 }}>
-            Une nouvelle version de GEST-IN-SITU va s'installer <strong style={{ color: '#fff' }}>à la prochaine fermeture</strong> de l'application. Une fenêtre d'installation va s'afficher : laissez-la se terminer, l'application redémarrera automatiquement ensuite.
+            Une nouvelle version est prête. Cliquez sur « <strong style={{ color: '#fff' }}>Installer maintenant</strong> » : l'application va se fermer, installer la mise à jour, puis se relancer automatiquement. Pensez à enregistrer votre travail.
           </p>
           <p style={{ margin: '10px 0 0 0', display: 'flex', gap: 8, alignItems: 'flex-start' }}>
             <span
@@ -124,16 +148,18 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
               }}
             />
             <span>
-              <strong style={{ color: '#fff' }}>Ne fermez pas cette fenêtre manuellement</strong> pendant la copie des fichiers : attendez qu'elle se termine et que l'application se relance d'elle-même.
+              <strong style={{ color: '#fff' }}>Ne fermez pas la fenêtre d'installation manuellement</strong> pendant la copie des fichiers : attendez qu'elle se termine et que l'application se relance d'elle-même.
             </span>
           </p>
         </div>
 
         {/* Footer */}
         <button
-          onClick={onAcknowledge}
+          onClick={handleInstallNow}
+          disabled={busy}
           className="btn-plein-soleil"
           style={{
+            opacity: busy ? 0.6 : 1,
             marginTop: 2,
             padding: '11px 18px',
             borderRadius: 12,
@@ -142,10 +168,10 @@ export default function UpdateReadyBanner({ visible, onAcknowledge }: UpdateRead
             backgroundColor: '#FFE600',
             color: '#000000',
             border: '1px solid #FFE600',
-            cursor: 'pointer'
+            cursor: busy ? 'default' : 'pointer'
           }}
         >
-          J'ai compris
+          Installer maintenant
         </button>
       </div>
     </div>

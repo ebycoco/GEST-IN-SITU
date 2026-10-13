@@ -2,9 +2,13 @@
 
 ### 🛠️ Corrections & Fiabilité
 
+- **Mises à jour : recherche automatique toutes les 4 heures** — l'application ne cherchait une nouvelle version qu'une seule fois, 10 secondes après son ouverture ; un poste resté ouvert plusieurs jours n'en trouvait donc pas de plus récente et semblait avancer version par version. Elle vérifie maintenant périodiquement (sans doublon, erreur réseau silencieuse hors ligne) et le poste récupère directement la dernière version publiée.
+
 - **Synchronisation des comptes : les comptes ignorés sont désormais expliqués dans le journal** — quand un téléchargement des comptes laisse de côté un compte (modification locale en attente, envoi en cours, compte supprimé, ou ligne locale plus récente que la lecture cloud), le journal indique le login et la raison exacte, ce qui facilite le diagnostic sur le terrain. Aucun mot de passe n’est journalisé et le volume est plafonné.
 
 ### 🚀 Nouveautés & Ergonomie
+
+- **Mise à jour : bouton « Installer maintenant » et reprise de la page en cours** — le bandeau « Mise à jour prête » propose désormais « Installer maintenant » : l'application se ferme, installe la mise à jour puis se relance seule (une confirmation s'affiche si un agent est connecté ; la croix reste « plus tard »). La page où l'agent travaillait est mémorisée et retrouvée à la reconnexion (même agent, même rôle, même site/centre, dans les 30 minutes). Les saisies de formulaire non enregistrées ne sont pas conservées.
 
 - **Gestion des agents : tableau lisible sur les écrans 1366×768** — le tableau tient désormais dans la largeur d'un petit écran : colonnes Centre et Site regroupées, badges de rôle plus grands (libellés courts, libellé complet au survol), textes longs tronqués avec leur contenu complet au survol, lignes et cartes de statistiques plus compactes. Le rôle « Opérateur Inventaire » est maintenant proposé à la création et à la modification d'un agent.
 

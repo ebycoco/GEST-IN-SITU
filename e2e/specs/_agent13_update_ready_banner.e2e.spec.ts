@@ -152,58 +152,69 @@ test.describe.serial('QA Terrain — Bandeau persistant "Mise à jour prête" (a
   // ═══════════════════════════════════════════════════════════════════════
   // Scénario 3 — Contenu du message.
   //
-  // Mis à jour par agent-13 (re-passage QA) : le texte du bandeau a changé
-  // (git diff -- src/renderer/src/components/UpdateReadyBanner.tsx) pour
-  // mentionner une fenêtre d'installation VISIBLE (au lieu d'une installation
-  // silencieuse) et avertir explicitement de ne pas la fermer manuellement,
-  // en cohérence avec `autoInstallOnAppQuit=false`/`quitAndInstall(false)`
-  // (src/main/auto-updater.ts). Les 3 anciennes assertions regex ci-dessous
-  // ciblaient l'ANCIEN texte ("...va s'installer automatiquement à la
-  // prochaine fermeture...", "...icône du raccourci...peut clignoter ou
-  // blanchir...", "...c'est normal, ce n'est pas une anomalie.") : elles ne
-  // matchaient plus le DOM réel et auraient fait échouer ce spec au prochain
-  // run (constat vérifié par lecture du texte actuellement rendu par le
-  // composant). Remplacées par les phrases réellement présentes aujourd'hui.
+  // Mis à jour : le bandeau propose désormais « Installer maintenant »
+  // (fermeture de l'app + installation + relance automatique) au lieu de
+  // « J'ai compris » / installation « à la prochaine fermeture ». Les
+  // assertions ciblent le texte réellement rendu par UpdateReadyBanner.tsx.
   // ═══════════════════════════════════════════════════════════════════════
-  test('3. Message — fenêtre d\'installation visible à la prochaine fermeture + avertissement de ne pas la fermer', async () => {
+  test('3. Message — installation à la demande (fermeture + relance automatique) + avertissement de ne pas fermer la fenêtre d\'installation', async () => {
     const { window } = env;
 
     await expect(
-      window.getByText(/va s'installer.*à la prochaine fermeture.*de l'application/i)
+      window.getByText(/une nouvelle version est prête/i)
     ).toBeVisible();
     await expect(
-      window.getByText(/une fenêtre d'installation va s'afficher/i)
+      window.getByText(/l'application va se fermer, installer la mise à jour, puis se relancer automatiquement/i)
     ).toBeVisible();
     await expect(
-      window.getByText(/l'application redémarrera automatiquement ensuite/i)
+      window.getByText(/pensez à enregistrer votre travail/i)
     ).toBeVisible();
     await expect(
-      window.getByText(/ne fermez pas cette fenêtre manuellement/i)
+      window.getByText(/ne fermez pas la fenêtre d'installation manuellement/i)
     ).toBeVisible();
     await expect(
       window.getByText(/pendant la copie des fichiers/i)
     ).toBeVisible();
+    // Ancien libellé / ancien texte disparus.
+    await expect(window.getByRole('button', { name: "J'ai compris" })).toHaveCount(0);
+    await expect(window.getByText(/à la prochaine fermeture/i)).toHaveCount(0);
+    // Nouveau bouton principal présent.
+    await expect(window.getByRole('button', { name: 'Installer maintenant' })).toBeVisible();
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Scénario 4 — Acquittement (bouton principal, puis re-test avec la croix).
+  // Scénario 4 — « Installer maintenant » (annulé) puis croix « Plus tard ».
+  //
+  // LIMITE : un clic confirmé sur « Installer maintenant » appelle
+  // window.api.window.close() et ferme réellement l'application (installation
+  // via le handler 'close' du main) — non testé ici pour ne pas tuer l'instance
+  // Electron ni déclencher une vraie installation. On vérifie uniquement le
+  // chemin « Annuler » de la confirmation (utilisateur connecté), qui ne ferme
+  // rien et laisse le bandeau affiché (il n'est pas masqué au clic).
   // ═══════════════════════════════════════════════════════════════════════
-  test('4a. Acquittement — clic sur "J\'ai compris" (bouton principal) fait disparaître le bandeau', async () => {
+  test('4a. « Installer maintenant » — confirmation affichée ; « Annuler » ne ferme rien et le bandeau reste visible', async () => {
     const { window } = env;
 
-    await window.getByRole('button', { name: "J'ai compris" }).click();
-    await expect(bannerLocator(window)).toHaveCount(0, { timeout: 5000 });
+    await window.getByRole('button', { name: 'Installer maintenant' }).click();
 
-    await window.screenshot({ path: join(SHOT_DIR, 'agent13-update-banner-04a-dismissed-main-button.png') });
+    // Titre ciblé par son rôle : un getByText() en sous-chaîne attrape aussi le texte du bandeau.
+    const confirmTitle = window.getByRole('heading', { name: 'Installer la mise à jour' });
+    await expect(confirmTitle).toBeVisible({ timeout: 5000 });
+    await expect(window.getByText(/Avez-vous enregistré votre travail/i)).toBeVisible();
+    await window.screenshot({ path: join(SHOT_DIR, 'agent13-update-banner-04a-install-confirm.png') });
+
+    await window.getByRole('button', { name: 'Annuler' }).click();
+    await expect(confirmTitle).toHaveCount(0, { timeout: 5000 });
+
+    // Le bandeau n'est pas masqué par « Installer maintenant » et l'app est toujours vivante.
+    await expect(bannerLocator(window)).toBeVisible();
+    await expect(window.locator('.topbar-title')).toBeVisible();
   });
 
-  test('4b. Acquittement — la croix de fermeture (icône X) fonctionne aussi indépendamment', async () => {
+  test('4b. « Plus tard » — la croix de fermeture masque seulement le bandeau', async () => {
     const { window } = env;
 
-    // Re-déclenche l'événement pour retester avec la croix cette fois.
-    await sendUpdateDownloaded();
-    await expect(bannerLocator(window)).toBeVisible({ timeout: 10000 });
-
+    await expect(bannerLocator(window)).toBeVisible();
     await window.getByRole('button', { name: 'Fermer la notification' }).click();
     await expect(bannerLocator(window)).toHaveCount(0, { timeout: 5000 });
 
@@ -211,14 +222,14 @@ test.describe.serial('QA Terrain — Bandeau persistant "Mise à jour prête" (a
   });
 
   // ═══════════════════════════════════════════════════════════════════════
-  // Scénario 5 — Non-réapparition dans la session après acquittement.
+  // Scénario 5 — Non-réapparition dans la session après « Plus tard » (croix).
   // ═══════════════════════════════════════════════════════════════════════
   test('5. Non-réapparition — navigation dashboard → profil → retour, bandeau absent', async () => {
     const { window } = env;
 
     await sendUpdateDownloaded();
     await expect(bannerLocator(window)).toBeVisible({ timeout: 10000 });
-    await window.getByRole('button', { name: "J'ai compris" }).click();
+    await window.getByRole('button', { name: 'Fermer la notification' }).click();
     await expect(bannerLocator(window)).toHaveCount(0, { timeout: 5000 });
 
     await window.evaluate(() => { window.location.hash = '#/profile'; });
@@ -291,7 +302,7 @@ test.describe.serial('QA Terrain — Bandeau persistant "Mise à jour prête" (a
     // Nettoyage de session pour la suite : acquitte les deux bandeaux.
     await window.getByRole('button', { name: "Fermer l'alerte de licence" }).click();
     await expect(window.getByText(licenseMessage)).toHaveCount(0, { timeout: 5000 });
-    await window.getByRole('button', { name: "J'ai compris" }).click();
+    await window.getByRole('button', { name: 'Fermer la notification' }).click();
     await expect(bannerLocator(window)).toHaveCount(0, { timeout: 5000 });
   });
 

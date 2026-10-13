@@ -1,10 +1,22 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Navigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { peekResumeRoute, clearResumeContext } from '../utils/resumeAfterUpdate';
 
 export default function RoleRedirect() {
   const user = useAuthStore((s) => s.user);
+
+  // Reprise de page après mise à jour : lecture pure (idempotente en double rendu), puis
+  // suppression du contexte au montage (usage unique, valide ou non). Le garde de rôle
+  // reste ProtectedRoute sur la route cible.
+  const resumeRoute = useMemo(() => (user ? peekResumeRoute(user) : null), [user]);
+  useEffect(() => {
+    clearResumeContext();
+  }, []);
+  if (user && resumeRoute) {
+    return <Navigate to={resumeRoute} replace />;
+  }
 
   // ── Guard 1 : Protection contre null/undefined ──────────────────────────
   // Si l'utilisateur n'est pas chargé, redirection immédiate vers /login.
