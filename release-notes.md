@@ -8,6 +8,8 @@
 
 ### 🚀 Nouveautés & Ergonomie
 
+- **Panneau de succès animé pour les validations importantes** — après une délivrance de carte, un import réussi ou la publication de brouillons, un petit panneau avec une coche animée remplace le message furtif : « Carte délivrée avec succès ! », « Import terminé » ou « N brouillon(s) publié(s) ». Il s'affiche en bas à gauche de la zone de travail (sans recouvrir le menu), disparaît seul après 4 secondes, reste affiché tant que la souris ou le clavier est dessus, se ferme avec la croix ou Échap, et respecte le réglage « réduire les animations » de Windows. Les messages d'erreur et d'avertissement restent inchangés.
+
 - **Mise à jour : bouton « Installer maintenant » et reprise de la page en cours** — le bandeau « Mise à jour prête » propose désormais « Installer maintenant » : l'application se ferme, installe la mise à jour puis se relance seule (une confirmation s'affiche si un agent est connecté ; la croix reste « plus tard »). La page où l'agent travaillait est mémorisée et retrouvée à la reconnexion (même agent, même rôle, même site/centre, dans les 30 minutes). Les saisies de formulaire non enregistrées ne sont pas conservées.
 
 - **Gestion des agents : tableau lisible sur les écrans 1366×768** — le tableau tient désormais dans la largeur d'un petit écran : colonnes Centre et Site regroupées, badges de rôle plus grands (libellés courts, libellé complet au survol), textes longs tronqués avec leur contenu complet au survol, lignes et cartes de statistiques plus compactes. Le rôle « Opérateur Inventaire » est maintenant proposé à la création et à la modification d'un agent.
