@@ -32,6 +32,7 @@ import { useAuthStore } from './stores/authStore';
 import { useEffect, useRef, useState } from 'react';
 import { GlobalConfirmModal } from './components/GlobalConfirmModal';
 import { confirmService } from './components/confirmService';
+import SuccessPanel from './components/SuccessPanel';
 import UpdateReadyBanner from './components/UpdateReadyBanner';
 import { saveResumeContext, clearResumeContext } from './utils/resumeAfterUpdate';
 import LicenseExpiryBanner from './components/LicenseExpiryBanner';
@@ -252,6 +253,7 @@ export default function App() {
     <>
       <Toaster position="top-right" containerStyle={{ zIndex: 10000, top: 40 }} toastOptions={{ duration: 4000, style: { background: 'var(--bg-secondary)', color: 'var(--text-primary)', border: '1px solid var(--border-subtle)', borderRadius: 12 } }} />
       <GlobalConfirmModal />
+      <SuccessPanel />
       <UpdateReadyBanner visible={updateReady} onAcknowledge={() => setUpdateReady(false)} onInstallNow={handleInstallNow} />
       <LicenseExpiryBanner
         message={licenseWarning?.message ?? ''}
