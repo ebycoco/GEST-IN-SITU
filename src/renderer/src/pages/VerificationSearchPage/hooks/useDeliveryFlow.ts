@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
+import { successPanel } from '../../../components/successPanelService';
 
 export function useDeliveryFlow(
   user: any,
@@ -95,7 +96,7 @@ export function useDeliveryFlow(
         centre_id: user?.centre_id
       });
 
-      toast.success('Carte délivrée avec succès !');
+      successPanel.show({ title: 'Carte délivrée avec succès !', detail: 'Enregistrée sur ce poste' });
       // Signal global de mise à jour de données (même convention que AgentSaisieLayout.tsx /
       // CorrectionSidePanel.onSave / DoublonsView.tsx etc.) : ce hook est partagé par
       // RechercheView.tsx (portail AgentVerification, qui reçoit déjà son propre callback de

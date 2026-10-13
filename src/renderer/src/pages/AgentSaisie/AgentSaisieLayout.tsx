@@ -10,6 +10,7 @@ import { useAutoDownstreamPreference } from '../../hooks/useAutoDownstreamPrefer
 import { usePushButtonVisibility } from '../../hooks/usePushButtonVisibility';
 import { AutoSyncIndicators } from '../../components/AutoSyncIndicators';
 import { toast } from 'react-hot-toast';
+import { successPanel } from '../../components/successPanelService';
 
 export default function AgentSaisieLayout() {
   const { user, activeSiteId } = useAuthStore();
@@ -180,7 +181,12 @@ export default function AgentSaisieLayout() {
                 setIsPublishing(true);
                 try {
                   const res = await window.api.cartes.publishDrafts(effectiveSiteId, user);
-                  if (res.skippedInvalidDateCount > 0) {
+                  if (res.promotedCount > 0) {
+                    successPanel.show({ title: `${res.promotedCount} brouillon(s) publié(s)`, detail: 'Enregistrés sur ce poste' });
+                    if (res.skippedInvalidDateCount > 0) {
+                      toast(`${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`, { icon: '⚠️', duration: 8000 });
+                    }
+                  } else if (res.skippedInvalidDateCount > 0) {
                     toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation. ⚠️ ${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`);
                   } else {
                     toast.success(`${res.publishedCount} brouillon(s) publié(s) et envoyé(s) à la synchronisation.`);

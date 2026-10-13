@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Edit2, AlertCircle, FileText, Search, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../../../components/confirmService';
+import { successPanel } from '../../../components/successPanelService';
 import { useAuthStore } from '../../../stores/authStore';
 import SaisieEditModal from '../components/SaisieEditModal';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
@@ -87,7 +88,12 @@ export default function MesBrouillonsView() {
       try {
         setIsLoading(true);
         const res = await window.api.cartes.publishDrafts(effectiveSiteId as number, user);
-        if (res.skippedInvalidDateCount > 0) {
+        if (res.promotedCount > 0) {
+          successPanel.show({ title: `${res.promotedCount} brouillon(s) publié(s)`, detail: 'Enregistrés sur ce poste' });
+          if (res.skippedInvalidDateCount > 0) {
+            toast(`${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`, { icon: '⚠️', duration: 8000 });
+          }
+        } else if (res.skippedInvalidDateCount > 0) {
           toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès ! ⚠️ ${res.skippedInvalidDateCount} brouillon(s) ignoré(s) car leur date de naissance est invalide ou manquante — corrigez-les avant de réessayer.`);
         } else {
           toast.success(`${res.publishedCount} brouillon(s) publié(s) avec succès !`);

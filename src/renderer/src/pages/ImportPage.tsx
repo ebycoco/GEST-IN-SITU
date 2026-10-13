@@ -9,6 +9,7 @@ import {
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { confirmService } from '../components/confirmService';
+import { successPanel } from '../components/successPanelService';
 import { useNavigate } from 'react-router-dom';
 import { useCacheStore } from '../stores/cacheStore';
 
@@ -210,6 +211,8 @@ export default function ImportPage() {
         toast.error(res.outcome.message, { duration: 8000 });
       } else if (res?.outcome?.status === 'PARTIEL') {
         toast(res.outcome.message, { icon: '⚠️', duration: 8000 });
+      } else if (res?.outcome?.status === 'SUCCES') {
+        successPanel.show({ title: 'Import terminé', detail: res.outcome.message });
       } else {
         toast.success(res?.outcome?.message || 'Migration terminée !');
       }
