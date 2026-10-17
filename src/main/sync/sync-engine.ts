@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { networkMonitor, NetworkState } from './network-monitor';
 
 import { runUpstream } from './upstream';
+import { reconcileMissingCards } from './cards-reconcile';
 import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus, getPendingCardsCount } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
@@ -50,6 +51,12 @@ const CARDS_SHORT_SYNC_INTERVAL_MS = 75 * 1000; // 75 secondes
 // initial du cycle long (10s) pour éviter deux requêtes réseau simultanées juste après le
 // login (même esprit que USER_SYNC_INITIAL_DELAY_MS vs AUTO_DOWNSTREAM_INITIAL_DELAY_MS).
 const CARDS_SHORT_SYNC_INITIAL_DELAY_MS = 15 * 1000; // 15 secondes
+
+// Rattrapage des cartes manquantes par liste de sync_id (cards-reconcile.ts) : premier passage
+// ~2 min apres le demarrage du cycle auto, puis au plus 1x/heure (15 min apres un echec).
+const CARDS_RECONCILE_INITIAL_DELAY_MS = 2 * 60 * 1000;
+const CARDS_RECONCILE_INTERVAL_MS = 60 * 60 * 1000;
+const CARDS_RECONCILE_RETRY_MS = 15 * 60 * 1000;
 
 // ─── TYPES EXPORTÉS ─────────────────────────────────────────────────────────
 export type AutoDownstreamEvent =
@@ -150,6 +157,9 @@ class SyncEngine extends EventEmitter {
 
   /** Timer du délai initial avant le premier tick du cycle court cartes. */
   private cardsShortInitialDelay: NodeJS.Timeout | null = null;
+
+  /** Prochaine echeance (epoch ms) du rattrapage par liste de sync_id (voir cards-reconcile.ts). */
+  private cardsReconcileNextAt = 0;
 
   // ── Cycle dédié comptes/rôles (3 minutes, TOUJOURS actif) ──────────────────
   /**
@@ -270,6 +280,7 @@ class SyncEngine extends EventEmitter {
     // exactement du même gating par la préférence `auto_downstream_<id_user>`
     // (résolue par l'appelant avant d'invoquer startAutoDownstreamTimer — voir
     // handlers.ts, login et sync:setAutoDownstream) sans nouveau point d'appel.
+    this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_INITIAL_DELAY_MS;
     this.cardsShortInitialDelay = setTimeout(() => {
       this.cardsShortInitialDelay = null;
       setImmediate(() => this.triggerCardsShortSync(siteId));
@@ -314,6 +325,7 @@ class SyncEngine extends EventEmitter {
     }
     this.activeSiteId = null;
     this.pendingDownstreamDue = null;
+    this.cardsReconcileNextAt = 0;
   }
 
   /**
@@ -1072,6 +1084,13 @@ class SyncEngine extends EventEmitter {
       return;
     }
 
+    // Rattrapage periodique (<= 1x/heure) des cartes absentes en local mais presentes dans le
+    // cloud (invisibles au curseur). Remplace le comptage de ce tick ; le suivant (~75s) reprend.
+    if (this.cardsReconcileNextAt > 0 && Date.now() >= this.cardsReconcileNextAt) {
+      await this.runCardsReconcile(siteId);
+      return;
+    }
+
     try {
       const pendingCount = await getPendingCardsCount(siteId);
       if (pendingCount <= 0) {
@@ -1100,6 +1119,34 @@ class SyncEngine extends EventEmitter {
       }
     } catch (err) {
       log.warn(`[SyncEngine][CardsShortSync] Erreur lors du cycle court dédié aux cartes pour le site ${siteId} :`, err);
+    }
+  }
+
+  /**
+   * Passage de rattrapage par liste de sync_id. Appele uniquement depuis triggerCardsShortSync
+   * apres ses gardes (verrous, reseau). Reutilise isDownstreamRunning (aucun nouveau verrou).
+   * Ne leve jamais ; ne touche pas au curseur downstream.
+   */
+  private async runCardsReconcile(siteId: number): Promise<void> {
+    // Echeance repoussee d'emblee : pas de rejeu en boucle meme en cas d'erreur.
+    this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_INTERVAL_MS;
+    if (this.isDownstreamRunning || this.globalSyncLocked || this.isSyncing || this.isBulkUploading) return;
+    this.isDownstreamRunning = true;
+    try {
+      const secureUser = getSecureCurrentUser();
+      const myCentreId = secureUser?.centre_id != null ? Number(secureUser.centre_id) : null;
+      const res = await reconcileMissingCards(siteId, myCentreId);
+      if (res.status === 'error') {
+        this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_RETRY_MS;
+      }
+      if (res.recovered > 0) {
+        this.notifyRenderer('sync:updated-data', { count: res.recovered });
+      }
+    } catch (err) {
+      this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_RETRY_MS;
+      log.warn('[SyncEngine][CardsReconcile] Erreur inattendue :', err);
+    } finally {
+      this.isDownstreamRunning = false;
     }
   }
 

@@ -65,7 +65,7 @@ function getOrOpenDb() {
 
 // ─── Traitement d'un chunk ──────────────────────────────────────────────────
 
-function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId }) {
+function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId, skipWatermark }) {
   const database = getOrOpenDb();
 
   const selectStmt = database.prepare('SELECT id_carte, updated_at, is_dirty, statut FROM t_cartes WHERE sync_id = ?');
@@ -383,8 +383,13 @@ function processChunk({ cloudCards, watermark, lastSyncId, siteId, myCentreId })
       }
 
       // Mise à jour du watermark DANS la transaction pour garantir la cohérence
-      updateWatermarkStmt.run('last_downstream_sync', latestUpdatedAt);
-      updateWatermarkStmt.run('last_downstream_sync_id', latestSyncId);
+      // skipWatermark === true : chunk de RATTRAPAGE par liste de sync_id (cards-reconcile.ts).
+      // Ces cartes sont hors fenêtre du curseur ; l'avancer a partir de leur updated_at pourrait
+      // faire sauter des cartes intermediaires du pull normal -> le curseur n'est JAMAIS touche.
+      if (!skipWatermark) {
+        updateWatermarkStmt.run('last_downstream_sync', latestUpdatedAt);
+        updateWatermarkStmt.run('last_downstream_sync_id', latestSyncId);
+      }
     })();
   } finally {
     database.exec('PRAGMA foreign_keys = ON;');

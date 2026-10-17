@@ -539,12 +539,13 @@ async function writeChunkViaWorkerWithRetry(
   watermark: string,
   lastSyncId: string,
   siteId: number,
-  myCentreId: number | null
+  myCentreId: number | null,
+  skipWatermark: boolean = false
 ): Promise<{ fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] }> {
   let lastErr: any = null;
   for (let attempt = 0; attempt <= CHUNK_WRITE_MAX_RETRIES; attempt++) {
     try {
-      return await writeChunkViaWorker(cloudCards, watermark, lastSyncId, siteId, myCentreId);
+      return await writeChunkViaWorker(cloudCards, watermark, lastSyncId, siteId, myCentreId, skipWatermark);
     } catch (err: any) {
       lastErr = err;
       const isLastAttempt = attempt >= CHUNK_WRITE_MAX_RETRIES;
@@ -572,7 +573,8 @@ function writeChunkViaWorker(
   watermark: string,
   lastSyncId: string,
   siteId: number,
-  myCentreId: number | null
+  myCentreId: number | null,
+  skipWatermark: boolean = false
 ): Promise<{ fetched: number; processed: number; insertedCount: number; updatedCount: number; insertedInMyCentreCount: number; insertedLabels: ReceivedCardLabel[] }> {
   return new Promise((resolve, reject) => {
     let sqlitePath: string;
@@ -634,9 +636,26 @@ function writeChunkViaWorker(
       watermark,
       lastSyncId,
       siteId,
-      myCentreId
+      myCentreId,
+      skipWatermark
     });
   });
+}
+
+/**
+ * Ecrit un lot de cartes cloud (<= 500) via le MEME DownloadWorker que le pull normal, mais
+ * SANS toucher au curseur last_downstream_sync / last_downstream_sync_id (skipWatermark=true).
+ * Reserve au rattrapage par liste de sync_id (cards-reconcile.ts).
+ */
+export async function writeCardsChunkWithoutCursor(
+  cloudCards: any[],
+  siteId: number,
+  myCentreId: number | null
+): Promise<{ processed: number; insertedCount: number }> {
+  const res = await writeChunkViaWorkerWithRetry(
+    cloudCards, '1970-01-01T00:00:00Z', '00000000-0000-0000-0000-000000000000', siteId, myCentreId, true
+  );
+  return { processed: res.processed, insertedCount: res.insertedCount };
 }
 
 /**
