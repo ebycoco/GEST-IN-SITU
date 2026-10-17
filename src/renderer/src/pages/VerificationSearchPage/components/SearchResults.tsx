@@ -2,6 +2,7 @@ import React from 'react';
 import { Package, User, Calendar, MapPin, Phone, CheckCircle, AlertTriangle, ArrowRight, ShieldCheck, Cloud, CloudDownload, X, Loader } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { AUCUN_RANGEMENT_LABEL, isRangementAbsent } from '../../../utils/rangementDisplay';
 
 interface SearchResultsProps {
   results: any[];
@@ -334,7 +335,7 @@ export function SearchResults({
                       display: 'inline-flex', alignItems: 'center', gap: 6
                     }}>
                       <Package size={12} />
-                      Rangement : {carte.rangement}
+                      {isRangementAbsent(carte.rangement) ? AUCUN_RANGEMENT_LABEL : `Rangement : ${carte.rangement}`}
                     </span>
                   )}
                 </div>

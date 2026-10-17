@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../../stores/authStore';
 import { toast } from 'react-hot-toast';
 import SyncWidget from '../SyncWidget';
+import { AUCUN_RANGEMENT_LABEL, formatRangementDisplay } from '../../utils/rangementDisplay';
 import RoleSwitcher from './RoleSwitcher';
 
 function ConsultantPerimeter() {
@@ -262,7 +263,7 @@ export default function TopBar() {
             : n.detail,
           noms: parsed?.noms || 'Inconnu',
           prenoms: parsed?.prenoms || '',
-          rangement: parsed?.rangement || 'Non classé',
+          rangement: formatRangementDisplay(parsed?.rangement),
           contact: parsed?.contact || '—',
           isLost: n.action === 'CARTE_PERDUE_CONFIRMEE'
         });
@@ -610,7 +611,7 @@ export default function TopBar() {
                   ) : (
                     <>
                       <span style={{ fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Nouveau Rangement</span>
-                      <div style={{ fontSize: 28, fontWeight: 900, color: '#FFD700', marginTop: 4 }}>
+                      <div style={{ fontSize: selectedResolution.rangement === AUCUN_RANGEMENT_LABEL ? 18 : 28, fontWeight: 900, color: '#FFD700', marginTop: 4 }}>
                         {selectedResolution.rangement}
                       </div>
                     </>

@@ -4,6 +4,7 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
 import { EscaladesResoluesTab } from './AdminQueuePage/components/EscaladesResoluesTab';
 import { formatNumSecu } from '../../../shared/utils/numSecu';
+import { formatRangementDisplay } from '../utils/rangementDisplay';
 
 export default function AdminQueuePage() {
   const { user, activeSiteId } = useAuthStore();
@@ -416,7 +417,7 @@ export default function AdminQueuePage() {
                     fontSize: 13 
                   }}>
                     <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Rangement théorique initial</div>
-                    <div style={{ fontWeight: 700, color: '#ef4444', fontSize: 15 }}>{r.rangement || 'Non classé'}</div>
+                    <div style={{ fontWeight: 700, color: '#ef4444', fontSize: 15 }}>{formatRangementDisplay(r.rangement)}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                       Signalé par : <strong style={{ color: 'var(--text-secondary)' }}>{r.agent_nom_complet ? `${r.agent_nom_complet} (${r.agent_role || 'Agent'})` : (r.agent_signalement_absence || 'Inconnu')}</strong>
                     </div>
@@ -583,7 +584,7 @@ export default function AdminQueuePage() {
                     </h4>
                     <div style={{ display: 'flex', gap: 16, marginTop: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
                       <span>N° Sécu : {formatNumSecu(r.num_secu) || 'Non renseigné'}</span>
-                      <span>Dernier rangement : <strong>{r.rangement || 'Non classé'}</strong></span>
+                      <span>Dernier rangement : <strong>{formatRangementDisplay(r.rangement)}</strong></span>
                       {r.site_nom && <span>Centre : {r.site_nom}</span>}
                     </div>
                   </div>

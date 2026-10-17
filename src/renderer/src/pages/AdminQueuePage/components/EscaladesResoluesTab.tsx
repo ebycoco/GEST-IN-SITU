@@ -3,6 +3,7 @@ import { useAuthStore } from '../../../stores/authStore';
 import { Search, ChevronLeft, ChevronRight, CheckCircle, Archive } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { formatRangementDisplay } from '../../../utils/rangementDisplay';
 
 // Onglet ADMIN_CENTRE (Correctif 5) : visibilité des signalements que CE centre a escaladés au
 // site (cartes:escaladerAuSite -> log CARTE_ABSENTE_ESCALADEE) et qui ont depuis été résolus,
@@ -180,7 +181,7 @@ export const EscaladesResoluesTab = () => {
               fontSize: 13
             }}>
               <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Rangement</div>
-              <div style={{ fontWeight: 800, color: '#FFD700', fontSize: 18 }}>{carte.rangement || 'Non classé'}</div>
+              <div style={{ fontWeight: 800, color: '#FFD700', fontSize: 18 }}>{formatRangementDisplay(carte.rangement)}</div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
                 Signalé par : <strong style={{ color: 'var(--text-secondary)' }}>{carte.agent_nom_complet ? `${carte.agent_nom_complet} (${carte.agent_role || 'Agent'})` : (carte.agent_signalement_absence || 'Inconnu')}</strong>
               </div>

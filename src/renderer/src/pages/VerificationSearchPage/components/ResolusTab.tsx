@@ -3,6 +3,7 @@ import { useAuthStore } from '../../../stores/authStore';
 import { Search, ChevronLeft, ChevronRight, CheckCircle, Archive } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { formatRangementDisplay } from '../../../utils/rangementDisplay';
 
 export const ResolusTab = () => {
   const user = useAuthStore((s) => s.user);
@@ -176,7 +177,7 @@ export const ResolusTab = () => {
             fontSize: 13 
           }}>
             <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Nouveau Rangement Validé</div>
-            <div style={{ fontWeight: 800, color: '#FFD700', fontSize: 18 }}>{carte.rangement || 'Non classé'}</div>
+            <div style={{ fontWeight: 800, color: '#FFD700', fontSize: 18 }}>{formatRangementDisplay(carte.rangement)}</div>
           </div>
 
           {/* Action */}

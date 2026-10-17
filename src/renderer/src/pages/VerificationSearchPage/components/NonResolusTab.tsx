@@ -3,6 +3,7 @@ import { useAuthStore } from '../../../stores/authStore';
 import { Search, ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { formatRangementDisplay } from '../../../utils/rangementDisplay';
 
 export const NonResolusTab = () => {
   const user = useAuthStore((s) => s.user);
@@ -115,7 +116,7 @@ export const NonResolusTab = () => {
             fontSize: 13 
           }}>
             <div style={{ color: 'var(--text-secondary)', marginBottom: 2 }}>Rangement initial</div>
-            <div style={{ fontWeight: 800, color: 'var(--text-muted)', fontSize: 18 }}>{carte.rangement || 'Non classé'}</div>
+            <div style={{ fontWeight: 800, color: 'var(--text-muted)', fontSize: 18 }}>{formatRangementDisplay(carte.rangement)}</div>
           </div>
         </div>
       ))}

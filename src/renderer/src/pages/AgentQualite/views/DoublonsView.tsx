@@ -9,6 +9,7 @@ import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { PaginationInput } from '../../../components/PaginationInput';
 import { useDebounce } from '../../../hooks/useDebounce';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { formatRangementDisplay } from '../../../utils/rangementDisplay';
 
 export default function DoublonsView() {
   const { user, activeSiteId } = useAuthStore();
@@ -223,7 +224,7 @@ export default function DoublonsView() {
                               <span style={{ fontSize: 11, background: targetCard.num_secu ? 'rgba(46,213,115,0.1)' : 'rgba(255,99,72,0.1)', color: targetCard.num_secu ? '#2ed573' : '#ff6b81', padding: '2px 6px', borderRadius: 4 }}>
                                 🛡️ {formatNumSecu(targetCard.num_secu) || 'Sans Sécu'}
                               </span>
-                              <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📦 {targetCard.rangement || 'NON CLASSE'}</span>
+                              <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📦 {formatRangementDisplay(targetCard.rangement)}</span>
                               {targetCard.date_de_naissance && <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📅 {targetCard.date_de_naissance}</span>}
                               {targetCard.lieu_de_naissance && <span style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', padding: '2px 6px', borderRadius: 4 }}>📍 {targetCard.lieu_de_naissance}</span>}
                             </div>
@@ -242,7 +243,7 @@ export default function DoublonsView() {
                               <span style={{ fontSize: 11, background: sourceCard.num_secu ? 'rgba(46,213,115,0.1)' : 'rgba(255,99,72,0.1)', color: sourceCard.num_secu ? '#2ed573' : '#ff6b81', padding: '2px 6px', borderRadius: 4 }}>
                                 🛡️ {formatNumSecu(sourceCard.num_secu) || 'Sans Sécu'}
                               </span>
-                              <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📦 {sourceCard.rangement || 'NON CLASSE'}</span>
+                              <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📦 {formatRangementDisplay(sourceCard.rangement)}</span>
                               {sourceCard.date_de_naissance && <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📅 {sourceCard.date_de_naissance}</span>}
                               {sourceCard.lieu_de_naissance && <span style={{ fontSize: 11, background: 'rgba(239,68,68,0.1)', padding: '2px 6px', borderRadius: 4, color: '#ef4444' }}>📍 {sourceCard.lieu_de_naissance}</span>}
                             </div>

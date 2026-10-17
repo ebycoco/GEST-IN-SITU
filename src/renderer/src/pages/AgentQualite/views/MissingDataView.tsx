@@ -11,6 +11,7 @@ import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { ExpandedManquantDetails } from '../../../components/Quality/ExpandedManquantDetails';
 import { useDebounce } from '../../../hooks/useDebounce';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { AUCUN_RANGEMENT_LABEL } from '../../../utils/rangementDisplay';
 
 type MissingTab = 'SANS_SECU' | 'SANS_RANGEMENT' | 'SANS_NOM' | 'SANS_PRENOM' | 'SANS_CONTACT' | 'SANS_LIEU' | 'SANS_DATE' | 'SANS_LIEU_ENROLEMENT';
 
@@ -143,7 +144,7 @@ export default function MissingDataView() {
     emptyLabel: string;
   }> = {
     SANS_SECU:       { fieldName: 'num_secu',          placeholder: 'Ex: 1234567890123', maxLength: 13, inputMode: 'numeric', columnLabel: 'N° Sécurité (13 chiffres)',  emptyLabel: 'Manquant' },
-    SANS_RANGEMENT:  { fieldName: 'rangement',          placeholder: 'Ex: AB123',         maxLength: 20, inputMode: 'text',    columnLabel: 'Emplacement (ex: KM102)',    emptyLabel: 'Non classé' },
+    SANS_RANGEMENT:  { fieldName: 'rangement',          placeholder: 'Ex: AB123',         maxLength: 20, inputMode: 'text',    columnLabel: 'Emplacement (ex: KM102)',    emptyLabel: AUCUN_RANGEMENT_LABEL },
     SANS_NOM:        { fieldName: 'noms',               placeholder: 'Saisir le nom',     maxLength: 100, inputMode: 'text',   columnLabel: 'Saisie Nom',                emptyLabel: 'Manquant' },
     SANS_PRENOM:     { fieldName: 'prenoms',            placeholder: 'Saisir les prénoms',maxLength: 100, inputMode: 'text',   columnLabel: 'Saisie Prénom',             emptyLabel: 'Manquant' },
     SANS_CONTACT:    { fieldName: 'contact',            placeholder: 'Ex: 0708090010',    maxLength: 10,  inputMode: 'numeric', columnLabel: 'Contact (10 chiffres CI)',  emptyLabel: 'Manquant' },

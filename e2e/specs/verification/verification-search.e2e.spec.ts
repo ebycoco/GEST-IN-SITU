@@ -275,7 +275,7 @@ test.describe.serial('VerificationSearchPage — OPERATEUR_VERIFICATION (QA Terr
     await submitNameSearch();
 
     await expect(deliveryModal()).toBeVisible({ timeout: 10000 });
-    await expect(deliveryModal().getByText('NON CLASSÉ', { exact: true })).toBeVisible();
+    await expect(deliveryModal().getByText('Aucun rangement renseigné pour cette carte', { exact: true })).toBeVisible();
 
     await window.getByRole('button', { name: /Oui, j'ai la carte/ }).click();
     await expect(window.getByText(/RANGEMENT D'URGENCE OBLIGATOIRE/)).toBeVisible();
@@ -321,7 +321,7 @@ test.describe.serial('VerificationSearchPage — OPERATEUR_VERIFICATION (QA Terr
     // Match unique EN STOCK non-absent -> auto-ouverture (cf. commentaire test 14 : le
     // cloisonnement centre n'est jamais vérifié à ce stade, seulement site_id côté serveur).
     await expect(deliveryModal()).toBeVisible({ timeout: 10000 });
-    await expect(deliveryModal().getByText('NON CLASSÉ', { exact: true })).toBeVisible();
+    await expect(deliveryModal().getByText('Aucun rangement renseigné pour cette carte', { exact: true })).toBeVisible();
 
     // Avant le correctif, canDeliver (DeliveryModal.tsx) exigeait déjà une égalité stricte de
     // centre_id -> le bouton "Oui, j'ai la carte" serait resté désactivé ici sur le front. Le

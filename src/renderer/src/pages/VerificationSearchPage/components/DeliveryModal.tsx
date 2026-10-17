@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, CheckCircle, Package, ArrowRight, ShieldCheck, AlertTriangle, Loader, MessageSquare } from 'lucide-react';
 import { useAuthStore } from '../../../stores/authStore';
 import { formatNumSecu } from '../../../../../shared/utils/numSecu';
+import { AUCUN_RANGEMENT_LABEL, isRangementAbsent } from '../../../utils/rangementDisplay';
 
 
 interface DeliveryModalProps {
@@ -121,9 +122,16 @@ export function DeliveryModal({
                     <Package size={20} />
                     <span>Emplacement de rangement exact</span>
                   </div>
-                  <div style={{ color: '#fbbf24', fontWeight: 900, fontSize: 32, lineHeight: 1.2, wordBreak: 'break-all' }}>
-                    {displayCarte.rangement || 'NON CLASSÉ'}
-                  </div>
+                  {isRangementAbsent(displayCarte.rangement) ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#fbbf24', fontWeight: 800, fontSize: 20, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+                      <AlertTriangle size={26} style={{ flexShrink: 0 }} />
+                      <span>{AUCUN_RANGEMENT_LABEL}</span>
+                    </div>
+                  ) : (
+                    <div style={{ color: '#fbbf24', fontWeight: 900, fontSize: 32, lineHeight: 1.2, wordBreak: 'break-all' }}>
+                      {displayCarte.rangement}
+                    </div>
+                  )}
                 </div>
 
                 {/* Additional Info Grid */}
@@ -287,7 +295,7 @@ export function DeliveryModal({
                 {isUnclassifiedCard(displayCarte) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 16, background: 'rgba(251, 191, 36, 0.05)', border: '1px solid rgba(251, 191, 36, 0.2)', borderRadius: 12 }}>
                     <label style={{ fontSize: 13, fontWeight: 800, color: '#fbbf24' }}>
-                      ⚠️ RANGEMENT D'URGENCE OBLIGATOIRE (Carte non classée)
+                      ⚠️ RANGEMENT D'URGENCE OBLIGATOIRE (Carte sans rangement)
                     </label>
                     <input
                       type="text"
