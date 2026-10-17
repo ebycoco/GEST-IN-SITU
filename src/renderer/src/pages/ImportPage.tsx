@@ -27,7 +27,7 @@ export default function ImportPage() {
   const [preview, setPreview] = useState<{ rows: any[]; headers: string[]; total: number } | null>(null);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number; outcome?: { status: 'SUCCES' | 'PARTIEL' | 'ECHEC'; message: string } } | null>(null);
+  const [result, setResult] = useState<{ updated: number; inserted: number; rejected: number; numSecuInvalid?: number; statutInconnu?: number; duplicates: number; probableDuplicates?: number; duration: number; totalProcessed: number; outcome?: { status: 'SUCCES' | 'PARTIEL' | 'ECHEC'; message: string } } | null>(null);
   
   const [showFixCentreModal, setShowFixCentreModal] = useState(false);
   const [showConfirmSetupModal, setShowConfirmSetupModal] = useState(false);
@@ -540,12 +540,12 @@ export default function ImportPage() {
                 {/* Rejected */}
                 <div className="premium-glass" style={{ padding: '20px 24px', borderRadius: 20, border: '1px solid rgba(239, 68, 68, 0.2)', textAlign: 'center', background: 'rgba(239, 68, 68, 0.02)' }}>
                   <p
-                    title="Inclut les lignes rejetées (non importées, ex. date invalide) et les lignes importées avec une anomalie à corriger (ex. statut inconnu normalisé en EN STOCK)."
+                    title="Total des anomalies enregistrées : lignes rejetées + importées avec anomalie : numéro de sécu invalide, statut inconnu."
                     style={{ fontSize: 11, fontWeight: 800, color: '#ef4444', textTransform: 'uppercase', marginBottom: 6, letterSpacing: '0.05em', cursor: 'help' }}
                   >
                     Anomalies Signalées
                   </p>
-                  <p style={{ fontSize: 24, fontWeight: 900, color: '#ef4444', margin: 0 }}>{result.rejected?.toLocaleString('fr') || 0}</p>
+                  <p style={{ fontSize: 24, fontWeight: 900, color: '#ef4444', margin: 0 }}>{((result.rejected || 0) + (result.numSecuInvalid || 0) + (result.statutInconnu || 0)).toLocaleString('fr')}</p>
                 </div>
               </div>
             </div>

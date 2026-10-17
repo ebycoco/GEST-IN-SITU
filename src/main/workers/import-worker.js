@@ -22,6 +22,12 @@ async function run() {
   // juste avant `resolveRouting()` plus bas. Ne touche aucun autre compteur ni le contrat
   // postMessage({ type: 'done' }), uniquement tracé dans le log [IMPORT DIAGNOSTIC] final.
   var totalSkippedEmpty = 0;
+  // Anomalies NUM_SECU_INVALIDE (non bloquantes : carte créée avec num_secu null). Compteur
+  // distinct de totalRejected pour ne pas fausser le verdict ECHEC/PARTIEL de
+  // classifyImportOutcome ; simple entier, aucune allocation par ligne (Low-Memory §2).
+  var totalNumSecuInvalid = 0;
+  // Idem pour STATUT_INCONNU (carte créée en 'EN STOCK', anomalie tracée) — simple entier.
+  var totalStatutInconnu = 0;
   const { dbPath, filePath, agent, totalEstimate, siteId, routingTable, excludedRowIndices } = workerData;
   var lastProgressValue = -1;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -674,6 +680,10 @@ async function run() {
         }
 
         var finalStatut       = 'EN STOCK';
+        // Drapeau par ligne (réinitialisé à chaque itération par l'initialiseur) : STATUT_INCONNU
+        // détecté. Le compteur global n'est incrémenté que si la carte est réellement poussée
+        // dans `batch` (branche else plus bas), pour ne pas compter une ligne rejetée DATE_INVALIDE.
+        var statutInconnuLigne = false;
         var nomRetirant       = null;
         var numRetirant       = null;
         var dateDelivrance    = '';
@@ -754,7 +764,9 @@ async function run() {
                 statut: finalStatut,
                 date_delivrance: dateDelivrance
               });
-              totalRejected++;
+              // Anomalie NON bloquante (carte créée en EN STOCK) : pas dans totalRejected ;
+              // comptage différé à la branche où la carte est réellement poussée dans `batch`.
+              statutInconnuLigne = true;
             }
           }
         }
@@ -792,7 +804,9 @@ async function run() {
             statut: finalStatut,
             date_delivrance: dateDelivrance
           });
-          totalRejected++;
+          // Anomalie NON bloquante : hors totalRejected (qui alimente le verdict ECHEC) ; le
+          // compteur totalNumSecuInvalid est incrémenté plus bas, uniquement si la carte est
+          // réellement créée (pas de surcomptage d'une ligne rejetée DATE_INVALIDE).
         }
 
         var resolved = resolveRouting(getCol(cols, colMap, 'rangement') || '');
@@ -827,6 +841,9 @@ async function run() {
             date_delivrance: dateDelivrance
           });
         } else {
+          // Carte réellement créée : seul endroit où les anomalies non bloquantes sont comptées.
+          if (numSecuInvalid) totalNumSecuInvalid++;
+          if (statutInconnuLigne) totalStatutInconnu++;
           batch.push({
             noms: noms,
             prenoms: prenoms,
@@ -1506,6 +1523,8 @@ Lignes vides ignorées : ${totalSkippedEmpty}`);
       completed: totalCompleted,
       completedN2: totalCompletedN2,
       rejected: totalRejected,
+      numSecuInvalid: totalNumSecuInvalid,
+      statutInconnu: totalStatutInconnu,
       // totalExcludedFromBatch (dates invalides) est soustrait car ces lignes ne rentrent jamais
       // dans t_import_temp et ne peuvent donc jamais contribuer à totalInserted/totalUpdated ;
       // sans cette soustraction elles gonflaient artificiellement "duplicates". Les anomalies

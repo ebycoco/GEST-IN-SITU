@@ -17,6 +17,10 @@ export interface ImportWorkerCounters {
   rejected?: number;
   duplicates?: number;
   totalProcessed?: number;
+  /** Anomalies NUM_SECU_INVALIDE non bloquantes (cartes créées sans numéro) — hors `rejected`. */
+  numSecuInvalid?: number;
+  /** Anomalies STATUT_INCONNU non bloquantes (cartes créées en EN STOCK) — hors `rejected`. */
+  statutInconnu?: number;
 }
 
 export interface ImportOutcome {
@@ -42,20 +46,33 @@ export function classifyImportOutcome(r: ImportWorkerCounters): ImportOutcome {
   const rejected = n(r.rejected);
   const acceptes = n(r.inserted) + n(r.updated) + n(r.completed) + n(r.completedN2) + n(r.duplicates);
 
+  // Avertissement non bloquant : n'influence jamais le statut, uniquement le message (si N > 0).
+  // Chaque avertissement n'apparaît que si son compteur > 0 ; concaténés avec un espace.
+  const numSecuInvalid = n(r.numSecuInvalid);
+  const statutInconnu = n(r.statutInconnu);
+  const warnings: string[] = [];
+  if (numSecuInvalid > 0) {
+    warnings.push(`Attention : ${numSecuInvalid} numéro(s) de sécu invalide(s) ignoré(s) : cartes créées sans numéro, à compléter dans l'application.`);
+  }
+  if (statutInconnu > 0) {
+    warnings.push(`Attention : ${statutInconnu} statut(s) inconnu(s) ramené(s) à EN STOCK : à vérifier.`);
+  }
+  const warning = warnings.length > 0 ? ` ${warnings.join(' ')}` : '';
+
   if (processed === 0) {
     return { status: 'ECHEC', message: "Aucune ligne de données n'a été lue dans le fichier (fichier vide ou format illisible)." };
   }
   if (rejected >= processed || (acceptes === 0 && rejected > 0)) {
     return {
       status: 'ECHEC',
-      message: `Toutes les lignes ont été rejetées (${rejected}/${processed}). Vérifiez les en-têtes de colonnes et le séparateur du fichier.`
+      message: `Toutes les lignes ont été rejetées (${rejected}/${processed}). Vérifiez les en-têtes de colonnes et le séparateur du fichier.${warning}`
     };
   }
   if (rejected > 0) {
     return {
       status: 'PARTIEL',
-      message: `Import partiel : ${rejected} ligne(s) rejetée(s) sur ${processed}, à traiter dans les anomalies d'import.`
+      message: `Import partiel : ${rejected} ligne(s) rejetée(s) sur ${processed}, à traiter dans les anomalies d'import.${warning}`
     };
   }
-  return { status: 'SUCCES', message: `Import terminé : ${processed} ligne(s) traitée(s) sans rejet.` };
+  return { status: 'SUCCES', message: `Import terminé : ${processed} ligne(s) traitée(s) sans rejet.${warning}` };
 }
