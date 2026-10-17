@@ -4,6 +4,16 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.24.1] - 2026-10-17
+
+### 🛠️ Corrections & Fiabilité
+
+- **Carte sans rangement : message clair au lieu de « Non classé »** — quand une carte n'a pas de rangement, l'opérateur de vérification lit désormais « Aucun rangement renseigné pour cette carte » (avec une icône d'avertissement dans la fenêtre de vérification physique) à la place de « NON CLASSÉ ». Le même message remplace « Non classé » dans la liste des résultats de recherche, les signalements résolus / non résolus, la file d'attente de l'admin centre, les notifications, l'écran qualité « Sans rangement » et la détection de doublons. Le libellé du champ obligatoire à la délivrance devient « RANGEMENT D'URGENCE OBLIGATOIRE (Carte sans rangement) ». Aucun changement de comportement : le rangement d'urgence reste obligatoire pour délivrer une carte sans rangement.
+
+- **Récupération automatique : les nouvelles cartes ajoutées au cloud sont enfin téléchargées sur les postes déjà installés** — jusqu'ici, seules les mises à jour de cartes déjà présentes arrivaient, et il fallait désinstaller puis réinstaller l'application pour récupérer les nouvelles cartes (par exemple un second import CSV de l'administrateur du site). Un rattrapage compare désormais, au plus une fois par heure (premier passage environ 2 minutes après la connexion), la liste des cartes du site sur Supabase à celle du poste et télécharge uniquement les cartes manquantes, quel que soit le rôle. Il ne modifie pas l'envoi vers le cloud ni la position de synchronisation, reste limité au site de l'utilisateur, est ignoré si la base locale du site est vide (après une purge, par exemple) et abandonne une requête qui dépasse 15 secondes.
+
+- **Import CSV : un numéro de sécurité sociale invalide ou un statut inconnu ne fait plus échouer l'import** — un fichier dont la colonne « NUM SECU » avait été abîmée par Excel (notation scientifique du type « 3,84E+11 ») affichait « Toutes les lignes ont été rejetées (706/704) » alors que les cartes étaient bien créées. Ces deux anomalies, non bloquantes, ne sont plus comptées comme des lignes rejetées : la carte est créée sans numéro (ou en « EN STOCK » pour un statut inconnu) et le bilan ajoute un avertissement clair (« N numéro(s) de sécu invalide(s) ignoré(s) : cartes créées sans numéro, à compléter dans l'application », « N statut(s) inconnu(s) ramené(s) à EN STOCK : à vérifier »). La tuile « Anomalies Signalées » affiche le total réel des anomalies enregistrées. Seules les vraies lignes rejetées (date de naissance invalide) restent comptées comme rejets.
+
 ## [2.24.0] - 2026-10-13
 
 ### 🛠️ Corrections & Fiabilité
