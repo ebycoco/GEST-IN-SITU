@@ -2799,29 +2799,39 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // cartes:inventairePhysiqueScan, aucun autre consommateur trouvé dans le code).
   // site_id/centre_id ajoutés à la SELECT pour permettre le recalcul de centre_id ci-dessous.
   const scoped = currentUser && currentUser.role !== 'SUPER ADMIN';
-  // Audit 2026-10-26 (point 10) : la recherche ignore désormais les cartes supprimées
+  // Audit 2026-10-26 (point 10, affiné par NR-03) : la recherche ignore les cartes supprimées
   // (is_dirty = -1, convention de suppression logique du fichier) et ne tranche plus au hasard
-  // (ancien `LIMIT 1`) : on lit jusqu'à 2 lignes pour détecter l'ambiguïté. `statut` ajouté à la
-  // SELECT pour la garde ci-dessous. Lecture seule : aucun effet de bord avant les refus.
+  // (ancien `LIMIT 1`). declarerDoublon() passe le statut en 'DOUBLON' sur place en conservant
+  // le num_secu : l'original EN STOCK et sa copie DOUBLON partagent donc légitimement un
+  // num_secu. On lit donc tous les candidats non supprimés (LIMIT 20 : borne mémoire, large
+  // devant le nombre de copies plausible) triés par id_carte (ordre déterministe), puis :
+  //   - 0 candidat                  -> « Carte introuvable » ;
+  //   - exactement 1 EN STOCK       -> c'est elle qui est rangée (les autres statuts sont ignorés) ;
+  //   - >= 2 EN STOCK               -> refus « Plusieurs cartes » (ambiguïté réelle) ;
+  //   - 0 EN STOCK, >= 1 candidat   -> refus « Carte au statut X », X = statut du premier
+  //                                    candidat (plus petit id_carte), choix déterministe.
+  // Tous les refus se font AVANT toute écriture (ni t_cartes, ni t_outbox, ni t_logs).
+  // `statut` est dans la SELECT pour ces gardes. Lecture seule : aucun effet de bord avant les refus.
   const candidates = (scoped
-    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? AND is_dirty != -1 LIMIT 2`).all(cleanedId, currentUser!.site_id)
-    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND is_dirty != -1 LIMIT 2`).all(cleanedId)) as any[];
+    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? AND is_dirty != -1 ORDER BY id_carte LIMIT 20`).all(cleanedId, currentUser!.site_id)
+    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND is_dirty != -1 ORDER BY id_carte LIMIT 20`).all(cleanedId)) as any[];
 
   if (candidates.length === 0) {
     return { success: false, message: "Carte introuvable avec cet identifiant." };
   }
-  if (candidates.length > 1) {
+  const enStock = candidates.filter((c) => c.statut === 'EN STOCK');
+  if (enStock.length > 1) {
     return { success: false, message: "Plusieurs cartes portent ce numéro : à vérifier par un responsable." };
   }
-  const carte = candidates[0];
 
   // Garde de statut : le scan ne « range » qu'une carte réellement EN STOCK. Sans cette garde,
   // une carte DELIVRE/DOUBLON/DISTRIBUEE/RETIRE/ANNULE/BROUILLON était silencieusement remise
   // en 'EN STOCK' (preuve de retrait contournée). Refus = AUCUNE écriture (ni t_cartes, ni
   // t_outbox, ni t_logs) ; le renderer affiche déjà `message` en toast d'erreur.
-  if (carte.statut !== 'EN STOCK') {
-    return { success: false, message: `Carte au statut ${carte.statut} : à signaler à un responsable.` };
+  if (enStock.length === 0) {
+    return { success: false, message: `Carte au statut ${candidates[0].statut} : à signaler à un responsable.` };
   }
+  const carte = enStock[0];
 
   // Recalcul centre_id à partir du nouveau rangement — même règle que updateRangementEtFiche()
   // (repli sur la valeur déjà en base si aucun préfixe ne matche). Cloisonnement §3 : le siteId

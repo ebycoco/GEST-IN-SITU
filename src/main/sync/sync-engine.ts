@@ -584,8 +584,12 @@ class SyncEngine extends EventEmitter {
 
       // Audit 2026-10-26 (point 6) : executeSyncCycle() sort silencieusement, sans rien traiter,
       // quand aucun site n'est actif (aucun utilisateur connecté dans cette session). L'outbox
-      // ne dépend pas du site : on la vide quand même ici (forceCards=true : action manuelle
-      // explicite), avec la même gestion d'erreur non bloquante que dans executeSyncCycle().
+      // ne dépend pas du site : on la vide quand même ici, avec la même gestion d'erreur non
+      // bloquante que dans executeSyncCycle(). Attention : processOutboxPending(true) positionne
+      // fromPeriodicCycle=true (promotion ERROR->PENDING après backoff), PAS forceCards (laissé à
+      // false par défaut, cf. outbox.service.ts). Les entrées t_cartes PENDING restent donc exclues
+      // si le toggle « Envoi Automatique » est désactivé : ce vidage peut n'être que partiel, d'où
+      // le message « partielle » renvoyé plus bas.
       // Mémoire : aucun tableau retenu, seul un compteur est lu.
       if (this.activeSiteId === null) {
         try {

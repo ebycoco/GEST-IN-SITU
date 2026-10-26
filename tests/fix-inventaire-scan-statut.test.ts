@@ -76,13 +76,36 @@ describe('updateCarteRangementAndStatusRapid() — refus hors EN STOCK', () => {
     expect(snapshot()).toEqual(avant);
   });
 
-  it('deux cartes de même num_secu : refus, aucune écriture', () => {
-    insertCarte('EN STOCK', '3000000000001');
-    insertCarte('EN STOCK', '3000000000001');
-    const avant = snapshot();
+  it("1 EN STOCK + 1 DOUBLON de même num_secu : l'EN STOCK est rangée, le DOUBLON reste inchangé", () => {
+    const idStock = insertCarte('EN STOCK', '3000000000001');
+    const idDoublon = insertCarte('DOUBLON', '3000000000001');
+    const doublonAvant = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(idDoublon);
     const res: any = queries.updateCarteRangementAndStatusRapid('3000000000001', 'R-NEW', user);
+    expect(res.success).toBe(true);
+    const stock = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(idStock) as any;
+    expect(stock.rangement).toBe('R-NEW');
+    expect(stock.statut).toBe('EN STOCK');
+    expect(stock.is_dirty).toBe(1);
+    expect(db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(idDoublon)).toEqual(doublonAvant);
+  });
+
+  it('2 EN STOCK de même num_secu : refus « Plusieurs cartes », aucune écriture', () => {
+    insertCarte('EN STOCK', '3100000000001');
+    insertCarte('EN STOCK', '3100000000001');
+    const avant = snapshot();
+    const res: any = queries.updateCarteRangementAndStatusRapid('3100000000001', 'R-NEW', user);
     expect(res.success).toBe(false);
     expect(res.message).toContain('Plusieurs cartes');
+    expect(snapshot()).toEqual(avant);
+  });
+
+  it('1 DELIVRE + 1 DOUBLON de même num_secu : refus de statut, aucune écriture', () => {
+    insertCarte('DELIVRE', '3200000000001');
+    insertCarte('DOUBLON', '3200000000001');
+    const avant = snapshot();
+    const res: any = queries.updateCarteRangementAndStatusRapid('3200000000001', 'R-NEW', user);
+    expect(res.success).toBe(false);
+    expect(res.message).toContain('Carte au statut DELIVRE');
     expect(snapshot()).toEqual(avant);
   });
 

@@ -7,13 +7,11 @@
  * (`src/renderer/src/pages/AgentSaisie/views/Overview.tsx`).
  *
  * ── Différence assumée avec le portail Vérification (rappel) ───────────────────────────────
- * `createCarte()`/`updateCarte()` (cartes.queries.ts) n'appellent JAMAIS `enqueueOutbox()` :
- * le workflow de synchro de ce portail est 100% manuel (push en masse déclenché plus tard par
- * un admin via le bouton "Synchroniser vers le Cloud" / upload-worker.js). En conséquence :
- *   - Libellé "en attente" changé en "À synchroniser (admin)" (au lieu de "En attente").
+ * `createCarte()` (cartes.queries.ts) met désormais la saisie finale en file automatiquement
+ * (autoEnqueueCorrection → une ligne t_outbox PENDING ; brouillons exclus, doublon probable/strict
+ * retenu pour l'envoi manuel groupé) ; `updateCarte()` n'appelle pas `enqueueOutbox()`.
+ *   - Libellé PENDING : "En attente d'envoi".
  *   - Pas de polling dédié 30s ici (seul le rafraîchissement général ~60s préexistant subsiste).
- *   - L'état ERROR est structurellement inatteignable (aucune ligne t_outbox n'est jamais créée
- *     pour ces cartes tant qu'un admin n'a pas lancé un push).
  *
  * ── Isolation ─────────────────────────────────────────────────────────────
  * Harnais Playwright `_electron` exclusif (`../fixtures/electron-app.ts`), lancé contre le build
@@ -151,7 +149,7 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
       };
       return {
         synced: findAfterBadge('SYNCHRONISÉ') || '',
-        pending: findAfterBadge('SYNCHRONISER (ADMIN)') || '',
+        pending: findAfterBadge("EN ATTENTE D'ENVOI") || '',
         error: findAfterBadge('ÉCHEC') || ''
       };
     });
@@ -176,14 +174,14 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
 
   // ═══════════════════════════════════════════════════════════════════════
   // SCÉNARIO 1 — Création réelle (parcours UI complet) → badge
-  // "À SYNCHRONISER (ADMIN)" immédiatement, is_dirty=1, AUCUNE ligne t_outbox.
+  // "EN ATTENTE D'ENVOI" immédiatement, is_dirty=1, UNE ligne t_outbox (mise en file automatique).
   // ═══════════════════════════════════════════════════════════════════════
 
   let createdSyncId = '';
   const uniqueSuffix = Date.now();
   const nomsCree = `ZZTEST_SAISIE${uniqueSuffix}`;
 
-  test('1. OPERATEUR_SAISIE crée une carte via le vrai formulaire "Nouvelle Saisie" → badge "À synchroniser (admin)" affiché immédiatement dans "Travail du jour", cohérent avec is_dirty=1 / AUCUNE ligne t_outbox', async () => {
+  test('1. OPERATEUR_SAISIE crée une carte via le vrai formulaire "Nouvelle Saisie" → badge "En attente d\'envoi" affiché immédiatement dans "Travail du jour", cohérent avec is_dirty=1 / UNE ligne t_outbox', async () => {
     const { window } = env;
     const user = getTestUser('operateurSaisie');
 
@@ -226,9 +224,9 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
       [createdSyncId]
     );
     console.log(`[agent13][SAISIE][SCENARIO1] Lignes t_outbox pour cette carte : ${outboxRows.length}`);
-    expect(outboxRows.length, 'Aucune ligne t_outbox ne doit exister — workflow 100% manuel côté Saisie').toBe(0);
+    expect(outboxRows.length, 'Exactement une ligne t_outbox doit exister pour la carte — saisie finale mise en file automatiquement (createCarte → autoEnqueueCorrection)').toBe(1);
 
-    // ── Écran "Travail du jour" : badge attendu = "À synchroniser (admin)" ────────────
+    // ── Écran "Travail du jour" : badge attendu = "En attente d'envoi" ────────────
     await gotoAgentSaisieOverview();
     await expect(window.getByText('Travail du jour')).toBeVisible({ timeout: 10000 });
     await window.waitForTimeout(1500);
@@ -269,8 +267,8 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
 
     const badge = await getRowBadgeText(nomsCree);
     console.log(`[agent13][SAISIE][SCENARIO1] Badge affiché juste après création pour ${nomsCree} : "${badge}"`);
-    expect(badge?.toUpperCase()).toContain('SYNCHRONISER (ADMIN)');
-    expect(badge?.toUpperCase()).not.toContain('EN ATTENTE');
+    expect(badge?.toUpperCase()).toContain("EN ATTENTE D'ENVOI");
+    expect(badge?.toUpperCase()).not.toContain('SYNCHRONISER (ADMIN)');
 
     const summary = await getSyncSummaryCounts();
     console.log(`[agent13][SAISIE][SCENARIO1] Récapitulatif agrégé affiché : ${JSON.stringify(summary)}`);
@@ -296,7 +294,7 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
     console.log(`[agent13][SAISIE][SCENARIO2] Badge échantillonné sur 35s SANS action UI : ${JSON.stringify(samples)}`);
     await window.screenshot({ path: join(SHOT_DIR, 'agent13-badge-saisie-02-apres-35s-sans-action.png') });
 
-    const changed = samples.some((s) => s.badge && !s.badge.toUpperCase().includes('SYNCHRONISER (ADMIN)'));
+    const changed = samples.some((s) => s.badge && !s.badge.toUpperCase().includes("EN ATTENTE D'ENVOI"));
     console.log(`[agent13][SAISIE][SCENARIO2] Changement observé sans action UI sur 35s = ${changed}`);
     expect(changed, 'Le badge ne doit pas changer sans action UI sur une fenêtre < 60s (pas de polling 30s côté Saisie)').toBe(false);
   });
@@ -316,7 +314,7 @@ test.describe.serial('QA Terrain — Badge Synchro "Travail du jour" Portail Sai
       [createdSyncId]
     );
     await dbQuery(
-      `INSERT INTO t_outbox (id, table_name, operation, payload, status) VALUES (?, 't_cartes', 'UPDATE', '{}', 'SYNCED')`,
+      `INSERT OR REPLACE INTO t_outbox (id, table_name, operation, payload, status) VALUES (?, 't_cartes', 'UPDATE', '{}', 'SYNCED')`,
       [createdSyncId]
     );
     const dbState = await dbQuery(`SELECT is_dirty FROM t_cartes WHERE sync_id = ?`, [createdSyncId]);

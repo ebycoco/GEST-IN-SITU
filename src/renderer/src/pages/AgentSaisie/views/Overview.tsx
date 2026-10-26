@@ -21,14 +21,14 @@ const EMPTY_STATS: AgentStats = { today: 0, yesterday: 0, week: 0, month: 0, yea
 // factorisé dans un fichier partagé : périmètre de cette tâche limité aux 2 fichiers Overview.tsx
 // déjà existants, pas de nouvelle abstraction pour seulement 2 usages.
 // Libellé PENDING volontairement différent de la version Vérification : sur ce portail Saisie,
-// createCarte()/updateCarte() n'appellent jamais enqueueOutbox() (workflow de synchro 100%
-// manuel, push en masse déclenché plus tard par un admin via upload-worker.js) — l'état ERROR
-// y est donc structurellement inatteignable et rien ne se résout tout seul en quelques
-// secondes/minutes, contrairement à Vérification où l'auto-refresh 30s a un vrai sens. D'où un
-// libellé qui reflète cette réalité plutôt qu'un simple "En attente" trompeur.
+// createCarte() met la saisie finale en file d'envoi automatiquement (autoEnqueueCorrection,
+// cartes.queries.ts) ; les brouillons sont exclus (publishDrafts() les enfile à la publication) et
+// une carte en doublon probable/strict est retenue pour l'envoi manuel groupé. updateCarte()
+// n'appelle pas enqueueOutbox() : elle marque seulement la carte is_dirty = 1. "En attente d'envoi"
+// reste donc vrai dans les deux cas (carte en file, ou retenue pour l'envoi manuel groupé).
 const SYNC_STATUS_META: Record<string, { label: string; color: string; bg: string; border: string; Icon: typeof CheckCircle2 }> = {
   SYNCED: { label: 'Synchronisé', color: '#10b981', bg: 'rgba(16, 185, 129, 0.1)', border: 'rgba(16, 185, 129, 0.25)', Icon: CheckCircle2 },
-  PENDING: { label: 'À synchroniser (admin)', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', Icon: Clock3 },
+  PENDING: { label: "En attente d'envoi", color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.25)', Icon: Clock3 },
   ERROR: { label: 'Échec', color: '#f87171', bg: 'rgba(248, 113, 113, 0.1)', border: 'rgba(248, 113, 113, 0.25)', Icon: AlertTriangle }
 };
 
@@ -128,9 +128,9 @@ export default function Overview() {
   }, [loadStats, loadCardsToday]);
 
   // Pas de polling dédié 30s ici (à la différence de AgentVerification/views/Overview.tsx) :
-  // ce portail fonctionne en workflow de synchro 100% manuel (createCarte()/updateCarte()
-  // n'appellent jamais enqueueOutbox(), push en masse déclenché plus tard par un admin) — un
-  // timer court n'aurait rien de nouveau à refléter dans l'intervalle. Le rafraîchissement
+  // ici l'envoi d'une saisie finale est lancé automatiquement par createCarte() (autoEnqueueCorrection),
+  // sans action de l'agent, et les cartes retenues (doublon) attendent l'envoi manuel groupé d'un
+  // admin — un timer court n'aurait rien de nouveau à refléter dans l'intervalle. Le rafraîchissement
   // général ~60s ci-dessus (préexistant) suffit à tenir le badge et le récapitulatif à jour.
   const handleRefreshClick = async () => {
     setIsRefreshing(true);
