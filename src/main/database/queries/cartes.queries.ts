@@ -1685,9 +1685,12 @@ export type QualiteCorrectionSource = 't_cartes' | 't_import_anomalies';
  * supprime de t_import_anomalies. Lit UNIQUEMENT t_import_anomalies (jamais t_cartes, dont les
  * numéros chevauchent ceux des anomalies). INSERT + DELETE + enfilage outbox dans une seule
  * transaction (better-sqlite3 la convertit en SAVEPOINT si l'appelant est déjà en transaction).
+ * `createdBy` : id_user de l'auteur de la correction (getSecureCurrentUser()), ou null s'il est
+ * inconnu. t_cartes.created_by est un INTEGER (BIGINT REFERENCES t_users côté Supabase) : jamais
+ * de texte ici, sinon l'upsert cloud de la carte est refusé.
  * @returns l'id_carte de la carte créée (lastInsertRowid), ou null si l'anomalie n'existe pas.
  */
-export function transfererAnomalieVersCarte(anomalyId: number, newDate: string): number | null {
+export function transfererAnomalieVersCarte(anomalyId: number, newDate: string, createdBy?: number | null): number | null {
   const db = getDatabase()!;
   const now = new Date().toISOString();
   const id = anomalyId;
@@ -1731,7 +1734,7 @@ export function transfererAnomalieVersCarte(anomalyId: number, newDate: string):
         now,
         now,
         now,
-        'CORRECTION'
+        createdBy ?? null
       );
 
       db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
@@ -1808,7 +1811,8 @@ export function updateDateDeNaissance(id: number, newDate: string) {
   const anomaly = db.prepare('SELECT id FROM t_import_anomalies WHERE id = ?').get(id);
   if (anomaly) {
     // Contrat de retour historique de la branche anomalie : RunResult de l'INSERT.
-    const newId = transfererAnomalieVersCarte(id, newDate);
+    // Utilisateur non transmis par cet appelant (cartes:updateDate) : created_by = null.
+    const newId = transfererAnomalieVersCarte(id, newDate, null);
     return { changes: newId === null ? 0 : 1, lastInsertRowid: newId ?? 0 };
   }
   return corrigerDateNaissanceCarte(id, newDate);
@@ -1899,7 +1903,7 @@ export function corrigerFormatQualite(params: {
 
   const newId = db.transaction(() => {
     const dateTransfert = champCorrige === 'date_de_naissance' ? valeur_apres : String(record.date_de_naissance ?? '');
-    const createdId = transfererAnomalieVersCarte(id, dateTransfert);
+    const createdId = transfererAnomalieVersCarte(id, dateTransfert, currentUser.id_user ?? null);
     if (createdId !== null && champCorrige !== 'date_de_naissance') {
       const upd = updateQuickFields(createdId, { [champCorrige]: valeur_apres }, quickUser);
       // Garde-fou : la carte vient d'être créée dans cette même transaction ; un échec annule
