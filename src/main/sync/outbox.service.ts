@@ -333,12 +333,24 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
     }
 
     for (const entry of pendingEntries) {
+      // ── Garde anti-course "ré-enfilage pendant traitement" (audit 2026-10-26, point 5) ──
+      // L'id t_outbox est réutilisé pour une même entité : enqueueOutbox() remplace payload/
+      // operation et repasse la ligne en PENDING (attempts = 0). Toute écriture de statut
+      // ci-dessous (SYNCED, ERROR, attempts) est donc conditionnée à ce que la ligne porte
+      // encore la version lue dans ce lot (même operation + même payload) — sinon la réponse
+      // d'un envoi de l'ancienne version écraserait la nouvelle (perdue, is_dirty effacé).
+      // Comparaison sur le payload plutôt que sur created_at (datetime('now') : résolution à
+      // la seconde, deux enfilages dans la même seconde seraient indiscernables).
+      const markError = (attempts: number, errorMsg: string): boolean =>
+        _markOutboxError(db, entry.id, attempts, errorMsg, { operation: entry.operation, payload: entry.payload });
+
       if (entry.depends_on) {
         const parent = db.prepare('SELECT status FROM t_outbox WHERE id = ?').get(entry.depends_on) as { status: string } | undefined;
         if (parent && parent.status === 'ERROR') {
-          _markOutboxError(db, entry.id, entry.attempts + 1, "Action parente en échec définitif. Opération suspendue.");
-          errors++;
-          onEntryProcessed?.({ tableName: entry.table_name, success: false });
+          if (markError(entry.attempts + 1, "Action parente en échec définitif. Opération suspendue.")) {
+            errors++;
+            onEntryProcessed?.({ tableName: entry.table_name, success: false });
+          }
           continue;
         } else if (parent && parent.status === 'PENDING') {
           continue; // Parent pas encore prêt, on reporte à plus tard sans erreur
@@ -363,15 +375,25 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
       // plus bas (branche supabaseError), qui met à jour last_attempt_at et fait croître
       // attempts pour le calcul du prochain backoff.
       if (!fromPeriodicCycle && newAttempts > MAX_OUTBOX_ATTEMPTS) {
-        _markOutboxError(db, entry.id, newAttempts, `Nombre maximum de tentatives (${MAX_OUTBOX_ATTEMPTS}) atteint.`);
-        log.error(`[OutboxService] Entrée ${entry.id} (${entry.table_name}) basculée en ERROR après ${MAX_OUTBOX_ATTEMPTS} tentatives.`);
-        errors++;
-        onEntryProcessed?.({ tableName: entry.table_name, success: false });
+        if (markError(newAttempts, `Nombre maximum de tentatives (${MAX_OUTBOX_ATTEMPTS}) atteint.`)) {
+          log.error(`[OutboxService] Entrée ${entry.id} (${entry.table_name}) basculée en ERROR après ${MAX_OUTBOX_ATTEMPTS} tentatives.`);
+          errors++;
+          onEntryProcessed?.({ tableName: entry.table_name, success: false });
+        }
         continue;
       }
 
-      // Incrémenter le compteur de tentatives avant l'appel réseau
-      db.prepare(`UPDATE t_outbox SET attempts = ? WHERE id = ?`).run(newAttempts, entry.id);
+      // Incrémenter le compteur de tentatives avant l'appel réseau — gardé sur la version lue :
+      // si l'entrée a été ré-enfilée (ou supprimée) depuis la lecture du lot (pendant l'envoi
+      // d'une entrée précédente), on n'envoie pas l'ancienne version ; la nouvelle reste
+      // PENDING pour le prochain traitement.
+      const attemptsUpdate = db.prepare(
+        `UPDATE t_outbox SET attempts = ? WHERE id = ? AND operation = ? AND payload = ?`
+      ).run(newAttempts, entry.id, entry.operation, entry.payload);
+      if (attemptsUpdate.changes === 0) {
+        log.info(`[OutboxService] Entrée ${entry.id} (${entry.table_name}) modifiée depuis la lecture du lot : ancienne version non envoyée, nouvelle version conservée en PENDING.`);
+        continue;
+      }
 
       let payload: Record<string, unknown>;
       try {
@@ -395,10 +417,11 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         }
 
       } catch (parseErr: any) {
-        _markOutboxError(db, entry.id, newAttempts, `Payload JSON invalide : ${parseErr.message}`);
         log.error(`[OutboxService] Payload invalide pour l'entrée ${entry.id} :`, parseErr.message);
-        errors++;
-        onEntryProcessed?.({ tableName: entry.table_name, success: false });
+        if (markError(newAttempts, `Payload JSON invalide : ${parseErr.message}`)) {
+          errors++;
+          onEntryProcessed?.({ tableName: entry.table_name, success: false });
+        }
         continue;
       }
 
@@ -412,10 +435,11 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           // Un payload DELETE ne contient que { sync_id } (ou { user_sync_id } pour t_user_roles)
           const syncIdToDelete = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
           if (!syncIdToDelete) {
-            _markOutboxError(db, entry.id, newAttempts, 'Payload DELETE invalide : champ sync_id manquant.');
             log.error(`[OutboxService] Payload DELETE invalide pour ${entry.table_name} (id=${entry.id}).`);
-            errors++;
-            onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            if (markError(newAttempts, 'Payload DELETE invalide : champ sync_id manquant.')) {
+              errors++;
+              onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            }
             continue;
           }
           const deleteColumn = entry.table_name === 't_user_roles' ? 'user_sync_id' : 'sync_id';
@@ -451,10 +475,11 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           try {
             finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
           } catch (validationErr: any) {
-            _markOutboxError(db, entry.id, newAttempts, validationErr.message);
             log.error(`[OutboxService] Rejet local (validation) pour ${entry.table_name} (id=${entry.id}) : ${validationErr.message}`);
-            errors++;
-            onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            if (markError(newAttempts, validationErr.message)) {
+              errors++;
+              onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            }
             continue;
           }
 
@@ -518,11 +543,13 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
               `Conservé en PENDING. Tentative ${newAttempts}/${MAX_OUTBOX_ATTEMPTS}. Détail : ${supabaseError.message}`
             );
           } else if (newAttempts >= MAX_OUTBOX_ATTEMPTS) {
-            // Erreur définitive dépassant le seuil → ERROR
-            _markOutboxError(db, entry.id, newAttempts, supabaseError.message);
+            // Erreur définitive dépassant le seuil → ERROR (sauf si l'entrée a été ré-enfilée
+            // pendant l'envoi : la nouvelle version, jamais tentée, reste PENDING)
             log.error(`[OutboxService] Erreur définitive pour ${entry.table_name} (id=${entry.id}) : ${supabaseError.message}`);
-            errors++;
-            onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            if (markError(newAttempts, supabaseError.message)) {
+              errors++;
+              onEntryProcessed?.({ tableName: entry.table_name, success: false });
+            }
           } else {
             log.warn(
               `[OutboxService] Erreur Supabase pour ${entry.table_name} (id=${entry.id}). ` +
@@ -538,16 +565,27 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // puis synchronisée avec succès restait signalée "en attente" (is_dirty
         // = 1) indéfiniment, faussant les compteurs UI (ex: bandeau "corrections
         // en attente" du Portail Qualité après une fusion de doublons).
-        db.transaction(() => {
-          db.prepare(`
-            UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL WHERE id = ?
-          `).run(entry.id);
+        // Garde anti-course (voir markError en tête de boucle) : SYNCED + effacement de is_dirty
+        // uniquement si la ligne porte encore la version envoyée. Si elle a été ré-enfilée
+        // pendant l'envoi, on ne touche à rien : la nouvelle version reste PENDING, is_dirty = 1.
+        const markedSynced = db.transaction(() => {
+          const res = db.prepare(`
+            UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL
+            WHERE id = ? AND operation = ? AND payload = ?
+          `).run(entry.id, entry.operation, entry.payload);
+          if (res.changes === 0) return false;
 
           if (entry.operation !== 'DELETE') {
             const syncIdValue = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
             _clearLocalDirtyFlag(db, entry.table_name, syncIdValue);
           }
+          return true;
         })();
+
+        if (!markedSynced) {
+          log.info(`[OutboxService] ${entry.table_name} [${entry.operation}] envoyé (id=${entry.id}) mais ré-enfilé pendant l'envoi : nouvelle version conservée en PENDING, is_dirty inchangé.`);
+          continue;
+        }
 
         log.info(`[OutboxService] ✓ ${entry.table_name} [${entry.operation}] synchronisé (id=${entry.id})`);
         processed++;
@@ -805,19 +843,37 @@ let _rerunForceCards = false;
 /**
  * Marque une entrée outbox en statut ERROR avec le message d'erreur fourni.
  * Opération synchrone SQLite (très rapide, non bloquante pour l'UI).
+ *
+ * `expected` (garde anti-course, audit 2026-10-26 point 5) : si fourni, l'écriture n'a lieu
+ * que si la ligne porte encore cette operation + ce payload (version lue dans le lot). Une
+ * entrée ré-enfilée entre-temps n'est pas marquée ERROR (elle reste PENDING).
+ *
+ * @returns `true` si la ligne a effectivement été passée en ERROR.
  */
 function _markOutboxError(
   db: NonNullable<ReturnType<typeof getDatabase>>,
   id: string,
   attempts: number,
-  errorMsg: string
-): void {
+  errorMsg: string,
+  expected?: { operation: string; payload: string }
+): boolean {
   try {
-    db.prepare(`
-      UPDATE t_outbox SET status = 'ERROR', error_msg = ?, attempts = ?, last_attempt_at = datetime('now') WHERE id = ?
-    `).run(errorMsg, attempts, id);
+    const res = expected
+      ? db.prepare(`
+          UPDATE t_outbox SET status = 'ERROR', error_msg = ?, attempts = ?, last_attempt_at = datetime('now')
+          WHERE id = ? AND operation = ? AND payload = ?
+        `).run(errorMsg, attempts, id, expected.operation, expected.payload)
+      : db.prepare(`
+          UPDATE t_outbox SET status = 'ERROR', error_msg = ?, attempts = ?, last_attempt_at = datetime('now') WHERE id = ?
+        `).run(errorMsg, attempts, id);
+    if (res.changes === 0) {
+      log.info(`[OutboxService] Entrée ${id} non passée en ERROR : ré-enfilée (ou retirée) depuis sa lecture, nouvelle version conservée.`);
+      return false;
+    }
+    return true;
   } catch (err: any) {
     log.error(`[OutboxService] Impossible de marquer l'entrée ${id} en ERROR :`, err.message);
+    return false;
   }
 }
 
