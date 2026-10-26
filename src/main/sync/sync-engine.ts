@@ -6,7 +6,7 @@ import { runUpstream } from './upstream';
 import { reconcileMissingCards } from './cards-reconcile';
 import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus, getPendingCardsCount } from './downstream';
 import { getDatabase } from '../database/connection';
-import { processOutboxPending, getOutboxPendingCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
+import { processOutboxPending, getOutboxPendingCount, getOutboxActionableCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
 import { purgeEmptyRows } from '../database/queries/maintenance.queries';
 import { refreshSecureCurrentUser, getCurrentGrantedRoles, resolveCurrentSessionLogin, stopSessionHeartbeat, getSecureCurrentUser } from '../auth/session-heartbeat';
 import { recordPresenceLogout } from './presence.service';
@@ -581,6 +581,34 @@ class SyncEngine extends EventEmitter {
 
     try {
       await this.executeSyncCycle();
+
+      // Audit 2026-10-26 (point 6) : executeSyncCycle() sort silencieusement, sans rien traiter,
+      // quand aucun site n'est actif (aucun utilisateur connecté dans cette session). L'outbox
+      // ne dépend pas du site : on la vide quand même ici (forceCards=true : action manuelle
+      // explicite), avec la même gestion d'erreur non bloquante que dans executeSyncCycle().
+      // Mémoire : aucun tableau retenu, seul un compteur est lu.
+      if (this.activeSiteId === null) {
+        try {
+          const outboxResult = await processOutboxPending(true);
+          log.info(
+            `[SyncEngine][Outbox] forceSync sans site actif : ${outboxResult.processed} synchronisé(s), ` +
+            `${outboxResult.errors} en erreur.`
+          );
+        } catch (outboxErr: any) {
+          log.warn('[SyncEngine][Outbox] Erreur lors du traitement outbox de forceSync (non-bloquant) :', outboxErr);
+        }
+      }
+
+      // Message fidèle : ne jamais annoncer un succès total s'il reste des éléments à envoyer
+      // (PENDING ou ERROR, cf. getOutboxActionableCount). Limite connue : les cartes is_dirty=1
+      // hors outbox ne sont pas comptées ici.
+      const remaining = getOutboxActionableCount();
+      if (remaining > 0) {
+        return {
+          success: false,
+          message: `Synchronisation partielle : ${remaining} élément(s) restent en attente d'envoi.`
+        };
+      }
       return { success: true, message: 'Synchronisation terminée avec succès.' };
     } catch (err: any) {
       log.error('[SyncEngine] Échec de la synchronisation forcée :', err);
