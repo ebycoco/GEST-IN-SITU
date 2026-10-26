@@ -76,12 +76,21 @@ export default function InvalidFormatView() {
     try {
       window.api.log.info(`[QUALITÉ] Tentative de correction de date pour la carte ID=${card.id_carte}`);
       setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
-      await window.api.qualite.corrigerFormat({
+      // Audit 2026-10-26 (point 8) : `source` (fournie par getInvalidDates pour chaque ligne)
+      // indique au serveur s'il s'agit d'une carte ou d'une anomalie d'import (numéros qui se
+      // chevauchent). Fiche introuvable → success:false, on n'affiche pas de succès.
+      const res = await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
+        source: card.source,
         champ_corrige: 'date_de_naissance',
         valeur_avant: card.date_de_naissance || '',
         valeur_apres: editValue
       });
+      if (!res?.success) {
+        toast.error(res?.error || 'Aucune fiche corrigée.');
+        loadTabData();
+        return;
+      }
       window.api.log.info(`[QUALITÉ] Succès : Correction de date terminée pour ID=${card.id_carte}`);
       toast.success('Date de naissance corrigée !');
       setEditingId(null);
@@ -123,12 +132,19 @@ export default function InvalidFormatView() {
     try {
       setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
       window.api.log.info(`[QUALITÉ] Correction du champ '${champ}' pour anomalie ID=${card.id_carte}`);
-      await window.api.qualite.corrigerFormat({
+      // `source` : voir handleSaveDate ci-dessus (audit 2026-10-26 point 8).
+      const res = await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
+        source: card.source,
         champ_corrige: champ,
         valeur_avant: card[champ] || '',
         valeur_apres: champ === 'contact' ? valeur.replace(/\D/g, '') : champ === 'date_de_naissance' ? valeur : valeur.trim().toUpperCase()
       });
+      if (!res?.success) {
+        toast.error(res?.error || 'Aucune fiche corrigée.');
+        loadTabData();
+        return false;
+      }
       window.api.log.info(`[QUALITÉ] Succès correction '${champ}' pour ID=${card.id_carte}`);
 
       let label = champ;

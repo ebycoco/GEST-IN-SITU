@@ -278,6 +278,7 @@ test.describe.serial('[PREUVE] ADMINISTRATEUR_SITE — correction Qualité unita
       async ({ id }) => {
         return (window as any).api.qualite.corrigerFormat({
           id_carte: id,
+          source: 't_cartes',
           champ_corrige: 'date_de_naissance',
           valeur_avant: '1988-03-20',
           valeur_apres: '1988-04-25'

@@ -135,7 +135,7 @@ declare global {
       };
       qualite: {
         fusionnerDoublons: (payload: { id_carte_source: number; id_carte_cible: number; champs_fusionnes: string[] }) => Promise<any>;
-        corrigerFormat: (payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => Promise<any>;
+        corrigerFormat: (payload: { id_carte: number; source: 't_cartes' | 't_import_anomalies'; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => Promise<{ success: boolean; changes: number; id_carte: number | null; transferee: boolean; error?: string }>;
         supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }) => Promise<any>;
         assainirGlobal: (payload: { site_id: number }) => Promise<{ success: boolean; deleted: number; details: any }>;
       };

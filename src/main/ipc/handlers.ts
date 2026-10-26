@@ -2685,9 +2685,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('qualite:corrigerFormat', async (event, payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => {
+  ipcMain.handle('qualite:corrigerFormat', async (event, payload: { id_carte: number; source: queries.QualiteCorrectionSource; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    const { id_carte, champ_corrige, valeur_avant } = payload;
+    // Audit 2026-10-26 (point 8) : `source` désigne la table de la fiche (t_cartes ou
+    // t_import_anomalies), dont les numéros se chevauchent. Validée dans corrigerFormatQualite().
+    const { id_carte, source, champ_corrige, valeur_avant } = payload;
     // Audit 2026-10-26 (point 9) : une date de naissance saisie JJ/MM/AAAA doit être stockée
     // en ISO (AAAA-MM-JJ). On normalise AVANT toute validation/idempotence/écriture/audit, et
     // `valeur_apres` désigne ensuite partout la valeur normalisée. Les autres champs sont
@@ -2722,79 +2724,41 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         throw new Error("Accès refusé pour cette opération.");
       }
 
-      const db = getDatabase();
-      if (!db) throw new Error('Base de données indisponible');
-
-      const card = db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id_carte) as any;
-      const anomaly = db.prepare('SELECT * FROM t_import_anomalies WHERE id = ?').get(id_carte) as any;
-
-      if (!card && !anomaly) {
-        return { success: true, changes: 0 };
-      }
-
-      const recordSiteId = card?.site_id ?? anomaly?.site_id;
-      if (secureUser.role !== 'SUPER ADMIN' && recordSiteId !== undefined && recordSiteId !== null && recordSiteId !== secureUser.site_id) {
-        log.warn(`[SECURITY] Tentative de correction hors-site refusée pour l'utilisateur ID ${secureUser.id_user}`);
-        throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
-      }
-
-      // Idempotence : si la valeur est déjà identique, on ne réécrit pas
-      if (card && card[champ_corrige] === valeur_apres) {
-        return { success: true, changes: 0 };
-      }
-
-      db.transaction(() => {
-        if (anomaly) {
-          if (!card && !anomaly.carte_id) {
-            // Transfert complet de t_import_anomalies vers t_cartes via l'API officielle
-            const newDate = champ_corrige === 'date_de_naissance' ? valeur_apres : anomaly.date_de_naissance;
-            // updateDateDeNaissance gère le transfert des anomalies non liées proprement + outbox
-            queries.updateDateDeNaissance(anomaly.id, newDate);
-            
-            if (champ_corrige !== 'date_de_naissance') {
-               // Si le champ n'était pas la date, on doit quand même mettre à jour le champ après coup,
-               // sauf si ça a été mis à jour par le premier appel.
-               // Mais l'anomalie ayant été purgée, on met à jour la nouvelle carte
-               const newCard = db.prepare('SELECT id_carte FROM t_cartes WHERE num_secu = ? AND noms = ? AND prenoms = ? ORDER BY id_carte DESC LIMIT 1').get(anomaly.num_secu, anomaly.noms, anomaly.prenoms) as any;
-               if (newCard) {
-                 queries.updateQuickFields(newCard.id_carte, { [champ_corrige]: valeur_apres }, secureUser);
-               }
-            }
-          } else {
-            // L'anomalie est déjà liée à une carte existante, on la met à jour
-            const targetId = anomaly.carte_id || id_carte;
-            if (champ_corrige === 'date_de_naissance') {
-              queries.updateDateDeNaissance(targetId, valeur_apres);
-            } else {
-              queries.updateQuickFields(targetId, { [champ_corrige]: valeur_apres }, secureUser);
-            }
-            // Suppression de l'anomalie traitée (updateDateDeNaissance ne le fait pas si carte_id existe)
-            db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(anomaly.id);
-          }
-
-        } else if (card) {
-          // Si c'est une simple carte (pas d'anomalie)
-          if (champ_corrige === 'date_de_naissance') {
-            queries.updateDateDeNaissance(id_carte, valeur_apres);
-          } else {
-            queries.updateQuickFields(id_carte, { [champ_corrige]: valeur_apres }, secureUser);
-          }
+      // Audit 2026-10-26 (point 8) : logique déplacée dans corrigerFormatQualite() (testable) —
+      // lecture de la SEULE table indiquée par `source`, contrôle de site sur la fiche réellement
+      // visée (rôle/site issus de getSecureCurrentUser(), §3), transfert systématique d'une
+      // anomalie vers t_cartes (carte identifiée par lastInsertRowid), le tout dans une seule
+      // transaction SQLite avec l'enfilage outbox. Fiche introuvable → success:false (plus de
+      // « succès » quand rien n'a été corrigé).
+      let result: queries.QualiteCorrectionResult;
+      try {
+        result = queries.corrigerFormatQualite({ source, id: id_carte, champ: champ_corrige, valeur_apres, currentUser: secureUser });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("n'appartient pas à votre site")) {
+          log.warn(`[SECURITY] Tentative de correction hors-site refusée pour l'utilisateur ID ${secureUser.id_user}`);
         }
-      })();
+        throw err;
+      }
 
-      logAudit(
-        userLogin,
-        'QUALITE_CORRECTION',
-        JSON.stringify({
-          id_carte,
-          champ_corrige,
-          valeur_avant: maskSensitiveField(champ_corrige, valeur_avant),
-          valeur_apres: maskSensitiveField(champ_corrige, valeur_apres),
-          raison: "Correction de format d'une carte"
-        })
-      );
+      if (result.changes > 0) {
+        logAudit(
+          userLogin,
+          'QUALITE_CORRECTION',
+          JSON.stringify({
+            // id_carte = carte réellement corrigée (ou créée par transfert), pour que la
+            // jointure d'affichage « Travail du jour » (stats.queries.ts) retrouve la fiche.
+            id_carte: result.id_carte,
+            source,
+            id_fiche_origine: id_carte,
+            champ_corrige,
+            valeur_avant: maskSensitiveField(champ_corrige, valeur_avant),
+            valeur_apres: maskSensitiveField(champ_corrige, valeur_apres),
+            raison: "Correction de format d'une carte"
+          })
+        );
+      }
 
-      return { success: true, changes: 1 };
+      return result;
     } catch (e) {
       log.error('IPC Error: qualite:corrigerFormat', e);
       throw e;

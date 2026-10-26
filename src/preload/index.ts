@@ -371,7 +371,8 @@ const api = {
   qualite: {
     fusionnerDoublons: (payload: { id_carte_source: number; id_carte_cible: number; champs_fusionnes: string[] }): Promise<any> =>
       ipcRenderer.invoke('qualite:fusionnerDoublons', payload),
-    corrigerFormat: (payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }): Promise<any> =>
+    // `source` (audit 2026-10-26 point 8) : table de la fiche, les numéros carte/anomalie se chevauchent.
+    corrigerFormat: (payload: { id_carte: number; source: 't_cartes' | 't_import_anomalies'; champ_corrige: string; valeur_avant: string; valeur_apres: string }): Promise<any> =>
       ipcRenderer.invoke('qualite:corrigerFormat', payload),
     supprimerIncoherences: (payload: { type_incoherence: string; site_id: number }): Promise<any> =>
       ipcRenderer.invoke('qualite:supprimerIncoherences', payload),

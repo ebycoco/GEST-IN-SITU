@@ -76,7 +76,7 @@ describe('dates JJ/MM/AAAA — normalisation avant écriture', () => {
 
   it('qualite:corrigerFormat accepte 15/03/1985 et stocke 1985-03-15', async () => {
     const id = insertCarte('A', '1985-13-45');
-    const res = await corriger({}, { id_carte: id, champ_corrige: 'date_de_naissance', valeur_avant: '1985-13-45', valeur_apres: '15/03/1985' });
+    const res = await corriger({}, { id_carte: id, source: 't_cartes', champ_corrige: 'date_de_naissance', valeur_avant: '1985-13-45', valeur_apres: '15/03/1985' });
     expect(res.success).toBe(true);
     expect(dateOf(id)).toBe('1985-03-15');
   });
@@ -84,7 +84,7 @@ describe('dates JJ/MM/AAAA — normalisation avant écriture', () => {
   it('qualite:corrigerFormat refuse 31/02/1990 sans écrire', async () => {
     const id = insertCarte('B', '1990-99-99');
     await expect(
-      corriger({}, { id_carte: id, champ_corrige: 'date_de_naissance', valeur_avant: '1990-99-99', valeur_apres: '31/02/1990' })
+      corriger({}, { id_carte: id, source: 't_cartes', champ_corrige: 'date_de_naissance', valeur_avant: '1990-99-99', valeur_apres: '31/02/1990' })
     ).rejects.toThrow(/invalide/i);
     expect(dateOf(id)).toBe('1990-99-99');
   });

@@ -480,7 +480,7 @@ test.describe.serial('Wave 2 audit sécurité — vérification vivante (agent-1
       const result = await window.evaluate(async (id) => {
         try {
           const res = await (window as any).api.qualite.corrigerFormat({
-            id_carte: id, champ_corrige: 'num_secu', valeur_avant: 'ZZTEST-QUALITE-000', valeur_apres: '1234500000000'
+            id_carte: id, source: 't_cartes', champ_corrige: 'num_secu', valeur_avant: 'ZZTEST-QUALITE-000', valeur_apres: '1234500000000'
           });
           return { ok: true, res };
         } catch (e: any) { return { ok: false, message: e?.message || String(e) }; }

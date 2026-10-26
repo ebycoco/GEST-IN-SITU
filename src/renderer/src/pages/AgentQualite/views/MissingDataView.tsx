@@ -104,8 +104,11 @@ export default function MissingDataView() {
 
     try {
       setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
-      await window.api.qualite.corrigerFormat({
+      // Audit 2026-10-26 (point 8) : tous les onglets de cette vue lisent exclusivement
+      // t_cartes (getSans*Page / getDatesVidesPage) → source fixe 't_cartes'.
+      const res = await window.api.qualite.corrigerFormat({
         id_carte: card.id_carte,
+        source: 't_cartes',
         champ_corrige: field,
         // Correctif P1 (agent-13-qa-terrain-tester, 2026-09-05) : envoyer une chaîne réellement
         // vide plutôt que le littéral '(Vide)', qui n'est pas falsy et tombait donc dans la
@@ -114,6 +117,11 @@ export default function MissingDataView() {
         valeur_avant: card[field] || '',
         valeur_apres: field === 'contact' ? providedValue.replace(/\D/g, '') : providedValue.trim().toUpperCase()
       });
+      if (!res?.success) {
+        toast.error(res?.error || 'Aucune fiche corrigée.');
+        loadTabData();
+        return false;
+      }
       toast.success('Donnée mise à jour avec succès !');
       loadTabData();
       // Notifie AgentQualiteLayout.tsx pour recalculer dirtyCartesCount/detailedSyncStats,

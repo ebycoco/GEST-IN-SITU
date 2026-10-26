@@ -1662,14 +1662,29 @@ export function getDatesVidesPage(siteId?: number, offset = 0, limit = 50, query
   return { rows, total };
 }
 
-export function updateDateDeNaissance(id: number, newDate: string) {
+/**
+ * Audit 2026-10-26 (point 8) — table d'origine d'une fiche du portail Qualité. Les numéros
+ * t_cartes.id_carte et t_import_anomalies.id sont deux séries AUTOINCREMENT indépendantes qui se
+ * chevauchent : un numéro seul ne permet jamais de savoir quelle fiche est visée.
+ */
+export type QualiteCorrectionSource = 't_cartes' | 't_import_anomalies';
+
+/**
+ * Transfère l'anomalie d'import (DLQ) `anomalyId` vers t_cartes avec la date `newDate`, puis la
+ * supprime de t_import_anomalies. Lit UNIQUEMENT t_import_anomalies (jamais t_cartes, dont les
+ * numéros chevauchent ceux des anomalies). INSERT + DELETE + enfilage outbox dans une seule
+ * transaction (better-sqlite3 la convertit en SAVEPOINT si l'appelant est déjà en transaction).
+ * @returns l'id_carte de la carte créée (lastInsertRowid), ou null si l'anomalie n'existe pas.
+ */
+export function transfererAnomalieVersCarte(anomalyId: number, newDate: string): number | null {
   const db = getDatabase()!;
   const now = new Date().toISOString();
+  const id = anomalyId;
 
-  // Vérifier si la fiche correspond à une anomalie d'importation (DLQ)
   const anomaly = db.prepare('SELECT * FROM t_import_anomalies WHERE id = ?').get(id) as any;
+  if (!anomaly) return null;
 
-  if (anomaly) {
+  {
     const runTx = db.transaction(() => {
       const noms = removeAccents(anomaly.noms || '');
       const prenoms = removeAccents(anomaly.prenoms || '');
@@ -1723,8 +1738,18 @@ export function updateDateDeNaissance(id: number, newDate: string) {
 
     const res = runTx();
     console.log(`[CORRECTION DIAGNOSTIC] ✨ Anomalie ID ${id} corrigée. Carte transférée avec succès vers t_cartes et purgée de la DLQ.`);
-    return res;
+    return Number(res.lastInsertRowid);
   }
+}
+
+/**
+ * Corrige la date de naissance de la carte `id` (t_cartes uniquement — ne lit ni ne modifie
+ * jamais t_import_anomalies, cf. audit 2026-10-26 point 8). Recalcule cle_doublon/flex, is_dirty=1
+ * et enfile la carte dans t_outbox dans la même transaction. `changes` = 0 si la carte n'existe pas.
+ */
+export function corrigerDateNaissanceCarte(id: number, newDate: string) {
+  const db = getDatabase()!;
+  const now = new Date().toISOString();
 
   // P0-4 (audit export) : cle_doublon/cle_doublon_flex n'étaient jamais recalculées ici après
   // correction de la date de naissance sur une carte déjà présente dans t_cartes (elles
@@ -1751,12 +1776,132 @@ export function updateDateDeNaissance(id: number, newDate: string) {
       WHERE id_carte = ?
     `).run(newDate, cleDbl, cleFlex, now, now, id);
 
-    autoEnqueueCorrection(id);
+    // Pas d'enfilage pour une carte inexistante (aucune ligne modifiée).
+    if (updateRes.changes > 0) autoEnqueueCorrection(id);
 
     return updateRes;
   });
 
   return runStandardTx();
+}
+
+/**
+ * @deprecated Audit 2026-10-26 (point 8) : devine la table à partir d'un simple numéro (anomalie
+ * d'abord, puis carte) — corriger la carte n°N peut transférer l'anomalie n°N à la place.
+ * Conservée (même comportement) uniquement pour l'appelant restant `cartes:updateDate`
+ * (handlers.ts, hors périmètre de ce correctif). Tout nouveau code doit appeler
+ * transfererAnomalieVersCarte() ou corrigerDateNaissanceCarte() explicitement.
+ */
+export function updateDateDeNaissance(id: number, newDate: string) {
+  const db = getDatabase()!;
+  const anomaly = db.prepare('SELECT id FROM t_import_anomalies WHERE id = ?').get(id);
+  if (anomaly) {
+    // Contrat de retour historique de la branche anomalie : RunResult de l'INSERT.
+    const newId = transfererAnomalieVersCarte(id, newDate);
+    return { changes: newId === null ? 0 : 1, lastInsertRowid: newId ?? 0 };
+  }
+  return corrigerDateNaissanceCarte(id, newDate);
+}
+
+/** Champs modifiables via le portail Qualité (même whitelist que le handler IPC). */
+const CHAMPS_QUALITE_CORRIGEABLES = ['date_de_naissance', 'num_secu', 'rangement', 'noms', 'prenoms', 'contact', 'lieu_de_naissance', 'lieu_enrolement'] as const;
+type ChampQualiteCorrigeable = typeof CHAMPS_QUALITE_CORRIGEABLES[number];
+
+export interface QualiteCorrectionResult {
+  /** false si la fiche visée n'existe pas (déjà traitée/supprimée) : rien n'a été écrit. */
+  success: boolean;
+  /** Nombre réel de fiches modifiées (0 si valeur déjà identique ou fiche introuvable). */
+  changes: number;
+  /** id_carte de la carte corrigée (ou créée par transfert), null si rien n'a été trouvé. */
+  id_carte: number | null;
+  /** true si une anomalie d'import a été transférée vers t_cartes. */
+  transferee: boolean;
+  error?: string;
+}
+
+const MSG_FICHE_INTROUVABLE = 'Fiche introuvable : elle a peut-être déjà été corrigée ou supprimée. Actualisez la liste.';
+
+/**
+ * Logique métier de `qualite:corrigerFormat` (audit 2026-10-26 point 8), extraite du handler pour
+ * être testable sans Electron. Le handler garde la whitelist/revalidation des formats, la
+ * normalisation de date, le contrôle de rôle et l'audit.
+ *
+ * - `source` est OBLIGATOIRE : seule la table indiquée est lue (aucune devinette par numéro).
+ * - t_import_anomalies → toujours un transfert vers t_cartes (`carte_id` de l'anomalie ignoré :
+ *   c'est un n° sécu ou une clé nom|prénom|date, jamais un id carte — cf. import-worker.js) ; un
+ *   champ autre que la date est appliqué à la carte créée, identifiée par lastInsertRowid.
+ * - Cloisonnement §3 : le site contrôlé est celui de la fiche réellement visée ; `currentUser`
+ *   doit provenir de getSecureCurrentUser() (rôle actif de la session).
+ * - Transaction unique (better-sqlite3, synchrone, savepoints pour les transactions imbriquées) :
+ *   INSERT/UPDATE t_cartes (is_dirty=1) + DELETE de l'anomalie + enfilage t_outbox
+ *   (autoEnqueueCorrection, payload complet). Une seule fiche par appel : empreinte mémoire nulle.
+ * @throws si `source` est absente/invalide, si le champ n'est pas autorisé, si la fiche
+ *   appartient à un autre site, ou si une anomalie n'a pas de site de rattachement.
+ */
+export function corrigerFormatQualite(params: {
+  source: unknown;
+  id: number;
+  champ: string;
+  valeur_apres: string;
+  currentUser: { role?: string; site_id?: number | null; centre_id?: number; id_user?: number; login?: string };
+}): QualiteCorrectionResult {
+  const { source, id, champ, valeur_apres, currentUser } = params;
+  if (source !== 't_cartes' && source !== 't_import_anomalies') {
+    throw new Error("Source de la fiche absente ou invalide : impossible de savoir s'il s'agit d'une carte ou d'une anomalie d'import.");
+  }
+  if (!(CHAMPS_QUALITE_CORRIGEABLES as readonly string[]).includes(champ)) {
+    throw new Error(`Champ non autorisé : ${champ}`);
+  }
+  const champCorrige = champ as ChampQualiteCorrigeable;
+  const quickUser = { ...currentUser, site_id: currentUser.site_id ?? undefined };
+  const db = getDatabase()!;
+
+  const record = (source === 't_cartes'
+    ? db.prepare('SELECT * FROM t_cartes WHERE id_carte = ?').get(id)
+    : db.prepare('SELECT * FROM t_import_anomalies WHERE id = ?').get(id)) as Record<string, unknown> | undefined;
+
+  if (!record) {
+    return { success: false, changes: 0, id_carte: null, transferee: false, error: MSG_FICHE_INTROUVABLE };
+  }
+
+  const recordSiteId = record.site_id as number | null | undefined;
+  if (currentUser.role !== 'SUPER ADMIN' && recordSiteId !== undefined && recordSiteId !== null && recordSiteId !== currentUser.site_id) {
+    throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
+  }
+
+  if (source === 't_cartes') {
+    // Idempotence : valeur déjà identique, aucune réécriture.
+    if (record[champCorrige] === valeur_apres) {
+      return { success: true, changes: 0, id_carte: id, transferee: false };
+    }
+    const res = db.transaction(() => (champCorrige === 'date_de_naissance'
+      ? corrigerDateNaissanceCarte(id, valeur_apres)
+      : updateQuickFields(id, { [champCorrige]: valeur_apres }, quickUser)))();
+    const changes = Number(res.changes);
+    return { success: changes > 0, changes, id_carte: changes > 0 ? id : null, transferee: false, ...(changes > 0 ? {} : { error: MSG_FICHE_INTROUVABLE }) };
+  }
+
+  // Anomalie sans site : la carte créée serait orpheline (même refus que updateCarte()).
+  if (recordSiteId === undefined || recordSiteId === null) {
+    throw new Error('Anomalie sans site de rattachement : transfert impossible.');
+  }
+
+  const newId = db.transaction(() => {
+    const dateTransfert = champCorrige === 'date_de_naissance' ? valeur_apres : String(record.date_de_naissance ?? '');
+    const createdId = transfererAnomalieVersCarte(id, dateTransfert);
+    if (createdId !== null && champCorrige !== 'date_de_naissance') {
+      const upd = updateQuickFields(createdId, { [champCorrige]: valeur_apres }, quickUser);
+      // Garde-fou : la carte vient d'être créée dans cette même transaction ; un échec annule
+      // tout (transfert compris) plutôt que de laisser une correction partielle.
+      if (Number(upd.changes) === 0) throw new Error('Correction non appliquée sur la carte transférée.');
+    }
+    return createdId;
+  })();
+
+  if (newId === null) {
+    return { success: false, changes: 0, id_carte: null, transferee: false, error: MSG_FICHE_INTROUVABLE };
+  }
+  return { success: true, changes: 1, id_carte: newId, transferee: true };
 }
 
 export function getDoublonsStrictsPage(siteId: number, offset: number, limit: number, query?: string, filters?: QualityFilters) {
