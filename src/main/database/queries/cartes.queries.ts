@@ -460,18 +460,29 @@ export function updateCarte(id: number, data: Record<string, unknown>, currentUs
       // 3. Insérer dans t_cartes avec statut EN STOCK
       const stmt = db.prepare(`
         INSERT INTO t_cartes (noms, prenoms, date_de_naissance, lieu_de_naissance, num_secu,
-          lieu_enrolement, contact, rangement, statut, sync_id, site_id, cle_doublon, cle_doublon_flex, is_dirty, updated_at, action_at)
+          lieu_enrolement, contact, rangement, statut, sync_id, site_id, cle_doublon, cle_doublon_flex, is_dirty, updated_at, action_at, created_by)
         VALUES (@noms, @prenoms, @date_de_naissance, @lieu_de_naissance, @num_secu,
-          @lieu_enrolement, @contact, @rangement, 'EN STOCK', @sync_id, @site_id, @cle_doublon, @cle_doublon_flex, 1, @updated_at, @action_at)
+          @lieu_enrolement, @contact, @rangement, 'EN STOCK', @sync_id, @site_id, @cle_doublon, @cle_doublon_flex, 1, @updated_at, @action_at, @created_by)
       `);
-      stmt.run({
+      // P1-A (test terrain 2026-10-26) : created_by = id_user de la session serveur (colonne
+      // INTEGER, référence t_users côté cloud ; même convention que createCarte et que les
+      // lectures created_by = id_user de stats.queries.ts / OPERATEUR_SAISIE ci-dessous).
+      const insertRes = stmt.run({
         noms, prenoms, date_de_naissance: ddn, lieu_de_naissance: lieuN,
         num_secu, lieu_enrolement, contact, rangement, sync_id: newSyncId,
-        site_id: siteId, cle_doublon: cleDbl, cle_doublon_flex: cleFlex, updated_at: now, action_at: now
+        site_id: siteId, cle_doublon: cleDbl, cle_doublon_flex: cleFlex, updated_at: now, action_at: now,
+        created_by: currentUser.id_user ?? null
       });
 
       // 4. Supprimer de t_import_anomalies
       db.prepare('DELETE FROM t_import_anomalies WHERE id = ?').run(id);
+
+      // 4 bis. P1-A (test terrain 2026-10-26) : enfilage outbox de la carte créée DANS la même
+      // transaction que l'INSERT/DELETE (quadriptyque), comme transfererAnomalieVersCarte.
+      // autoEnqueueCorrection relit la carte complète (payload complet), retient les doublons
+      // et avale ses propres erreurs (log.warn) : il ne peut pas provoquer de rollback ; en cas
+      // de non-enfilage la carte reste is_dirty = 1 et l'envoi manuel groupé la reprend.
+      autoEnqueueCorrection(Number(insertRes.lastInsertRowid));
 
       // 5. Trace d'audit
       insertAuditLog(
