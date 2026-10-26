@@ -359,8 +359,18 @@ export function createCarte(data: Record<string, unknown>, siteIdToUse: number) 
     created_by: data.created_by || null
   });
 
-  // L'envoi automatique est désactivé pour permettre un workflow de synchronisation 100% manuel via le bouton Envoyer vers le Cloud.
-  // Toute carte insérée a is_dirty = 1, ce qui permet à l'action manuelle de la détecter.
+  // Envoi automatique des saisies finales (décision utilisateur, audit 2026-10-26 point 11 :
+  // « envoyée automatiquement, comme les corrections »). L'INSERT ci-dessus a posé is_dirty = 1 ;
+  // autoEnqueueCorrection() (déclaré en tête de fichier, hoisté, non transactionnel, ne lève
+  // jamais : toute erreur est journalisée en warn) réutilise la logique existante : il retient
+  // les doublons stricts/probables, valide via mapCardPayload, puis enqueueOutbox +
+  // scheduleOutboxProcessing(true) si le réseau est ONLINE. La carte reste is_dirty = 1 jusqu'à
+  // confirmation d'envoi par le moteur outbox (comportement inchangé) ; en cas de doublon ou
+  // d'échec, l'envoi manuel groupé la reprend. Les BROUILLON ne partent PAS : publishDrafts()
+  // les enfile à la publication.
+  if (data.statut !== 'BROUILLON') {
+    autoEnqueueCorrection(Number(result.lastInsertRowid));
+  }
 
   return { id: result.lastInsertRowid, sync_id: syncId };
 }
@@ -2789,12 +2799,28 @@ export function updateCarteRangementAndStatusRapid(identifiant: string, rangemen
   // cartes:inventairePhysiqueScan, aucun autre consommateur trouvé dans le code).
   // site_id/centre_id ajoutés à la SELECT pour permettre le recalcul de centre_id ci-dessous.
   const scoped = currentUser && currentUser.role !== 'SUPER ADMIN';
-  const carte = scoped
-    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? LIMIT 1`).get(cleanedId, currentUser!.site_id) as any
-    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id FROM t_cartes WHERE UPPER(num_secu) = ? LIMIT 1`).get(cleanedId) as any;
+  // Audit 2026-10-26 (point 10) : la recherche ignore désormais les cartes supprimées
+  // (is_dirty = -1, convention de suppression logique du fichier) et ne tranche plus au hasard
+  // (ancien `LIMIT 1`) : on lit jusqu'à 2 lignes pour détecter l'ambiguïté. `statut` ajouté à la
+  // SELECT pour la garde ci-dessous. Lecture seule : aucun effet de bord avant les refus.
+  const candidates = (scoped
+    ? db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND site_id = ? AND is_dirty != -1 LIMIT 2`).all(cleanedId, currentUser!.site_id)
+    : db.prepare(`SELECT id_carte, noms, prenoms, num_secu, rangement, sync_id, site_id, centre_id, statut FROM t_cartes WHERE UPPER(num_secu) = ? AND is_dirty != -1 LIMIT 2`).all(cleanedId)) as any[];
 
-  if (!carte) {
+  if (candidates.length === 0) {
     return { success: false, message: "Carte introuvable avec cet identifiant." };
+  }
+  if (candidates.length > 1) {
+    return { success: false, message: "Plusieurs cartes portent ce numéro : à vérifier par un responsable." };
+  }
+  const carte = candidates[0];
+
+  // Garde de statut : le scan ne « range » qu'une carte réellement EN STOCK. Sans cette garde,
+  // une carte DELIVRE/DOUBLON/DISTRIBUEE/RETIRE/ANNULE/BROUILLON était silencieusement remise
+  // en 'EN STOCK' (preuve de retrait contournée). Refus = AUCUNE écriture (ni t_cartes, ni
+  // t_outbox, ni t_logs) ; le renderer affiche déjà `message` en toast d'erreur.
+  if (carte.statut !== 'EN STOCK') {
+    return { success: false, message: `Carte au statut ${carte.statut} : à signaler à un responsable.` };
   }
 
   // Recalcul centre_id à partir du nouveau rangement — même règle que updateRangementEtFiche()
