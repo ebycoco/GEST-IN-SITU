@@ -12,6 +12,13 @@ import { QualityFilters } from '../../../../../shared/types/quality.types';
 import { ExpandedAnomalyDetails } from '../../../components/Quality/ExpandedAnomalyDetails';
 import { useDebounce } from '../../../hooks/useDebounce';
 
+// Audit 2026-10-26 (P1-2 non-régression c49a7c2) : la liste mélange cartes (t_cartes) et
+// anomalies d'import (t_import_anomalies) dont les numéros se chevauchent. L'état UI (clé React,
+// ligne dépliée, indicateurs de traitement) est donc indexé par source + numéro, jamais par
+// le numéro seul. Le numéro envoyé au serveur reste `id_carte`.
+type RowKey = string;
+const rowKey = (r: { source?: string; id_carte: number }): RowKey => `${r.source ?? 't_cartes'}:${r.id_carte}`;
+
 export default function InvalidFormatView() {
   const { user, activeSiteId } = useAuthStore();
   const siteIdToUse = (user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id) ?? 1;
@@ -20,14 +27,14 @@ export default function InvalidFormatView() {
   const debouncedFilters = useDebounce(filters, 500);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<RowKey | null>(null);
   const [records, setRecords] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   // Édition en ligne — Date de naissance
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<RowKey | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [isResolving, setIsResolving] = useState<Record<number, boolean>>({});
+  const [isResolving, setIsResolving] = useState<Record<RowKey, boolean>>({});
 
   const { refreshTrigger, openCorrection, isFetchingQuery, setIsFetchingQuery } = useQualityUIStore();
 
@@ -75,7 +82,7 @@ export default function InvalidFormatView() {
     
     try {
       window.api.log.info(`[QUALITÉ] Tentative de correction de date pour la carte ID=${card.id_carte}`);
-      setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
+      setIsResolving(prev => ({ ...prev, [rowKey(card)]: true }));
       // Audit 2026-10-26 (point 8) : `source` (fournie par getInvalidDates pour chaque ligne)
       // indique au serveur s'il s'agit d'une carte ou d'une anomalie d'import (numéros qui se
       // chevauchent). Fiche introuvable → success:false, on n'affiche pas de succès.
@@ -105,7 +112,7 @@ export default function InvalidFormatView() {
       console.error(err);
       toast.error('Erreur lors de la mise à jour.');
     } finally {
-      setIsResolving(prev => ({ ...prev, [card.id_carte]: false }));
+      setIsResolving(prev => ({ ...prev, [rowKey(card)]: false }));
     }
   };
 
@@ -130,7 +137,7 @@ export default function InvalidFormatView() {
       }
     }
     try {
-      setIsResolving(prev => ({ ...prev, [card.id_carte]: true }));
+      setIsResolving(prev => ({ ...prev, [rowKey(card)]: true }));
       window.api.log.info(`[QUALITÉ] Correction du champ '${champ}' pour anomalie ID=${card.id_carte}`);
       // `source` : voir handleSaveDate ci-dessus (audit 2026-10-26 point 8).
       const res = await window.api.qualite.corrigerFormat({
@@ -169,11 +176,15 @@ export default function InvalidFormatView() {
       toast.error('Erreur lors de la mise à jour.');
       return false;
     } finally {
-      setIsResolving(prev => ({ ...prev, [card.id_carte]: false }));
+      setIsResolving(prev => ({ ...prev, [rowKey(card)]: false }));
     }
   };
 
-  const executeDelete = async (id: number) => {
+  // P1-2 : reçoit la ligne (pas seulement le numéro) pour indexer isResolving par rowKey ;
+  // le serveur reçoit toujours le numéro de l'anomalie.
+  const executeDelete = async (r: any) => {
+    const id: number = r.id_carte;
+    const key = rowKey(r);
     const confirmed = await confirmService.confirm({
       title: "Supprimer l'anomalie",
       message: 'Êtes-vous sûr de vouloir supprimer cette anomalie ? Cette action est irréversible.',
@@ -183,7 +194,7 @@ export default function InvalidFormatView() {
     if (!confirmed) return;
     
     try {
-      setIsResolving(prev => ({ ...prev, [id]: true }));
+      setIsResolving(prev => ({ ...prev, [key]: true }));
       window.api.log.info(`[QUALITÉ] Suppression de l'anomalie ID=${id} par l'opérateur`);
       await window.api.import.deleteAnomaly(id);
       toast.success('Anomalie supprimée avec succès.');
@@ -193,7 +204,7 @@ export default function InvalidFormatView() {
       console.error(err);
       toast.error("Erreur lors de la suppression de l'anomalie.");
     } finally {
-      setIsResolving(prev => ({ ...prev, [id]: false }));
+      setIsResolving(prev => ({ ...prev, [key]: false }));
     }
   };
 
@@ -240,18 +251,20 @@ export default function InvalidFormatView() {
                   </td>
                 </tr>
               ) : (
-                records.map(r => (
-                  <React.Fragment key={r.id_carte}>
+                records.map(r => {
+                  const k = rowKey(r);
+                  return (
+                  <React.Fragment key={k}>
                     <tr 
-                      style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', background: expandedId === r.id_carte ? 'rgba(255,255,255,0.02)' : 'transparent', transition: 'background 0.2s' }}
-                      onClick={() => setExpandedId(expandedId === r.id_carte ? null : r.id_carte)}
+                      style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', cursor: 'pointer', background: expandedId === k ? 'rgba(255,255,255,0.02)' : 'transparent', transition: 'background 0.2s' }}
+                      onClick={() => setExpandedId(expandedId === k ? null : k)}
                     >
                       <td style={{ paddingLeft: 20 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                          {expandedId === r.id_carte ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />}
+                          {expandedId === k ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />}
                           <div>
                             <strong>{r.noms} {r.prenoms}</strong>
-                            {expandedId !== r.id_carte && (
+                            {expandedId !== k && (
                               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
                                 Cliquez pour voir les détails
                               </div>
@@ -265,38 +278,41 @@ export default function InvalidFormatView() {
                         </span>
                       </td>
                       <td onClick={(e) => e.stopPropagation()}>
-                        {editingId === r.id_carte ? (
-                          <DateInput value={editValue} onChange={setEditValue} autoFocus disabled={isResolving[r.id_carte]} />
+                        {editingId === k ? (
+                          <DateInput value={editValue} onChange={setEditValue} autoFocus disabled={isResolving[k]} />
                         ) : (
                           <span style={{ color: 'var(--text-muted)', fontStyle: 'italic', fontSize: 13 }}>Modification requise</span>
                         )}
                       </td>
                       <td style={{ textAlign: 'right', paddingRight: 20 }} onClick={(e) => e.stopPropagation()}>
-                        {editingId === r.id_carte ? (
+                        {editingId === k ? (
                           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                            <button className="btn btn-primary" onClick={() => handleSaveDate(r)} disabled={isResolving[r.id_carte]}>
-                              {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
+                            <button className="btn btn-primary" onClick={() => handleSaveDate(r)} disabled={isResolving[k]}>
+                              {isResolving[k] ? <RefreshCw size={14} className="animate-spin" /> : <Save size={16} />}
                             </button>
                             <button className="btn btn-secondary" onClick={() => setEditingId(null)}>Annuler</button>
                           </div>
                         ) : (
                           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                            <button className="btn btn-secondary" onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === r.id_carte ? null : r.id_carte); }} title="Détails" style={{ padding: '6px 10px' }}>
+                            <button className="btn btn-secondary" onClick={(e) => { e.stopPropagation(); setExpandedId(expandedId === k ? null : k); }} title="Détails" style={{ padding: '6px 10px' }}>
                               <Info size={14} />
                             </button>
-                            <button className="btn btn-primary" onClick={() => openCorrection(r, 'date_de_naissance')}>
+                            {/* Audit 2026-10-26 (P1-1 non-régression c49a7c2) : sans _recordType, une anomalie n°N
+                                était corrigée via UPDATE t_cartes WHERE id_carte = N (fiche d'une autre personne).
+                                'AnomalieImport' fait prendre à updateCarte la branche transfert d'anomalie. */}
+                            <button className="btn btn-primary" onClick={() => openCorrection({ ...r, _recordType: r.source === 't_import_anomalies' ? 'AnomalieImport' : undefined }, 'date_de_naissance')}>
                               <Edit3 size={14} style={{ marginRight: 6 }} /> Corriger
                             </button>
                           </div>
                         )}
                       </td>
                     </tr>
-                    {expandedId === r.id_carte && (
+                    {expandedId === k && (
                       <tr>
                         <td colSpan={4} style={{ padding: 0, borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                           <ExpandedAnomalyDetails
                             record={r}
-                            isResolving={isResolving[r.id_carte] || false}
+                            isResolving={isResolving[k] || false}
                             onSaveField={(field, value) => handleSaveContactLieu(r, field, value)}
                             colorTheme="#ff6348"
                           />
@@ -311,12 +327,12 @@ export default function InvalidFormatView() {
                                 </div>
                                 <button 
                                   className="btn btn-secondary" 
-                                  onClick={(e) => { e.stopPropagation(); executeDelete(r.id_carte); }}
-                                  disabled={isResolving[r.id_carte]}
+                                  onClick={(e) => { e.stopPropagation(); executeDelete(r); }}
+                                  disabled={isResolving[k]}
                                   style={{ border: '1px solid rgba(255, 118, 117, 0.5)', color: '#ff7675', background: 'rgba(255, 118, 117, 0.1)', padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6 }}
                                   title="Supprimer l'anomalie"
                                 >
-                                  {isResolving[r.id_carte] ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                                  {isResolving[k] ? <RefreshCw size={14} className="animate-spin" /> : <Trash2 size={14} />}
                                   Supprimer
                                 </button>
                               </div>
@@ -326,7 +342,8 @@ export default function InvalidFormatView() {
                       </tr>
                     )}
                   </React.Fragment>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>
