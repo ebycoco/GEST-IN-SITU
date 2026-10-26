@@ -1841,7 +1841,13 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           throw new Error("Accès refusé : cette fiche n'appartient pas à votre site.");
         }
       }
-      return queries.updateDateDeNaissance(id, newDate);
+      // Audit 2026-10-26 (point 9) : normalisation (JJ/MM/AAAA -> AAAA-MM-JJ) puis validation
+      // calendaire AVANT toute écriture ; une date invalide est refusée avec une erreur claire.
+      const dateNormalisee = normalizeDate(String(newDate ?? ''));
+      if (!isValidCalendarDateFlexible(dateNormalisee)) {
+        throw new Error('Date de naissance invalide ou inexistante dans le calendrier.');
+      }
+      return queries.updateDateDeNaissance(id, dateNormalisee);
     }
     catch (e) { log.error('IPC Error: cartes:updateDate', e); throw e; }
   });
@@ -2681,7 +2687,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   ipcMain.handle('qualite:corrigerFormat', async (event, payload: { id_carte: number; champ_corrige: string; valeur_avant: string; valeur_apres: string }) => {
     const userLogin = getCurrentUserLogin() || 'SYSTEM';
-    const { id_carte, champ_corrige, valeur_avant, valeur_apres } = payload;
+    const { id_carte, champ_corrige, valeur_avant } = payload;
+    // Audit 2026-10-26 (point 9) : une date de naissance saisie JJ/MM/AAAA doit être stockée
+    // en ISO (AAAA-MM-JJ). On normalise AVANT toute validation/idempotence/écriture/audit, et
+    // `valeur_apres` désigne ensuite partout la valeur normalisée. Les autres champs sont
+    // inchangés (valeur brute).
+    const valeur_apres: string = (payload.champ_corrige === 'date_de_naissance' && payload.valeur_apres)
+      ? normalizeDate(String(payload.valeur_apres))
+      : payload.valeur_apres;
 
     // Whitelist de sécurité : seuls ces champs peuvent être modifiés via ce canal
     const CHAMPS_AUTORISES = ['date_de_naissance', 'num_secu', 'rangement', 'noms', 'prenoms', 'contact', 'lieu_de_naissance', 'lieu_enrolement'];
