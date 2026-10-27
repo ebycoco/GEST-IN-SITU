@@ -1371,7 +1371,10 @@ async function runLogsDownstreamChunk(siteId: number): Promise<{ fetched: number
         if (existing) continue; // Déjà rapatrié localement (idempotence, pas d'UPDATE — entrées de journal immuables)
 
         insertStmt.run({
-          id_user: row.id_user ?? null,
+          // id_user cloud volontairement NON recopié : les id_user locaux et Supabase ne sont
+          // pas alignés (audit 2026-10-26, chantier C3) ; recopié, il désignerait un agent
+          // absent ou un AUTRE agent de ce poste. L'auteur reste identifié par login_user.
+          id_user: null,
           login_user: row.login_user ?? null,
           action: row.action,
           detail: row.detail ?? null,

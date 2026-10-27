@@ -25,3 +25,5 @@
 ### 🚨 Sécurité
 
 - **Le numéro interne d'un agent n'est plus envoyé au cloud** — chaque poste numérote ses agents à sa façon, sans rapport avec la numérotation du cloud : l'auteur d'une carte et l'agent d'une ligne du journal pouvaient être refusés par le cloud, ou attribués à un autre agent, sans aucun message. Ces numéros ne sont plus transmis (le journal garde l'identifiant de connexion de l'agent) ; ils restent enregistrés sur le poste pour les statistiques locales.
+
+- **Les lignes du journal reçues d'autres postes ne sont plus attribuées à un agent de ce poste** — en récupérant le journal d'activité depuis le cloud, le poste recopiait le numéro d'agent d'origine, qui pouvait désigner un agent inexistant ou un autre agent du poste (statistiques Qualité du jour faussées). Ces lignes sont désormais enregistrées sans numéro d'agent, avec l'identifiant de connexion de leur auteur. Les lignes déjà récupérées avant cette version ne sont pas modifiées.
