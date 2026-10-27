@@ -473,7 +473,16 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         } else {
           let finalPayload;
           try {
-            finalPayload = entry.table_name === 't_cartes' ? mapCardPayload(payload) : payload;
+            if (entry.table_name === 't_cartes') {
+              finalPayload = mapCardPayload(payload);
+            } else if (entry.table_name === 't_logs') {
+              // id_user neutralisé au moment de l'envoi (audit 2026-10-26, chantier C3), y compris
+              // pour les entrées enfilées par une version antérieure : l'id_user local n'est jamais
+              // aligné sur l'id_user Supabase (FK t_logs_id_user_fkey). login_user identifie l'agent.
+              finalPayload = { ...payload, id_user: null };
+            } else {
+              finalPayload = payload;
+            }
           } catch (validationErr: any) {
             log.error(`[OutboxService] Rejet local (validation) pour ${entry.table_name} (id=${entry.id}) : ${validationErr.message}`);
             if (markError(newAttempts, validationErr.message)) {
@@ -555,6 +564,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
               `[OutboxService] Erreur Supabase pour ${entry.table_name} (id=${entry.id}). ` +
               `Tentative ${newAttempts}/${MAX_OUTBOX_ATTEMPTS} : ${supabaseError.message}`
             );
+            // Trace dès la 1re erreur (audit 2026-10-26, chantier C3) : statut PENDING inchangé.
+            _recordOutboxAttemptError(db, entry, _formatSupabaseError(supabaseError));
           }
           continue;
         }
@@ -599,6 +610,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           `Conservé en PENDING. Tentative ${newAttempts}/${MAX_OUTBOX_ATTEMPTS}. ` +
           `Détail : ${networkErr.message || networkErr}`
         );
+        // Trace de l'exception (audit 2026-10-26, chantier C3) : statut PENDING inchangé.
+        _recordOutboxAttemptError(db, entry, `Exception : ${networkErr?.message || String(networkErr)}`);
       }
     }
 
@@ -875,6 +888,34 @@ function _markOutboxError(
     log.error(`[OutboxService] Impossible de marquer l'entrée ${id} en ERROR :`, err.message);
     return false;
   }
+}
+
+/**
+ * Enregistre la dernière erreur d'envoi (error_msg + last_attempt_at) d'une entrée qui RESTE
+ * en PENDING (erreur Supabase non transitoire sous le seuil, ou exception) — audit 2026-10-26,
+ * chantier C3 : auparavant ces échecs n'étaient visibles que dans les logs. Ne modifie ni le
+ * statut ni attempts (déjà incrémenté avant l'envoi). Même garde anti-course que
+ * _markOutboxError : sans effet si l'entrée a été ré-enfilée pendant l'envoi.
+ * last_attempt_at n'est lu par _promoteEligibleErrorsToPending que pour les entrées ERROR.
+ */
+function _recordOutboxAttemptError(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  entry: Pick<OutboxEntry, 'id' | 'operation' | 'payload'>,
+  errorMsg: string
+): void {
+  try {
+    db.prepare(`
+      UPDATE t_outbox SET error_msg = ?, last_attempt_at = datetime('now')
+      WHERE id = ? AND status = 'PENDING' AND operation = ? AND payload = ?
+    `).run(errorMsg, entry.id, entry.operation, entry.payload);
+  } catch (err: any) {
+    log.error(`[OutboxService] Impossible d'enregistrer l'erreur de l'entrée ${entry.id} :`, err.message || err);
+  }
+}
+
+/** Message d'erreur Supabase lisible, préfixé du code PostgreSQL quand il est connu (ex: 23503). */
+function _formatSupabaseError(error: { message: string; code?: string }): string {
+  return error.code ? `[${error.code}] ${error.message}` : error.message;
 }
 
 /**

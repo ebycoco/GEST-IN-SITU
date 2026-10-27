@@ -582,26 +582,12 @@ class SyncEngine extends EventEmitter {
     try {
       await this.executeSyncCycle();
 
-      // Audit 2026-10-26 (point 6) : executeSyncCycle() sort silencieusement, sans rien traiter,
-      // quand aucun site n'est actif (aucun utilisateur connecté dans cette session). L'outbox
-      // ne dépend pas du site : on la vide quand même ici, avec la même gestion d'erreur non
-      // bloquante que dans executeSyncCycle(). Attention : processOutboxPending(true) positionne
-      // fromPeriodicCycle=true (promotion ERROR->PENDING après backoff), PAS forceCards (laissé à
-      // false par défaut, cf. outbox.service.ts). Les entrées t_cartes PENDING restent donc exclues
-      // si le toggle « Envoi Automatique » est désactivé : ce vidage peut n'être que partiel, d'où
-      // le message « partielle » renvoyé plus bas.
-      // Mémoire : aucun tableau retenu, seul un compteur est lu.
-      if (this.activeSiteId === null) {
-        try {
-          const outboxResult = await processOutboxPending(true);
-          log.info(
-            `[SyncEngine][Outbox] forceSync sans site actif : ${outboxResult.processed} synchronisé(s), ` +
-            `${outboxResult.errors} en erreur.`
-          );
-        } catch (outboxErr: any) {
-          log.warn('[SyncEngine][Outbox] Erreur lors du traitement outbox de forceSync (non-bloquant) :', outboxErr);
-        }
-      }
+      // Audit 2026-10-26 (point 6 puis chantier C3) : sans site actif, la file t_outbox est
+      // désormais traitée par executeSyncCycle() lui-même (avant sa garde « aucun site actif »).
+      // L'ancien second passage spécifique à forceSync() est retiré pour éviter un double
+      // traitement. Les entrées t_cartes PENDING restent exclues si le toggle « Envoi
+      // Automatique » est désactivé : ce vidage peut n'être que partiel, d'où le message
+      // « partielle » renvoyé plus bas.
 
       // Message fidèle : ne jamais annoncer un succès total s'il reste des éléments à envoyer
       // (PENDING ou ERROR, cf. getOutboxActionableCount). Limite connue : les cartes is_dirty=1
@@ -1206,19 +1192,16 @@ class SyncEngine extends EventEmitter {
         return;
       }
 
-      // 2. Vérifier si un utilisateur est actuellement connecté dans cette session
-      const siteId = this.activeSiteId;
-
-      if (!siteId) {
-        log.info('[SyncEngine] Aucun utilisateur connecté dans cette session. Phase de synchronisation d\'activité ignorée.');
-        this.isSyncing = false;
-        return;
-      }
-
-      // 3. Upstream (Push local -> cloud)
+      // 2. Upstream (Push local -> cloud)
       // ── Priorité 1 : Vider l'Outbox (entités structurelles : sites, centres, users)
       // L'outbox est traitée en premier pour garantir que les entités de référence
       // existent sur Supabase avant d'envoyer les cartes CMU qui en dépendent.
+      // Audit 2026-10-26 (chantier C3, cause A) : traitée AVANT la garde « aucun site actif »
+      // ci-dessous — l'outbox ne dépend pas du site (chaque payload porte déjà son site_id) et,
+      // sans « Récupération automatique », activeSiteId reste null : la file n'était alors jamais
+      // vidée par le cycle périodique. Appel inchangé : fromPeriodicCycle=true (promotion
+      // ERROR->PENDING après backoff), forceCards NON passé (les cartes restent soumises au
+      // réglage « Envoi Automatique »).
       const outboxPending = getOutboxPendingCount();
       if (outboxPending > 0) {
         log.info(`[SyncEngine][Outbox] ${outboxPending} entrée(s) PENDING — traitement prioritaire avant l'upstream cartes.`);
@@ -1231,6 +1214,16 @@ class SyncEngine extends EventEmitter {
         } catch (outboxErr: any) {
           log.warn('[SyncEngine][Outbox] Erreur lors du traitement outbox dans le cycle sync (non-bloquant) :', outboxErr);
         }
+      }
+
+      // 3. Vérifier si un utilisateur est actuellement connecté dans cette session : la suite
+      // (upstream t_sync_queue) dépend du site actif.
+      const siteId = this.activeSiteId;
+
+      if (!siteId) {
+        log.info('[SyncEngine] Aucun utilisateur connecté dans cette session. Phase de synchronisation d\'activité ignorée (outbox déjà traitée).');
+        this.isSyncing = false;
+        return;
       }
 
       // ── Priorité 2 : Upstream des cartes CMU (t_sync_queue) ───────────────────

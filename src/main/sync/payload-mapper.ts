@@ -51,7 +51,11 @@ export function mapCardPayload(c: any): any {
     notif_lue: c.notif_lue ?? 1,
     id_site: c.site_id, id_centre: c.centre_id || null, id_poste: c.poste_id || null,
     qr_code_data: c.qr_code_data || null, is_exported: c.is_exported || 0,
-    created_by: c.created_by || null,
+    // created_by : toujours null vers le cloud (audit 2026-10-26, chantier C3). La valeur locale
+    // est un id_user SQLite, jamais aligné sur les id_user Supabase (séquence cloud propre) :
+    // l'envoyer viole la FK t_cartes_created_by_fkey (23503) ou attribue la carte au mauvais
+    // agent. La valeur locale (stats par agent) reste inchangée dans t_cartes.
+    created_by: null,
     // updated_at : toujours l'heure RÉELLE d'envoi vers Supabase (jamais c.updated_at, la date de
     // dernière édition locale) — même correctif que upload-worker.js:205-211. Le pull descendant
     // incrémental (curseur (updated_at, sync_id) > watermark, RPC fn_downstream_cartes_chunk) doit

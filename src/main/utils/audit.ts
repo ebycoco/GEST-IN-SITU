@@ -149,9 +149,12 @@ export function logAudit(utilisateur: string | null | undefined, action: string,
               VALUES (?, ?, ?, ?, ?, ?, ?, 1)
             `).run(safeUserId, resolvedUser, action, jsonDetails, secureUser.site_id, centreId, syncId);
 
+            // id_user : null dans le payload cloud (audit 2026-10-26, chantier C3) — l'id local
+            // n'est jamais aligné sur l'id_user Supabase (FK t_logs_id_user_fkey). L'agent reste
+            // identifié par login_user ; t_logs local garde safeUserId (insert ci-dessus).
             enqueueOutbox(syncId, 't_logs', 'INSERT', {
               sync_id: syncId,
-              id_user: safeUserId,
+              id_user: null,
               login_user: resolvedUser,
               action,
               detail: jsonDetails,

@@ -273,7 +273,9 @@ async function run() {
         id_poste: c.poste_id || null,
         qr_code_data: c.qr_code_data || null,
         is_exported: c.is_exported || 0,
-        created_by: c.created_by || null,
+        // created_by : toujours null vers le cloud (id_user local jamais aligné sur l'id_user
+        // Supabase, FK t_cartes_created_by_fkey) — même règle que payload-mapper.ts. Valeur locale inchangée.
+        created_by: null,
         updated_at: pushedAt,
         // action_at : simple passager, jamais recalculé ici (contrairement à updated_at ci-dessus
         // qui est réécrit à pushedAt). Reflète la date réelle de l'action métier locale (posée par

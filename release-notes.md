@@ -19,3 +19,9 @@
 - **Portail Qualité : une anomalie corrigée par le bouton « Corriger » part au cloud automatiquement** — la carte créée à partir d'une ligne d'import en anomalie restait sur le poste jusqu'au clic sur « Envoyer les corrections », contrairement aux autres corrections. Elle est désormais mise en file d'envoi dès l'enregistrement, et l'agent qui l'a corrigée est enregistré comme son auteur (elle compte donc dans ses statistiques du jour).
 
 - **Portail Qualité : les cartes créées en corrigeant une anomalie peuvent être envoyées au cloud** — ces cartes étaient enregistrées avec le mot « CORRECTION » comme auteur, alors que le cloud attend le numéro d'un utilisateur : leur envoi aurait été refusé. L'auteur enregistré est désormais l'agent connecté qui a fait la correction.
+
+- **Synchronisation : le journal d'activité et les éléments en attente partent bien vers le cloud** — sans le réglage « Récupération automatique », le cycle de synchronisation périodique ne traitait plus la file d'envoi après le démarrage : les éléments en attente (dont les lignes du journal d'activité) pouvaient y rester indéfiniment. Il la traite désormais toutes les 5 minutes, réglage activé ou non (les cartes restent soumises au réglage « Envoi automatique »). Un envoi refusé par le cloud est maintenant noté dès le premier échec avec son motif, au lieu de rester en attente sans explication.
+
+### 🚨 Sécurité
+
+- **Le numéro interne d'un agent n'est plus envoyé au cloud** — chaque poste numérote ses agents à sa façon, sans rapport avec la numérotation du cloud : l'auteur d'une carte et l'agent d'une ligne du journal pouvaient être refusés par le cloud, ou attribués à un autre agent, sans aucun message. Ces numéros ne sont plus transmis (le journal garde l'identifiant de connexion de l'agent) ; ils restent enregistrés sur le poste pour les statistiques locales.
