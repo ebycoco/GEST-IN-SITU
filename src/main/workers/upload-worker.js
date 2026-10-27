@@ -3,6 +3,84 @@
 const { parentPort, workerData } = require('worker_threads');
 const Database = require(workerData.sqlitePath);
 const { createClient } = require('@supabase/supabase-js');
+const { randomUUID } = require('crypto');
+
+// ─── Bloc statut gardé par le cloud (correctif rouge 4 / A-02, étape 2) ─────────────
+// DUPLICATION VOLONTAIRE de la logique de src/main/sync/outbox.service.ts
+// (STATUS_BLOCK_COLUMNS, _normalizeStatusValue, _diffStatusBlock, _applyCloudStatusBlock) :
+// ce worker est copié tel quel sans bundler (copyWorkerPlugin, electron.vite.config.ts) et ne
+// peut pas importer le module TS. Tenir les deux copies (et supabase/migrations/0006) alignées.
+const STATUS_BLOCK_COLUMNS = [
+  'statut', 'date_delivrance', 'agent_distributeur', 'centre_retrait',
+  'nom_retirant', 'num_retirant', 'contact_retirant', 'relation_retirant',
+  'doublon_declare_par', 'doublon_declare_le', 'doublon_motif',
+  'doublon_annule_par', 'doublon_annule_le', 'doublon_motif_annulation',
+  'statut_avant_doublon',
+  'apurement_correction_par', 'apurement_correction_le', 'apurement_correction_motif',
+  'apurement_annulation_par', 'apurement_annulation_le', 'apurement_annulation_motif'
+];
+const CARD_UPSERT_RETURN_COLUMNS = ['sync_id', 'updated_at', ...STATUS_BLOCK_COLUMNS].join(',');
+
+/** Forme comparable envoi/réponse (date_delivrance = seule colonne TIMESTAMPTZ du bloc). */
+function normalizeStatusValue(column, value) {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value);
+  if (column !== 'date_delivrance') return text;
+  let iso = text.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += 'T00:00:00Z';
+  else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(iso) && !/(Z|[+-]\d{2}(:?\d{2})?)$/i.test(iso)) iso = iso.replace(' ', 'T') + 'Z';
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? text : `ts:${ms}`;
+}
+
+/**
+ * Fonction pure : cartes du lot dont le bloc statut renvoyé par le cloud diffère de l'envoi.
+ * @returns Map sync_id -> { sent, cloud, diff } (vide si pas de réponse ou aucun écart).
+ */
+function findStatusConflicts(sentRows, cloudRows) {
+  const conflicts = new Map();
+  if (!Array.isArray(cloudRows) || cloudRows.length === 0) return conflicts;
+  const sentById = new Map(sentRows.map(r => [r.sync_id, r]));
+  for (const cloud of cloudRows) {
+    const sent = cloud && sentById.get(cloud.sync_id);
+    if (!sent) continue;
+    const diff = STATUS_BLOCK_COLUMNS.filter(c => (c in cloud) && normalizeStatusValue(c, sent[c]) !== normalizeStatusValue(c, cloud[c]));
+    if (diff.length > 0) conflicts.set(cloud.sync_id, { sent, cloud, diff });
+  }
+  return conflicts;
+}
+
+/**
+ * Applique le bloc gardé par le cloud à la carte locale (autres champs intacts), updated_at =
+ * valeur cloud, is_dirty = 0, + une ligne t_logs CONFLIT_SYNC_STATUT locale (non mise en file,
+ * le cloud trace déjà dans t_sync_conflicts). Appelée dans la transaction du lot.
+ */
+function applyCloudStatusBlock(db, { sent, cloud, diff }) {
+  const columns = STATUS_BLOCK_COLUMNS.filter(c => c in cloud);
+  const cloudUpdatedAt = typeof cloud.updated_at === 'string' && cloud.updated_at !== '' ? cloud.updated_at : null;
+  db.prepare(`UPDATE t_cartes SET ${columns.map(c => `${c} = ?`).join(', ')}, updated_at = COALESCE(?, updated_at), is_dirty = 0, synced_at = datetime('now') WHERE sync_id = ? AND site_id = ?`)
+    .run(...columns.map(c => (cloud[c] === undefined ? null : cloud[c])), cloudUpdatedAt, sent.sync_id, sent.id_site);
+
+  const kept = { statut: cloud.statut ?? null };
+  const rejected = { statut: sent.statut ?? null };
+  for (const c of diff) {
+    kept[c] = cloud[c] ?? null;
+    rejected[c] = sent[c] ?? null;
+  }
+  const detail = `Conflit de synchronisation (carte ${sent.sync_id}) : le cloud a gardé le statut "${String(kept.statut)}" ` +
+    `(envoyé : "${String(rejected.statut)}"). Champs du bloc statut repris du cloud : ${diff.join(', ')}.`;
+  db.prepare(`
+    INSERT INTO t_logs (id_user, login_user, action, detail, valeur_avant, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+    VALUES (NULL, 'SYSTEM', 'CONFLIT_SYNC_STATUT', ?, ?, ?, ?, 1, ?, ?)
+  `).run(
+    detail,
+    JSON.stringify({ sync_id: sent.sync_id, ecarte: rejected }),
+    JSON.stringify({ sync_id: sent.sync_id, garde: kept, updated_at: cloudUpdatedAt }),
+    randomUUID(),
+    sent.id_site,
+    sent.id_centre ?? null
+  );
+}
 
 
 async function run() {
@@ -287,9 +365,13 @@ async function run() {
       }));
 
       try {
-        const { error } = await supabase
+        // .select() (A-02 étape 2) : relit, pour chaque carte du lot, le bloc statut gardé par le
+        // cloud (trigger trg_t_cartes_status_guard). Colonnes limitées au strict nécessaire ; la
+        // réponse est bornée par la taille du lot (≤ MAX_CHUNK_SIZE) et libérée à la fin du tour.
+        const { data: cloudRows, error } = await supabase
           .from('t_cartes')
-          .upsert(mappedCards, { onConflict: 'sync_id' });
+          .upsert(mappedCards, { onConflict: 'sync_id' })
+          .select(CARD_UPSERT_RETURN_COLUMNS);
 
         const chunkDuration = Date.now() - chunkStart;
 
@@ -305,12 +387,24 @@ async function run() {
             // updated_at local aligné sur pushedAt : évite un écart local/cloud qui
             // provoquerait une fusion inutile (mais inoffensive) lors d'un futur tirage
             // de cette même carte par ce poste ou un autre.
-            const syncIds = validCards.map(c => c.sync_id);
-            const placeholders = syncIds.map(() => '?').join(',');
-            const updateStmt = db.prepare(`UPDATE t_cartes SET is_dirty = 0, synced_at = datetime('now'), updated_at = ? WHERE sync_id IN (${placeholders})`);
+            // Cartes dont le bloc statut renvoyé par le cloud diffère de l'envoi (conflit arbitré
+            // par le trigger) : elles prennent le bloc cloud au lieu de updated_at = pushedAt.
+            // Sans trigger (prod actuelle), la réponse = l'envoi → aucune carte en conflit.
+            const conflicts = findStatusConflicts(mappedCards, cloudRows);
+            const syncIds = validCards.map(c => c.sync_id).filter(id => !conflicts.has(id));
             db.transaction(() => {
-              updateStmt.run(pushedAt, ...syncIds);
+              if (syncIds.length > 0) {
+                const placeholders = syncIds.map(() => '?').join(',');
+                db.prepare(`UPDATE t_cartes SET is_dirty = 0, synced_at = datetime('now'), updated_at = ? WHERE sync_id IN (${placeholders})`)
+                  .run(pushedAt, ...syncIds);
+              }
+              for (const conflict of conflicts.values()) {
+                applyCloudStatusBlock(db, conflict);
+              }
             })();
+            if (conflicts.size > 0) {
+              parentPort.postMessage({ type: 'log', level: 'warn', message: `Bloc ${blockIndex} : ${conflicts.size} carte(s) en conflit de statut, bloc statut du cloud appliqué localement (CONFLIT_SYNC_STATUT).` });
+            }
           } catch (txErr) {
             parentPort.postMessage({ type: 'log', level: 'error', message: `Erreur SQLite locale bloc ${blockIndex} : ${txErr.message}` });
           }

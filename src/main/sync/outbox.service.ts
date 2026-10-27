@@ -54,6 +54,26 @@ const OUTBOX_BATCH_SIZE = 50;
 const OUTBOX_ERROR_BACKOFF_BASE_MINUTES = 15;
 const OUTBOX_ERROR_BACKOFF_MAX_MINUTES = 24 * 60;
 
+/**
+ * "Bloc statut" de t_cartes (21 colonnes) protégé côté cloud par le trigger
+ * trg_t_cartes_status_guard (supabase/migrations/0006_t_cartes_status_guard.sql, même liste).
+ * DUPLIQUÉ dans src/main/workers/upload-worker.js (STATUS_BLOCK_COLUMNS) : le worker est copié
+ * tel quel sans bundler (copyWorkerPlugin, electron.vite.config.ts) et ne peut pas importer ce
+ * module — tenir les deux listes (et la migration) synchronisées.
+ */
+const STATUS_BLOCK_COLUMNS = [
+  'statut', 'date_delivrance', 'agent_distributeur', 'centre_retrait',
+  'nom_retirant', 'num_retirant', 'contact_retirant', 'relation_retirant',
+  'doublon_declare_par', 'doublon_declare_le', 'doublon_motif',
+  'doublon_annule_par', 'doublon_annule_le', 'doublon_motif_annulation',
+  'statut_avant_doublon',
+  'apurement_correction_par', 'apurement_correction_le', 'apurement_correction_motif',
+  'apurement_annulation_par', 'apurement_annulation_le', 'apurement_annulation_motif'
+] as const;
+
+/** Colonnes relues après l'upsert d'une carte (.select) : bloc statut + sync_id + updated_at. */
+const CARD_UPSERT_RETURN_COLUMNS = ['sync_id', 'updated_at', ...STATUS_BLOCK_COLUMNS].join(',');
+
 // ─── Types internes ──────────────────────────────────────────────────────────
 interface OutboxEntry {
   id: string;
@@ -430,6 +450,9 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // INSERT / UPDATE → upsert idempotent sur sync_id
         // DELETE          → suppression ciblée par sync_id
         let supabaseError: { message: string; code?: string; details?: string | null } | null = null;
+        // t_cartes seulement : ligne renvoyée par le cloud (bloc statut + sync_id + updated_at).
+        let cloudCardRow: Record<string, unknown> | null = null;
+        let sentCardPayload: Record<string, unknown> | null = null;
 
         if (entry.operation === 'DELETE') {
           // Un payload DELETE ne contient que { sync_id } (ou { user_sync_id } pour t_user_roles)
@@ -475,6 +498,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           try {
             if (entry.table_name === 't_cartes') {
               finalPayload = mapCardPayload(payload);
+              sentCardPayload = finalPayload;
             } else if (entry.table_name === 't_logs') {
               // id_user neutralisé au moment de l'envoi (audit 2026-10-26, chantier C3), y compris
               // pour les entrées enfilées par une version antérieure : l'id_user local n'est jamais
@@ -495,9 +519,26 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           // INSERT ou UPDATE → upsert idempotent sur sync_id (ou user_sync_id,role pour t_user_roles)
           log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(finalPayload));
           const conflictKey = entry.table_name === 't_user_roles' ? 'user_sync_id,role' : 'sync_id';
-          let { error } = await supabase
+          const upsertQuery: any = supabase
             .from(entry.table_name)
             .upsert(finalPayload, { onConflict: conflictKey });
+          let error: { message: string; code?: string; details?: string | null } | null;
+          if (entry.table_name === 't_cartes' && typeof upsertQuery.select === 'function') {
+            // Correctif rouge 4 / A-02, étape 2 : lecture de la ligne gardée par le cloud
+            // (trigger trg_t_cartes_status_guard, supabase/migrations/0006). Colonnes limitées au
+            // bloc statut + sync_id + updated_at (Low-Memory). `typeof ... === 'function'` : le
+            // builder supabase-js expose toujours select() ; ce test ne sert qu'aux clients simulés
+            // des tests existants (upsert directement awaitable), qui restent sur l'ancien chemin.
+            const res = await upsertQuery.select(CARD_UPSERT_RETURN_COLUMNS);
+            error = res.error;
+            if (!error && Array.isArray(res.data)) {
+              cloudCardRow = (res.data as Record<string, unknown>[]).find(
+                (r) => r && r.sync_id === (finalPayload as Record<string, unknown>).sync_id
+              ) ?? null;
+            }
+          } else {
+            ({ error } = await upsertQuery);
+          }
 
           if (error && ['t_sites', 't_centres', 't_postes', 't_users'].includes(entry.table_name) && error.message.includes('duplicate key value violates unique constraint')) {
             const pk = entry.table_name === 't_users' ? 'id_user' : 'id';
@@ -579,14 +620,27 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // Garde anti-course (voir markError en tête de boucle) : SYNCED + effacement de is_dirty
         // uniquement si la ligne porte encore la version envoyée. Si elle a été ré-enfilée
         // pendant l'envoi, on ne touche à rien : la nouvelle version reste PENDING, is_dirty = 1.
+        // Conflit de bloc statut (A-02 étape 2) : le cloud a gardé un bloc différent de l'envoi.
+        // Sans trigger (production actuelle), la réponse = l'envoi → aucun écart, chemin inchangé.
+        const statusConflict = (entry.table_name === 't_cartes' && sentCardPayload && cloudCardRow)
+          ? _diffStatusBlock(sentCardPayload, cloudCardRow)
+          : [];
+
         const markedSynced = db.transaction(() => {
           const res = db.prepare(`
             UPDATE t_outbox SET status = 'SYNCED', error_msg = NULL
             WHERE id = ? AND operation = ? AND payload = ?
           `).run(entry.id, entry.operation, entry.payload);
+          // Garde anti-course : si l'entrée a été ré-enfilée pendant l'envoi, on ne touche à rien
+          // (ni bloc cloud, ni is_dirty, ni t_logs). La nouvelle version locale reste PENDING ; à
+          // son envoi, le trigger cloud ré-arbitrera et ce même code appliquera alors le bloc gardé.
           if (res.changes === 0) return false;
 
-          if (entry.operation !== 'DELETE') {
+          if (statusConflict.length > 0 && sentCardPayload && cloudCardRow) {
+            // Même transaction que le passage SYNCED : bloc cloud + updated_at cloud + is_dirty 0
+            // + t_logs. Pas de nouvelle mise en file : le cloud porte déjà la version juste.
+            _applyCloudStatusBlock(db, sentCardPayload, cloudCardRow, statusConflict);
+          } else if (entry.operation !== 'DELETE') {
             const syncIdValue = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
             _clearLocalDirtyFlag(db, entry.table_name, syncIdValue);
           }
@@ -1040,6 +1094,94 @@ function _clearLocalDirtyFlag(
   } catch (err: any) {
     log.error(`[OutboxService] Erreur lors de la remise à zéro locale de is_dirty pour ${tableName} (sync_id=${syncIdValue}) :`, err.message || err);
   }
+}
+
+/**
+ * Valeur d'une colonne du bloc statut ramenée à une forme comparable entre l'envoi (payload
+ * mappé, chaînes locales) et la réponse PostgREST. Vide/absent → null. date_delivrance est la
+ * seule colonne TIMESTAMPTZ du bloc (vérifié dans information_schema du dev le 2026-10-27) :
+ * PostgREST la renvoie normalisée ("2026-10-20T09:00:00+00:00") alors que le poste envoie
+ * "2026-10-20T09:00:00.000Z" — comparaison à la milliseconde, chaîne sans fuseau lue en UTC
+ * (fuseau de session Supabase = UTC). Les autres colonnes sont TEXT : renvoyées telles quelles.
+ * DUPLIQUÉ dans src/main/workers/upload-worker.js (normalizeStatusValue) — tenir synchronisé.
+ */
+function _normalizeStatusValue(column: string, value: unknown): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value);
+  if (column !== 'date_delivrance') return text;
+  let iso = text.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) iso += 'T00:00:00Z';
+  else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(iso) && !/(Z|[+-]\d{2}(:?\d{2})?)$/i.test(iso)) iso = iso.replace(' ', 'T') + 'Z';
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? text : `ts:${ms}`;
+}
+
+/**
+ * Colonnes du bloc statut dont la valeur renvoyée par le cloud diffère de la valeur envoyée.
+ * Une colonne absente de la réponse est ignorée. Tableau vide = pas de conflit (cas normal,
+ * et cas unique tant que le trigger 0006 n'est pas appliqué en production).
+ */
+function _diffStatusBlock(sent: Record<string, unknown>, cloud: Record<string, unknown>): string[] {
+  const diff: string[] = [];
+  for (const column of STATUS_BLOCK_COLUMNS) {
+    if (!(column in cloud)) continue;
+    if (_normalizeStatusValue(column, sent[column]) !== _normalizeStatusValue(column, cloud[column])) {
+      diff.push(column);
+    }
+  }
+  return diff;
+}
+
+/**
+ * Applique localement le bloc statut gardé par le cloud (A-02 étape 2). Appelée DANS la
+ * transaction qui passe l'entrée outbox en SYNCED (après la garde anti-course).
+ *  - t_cartes : les colonnes du bloc renvoyées par le cloud, updated_at = valeur cloud
+ *    (greatest(NEW, OLD) + 1 ms, posé par le trigger), is_dirty = 0, synced_at. Aucun autre
+ *    champ local touché (contact, rangement, bloc absence...). Filtre sync_id + site_id
+ *    (cloisonnement §3, site_id = celui de la carte envoyée).
+ *  - t_logs : une ligne CONFLIT_SYNC_STATUT (valeur_avant = bloc écarté, valeur_apres = bloc
+ *    gardé), au format des journaux système locaux (id_user NULL, login 'SYSTEM', is_dirty 1
+ *    comme SYNC_UPDATE / CENTRE_CARTE_CORRIGE). Elle n'est PAS mise en file t_outbox : le cloud
+ *    trace déjà l'arbitrage dans t_sync_conflicts, et seules les actions de CRUD_SYNC_WHITELIST
+ *    (utils/audit.ts) partent au cloud.
+ *  - Aucune nouvelle mise en file pour la carte : le cloud porte déjà la version juste.
+ */
+function _applyCloudStatusBlock(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  sent: Record<string, unknown>,
+  cloud: Record<string, unknown>,
+  diffColumns: string[]
+): void {
+  const syncId = String(sent.sync_id);
+  const columns = STATUS_BLOCK_COLUMNS.filter((c) => c in cloud);
+  const assignments = columns.map((c) => `${c} = ?`).join(', ');
+  const cloudUpdatedAt = typeof cloud.updated_at === 'string' && cloud.updated_at !== '' ? cloud.updated_at : null;
+  db.prepare(`
+    UPDATE t_cartes SET ${assignments}, updated_at = COALESCE(?, updated_at), is_dirty = 0, synced_at = datetime('now')
+    WHERE sync_id = ? AND site_id = ?
+  `).run(...columns.map((c) => (cloud[c] ?? null) as string | null), cloudUpdatedAt, syncId, sent.id_site as number);
+
+  const kept: Record<string, unknown> = { statut: cloud.statut ?? null };
+  const rejected: Record<string, unknown> = { statut: sent.statut ?? null };
+  for (const c of diffColumns) {
+    kept[c] = cloud[c] ?? null;
+    rejected[c] = sent[c] ?? null;
+  }
+  const detail = `Conflit de synchronisation (carte ${syncId}) : le cloud a gardé le statut "${String(kept.statut)}" ` +
+    `(envoyé : "${String(rejected.statut)}"). Champs du bloc statut repris du cloud : ${diffColumns.join(', ')}.`;
+  db.prepare(`
+    INSERT INTO t_logs (id_user, login_user, action, detail, valeur_avant, valeur_apres, sync_id, is_dirty, site_id, centre_id)
+    VALUES (NULL, 'SYSTEM', 'CONFLIT_SYNC_STATUT', ?, ?, ?, ?, 1, ?, ?)
+  `).run(
+    detail,
+    JSON.stringify({ sync_id: syncId, ecarte: rejected }),
+    JSON.stringify({ sync_id: syncId, garde: kept, updated_at: cloudUpdatedAt }),
+    uuidv4(),
+    sent.id_site as number,
+    (sent.id_centre ?? null) as number | null
+  );
+
+  log.warn(`[OutboxService] ${detail}`);
 }
 
 /**
