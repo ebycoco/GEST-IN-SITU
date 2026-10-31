@@ -34,12 +34,16 @@ const DEFAULT_SITES = [
 ];
 let cloudSites: any[] = DEFAULT_SITES;
 let cloudCentres: any[] = [];
+let cloudSitesError = false; // lecture t_sites en échec (réseau, RLS)
+let cloudCentresError = false;
 vi.mock('../src/main/sync/supabase-client', () => ({
   getSupabaseClient: () => ({
     from: (table: string) => {
       const filters: Array<[string, unknown]> = [];
       const run = () => {
         let data: any[];
+        if (table === 't_sites' && cloudSitesError) return { data: null, error: { message: 'erreur simulée t_sites' } };
+        if (table === 't_centres' && cloudCentresError) return { data: null, error: { message: 'erreur simulée t_centres' } };
         if (table === 't_sites') data = cloudSites;
         else if (table === 't_centres') data = cloudCentres;
         else if (table === 't_user_roles') data = cloudRoles;
@@ -72,7 +76,7 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     connection.closeDatabase();
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
-  beforeEach(() => { cloudUsers = []; cloudRoles = []; cloudSites = DEFAULT_SITES; cloudCentres = []; });
+  beforeEach(() => { cloudUsers = []; cloudRoles = []; cloudSites = DEFAULT_SITES; cloudCentres = []; cloudSitesError = false; cloudCentresError = false; });
 
   const uid = () => ++n;
   const cu = (login: string, syncId: string, over: Record<string, unknown> = {}) => ({
@@ -114,6 +118,47 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     expect(ra).toEqual(['OPERATEUR_QUALITE', 'OPERATEUR_SAISIE']);
     expect(db.prepare(`SELECT 1 FROM t_user_roles WHERE id_user = ? AND role = 'SUPER ADMIN'`).get(byLogin(`sa_${k}`).id_user)).toBeTruthy();
     expect(fk()).toBe(1);
+  });
+
+  // ── Audit fbec916 P2-7 : construction des listes de vérification (sites, centres) du préchargement ──
+  it('liste des sites du cloud : un compte local est déplacé vers le site cloud vérifié', async () => {
+    const k = uid();
+    local(`move_${k}`, `sid-${k}-m`);
+    cloudUsers = [cu(`move_${k}`, `sid-${k}-m`, { site_id: SITE_B })];
+    await downstream.preloadUsersFromCloud();
+    expect(byLogin(`move_${k}`).site_id).toBe(SITE_B);
+  });
+
+  it('lecture des sites en échec : liste vide, le site local du compte est conservé (repli sûr)', async () => {
+    const k = uid();
+    local(`keep_${k}`, `sid-${k}-k`);
+    cloudSitesError = true;
+    cloudUsers = [cu(`keep_${k}`, `sid-${k}-k`, { site_id: SITE_B })];
+    await downstream.preloadUsersFromCloud();
+    expect(byLogin(`keep_${k}`).site_id).toBe(SITE_A);
+  });
+
+  it('liste des centres du cloud : lecture en échec → centre local conservé (repli sûr) ; lecture réussie → centre cloud appliqué', async () => {
+    const k = uid();
+    const C1 = 9900 + k, C2 = 9950 + k;
+    ensureSites();
+    db.prepare(`INSERT INTO t_centres (id, site_id, nom, numero, sync_id) VALUES (?, ?, 'LOC1', 1, ?), (?, ?, 'LOC2', 2, ?)`)
+      .run(C1, SITE_A, `centre-loc1-${k}`, C2, SITE_A, `centre-loc2-${k}`);
+    const id = local(`ctr_${k}`, `sid-${k}-c`);
+    db.prepare('UPDATE t_users SET centre_id = ? WHERE id_user = ?').run(C1, id);
+    // Lecture des centres en échec : liste vide → le centre cloud C2 (existant en local) n'est pas vérifié.
+    // (Une divergence d'identité sur un centre lu avec succès est réalignée par le préchargement avant les
+    // comptes ; le cas « id identique, identité différente » est couvert dans users-sync-site-rule.test.ts.)
+    cloudCentresError = true;
+    cloudUsers = [cu(`ctr_${k}`, `sid-${k}-c`, { site_id: SITE_A, centre_id: C2 })];
+    await downstream.preloadUsersFromCloud();
+    expect(byLogin(`ctr_${k}`).centre_id).toBe(C1);
+
+    cloudCentresError = false;
+    cloudCentres = [{ id: C2, site_id: SITE_A, nom: 'LOC2', numero: 2, sync_id: `centre-loc2-${k}` }];
+    cloudUsers = [cu(`ctr_${k}`, `sid-${k}-c`, { site_id: SITE_A, centre_id: C2 })];
+    await downstream.preloadUsersFromCloud();
+    expect(byLogin(`ctr_${k}`).centre_id).toBe(C2);
   });
 
   it('SUPER ADMIN dont le site cloud est absent localement : inséré sans site ; autre rôle au site absent : refusé', async () => {

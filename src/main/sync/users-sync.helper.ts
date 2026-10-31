@@ -43,9 +43,16 @@ export interface UpsertCloudUserOptions {
   readAt?: number;
   /**
    * sync_id cloud des sites lus par l'appelant dans la même synchro (id cloud → sync_id). Règle du site
-   * « le cloud l'emporte » (plan site_id 2026-10-31, commit 7) : le site_id cloud ne remplace un site_id
-   * local déjà renseigné que si la ligne locale de cet id porte le MÊME sync_id que le cloud (sinon,
-   * poste non réaligné : l'id local peut désigner un autre site). Absent : ancienne règle (site local conservé).
+   * « le cloud l'emporte » (plan site_id 2026-10-31, commit 7) :
+   * - le site_id cloud ne remplace un site_id local déjà renseigné que si la ligne locale de cet id porte le
+   *   MÊME sync_id que le cloud (sinon, poste non réaligné : l'id local peut désigner un autre site) ;
+   *   absent : le site local renseigné est conservé (ancienne règle) ;
+   * - rattachement d'un compte sans site local, ou création d'un compte : le site cloud doit exister localement
+   *   et ne pas y désigner un autre site (sync_id local ≠ sync_id cloud connu) ; un site absent de la liste ou
+   *   dont le sync_id cloud est NULL reste accepté sur sa seule existence (comportement historique) ;
+   * - indépendant de cette liste : un SUPER ADMIN n'est jamais rattaché à un site lors d'une MISE À JOUR (il est
+   *   seulement détaché quand le cloud n'a plus de site) ; à la création il garde le site cloud s'il existe
+   *   localement (comportement historique, voir RELAIS.md).
    */
   cloudSiteSyncIds?: ReadonlyMap<number, string | null>;
   /**
@@ -229,6 +236,17 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     typeof id === 'number' && !!db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(id);
   const centreExists = (id: unknown): boolean =>
     typeof id === 'number' && !!db.prepare('SELECT 1 FROM t_centres WHERE id = ?').get(id);
+  // Site cloud rattachable (compte sans site local, création) : existe en local ET, si le cloud annonce un
+  // sync_id pour cet id, la ligne locale porte le même (sinon l'id local désigne un autre site : poste non
+  // réaligné). Id absent de la liste ou sync_id cloud NULL : existence seule (comportement historique).
+  const siteAttachable = (id: unknown): boolean => {
+    if (!siteExists(id)) return false;
+    if (typeof id !== 'number' || !opts.cloudSiteSyncIds?.has(id)) return true;
+    const cloudSync = opts.cloudSiteSyncIds.get(id);
+    if (!cloudSync) return true;
+    const localSite = db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(id) as { sync_id: string | null } | undefined;
+    return !!localSite && localSite.sync_id === cloudSync;
+  };
   // Centre cloud vérifié : même sync_id local/cloud si l'appelant a fourni la liste, sinon existence seule.
   const cloudCentreVerified = (id: number): boolean => {
     if (!opts.cloudCentreSyncIds) return true;
@@ -271,7 +289,8 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
       return !!cloudSync && !!localSite && localSite.sync_id === cloudSync;
     };
     const superAdmin = target.role === 'SUPER ADMIN' || cloud.role === 'SUPER ADMIN';
-    let siteId = target.site_id ?? (!superAdmin && siteExists(cloud.site_id) ? (cloud.site_id as number) : null);
+    // Rattachement d'un compte sans site local : le site cloud ne doit pas désigner un autre site en local.
+    let siteId = target.site_id ?? (!superAdmin && siteAttachable(cloud.site_id) ? (cloud.site_id as number) : null);
     if (target.site_id != null && cloud.site_id !== target.site_id) {
       if (superAdmin) {
         if (cloud.site_id == null && cloud.role === 'SUPER ADMIN') siteId = null;
@@ -303,11 +322,17 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     if (!siteExists(cloud.site_id)) {
       return { action: 'skipped_invalid', reason: `site ${cloud.site_id ?? 'NULL'} absent localement` };
     }
+    // Site local de même id mais d'une autre identité : un SUPER ADMIN est créé sans site (il n'en a pas
+    // besoin), tout autre compte est refusé (jamais rattaché au mauvais site).
+    const insertSiteId: number | null = siteAttachable(cloud.site_id) ? (cloud.site_id as number) : null;
+    if (insertSiteId == null && cloud.role !== 'SUPER ADMIN') {
+      return { action: 'skipped_invalid', reason: `site ${cloud.site_id} non vérifié (identité locale différente du cloud)` };
+    }
     let centreId: number | null = null;
     if (cloud.centre_id != null) {
       if (!centreExists(cloud.centre_id)) centreNote = `centre ${cloud.centre_id} absent localement : centre_id NULL`;
       else if (!cloudCentreVerified(cloud.centre_id)) centreNote = `centre ${cloud.centre_id} non vérifié (identité locale différente) : centre_id NULL`;
-      else if (centreSiteOf(cloud.centre_id) !== cloud.site_id) centreNote = `centre ${cloud.centre_id} hors du site ${cloud.site_id} : centre_id NULL`;
+      else if (centreSiteOf(cloud.centre_id) !== insertSiteId) centreNote = `centre ${cloud.centre_id} hors du site ${insertSiteId ?? 'NULL'} : centre_id NULL`;
       else centreId = cloud.centre_id;
     }
     const res = db.prepare(`
@@ -316,7 +341,7 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, datetime('now'))
     `).run(
       cloud.login, cloud.password_hash, cloud.role, cloud.nom_user || '', cloud.prenom_user || '',
-      statut, cloud.site_id, centreId, cloud.sync_id
+      statut, insertSiteId, centreId, cloud.sync_id
     );
     idUser = Number(res.lastInsertRowid);
   }

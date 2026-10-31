@@ -117,6 +117,41 @@ describe('upsertCloudUser — règle du site « le cloud l\'emporte » (commit 7
     expect(row('nouveau-p1-1')).toEqual({ site_id: SITE_A, centre_id: null });
   });
 
+  // ── Audit fbec916 P2-5 : rattachement (site local vide, création) vérifié ──
+  it('compte sans site local : site cloud non rattaché si l\'id local désigne un autre site (poste non réaligné)', () => {
+    const u = local('OPERATEUR_SAISIE', null, null);
+    helper.upsertCloudUser(db, cloud(u, { site_id: SITE_B }), { cloudSiteSyncIds: new Map([[SITE_B, 'autre-site-cloud']]) });
+    expect(row(u.login).site_id).toBeNull();
+
+    helper.upsertCloudUser(db, cloud(u, { site_id: SITE_B }), { cloudSiteSyncIds: VERIFIED });
+    expect(row(u.login).site_id).toBe(SITE_B);
+  });
+
+  it('compte sans site local : site cloud sans sync_id (legacy) ou absent de la liste → accepté sur son existence', () => {
+    const a = local('OPERATEUR_SAISIE', null, null);
+    helper.upsertCloudUser(db, cloud(a, { site_id: SITE_B }), { cloudSiteSyncIds: new Map([[SITE_B, null]]) });
+    expect(row(a.login).site_id).toBe(SITE_B);
+
+    const b = local('OPERATEUR_SAISIE', null, null);
+    helper.upsertCloudUser(db, cloud(b, { site_id: SITE_A }), { cloudSiteSyncIds: new Map() });
+    expect(row(b.login).site_id).toBe(SITE_A);
+  });
+
+  it('création : site local d\'une autre identité → compte refusé ; SUPER ADMIN créé sans site', () => {
+    const mismatch = { cloudSiteSyncIds: new Map<number, string | null>([[SITE_B, 'autre-site-cloud']]) };
+    const op = helper.upsertCloudUser(db, cloud({ login: 'creation-op', sync_id: 'sid-creation-op' }, { site_id: SITE_B }), mismatch);
+    expect(op.action).toBe('skipped_invalid');
+    expect(db.prepare(`SELECT 1 FROM t_users WHERE login = 'creation-op'`).get()).toBeUndefined();
+
+    const sa = helper.upsertCloudUser(db, cloud({ login: 'creation-sa', sync_id: 'sid-creation-sa' }, { role: 'SUPER ADMIN', site_id: SITE_B, centre_id: CENTRE_B }), mismatch);
+    expect(sa.action).toBe('inserted');
+    expect(row('creation-sa')).toEqual({ site_id: null, centre_id: null });
+
+    const ok = helper.upsertCloudUser(db, cloud({ login: 'creation-ok', sync_id: 'sid-creation-ok' }, { site_id: SITE_B, centre_id: CENTRE_B }), { cloudSiteSyncIds: VERIFIED });
+    expect(ok.action).toBe('inserted');
+    expect(row('creation-ok')).toEqual({ site_id: SITE_B, centre_id: CENTRE_B });
+  });
+
   it('ligne locale modifiée non envoyée (is_dirty) : rien n\'est écrasé', () => {
     const u = local('OPERATEUR_SAISIE', SITE_A, CENTRE_A, 1);
     const res = helper.upsertCloudUser(db, cloud(u, { site_id: SITE_B, centre_id: CENTRE_B }), { cloudSiteSyncIds: VERIFIED });

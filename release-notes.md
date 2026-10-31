@@ -48,6 +48,10 @@
 
 - **Monitoring de synchronisation : les envois suspendus faute d'alignement sont comptés** — quand le site ou le centre d'un poste n'a pas le même numéro dans le cloud, les envois concernés sont suspendus (sans être perdus) jusqu'au redémarrage de l'application. Le tableau « Outbox Locale » affiche désormais un badge orange « N en attente d'alignement » et la consigne de redémarrer, au lieu de les noyer dans le total « en attente ».
 
+- **Comptes : un agent n'est plus rattaché à un site qui désigne un autre site sur le poste** — au rattachement d'un compte qui n'avait pas de site, et à la création d'un compte reçu du cloud, le site du cloud est vérifié (même identité sur le poste) comme pour un changement de site. Un SUPER ADMIN reçu avec un site d'une autre identité est créé sans site ; tout autre compte est refusé plutôt que rattaché au mauvais site.
+
+- **Envoi en masse : la vérification couvre toutes les cartes à envoyer** — le contrôle d'alignement avant l'envoi prend désormais en compte les centres des cartes jamais envoyées au cloud, et plus seulement ceux des cartes modifiées.
+
 - **Comptes : le centre d'un agent reste toujours dans son site** — le centre reçu du cloud n'est appliqué que s'il désigne bien le même centre sur le poste et s'il appartient au site de l'agent ; sinon le centre local est conservé (ou retiré s'il n'appartient pas au site). Un agent ne peut plus se retrouver rattaché au centre d'un autre site.
 
 - **Synchronisation : plus de téléchargement des données d'un autre site sur un poste non aligné** — si le numéro local du site d'un poste correspond, dans le cloud, à un autre site (code différent), le téléchargement des cartes, des agents et des centres est désormais refusé avec le message « Ce poste n'est pas aligné sur le cloud pour ce site — redémarrez l'application et attendez la fin du chargement avant de vous connecter », au lieu d'écrire sur ce poste les données de l'autre site.

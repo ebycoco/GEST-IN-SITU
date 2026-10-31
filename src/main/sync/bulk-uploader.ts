@@ -93,10 +93,14 @@ export async function runBulkUpload(
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const db = getDatabase();
+      // Mêmes cartes que le worker (upload-worker.js) : modifiées (is_dirty = 1) ; hors « onlyModified », aussi
+      // celles jamais synchronisées (synced_at vide). Les brouillons ne partent pas. Les suppressions
+      // (is_dirty = -1) s'envoient par sync_id : pas de centre à vérifier.
+      const pendingFilter = onlyModified ? 'is_dirty = 1' : `(is_dirty = 1 OR synced_at IS NULL OR synced_at = '')`;
       const centreIds = db
         ? (db.prepare(`
             SELECT DISTINCT centre_id FROM t_cartes
-            WHERE site_id = ? AND is_dirty = 1 AND centre_id IS NOT NULL ${centreId ? 'AND centre_id = ?' : ''}
+            WHERE site_id = ? AND ${pendingFilter} AND statut != 'BROUILLON' AND centre_id IS NOT NULL ${centreId ? 'AND centre_id = ?' : ''}
           `).all(...(centreId ? [siteId, centreId] : [siteId])) as { centre_id: number }[]).map(r => r.centre_id)
         : [];
       const timeout = new Promise<{ ok: false; reason: string; timedOut: true }>(resolve => {

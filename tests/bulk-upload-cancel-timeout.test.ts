@@ -12,14 +12,15 @@ import { EventEmitter } from 'events';
 
 const h = vi.hoisted(() => ({
   check: null as null | ((siteId: number, centreIds: ReadonlyArray<number>) => Promise<{ ok: true } | { ok: false; reason: string }>),
-  workers: [] as any[]
+  workers: [] as any[],
+  sqls: [] as string[]
 }));
 
 vi.mock('electron', () => ({ app: { getPath: () => '.', isPackaged: false } }));
 vi.mock('electron-log', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('../src/main/database/connection', () => ({
   getDbPath: () => ':memory:',
-  getDatabase: () => ({ prepare: () => ({ all: () => [] }) })
+  getDatabase: () => ({ prepare: (sql: string) => { h.sqls.push(sql); return { all: () => [] }; } })
 }));
 vi.mock('../src/main/sync/network-monitor', () => ({ networkMonitor: { setBypassForceOnline: vi.fn() } }));
 vi.mock('../src/main/utils/audit', () => ({ logAudit: vi.fn() }));
@@ -38,7 +39,7 @@ vi.mock('worker_threads', async () => {
 
 import { runBulkUpload, cancelBulkUpload, ALIGNMENT_CHECK_TIMEOUT_MS } from '../src/main/sync/bulk-uploader';
 
-const run = () => runBulkUpload(7, false, false, false, false, null, () => {}, 'test');
+const run = (onlyModified = false) => runBulkUpload(7, false, false, false, onlyModified, null, () => {}, 'test');
 const flush = () => new Promise<void>(r => setImmediate(r));
 
 describe('runBulkUpload — délai du contrôle d\'alignement et annulation (audit fbec916 P1-2)', () => {
@@ -47,6 +48,7 @@ describe('runBulkUpload — délai du contrôle d\'alignement et annulation (aud
     process.env.VITE_SUPABASE_ANON_KEY = 'fake';
     delete process.env.GEST_IN_SITU_E2E_DISABLE_SYNC;
     h.workers.length = 0;
+    h.sqls.length = 0;
   });
   afterEach(() => { vi.useRealTimers(); });
 
@@ -113,6 +115,24 @@ describe('runBulkUpload — délai du contrôle d\'alignement et annulation (aud
     (h.workers[0] as EventEmitter).emit('message', { type: 'done', uploadedCount: 3, message: 'ok' });
     const res = await p;
     expect(res).toMatchObject({ success: true, uploadedCount: 3 });
+  });
+
+  it('audit commit 7 P2-1 : les centres contrôlés sont ceux des cartes que le worker enverra', async () => {
+    h.check = async () => ({ ok: true });
+    const full = run(false);
+    await flush();
+    (h.workers[0] as EventEmitter).emit('message', { type: 'done', uploadedCount: 0, message: 'ok' });
+    await full;
+    expect(h.sqls[0]).toContain(`synced_at IS NULL OR synced_at = ''`); // jamais synchronisées incluses
+    expect(h.sqls[0]).toContain(`statut != 'BROUILLON'`);
+
+    h.sqls.length = 0; h.workers.length = 0;
+    const modified = run(true);
+    await flush();
+    (h.workers[0] as EventEmitter).emit('message', { type: 'done', uploadedCount: 0, message: 'ok' });
+    await modified;
+    expect(h.sqls[0]).not.toContain('synced_at');
+    expect(h.sqls[0]).toContain('is_dirty = 1');
   });
 
   it('poste non aligné (hors réseau) : refus avec consigne de redémarrage', async () => {
