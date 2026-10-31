@@ -2,9 +2,10 @@ import log from 'electron-log';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { app } from 'electron';
-import { getDbPath } from '../database/connection';
+import { getDbPath, getDatabase } from '../database/connection';
 import { networkMonitor } from './network-monitor';
 import { logAudit } from '../utils/audit';
+import { checkHierarchyAlignmentForUpload } from './outbox.service';
 
 // ─── SIGNAL D'ANNULATION GLOBAL ─────────────────────────────────────────────
 let _currentWorker: Worker | null = null;
@@ -67,6 +68,31 @@ export async function runBulkUpload(
   if (!supabaseUrl || !supabaseAnonKey) {
     log.error('[BulkUpload] Configuration Supabase manquante (.env).');
     return { success: false, uploadedCount: 0, message: 'Configuration Supabase manquante.' };
+  }
+
+  // ── Garde d'alignement (plan site_id, commit 7) : le worker envoie les cartes avec les ids LOCAUX
+  // de site/centre. Sur un poste non réaligné, ils peuvent désigner un autre site dans le cloud (§3) :
+  // l'envoi est alors refusé (réalignement au prochain démarrage). Centres : ceux des cartes à envoyer.
+  try {
+    const db = getDatabase();
+    const centreIds = db
+      ? (db.prepare(`
+          SELECT DISTINCT centre_id FROM t_cartes
+          WHERE site_id = ? AND is_dirty = 1 AND centre_id IS NOT NULL ${centreId ? 'AND centre_id = ?' : ''}
+        `).all(...(centreId ? [siteId, centreId] : [siteId])) as { centre_id: number }[]).map(r => r.centre_id)
+      : [];
+    const alignment = await checkHierarchyAlignmentForUpload(siteId, centreId && !centreIds.includes(centreId) ? [...centreIds, centreId] : centreIds);
+    if (!alignment.ok) {
+      log.warn(`[BulkUpload] Envoi en masse refusé pour le site ${siteId} : ${alignment.reason}`);
+      return {
+        success: false,
+        uploadedCount: 0,
+        message: `Envoi refusé : ${alignment.reason} Redémarrez l'application et attendez la fin du chargement avant de vous connecter.`
+      };
+    }
+  } catch (err: any) {
+    log.error('[BulkUpload] Garde d\'alignement en échec :', err?.message || err);
+    return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.' };
   }
 
   // Activer le contournement forcé du statut ONLINE pour ignorer la congestion réseau

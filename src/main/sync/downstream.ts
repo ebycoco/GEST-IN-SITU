@@ -712,6 +712,8 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     log.warn('[syncUsersFromCloud] Client Supabase non disponible — sync utilisateurs ignoré.');
     return 0;
   }
+  // sync_id cloud du site lu ci-dessous : règle « le site cloud l'emporte » de upsertCloudUser (commit 7).
+  const cloudSiteSyncIds = new Map<number, string | null>();
 
   log.info(`Downstream: Synchronisation préliminaire du site ${siteId} depuis Supabase...`);
   
@@ -728,6 +730,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     }
     const siteData = siteDataList[0];
     assertCloudSiteIdentity(db, siteId, siteData);
+    cloudSiteSyncIds.set(siteData.id, siteData.sync_id ?? null);
     // Ligne cloud à ne pas écrire (réalignement reporté, identité ambiguë) : site local conservé tel quel.
     const skipSite = reconcileHierarchyBeforeReplace(db, 'site', [siteData]).has(siteData.id);
 
@@ -852,7 +855,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
           statut_actif: u.statut_actif,
           sync_id: u.sync_id,
           roles: rolesForUser
-        }, { statutFromCloud: true, readAt });
+        }, { statutFromCloud: true, readAt, cloudSiteSyncIds });
         summary[res.action]++;
       }
       if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
@@ -1042,6 +1045,10 @@ export async function preloadUsersFromCloud(): Promise<void> {
     ]);
 
     const { data: sitesData, error: sitesError } = sitesPromise;
+    // sync_id cloud de tous les sites : règle « le site cloud l'emporte » de upsertCloudUser (commit 7).
+    const preloadCloudSiteSyncIds = new Map<number, string | null>(
+      (sitesError ? [] : (sitesData ?? [])).map((s: any) => [s.id, s.sync_id ?? null] as [number, string | null])
+    );
     const { data: centresData, error: centresError } = centresPromise;
     const { data: cloudUsers, error: error } = usersPromise;
     const { data: cloudRoles, error: rolesErr } = rolesPromise;
@@ -1191,7 +1198,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
               statut_actif: u.statut_actif,
               sync_id: u.sync_id,
               roles: rolesForUser
-            }, { statutFromCloud: true });
+            }, { statutFromCloud: true, cloudSiteSyncIds: preloadCloudSiteSyncIds });
 
             let action = res.action;
             let idUser = res.id_user;

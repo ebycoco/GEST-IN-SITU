@@ -188,6 +188,21 @@ describe('outbox — réalignement à l\'acquittement (plan site_id, commit 5)',
     expect(one(`SELECT MAX(attempts) AS a FROM t_outbox WHERE id LIKE 'log-e-%'`).a).toBe(0);
   });
 
+  it('commit 7 : vérification avant envoi en masse — refusée si le site (ou un centre) n\'est pas aligné', async () => {
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (12, 'S12', 'S12', 1, 4, 'site-12'), (13, 'S13', 'S13', 1, 4, 'site-13')`).run();
+    db.prepare(`INSERT INTO t_centres (id, site_id, nom, numero, sync_id) VALUES (120, 12, 'C120', 1, 'centre-120'), (121, 12, 'C121', 2, 'centre-121')`).run();
+    cloudRows.push({ table: 't_sites', row: { id: 12, sync_id: 'site-12', code: 'S12' } });
+    cloudRows.push({ table: 't_centres', row: { id: 120, sync_id: 'centre-120', site_id: 12, numero: 1, nom: 'C120' } });
+    cloudRows.push({ table: 't_sites', row: { id: 13, sync_id: 'autre', code: 'AUTRE' } });
+
+    expect(await outbox.checkHierarchyAlignmentForUpload(12, [120])).toEqual({ ok: true });
+    const centreKo = await outbox.checkHierarchyAlignmentForUpload(12, [120, 121]);
+    expect(centreKo.ok).toBe(false);
+    const siteKo = await outbox.checkHierarchyAlignmentForUpload(13, []);
+    expect(siteKo).toMatchObject({ ok: false });
+    expect((siteKo as { reason: string }).reason).toContain('site local 13');
+  });
+
   it('commit 6 : site cloud de même identité (même code, autre sync_id) → envoi autorisé', async () => {
     db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (8, 'S8', 'S8', 1, 4, 'uuid-local-8')`).run();
     cloudRows.push({ table: 't_sites', row: { id: 8, sync_id: 'uuid-cloud-8', code: 'S8' } });

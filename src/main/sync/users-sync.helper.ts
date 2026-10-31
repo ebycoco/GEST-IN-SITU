@@ -41,6 +41,13 @@ export interface UpsertCloudUserOptions {
    * ignorée (skipped_dirty, « local plus récent ») et sera réalignée au tick suivant. Absent = pas de garde.
    */
   readAt?: number;
+  /**
+   * sync_id cloud des sites lus par l'appelant dans la même synchro (id cloud → sync_id). Règle du site
+   * « le cloud l'emporte » (plan site_id 2026-10-31, commit 7) : le site_id cloud ne remplace un site_id
+   * local déjà renseigné que si la ligne locale de cet id porte le MÊME sync_id que le cloud (sinon,
+   * poste non réaligné : l'id local peut désigner un autre site). Absent : ancienne règle (site local conservé).
+   */
+  cloudSiteSyncIds?: ReadonlyMap<number, string | null>;
 }
 
 export type UpsertCloudUserAction =
@@ -234,8 +241,35 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     } else {
       centreNote = `centre ${cloud.centre_id} absent localement : centre local conservé`;
     }
-    // site : logique existante (COALESCE) — jamais écrasé s'il est déjà renseigné localement.
-    const siteId = target.site_id ?? (siteExists(cloud.site_id) ? (cloud.site_id as number) : null);
+    // site : la valeur cloud l'emporte (plan site_id 2026-10-31, commit 7, règle « recommandée ») —
+    // les réparations faites dans le cloud atteignent ainsi les postes qui avaient déjà le compte. La
+    // ligne locale sale ou en attente d'envoi est déjà écartée plus haut (guardLocalRow).
+    // - site local vide : site cloud s'il existe localement (logique historique) ;
+    // - SUPER ADMIN local : jamais rattaché à un site par le cloud, seulement détaché (site NULL) ;
+    // - autre compte : site cloud seulement s'il est vérifié (même sync_id local/cloud, cloudSiteSyncIds).
+    const cloudSiteVerified = (id: unknown): boolean => {
+      if (typeof id !== 'number' || !opts.cloudSiteSyncIds?.has(id)) return false;
+      const cloudSync = opts.cloudSiteSyncIds.get(id);
+      const localSite = db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(id) as { sync_id: string | null } | undefined;
+      return !!cloudSync && !!localSite && localSite.sync_id === cloudSync;
+    };
+    const superAdmin = target.role === 'SUPER ADMIN' || cloud.role === 'SUPER ADMIN';
+    let siteId = target.site_id ?? (!superAdmin && siteExists(cloud.site_id) ? (cloud.site_id as number) : null);
+    if (target.site_id != null && cloud.site_id !== target.site_id) {
+      if (superAdmin) {
+        if (cloud.site_id == null && cloud.role === 'SUPER ADMIN') siteId = null;
+      } else if (cloud.site_id != null && cloudSiteVerified(cloud.site_id)) {
+        siteId = cloud.site_id;
+      }
+    }
+    // Site changé : un centre local conservé appartient à l'ancien site → NULL.
+    if (siteId !== target.site_id && centreId === target.centre_id && centreId != null) {
+      const centreSite = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(centreId) as { site_id: number } | undefined;
+      if (!centreSite || centreSite.site_id !== siteId) {
+        centreNote = `site changé (${target.site_id} → ${siteId ?? 'NULL'}) : centre local ${centreId} retiré`;
+        centreId = null;
+      }
+    }
 
     db.prepare(`
       UPDATE t_users SET

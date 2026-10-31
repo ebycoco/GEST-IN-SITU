@@ -225,6 +225,36 @@ async function _checkReferencesAligned(
   return { kind: 'ok' };
 }
 
+/**
+ * Même garde d'alignement pour l'envoi en masse des cartes (bulk-uploader → upload-worker.js), qui
+ * ne passe pas par t_outbox (audit 2026-10-31 sur les commits 5-6, P1-5) : le site et chacun des
+ * centres concernés doivent désigner la même ligne dans le cloud. Sans client Supabase : ok (l'envoi
+ * échouera de lui-même). Ne lève jamais.
+ */
+export async function checkHierarchyAlignmentForUpload(
+  siteId: number,
+  centreIds: ReadonlyArray<number>
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const db = getDatabase();
+    const supabase = getSupabaseClient();
+    if (!db || !supabase) return { ok: true };
+    const cache = new Map<string, AlignmentVerdict>();
+    for (const centreId of [null, ...centreIds]) {
+      const res = await _checkReferencesAligned(db, supabase, {
+        table_name: 't_cartes',
+        operation: 'UPDATE',
+        payload: JSON.stringify({ site_id: siteId, centre_id: centreId })
+      }, cache);
+      if (res.kind === 'defer') return { ok: false, reason: res.reason.slice(NOT_ALIGNED_PREFIX.length).trim() };
+    }
+    return { ok: true };
+  } catch (err: any) {
+    log.error('[OutboxService] Vérification d\'alignement avant envoi en masse en échec :', err?.message || err);
+    return { ok: false, reason: 'vérification de l\'alignement du site impossible' };
+  }
+}
+
 // ─── Types internes ──────────────────────────────────────────────────────────
 interface OutboxEntry {
   id: string;
