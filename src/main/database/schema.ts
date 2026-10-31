@@ -1,7 +1,8 @@
 import Database from 'better-sqlite3';
 import { dirname, join } from 'path';
 import log from 'electron-log';
-import { hashPassword } from '../auth/local-auth';
+import { randomBytes } from 'crypto';
+import { hashPassword, verifyPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { RecoveryRequiredError, RecoveryInfo, readRecoveryMarker, writeRecoveryMarker, snapshotDatabase, validateDatabase, countCriticalRows, planFtsRepair, repairFtsDrift } from './recovery';
 
@@ -55,6 +56,9 @@ export function runMigrations(db: Database.Database): void {
     } catch (e: any) {
       log.error('[MIGRATION V72] Échec du filet de réparation de t_logs (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
     }
+    // Passe de sécurité locale (non versionnée, idempotente, jamais bloquante — try/catch interne) :
+    // désactive le compte 'superadmin' seed resté au mot de passe par défaut. Aucune écriture cloud.
+    disableDefaultSuperadminAccounts(db);
 
     // 2. Réinstallation canonique des triggers FTS5 : migrateV60 (RENAME/DROP de t_cartes) et les
     // passes ci-dessus suppriment les triggers. Installation centralisée, avant toute validation.
@@ -1126,7 +1130,7 @@ function migrateV1(db: Database.Database): void {
     -- Seed data removed for clean multi-tenant deployment. 
     -- Super Admin must create sites and centers manually.
 
-    -- Compte Super Admin par dÃ©faut (identifiants: superadmin / admin)
+    -- Compte Super Admin par dÃ©faut (créé désactivé, voir plus bas)
     -- NOTE: Le hash est gÃ©nÃ©rÃ© dynamiquement par hashPassword() ci-dessous (voir code TypeScript).
 
     -- Config initiale
@@ -1145,13 +1149,18 @@ function migrateV1(db: Database.Database): void {
 
   // â”€â”€ Seed Super Admin avec mot de passe hashÃ© (bcrypt) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Le hash est gÃ©nÃ©rÃ© Ã  l'exÃ©cution pour ne jamais stocker de mot de passe en clair.
+  // Sécurité (2026-10-31) : la ligne seed est créée DÉSACTIVÉE (statut_actif = 0) avec le hash d'un
+  // secret aléatoire jamais conservé — plus aucun compte actif au mot de passe connu ('admin') sur
+  // une installation neuve. La ligne est conservée (et non supprimée) pour ne pas modifier le
+  // parcours poste neuf : t_users reste non vide, donc app:checkFirstLaunch et le préchargement
+  // des comptes cloud au démarrage (index.ts, preloadUsersFromCloud) se comportent comme avant.
   try {
-    const defaultHash = hashPassword('admin');
+    const unusableHash = hashPassword(randomBytes(32).toString('hex'));
     db.prepare(`
       INSERT OR IGNORE INTO t_users (id_user, login, password_hash, role, nom_user, statut_actif)
-      VALUES (1, 'superadmin', ?, 'SUPER ADMIN', 'Super Administrateur', 1)
-    `).run(defaultHash);
-    log.info('[MIGRATION V1] Compte superadmin crÃ©Ã© avec mot de passe hashÃ© (bcrypt).');
+      VALUES (1, 'superadmin', ?, 'SUPER ADMIN', 'Super Administrateur', 0)
+    `).run(unusableHash);
+    log.info('[MIGRATION V1] Compte superadmin seed créé DÉSACTIVÉ (mot de passe aléatoire non conservé).');
   } catch (e: any) {
     log.warn('[MIGRATION V1] Impossible de crÃ©er le compte superadmin (dÃ©jÃ  existant ?) :', e.message);
   }
@@ -4174,4 +4183,84 @@ export function migrateV72(db: Database.Database): void {
     log.error('[MIGRATION V72] Erreur :', e.message);
     throw e;
   }
+}
+
+// =====================================================
+// PASSE DE SÉCURITÉ — Compte 'superadmin' seed au mot de passe par défaut (2026-10-31)
+// =====================================================
+// migrateV1 créait systématiquement `id_user 1, login 'superadmin'` ACTIF avec le mot de passe
+// connu 'admin'. Sur les postes déjà installés, ce compte local (jamais synchronisé : sync_id vide)
+// reste utilisable à l'écran de connexion et pour franchir verifySuperAdminPassword().
+//
+// Règle appliquée, ligne par ligne (login = 'superadmin', sync_id vide, statut_actif = 1) :
+//   - hash bcrypt correspondant encore au mot de passe par défaut -> statut_actif = 0 + trace
+//     locale dans t_audit_log (table 100 % locale, jamais synchronisée) + log electron-log ;
+//   - mot de passe changé (ou hash non-bcrypt, invérifiable) -> laissé actif, avertissement seul.
+// Aucune écriture cloud : ni t_outbox, ni t_sync_queue, ni is_dirty (désactivation propre à ce poste).
+// Passe NON versionnée (SCHEMA_VERSION inchangé, aucune modification de schéma) : exécutée à chaque
+// démarrage, après les filets de sécurité. Idempotente : un compte déjà désactivé n'est plus lu
+// (statut_actif = 1 dans le filtre), donc aucune comparaison bcrypt après la première exécution.
+// Jamais bloquante : toute erreur est journalisée et avalée. Aucun mot de passe ni hash journalisé.
+// =====================================================
+const DEFAULT_SUPERADMIN_LOGIN = 'superadmin';
+const DEFAULT_SUPERADMIN_PASSWORD = 'admin';
+
+export interface DefaultSuperadminPassResult { disabled: number; keptActive: number }
+
+export function disableDefaultSuperadminAccounts(db: Database.Database): DefaultSuperadminPassResult {
+  const result: DefaultSuperadminPassResult = { disabled: 0, keptActive: 0 };
+  try {
+    const cols = new Set((db.pragma('table_info(t_users)') as { name: string }[]).map(c => c.name));
+    if (!cols.has('login') || !cols.has('password_hash') || !cols.has('statut_actif') || !cols.has('sync_id')) {
+      log.warn('[SECURITE] Passe compte superadmin par défaut ignorée : colonnes attendues absentes de t_users.');
+      return result;
+    }
+
+    const candidates = db.prepare(`
+      SELECT id_user, password_hash FROM t_users
+      WHERE login = ? AND statut_actif = 1 AND (sync_id IS NULL OR TRIM(sync_id) = '')
+    `).all(DEFAULT_SUPERADMIN_LOGIN) as { id_user: number; password_hash: string | null }[];
+    if (candidates.length === 0) return result;
+
+    const hasAuditTable = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='t_audit_log'").get();
+
+    for (const row of candidates) {
+      const hash = row.password_hash || '';
+      let isDefault = false;
+      if (hash.startsWith('$2')) {
+        try {
+          isDefault = verifyPassword(DEFAULT_SUPERADMIN_PASSWORD, hash);
+        } catch {
+          isDefault = false;
+        }
+      }
+
+      if (!isDefault) {
+        result.keptActive++;
+        log.warn(`[SECURITE] Compte local '${DEFAULT_SUPERADMIN_LOGIN}' (id_user ${row.id_user}, non synchronisé) actif avec un mot de passe différent du défaut : laissé actif. Vérifier qu'il est encore nécessaire.`);
+        continue;
+      }
+
+      db.transaction(() => {
+        // Garde de concurrence : ne désactive que si la ligne est toujours dans l'état lu.
+        const upd = db.prepare(`
+          UPDATE t_users SET statut_actif = 0
+          WHERE id_user = ? AND login = ? AND statut_actif = 1 AND (sync_id IS NULL OR TRIM(sync_id) = '')
+        `).run(row.id_user, DEFAULT_SUPERADMIN_LOGIN);
+        if (upd.changes === 0) return;
+        result.disabled++;
+        if (hasAuditTable) {
+          db.prepare('INSERT INTO t_audit_log (utilisateur, action, details) VALUES (?, ?, ?)').run(
+            'SYSTEM',
+            'SECURITE_COMPTE_DEFAUT_DESACTIVE',
+            `Compte local '${DEFAULT_SUPERADMIN_LOGIN}' (id_user ${row.id_user}) désactivé au démarrage : mot de passe par défaut encore en place. Désactivation locale uniquement (aucun envoi cloud).`
+          );
+        }
+      })();
+      log.warn(`[SECURITE] Compte local '${DEFAULT_SUPERADMIN_LOGIN}' (id_user ${row.id_user}) DÉSACTIVÉ : mot de passe par défaut encore en place. Aucun envoi cloud.`);
+    }
+  } catch (e: any) {
+    log.error('[SECURITE] Passe compte superadmin par défaut en échec (non bloquant) :', e?.message);
+  }
+  return result;
 }

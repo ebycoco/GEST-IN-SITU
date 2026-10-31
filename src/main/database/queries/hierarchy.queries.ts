@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { enqueueOutbox, scheduleOutboxProcessing, cancelPendingInsert } from '../../sync/outbox.service';
 import { networkMonitor } from '../../sync/network-monitor';
 import { insertAuditLog } from './audit.queries';
+import { getSecureCurrentUser } from '../../auth/session-heartbeat';
 import log from 'electron-log';
 
 // Cache du schéma de t_centres pour éviter de répéter PRAGMA table_info à chaque appel
@@ -474,20 +475,61 @@ export function deleteSite(id: number) {
   return result;
 }
 
+/**
+ * Preuve de connaissance d'un mot de passe SUPER ADMIN (database:import depuis l'écran de connexion,
+ * repli de hierarchy:verifyPassword sans login).
+ *
+ * Sécurité (2026-10-31) — l'ancienne version lisait la PREMIÈRE ligne `role = 'SUPER ADMIN'` sans
+ * filtre ni ordre, en pratique le compte seed 'superadmin' / 'admin'. Désormais :
+ *  1. Session serveur dont le rôle ACTIF est SUPER ADMIN (getSecureCurrentUser(), CLAUDE.md §3) et
+ *     adossée à une ligne t_users : seul le mot de passe de CE compte est vérifié (compte actif requis).
+ *  2. Sinon (aucune session, autre rôle, ou session ROOT failsafe sans ligne t_users) : seuls les
+ *     comptes actifs (statut_actif = 1) ET synchronisés (sync_id non vide) détenant SUPER ADMIN — rôle
+ *     primaire ou t_user_roles — sont candidats ; il suffit qu'un seul corresponde. Un compte local
+ *     jamais synchronisé (dont le seed par défaut) n'est donc jamais accepté sans session.
+ * Un hash non-bcrypt est toujours refusé (jamais comparé en clair).
+ */
 export function verifySuperAdminPassword(password: string): boolean {
+  if (typeof password !== 'string' || password.length === 0) return false;
   const db = getDatabase()!;
-  const admin = db.prepare("SELECT password_hash FROM t_users WHERE role = 'SUPER ADMIN'").get() as any;
-  if (!admin) return false;
 
-  const hash = admin.password_hash;
-  // Sécurité : seule une comparaison bcrypt est acceptée. Un hash legacy non-bcrypt (donnée mal
-  // migrée) est traité comme invalide plutôt que comparé en clair — le mot de passe doit être
-  // réinitialisé via le flux dédié.
-  if (!hash || !hash.startsWith('$2')) {
-    log.warn('[SECURITY] verifySuperAdminPassword : hash non-bcrypt détecté, vérification refusée.');
-    return false;
+  const checkHash = (hash: string | null | undefined): boolean => {
+    if (!hash || !hash.startsWith('$2')) {
+      log.warn('[SECURITY] verifySuperAdminPassword : hash non-bcrypt détecté, vérification refusée.');
+      return false;
+    }
+    try {
+      return verifyPassword(password, hash);
+    } catch {
+      return false;
+    }
+  };
+
+  const session = getSecureCurrentUser();
+  if (session && session.role === 'SUPER ADMIN' && session.id_user !== undefined && session.id_user !== null) {
+    const own = db.prepare('SELECT password_hash, statut_actif FROM t_users WHERE id_user = ?')
+      .get(session.id_user) as { password_hash: string | null; statut_actif: number } | undefined;
+    if (own) {
+      if (own.statut_actif !== 1) return false;
+      return checkHash(own.password_hash);
+    }
+    // Pas de ligne t_users (session ROOT failsafe) : repli sur la règle stricte ci-dessous.
   }
-  return verifyPassword(password, hash);
+
+  const candidates = db.prepare(`
+    SELECT u.password_hash FROM t_users u
+    WHERE u.statut_actif = 1
+      AND u.sync_id IS NOT NULL AND TRIM(u.sync_id) <> ''
+      AND (u.role = 'SUPER ADMIN'
+           OR EXISTS (SELECT 1 FROM t_user_roles r WHERE r.id_user = u.id_user AND r.role = 'SUPER ADMIN'))
+    ORDER BY u.id_user ASC
+    LIMIT 50
+  `).all() as { password_hash: string | null }[];
+
+  for (const c of candidates) {
+    if (checkHash(c.password_hash)) return true;
+  }
+  return false;
 }
 
 export function verifyUserPassword(login: string, password: string): boolean {
