@@ -83,6 +83,26 @@ function applyCloudStatusBlock(db, { sent, cloud, diff }) {
 }
 
 
+// ─── Délai maximal par requête et arrêt sur réseau défaillant (audit agent-13 2026-10-31, P1-3) ───
+// Sans délai, une requête vers un réseau qui se bloque après la garde d'alignement restait pendante
+// jusqu'au délai TCP du système (~5 min mesurés) et le worker concluait quand même « terminé ».
+const DEFAULT_REQUEST_TIMEOUT_MS = 60000;
+const MAX_CONSECUTIVE_NETWORK_FAILURES = 2;
+const NETWORK_ERROR_RE = /fetch failed|network|timeout|timed out|abort|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|socket/i;
+
+/** fetch avec délai maximal (fusionne le signal éventuel de l'appelant avec le délai). */
+function makeTimedFetch(timeoutMs) {
+  return (input, init = {}) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`Délai de ${timeoutMs} ms dépassé`)), timeoutMs);
+    if (init.signal) {
+      if (init.signal.aborted) controller.abort(init.signal.reason);
+      else init.signal.addEventListener('abort', () => controller.abort(init.signal.reason), { once: true });
+    }
+    return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  };
+}
+
 async function run() {
   const { siteId, centreId, dbPath, supabaseUrl, supabaseAnonKey, allowProbable, allowInvalid, allowMissing, onlyModified } = workerData;
 
@@ -91,7 +111,8 @@ async function run() {
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false
-    }
+    },
+    global: { fetch: makeTimedFetch(workerData.requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS) }
   });
 
   const db = new Database(dbPath, { timeout: 60000 });
@@ -220,6 +241,9 @@ async function run() {
   let lastProgressSentAt = 0;
   const PROGRESS_THROTTLE_MS = 500;
   const failedSyncIds = new Map();
+  let failedBlocks = 0;
+  let consecutiveNetworkFailures = 0;
+  let networkAborted = false;
 
   while (i < totalToUpload) {
     blockIndex++;
@@ -380,7 +404,10 @@ async function run() {
           validCards.forEach(c => {
             failedSyncIds.set(c.sync_id, (failedSyncIds.get(c.sync_id) || 0) + 1);
           });
+          failedBlocks++;
+          consecutiveNetworkFailures = NETWORK_ERROR_RE.test(String(error.message)) ? consecutiveNetworkFailures + 1 : 0;
         } else {
+          consecutiveNetworkFailures = 0;
           parentPort.postMessage({ type: 'log', level: 'info', message: `Bloc ${blockIndex} OK — ${chunkDuration}ms — chunkSize=${chunkSize}` });
 
           try {
@@ -419,6 +446,8 @@ async function run() {
         }
       } catch (err) {
         parentPort.postMessage({ type: 'log', level: 'error', message: `Exception bloc ${blockIndex} : ${err.message}` });
+        failedBlocks++;
+        consecutiveNetworkFailures = NETWORK_ERROR_RE.test(String(err.message)) ? consecutiveNetworkFailures + 1 : 0;
       }
     } else {
       parentPort.postMessage({ type: 'log', level: 'warn', message: `Bloc ${blockIndex} ignoré : ${chunkIds.length} dates invalides.` });
@@ -432,9 +461,29 @@ async function run() {
     }
 
     i += chunkIds.length;
+
+    // Réseau défaillant : inutile d'attendre un délai par bloc restant, l'envoi s'arrête (les cartes non
+    // envoyées restent is_dirty=1 et repartiront au prochain envoi).
+    if (consecutiveNetworkFailures >= MAX_CONSECUTIVE_NETWORK_FAILURES && i < totalToUpload) {
+      networkAborted = true;
+      parentPort.postMessage({ type: 'log', level: 'error', message: `Envoi interrompu : ${consecutiveNetworkFailures} blocs consécutifs en échec réseau.` });
+      break;
+    }
   }
 
-  parentPort.postMessage({ type: 'done', uploadedCount, message: `Synchronisation de masse terminée : ${uploadedCount} cartes traitées.` });
+  if (networkAborted || (uploadedCount === 0 && failedBlocks > 0)) {
+    const reason = networkAborted ? 'le réseau est devenu indisponible pendant l\'envoi' : 'aucun bloc n\'a pu être envoyé';
+    parentPort.postMessage({
+      type: 'done',
+      success: false,
+      uploadedCount,
+      message: `Envoi interrompu : ${reason} (${uploadedCount} carte(s) envoyée(s), les autres restent à envoyer). Vérifiez la connexion et réessayez.`
+    });
+    return;
+  }
+
+  const failedNote = failedBlocks > 0 ? ` ${failedBlocks} bloc(s) en échec, à renvoyer.` : '';
+  parentPort.postMessage({ type: 'done', uploadedCount, message: `Synchronisation de masse terminée : ${uploadedCount} cartes traitées.${failedNote}` });
 }
 
 run().catch(err => {

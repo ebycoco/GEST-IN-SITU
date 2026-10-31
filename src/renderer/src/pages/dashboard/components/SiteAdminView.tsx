@@ -60,6 +60,7 @@ interface SiteAdminViewProps {
   handleForceAgentsSync: () => Promise<void>;
   handlePullSiteCards: () => Promise<void>;
   handleStartBulkUpload: (forceProbable?: boolean, forceInvalid?: boolean, forceMissing?: boolean, onlyModified?: boolean) => Promise<any>;
+  handleCancelBulkUpload?: () => Promise<void>;
   isClearingCloud?: boolean;
   purgeCloudProgress?: number;
   handleClearCloudDatabase: () => Promise<void>;
@@ -92,6 +93,7 @@ export function SiteAdminView({
   handleForceAgentsSync,
   handlePullSiteCards,
   handleStartBulkUpload,
+  handleCancelBulkUpload,
   isClearingCloud = false,
   handleClearCloudDatabase,
   isBackgroundPulling = false,
@@ -1355,6 +1357,27 @@ export function SiteAdminView({
              isClearingCloud ? `Purge du cloud en cours... (${purgeCloudProgress >= 0 ? purgeCloudProgress : 0}%)` :
              'Opération en cours...'}
           </span>
+          {/* Annulation du transfert de masse seul (la surcouche bloque tout le reste de l'écran). */}
+          {isBulkUploading && handleCancelBulkUpload && !(isSiteSyncing || isSyncingAgents || isPullingCards || isClearingCloud) && (
+            <button
+              type="button"
+              data-testid="bulk-cancel-button"
+              onClick={() => { void handleCancelBulkUpload(); }}
+              style={{
+                marginTop: 4,
+                padding: '10px 22px',
+                borderRadius: 10,
+                border: '1px solid rgba(255,255,255,0.35)',
+                background: 'rgba(255,255,255,0.08)',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: 13,
+                cursor: 'pointer'
+              }}
+            >
+              Annuler le transfert
+            </button>
+          )}
         </div>
       )}
 

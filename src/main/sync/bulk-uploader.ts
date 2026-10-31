@@ -13,6 +13,9 @@ let _currentWorker: Worker | null = null;
 // est retenue même avant la création du worker (contrôle d'alignement cloud en cours).
 let _uploadActive = false;
 let _cancelRequested = false;
+// Réveille aussitôt le contrôle d'alignement en cours quand l'agent annule (sinon l'annulation n'est vue
+// qu'à la fin de la vérification : jusqu'à 15 s).
+let _wakeOnCancel: (() => void) | null = null;
 
 /** Délai maximal du contrôle d'alignement cloud avant l'envoi en masse (réseau terrain lent). */
 export const ALIGNMENT_CHECK_TIMEOUT_MS = 15000;
@@ -25,6 +28,7 @@ export function cancelBulkUpload(): void {
   if (!_uploadActive) return;
   _cancelRequested = true;
   log.warn('[BulkUpload] Signal d\'annulation reçu.');
+  _wakeOnCancel?.();
   // _currentWorker reste renseigné : le gestionnaire 'exit' conclut l'envoi comme annulé.
   if (_currentWorker) _currentWorker.terminate();
 }
@@ -98,9 +102,13 @@ export async function runBulkUpload(
       const timeout = new Promise<{ ok: false; reason: string; timedOut: true }>(resolve => {
         timer = setTimeout(() => resolve({ ok: false, reason: 'vérification du site dans le cloud impossible (réseau, délai dépassé).', timedOut: true }), ALIGNMENT_CHECK_TIMEOUT_MS);
       });
+      const cancelWake = new Promise<{ ok: false; reason: string }>(resolve => {
+        _wakeOnCancel = () => resolve({ ok: false, reason: 'annulé' });
+      });
       const alignment = await Promise.race([
         checkHierarchyAlignmentForUpload(siteId, centreId && !centreIds.includes(centreId) ? [...centreIds, centreId] : centreIds),
-        timeout
+        timeout,
+        cancelWake
       ]);
       if (_cancelRequested) {
         log.warn('[BulkUpload] Annulé pendant la vérification du site : worker non démarré.');
@@ -119,6 +127,7 @@ export async function runBulkUpload(
       return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.', refused: true };
     } finally {
       clearTimeout(timer);
+      _wakeOnCancel = null;
     }
 
     return await startUploadWorker(siteId, allowProbable, allowInvalid, allowMissing, onlyModified, centreId, progressCallback, userLogin, dbPath, supabaseUrl, supabaseAnonKey);
@@ -203,14 +212,24 @@ function startUploadWorker(
           else log.info(`[UploadWorker] ${msg.message}`);
           break;
         case 'done':
-          logAudit(userLogin, 'SYS_SYNC_CLOUD_SUCCESS', {
-            site_id: siteId,
-            uploaded_count: msg.uploadedCount,
-            timestamp_fin: new Date().toISOString()
-          });
+          if (msg.success === false) {
+            logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {
+              site_id: siteId,
+              error: msg.message,
+              uploaded_count: msg.uploadedCount,
+              timestamp: new Date().toISOString()
+            });
+          } else {
+            logAudit(userLogin, 'SYS_SYNC_CLOUD_SUCCESS', {
+              site_id: siteId,
+              uploaded_count: msg.uploadedCount,
+              timestamp_fin: new Date().toISOString()
+            });
+          }
           _currentWorker = null;
           networkMonitor.setBypassForceOnline(false);
-          resolve({ success: true, uploadedCount: msg.uploadedCount, message: msg.message });
+          // msg.success === false : le worker a terminé sans pouvoir tout envoyer (réseau défaillant).
+          resolve({ success: msg.success !== false, uploadedCount: msg.uploadedCount, message: msg.message });
           break;
         case 'error':
           logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {

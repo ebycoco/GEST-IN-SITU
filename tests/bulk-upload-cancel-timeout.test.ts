@@ -75,6 +75,25 @@ describe('runBulkUpload — délai du contrôle d\'alignement et annulation (aud
     expect(h.workers).toHaveLength(0);
   });
 
+  it('annulation pendant un contrôle qui ne répond pas : réponse immédiate, sans attendre le délai', async () => {
+    h.check = () => new Promise(() => {});
+    const p = run();
+    await flush();
+    cancelBulkUpload();
+    const res = await p; // pas de fake timers : si l'annulation n'était vue qu'après 15 s, le test expirerait
+    expect(res.cancelled).toBe(true);
+    expect(h.workers).toHaveLength(0);
+  });
+
+  it('worker terminé sur échec réseau (done success=false) : envoi en échec avec le message du worker', async () => {
+    h.check = async () => ({ ok: true });
+    const p = run();
+    await flush();
+    (h.workers[0] as EventEmitter).emit('message', { type: 'done', success: false, uploadedCount: 1, message: 'Envoi interrompu : réseau.' });
+    const res = await p;
+    expect(res).toMatchObject({ success: false, uploadedCount: 1, message: 'Envoi interrompu : réseau.' });
+  });
+
   it('annulation pendant l\'envoi : la promesse se conclut (annulé)', async () => {
     h.check = async () => ({ ok: true });
     const p = run();

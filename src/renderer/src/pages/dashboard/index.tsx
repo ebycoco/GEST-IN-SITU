@@ -60,6 +60,7 @@ export default function DashboardPage() {
     handleForceAgentsSync,
     handlePullSiteCards,
     handleStartBulkUpload,
+    handleCancelBulkUpload,
     handleClearCloudDatabase
   } = useForceSyncActions(user, activeSiteId, loadStats, setDirtyUsersCount);
 
@@ -132,6 +133,7 @@ export default function DashboardPage() {
       handleForceAgentsSync={handleForceAgentsSync}
       handlePullSiteCards={handlePullSiteCards}
       handleStartBulkUpload={handleStartBulkUpload}
+      handleCancelBulkUpload={handleCancelBulkUpload}
       handleClearCloudDatabase={handleClearCloudDatabase}
       loading={loading}
     />
