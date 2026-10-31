@@ -9,18 +9,27 @@ import { checkHierarchyAlignmentForUpload } from './outbox.service';
 
 // ─── SIGNAL D'ANNULATION GLOBAL ─────────────────────────────────────────────
 let _currentWorker: Worker | null = null;
+// Envoi en cours (de l'entrée de runBulkUpload jusqu'à sa résolution) et annulation demandée : l'annulation
+// est retenue même avant la création du worker (contrôle d'alignement cloud en cours).
+let _uploadActive = false;
+let _cancelRequested = false;
+
+/** Délai maximal du contrôle d'alignement cloud avant l'envoi en masse (réseau terrain lent). */
+export const ALIGNMENT_CHECK_TIMEOUT_MS = 15000;
 
 /**
  * Annule le bulk upload en cours de façon sûre en terminant le Worker Thread.
  * Idempotent : sans effet si aucun upload n'est actif.
  */
 export function cancelBulkUpload(): void {
-  if (_currentWorker) {
-    log.warn('[BulkUpload] Signal d\'annulation reçu. Interruption du Worker...');
-    _currentWorker.terminate();
-    _currentWorker = null;
-  }
+  if (!_uploadActive) return;
+  _cancelRequested = true;
+  log.warn('[BulkUpload] Signal d\'annulation reçu.');
+  // _currentWorker reste renseigné : le gestionnaire 'exit' conclut l'envoi comme annulé.
+  if (_currentWorker) _currentWorker.terminate();
 }
+
+const CANCELLED_RESULT = { success: false, uploadedCount: 0, message: 'Transfert annulé par l\'utilisateur.', cancelled: true };
 
 /**
  * Pousse en masse toutes les cartes modifiées (is_dirty = 1) d'un site vers Supabase.
@@ -70,30 +79,68 @@ export async function runBulkUpload(
     return { success: false, uploadedCount: 0, message: 'Configuration Supabase manquante.' };
   }
 
-  // ── Garde d'alignement (plan site_id, commit 7) : le worker envoie les cartes avec les ids LOCAUX
-  // de site/centre. Sur un poste non réaligné, ils peuvent désigner un autre site dans le cloud (§3) :
-  // l'envoi est alors refusé (réalignement au prochain démarrage). Centres : ceux des cartes à envoyer.
+  _uploadActive = true;
+  _cancelRequested = false;
   try {
-    const db = getDatabase();
-    const centreIds = db
-      ? (db.prepare(`
-          SELECT DISTINCT centre_id FROM t_cartes
-          WHERE site_id = ? AND is_dirty = 1 AND centre_id IS NOT NULL ${centreId ? 'AND centre_id = ?' : ''}
-        `).all(...(centreId ? [siteId, centreId] : [siteId])) as { centre_id: number }[]).map(r => r.centre_id)
-      : [];
-    const alignment = await checkHierarchyAlignmentForUpload(siteId, centreId && !centreIds.includes(centreId) ? [...centreIds, centreId] : centreIds);
-    if (!alignment.ok) {
-      log.warn(`[BulkUpload] Envoi en masse refusé pour le site ${siteId} : ${alignment.reason}`);
-      return {
-        success: false,
-        uploadedCount: 0,
-        message: `Envoi refusé : ${alignment.reason} Redémarrez l'application et attendez la fin du chargement avant de vous connecter.`
-      };
+    // ── Garde d'alignement (plan site_id, commit 7) : le worker envoie les cartes avec les ids LOCAUX
+    // de site/centre. Sur un poste non réaligné, ils peuvent désigner un autre site dans le cloud (§3) :
+    // l'envoi est alors refusé (réalignement au prochain démarrage). Centres : ceux des cartes à envoyer.
+    // Délai maximal ALIGNMENT_CHECK_TIMEOUT_MS : un réseau bloqué ne fige pas la fenêtre de transfert.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const db = getDatabase();
+      const centreIds = db
+        ? (db.prepare(`
+            SELECT DISTINCT centre_id FROM t_cartes
+            WHERE site_id = ? AND is_dirty = 1 AND centre_id IS NOT NULL ${centreId ? 'AND centre_id = ?' : ''}
+          `).all(...(centreId ? [siteId, centreId] : [siteId])) as { centre_id: number }[]).map(r => r.centre_id)
+        : [];
+      const timeout = new Promise<{ ok: false; reason: string; timedOut: true }>(resolve => {
+        timer = setTimeout(() => resolve({ ok: false, reason: 'vérification du site dans le cloud impossible (réseau, délai dépassé).', timedOut: true }), ALIGNMENT_CHECK_TIMEOUT_MS);
+      });
+      const alignment = await Promise.race([
+        checkHierarchyAlignmentForUpload(siteId, centreId && !centreIds.includes(centreId) ? [...centreIds, centreId] : centreIds),
+        timeout
+      ]);
+      if (_cancelRequested) {
+        log.warn('[BulkUpload] Annulé pendant la vérification du site : worker non démarré.');
+        return CANCELLED_RESULT;
+      }
+      if (!alignment.ok) {
+        log.warn(`[BulkUpload] Envoi en masse refusé pour le site ${siteId} : ${alignment.reason}`);
+        const advice = /réseau/.test(alignment.reason)
+          ? 'Vérifiez la connexion et réessayez.'
+          : 'Redémarrez l\'application et attendez la fin du chargement avant de vous connecter.';
+        return { success: false, uploadedCount: 0, message: `Envoi refusé : ${alignment.reason} ${advice}` };
+      }
+    } catch (err: any) {
+      log.error('[BulkUpload] Garde d\'alignement en échec :', err?.message || err);
+      return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.' };
+    } finally {
+      clearTimeout(timer);
     }
-  } catch (err: any) {
-    log.error('[BulkUpload] Garde d\'alignement en échec :', err?.message || err);
-    return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.' };
+
+    return await startUploadWorker(siteId, allowProbable, allowInvalid, allowMissing, onlyModified, centreId, progressCallback, userLogin, dbPath, supabaseUrl, supabaseAnonKey);
+  } finally {
+    _uploadActive = false;
+    _cancelRequested = false;
+    _currentWorker = null;
   }
+}
+
+function startUploadWorker(
+  siteId: number,
+  allowProbable: boolean,
+  allowInvalid: boolean,
+  allowMissing: boolean,
+  onlyModified: boolean,
+  centreId: number | null,
+  progressCallback: (progress: number) => void,
+  userLogin: string,
+  dbPath: string,
+  supabaseUrl: string,
+  supabaseAnonKey: string
+): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean }> {
 
   // Activer le contournement forcé du statut ONLINE pour ignorer la congestion réseau
   networkMonitor.setBypassForceOnline(true);
@@ -191,15 +238,24 @@ export async function runBulkUpload(
 
     worker.on('exit', (code) => {
       if (_currentWorker) {
-        // Le worker a été terminé violemment (ex: via cancelBulkUpload())
+        // Sortie sans message 'done'/'error' : annulation (cancelBulkUpload) ou arrêt inattendu du thread.
         log.warn(`[BulkUpload] Le Worker a été terminé (code ${code}).`);
-        logAudit(userLogin, 'SYS_SYNC_CLOUD_CANCELLED', {
-          site_id: siteId,
-          reason: 'Annulation manuelle par l\'agent / Interruption du thread.'
-        });
         _currentWorker = null;
         networkMonitor.setBypassForceOnline(false);
-        resolve({ success: false, uploadedCount: 0, message: 'Transfert annulé par l\'utilisateur.', cancelled: true });
+        if (_cancelRequested) {
+          logAudit(userLogin, 'SYS_SYNC_CLOUD_CANCELLED', {
+            site_id: siteId,
+            reason: 'Annulation manuelle par l\'agent / Interruption du thread.'
+          });
+          resolve(CANCELLED_RESULT);
+        } else {
+          logAudit(userLogin, 'SYS_SYNC_CLOUD_FAILURE', {
+            site_id: siteId,
+            error: `Worker arrêté sans résultat (code ${code})`,
+            timestamp: new Date().toISOString()
+          });
+          resolve({ success: false, uploadedCount: 0, message: `Le transfert s'est arrêté de façon inattendue (code ${code}).` });
+        }
       } else if (code !== 0) {
         log.error(`[BulkUpload] Le Worker s'est arrêté avec le code ${code}.`);
       }

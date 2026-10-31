@@ -48,6 +48,12 @@ export interface UpsertCloudUserOptions {
    * poste non réaligné : l'id local peut désigner un autre site). Absent : ancienne règle (site local conservé).
    */
   cloudSiteSyncIds?: ReadonlyMap<number, string | null>;
+  /**
+   * sync_id cloud des centres lus par l'appelant (id cloud → sync_id). Fourni : le centre_id cloud n'est appliqué
+   * que si la ligne locale de cet id porte le MÊME sync_id (poste non réaligné : l'id peut désigner un autre
+   * centre). Absent : existence locale seule. Dans tous les cas, un centre hors du site retenu est retiré.
+   */
+  cloudCentreSyncIds?: ReadonlyMap<number, string | null>;
 }
 
 export type UpsertCloudUserAction =
@@ -223,6 +229,15 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     typeof id === 'number' && !!db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(id);
   const centreExists = (id: unknown): boolean =>
     typeof id === 'number' && !!db.prepare('SELECT 1 FROM t_centres WHERE id = ?').get(id);
+  // Centre cloud vérifié : même sync_id local/cloud si l'appelant a fourni la liste, sinon existence seule.
+  const cloudCentreVerified = (id: number): boolean => {
+    if (!opts.cloudCentreSyncIds) return true;
+    const cloudSync = opts.cloudCentreSyncIds.get(id);
+    const localCentre = db.prepare('SELECT sync_id FROM t_centres WHERE id = ?').get(id) as { sync_id: string | null } | undefined;
+    return !!cloudSync && !!localCentre && localCentre.sync_id === cloudSync;
+  };
+  const centreSiteOf = (id: number): number | null | undefined =>
+    (db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(id) as { site_id: number | null } | undefined)?.site_id;
 
   let idUser: number;
   let centreNote: string | undefined;
@@ -236,10 +251,12 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     let centreId: number | null = target.centre_id;
     if (cloud.centre_id == null) {
       centreId = null;
-    } else if (centreExists(cloud.centre_id)) {
-      centreId = cloud.centre_id;
-    } else {
+    } else if (!centreExists(cloud.centre_id)) {
       centreNote = `centre ${cloud.centre_id} absent localement : centre local conservé`;
+    } else if (!cloudCentreVerified(cloud.centre_id)) {
+      centreNote = `centre ${cloud.centre_id} non vérifié (identité locale différente) : centre local conservé`;
+    } else {
+      centreId = cloud.centre_id;
     }
     // site : la valeur cloud l'emporte (plan site_id 2026-10-31, commit 7, règle « recommandée ») —
     // les réparations faites dans le cloud atteignent ainsi les postes qui avaient déjà le compte. La
@@ -262,13 +279,13 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
         siteId = cloud.site_id;
       }
     }
-    // Site changé : un centre local conservé appartient à l'ancien site → NULL.
-    if (siteId !== target.site_id && centreId === target.centre_id && centreId != null) {
-      const centreSite = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(centreId) as { site_id: number } | undefined;
-      if (!centreSite || centreSite.site_id !== siteId) {
-        centreNote = `site changé (${target.site_id} → ${siteId ?? 'NULL'}) : centre local ${centreId} retiré`;
-        centreId = null;
-      }
+    // Cohérence finale (§3) : le centre retenu (local ou cloud) doit appartenir au site retenu, sinon NULL.
+    // Centre cloud écarté : repli sur le centre local s'il appartient, lui, au site retenu.
+    if (centreId != null && centreSiteOf(centreId) !== siteId) {
+      const fallback = target.centre_id != null && target.centre_id !== centreId && centreSiteOf(target.centre_id) === siteId
+        ? target.centre_id : null;
+      centreNote = `centre ${centreId} hors du site ${siteId ?? 'NULL'} : ${fallback != null ? `centre local ${fallback} conservé` : 'centre retiré'}`;
+      centreId = fallback;
     }
 
     db.prepare(`
@@ -288,8 +305,10 @@ function doUpsert(db: Database.Database, cloud: CloudUserRow, opts: UpsertCloudU
     }
     let centreId: number | null = null;
     if (cloud.centre_id != null) {
-      if (centreExists(cloud.centre_id)) centreId = cloud.centre_id;
-      else centreNote = `centre ${cloud.centre_id} absent localement : centre_id NULL`;
+      if (!centreExists(cloud.centre_id)) centreNote = `centre ${cloud.centre_id} absent localement : centre_id NULL`;
+      else if (!cloudCentreVerified(cloud.centre_id)) centreNote = `centre ${cloud.centre_id} non vérifié (identité locale différente) : centre_id NULL`;
+      else if (centreSiteOf(cloud.centre_id) !== cloud.site_id) centreNote = `centre ${cloud.centre_id} hors du site ${cloud.site_id} : centre_id NULL`;
+      else centreId = cloud.centre_id;
     }
     const res = db.prepare(`
       INSERT INTO t_users

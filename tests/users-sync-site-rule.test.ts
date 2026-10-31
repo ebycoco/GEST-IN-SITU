@@ -88,6 +88,35 @@ describe('upsertCloudUser — règle du site « le cloud l\'emporte » (commit 7
     expect(row(sa3.login).site_id).toBe(SITE_A);
   });
 
+  // ── Audit fbec916 P1-1 : centre cloud vérifié et toujours cohérent avec le site retenu ──
+  it('site vérifié, centre cloud existant mais rattaché à l\'autre site : centre retiré', () => {
+    const u = local('ADMIN_CENTRE', SITE_A, CENTRE_A);
+    helper.upsertCloudUser(db, cloud(u, { role: 'ADMIN_CENTRE', site_id: SITE_B, centre_id: CENTRE_A }), { cloudSiteSyncIds: VERIFIED });
+    expect(row(u.login)).toEqual({ site_id: SITE_B, centre_id: null });
+  });
+
+  it('site non vérifié, centre cloud d\'un autre site : site et centre locaux conservés', () => {
+    const u = local('ADMIN_CENTRE', SITE_A, CENTRE_A);
+    helper.upsertCloudUser(db, cloud(u, { role: 'ADMIN_CENTRE', site_id: SITE_B, centre_id: CENTRE_B }), { cloudSiteSyncIds: new Map([[SITE_B, 'autre-site-cloud']]) });
+    expect(row(u.login)).toEqual({ site_id: SITE_A, centre_id: CENTRE_A });
+  });
+
+  it('centre cloud de même id mais autre sync_id (poste non réaligné) : centre local conservé', () => {
+    db.prepare(`INSERT INTO t_centres (id, site_id, nom, numero, sync_id) VALUES (71012, ?, 'CA2', 2, 'centre-a2')`).run(SITE_A);
+    const u = local('ADMIN_CENTRE', SITE_A, CENTRE_A);
+    helper.upsertCloudUser(db, cloud(u, { role: 'ADMIN_CENTRE', site_id: SITE_A, centre_id: 71012 }), { cloudSiteSyncIds: VERIFIED, cloudCentreSyncIds: new Map([[71012, 'autre-centre-cloud']]) });
+    expect(row(u.login)).toEqual({ site_id: SITE_A, centre_id: CENTRE_A });
+
+    helper.upsertCloudUser(db, cloud(u, { role: 'ADMIN_CENTRE', site_id: SITE_A, centre_id: 71012 }), { cloudSiteSyncIds: VERIFIED, cloudCentreSyncIds: new Map([[71012, 'centre-a2']]) });
+    expect(row(u.login)).toEqual({ site_id: SITE_A, centre_id: 71012 });
+  });
+
+  it('nouveau compte : centre cloud d\'un autre site non appliqué', () => {
+    const c = cloud({ login: 'nouveau-p1-1', sync_id: 'sid-nouveau-p1-1' }, { site_id: SITE_A, centre_id: CENTRE_B });
+    expect(helper.upsertCloudUser(db, c, { cloudSiteSyncIds: VERIFIED }).action).toBe('inserted');
+    expect(row('nouveau-p1-1')).toEqual({ site_id: SITE_A, centre_id: null });
+  });
+
   it('ligne locale modifiée non envoyée (is_dirty) : rien n\'est écrasé', () => {
     const u = local('OPERATEUR_SAISIE', SITE_A, CENTRE_A, 1);
     const res = helper.upsertCloudUser(db, cloud(u, { site_id: SITE_B, centre_id: CENTRE_B }), { cloudSiteSyncIds: VERIFIED });

@@ -829,6 +829,20 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     }
   }
 
+  // sync_id cloud des centres du site : un centre_id cloud n'est appliqué que s'il désigne le même centre
+  // en local (session ouverte = centres non réalignés). Lecture en échec : liste vide, centre local conservé.
+  const cloudCentreSyncIds = new Map<number, string | null>();
+  try {
+    const { data: cloudCentres, error: centresErr } = await supabase
+      .from('t_centres')
+      .select('id, sync_id')
+      .eq('site_id', siteId);
+    if (centresErr) log.warn(`[syncUsersFromCloud] Lecture des centres cloud impossible : ${centresErr.message}`);
+    for (const c of cloudCentres ?? []) cloudCentreSyncIds.set(c.id, c.sync_id ?? null);
+  } catch (centreCatchErr: any) {
+    log.warn(`[syncUsersFromCloud] Exception lors de la lecture des centres cloud : ${centreCatchErr?.message || centreCatchErr}`);
+  }
+
   // ─── LOT 2 / L2-1c : chaque ligne passe par upsertCloudUser (savepoint par ligne, jamais d'exception) ───
   // Pas de transaction englobante : un conflit/échec n'annule pas les autres lignes. Les lignes locales
   // sales / en outbox / supprimées (-1) ne sont plus écrasées. PRAGMA foreign_keys OFF/ON conservé
@@ -855,7 +869,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
           statut_actif: u.statut_actif,
           sync_id: u.sync_id,
           roles: rolesForUser
-        }, { statutFromCloud: true, readAt, cloudSiteSyncIds });
+        }, { statutFromCloud: true, readAt, cloudSiteSyncIds, cloudCentreSyncIds });
         summary[res.action]++;
       }
       if (i + CHUNK < cloudUsers.length) await new Promise<void>(resolve => setImmediate(resolve));
@@ -1050,6 +1064,10 @@ export async function preloadUsersFromCloud(): Promise<void> {
       (sitesError ? [] : (sitesData ?? [])).map((s: any) => [s.id, s.sync_id ?? null] as [number, string | null])
     );
     const { data: centresData, error: centresError } = centresPromise;
+    // Idem pour les centres : le centre_id cloud d'un compte n'est appliqué que s'il est vérifié.
+    const preloadCloudCentreSyncIds = new Map<number, string | null>(
+      (centresError ? [] : (centresData ?? [])).map((c: any) => [c.id, c.sync_id ?? null] as [number, string | null])
+    );
     const { data: cloudUsers, error: error } = usersPromise;
     const { data: cloudRoles, error: rolesErr } = rolesPromise;
 
@@ -1198,7 +1216,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
               statut_actif: u.statut_actif,
               sync_id: u.sync_id,
               roles: rolesForUser
-            }, { statutFromCloud: true, cloudSiteSyncIds: preloadCloudSiteSyncIds });
+            }, { statutFromCloud: true, cloudSiteSyncIds: preloadCloudSiteSyncIds, cloudCentreSyncIds: preloadCloudCentreSyncIds });
 
             let action = res.action;
             let idUser = res.id_user;
