@@ -231,7 +231,8 @@ function createWindow(): void {
                 return row.count;
               },
               preload: preloadUsersFromCloud,
-              canPreload: () => !!getSupabaseClient()
+              canPreload: () => !!getSupabaseClient(),
+              isOnline: () => networkMonitor.getState() === 'ONLINE'
             });
           } catch (armErr: any) {
             log.warn('[INIT] Rattrapage du préchargement des comptes non armé (non bloquant) :', armErr?.message || armErr);

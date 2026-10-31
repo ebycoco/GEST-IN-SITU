@@ -17,7 +17,10 @@ import log from 'electron-log';
  *  - après succès, l'écoute est retirée (aucun listener résiduel) ;
  *  - après échec, on attend le prochain passage ONLINE, avec un délai minimal entre deux
  *    tentatives (`minIntervalMs`) pour éviter une rafale si le réseau oscille.
- * Aucune boucle ni minuterie propre : uniquement des événements (politique Low-Memory, CLAUDE.md §2).
+ *  - une tentative sautée (trop rapprochée) ou en échec est reprogrammée par UN minuteur différé
+ *    (jamais plus d'un en attente, délai doublé après chaque échec, plafonné à 10 min), exécuté
+ *    seulement si le réseau est toujours ONLINE ; annulé par disarm() (P2-1 agent-13).
+ * Aucune boucle synchrone (politique Low-Memory, CLAUDE.md §2).
  * Ne modifie ni la porte de préchargement (preload-gate.ts), ni app:checkFirstLaunch, ni
  * sync:forceGlobal, ni le sync-engine.
  *
@@ -48,9 +51,29 @@ export interface OfflineBootRecoveryDeps {
   minIntervalMs?: number;
   /** Horloge injectable (tests). */
   now?: () => number;
+  /**
+   * État réseau courant (vrai si ONLINE). Fourni => une tentative sautée (trop rapprochée) ou en
+   * échec est reprogrammée par UN minuteur différé, relancé seulement si le réseau est toujours en
+   * ligne (P2-1 agent-13 : sans cela, un réseau resté stable après une tentative sautée ou vide ne
+   * relançait plus rien). Absent => comportement purement événementiel.
+   */
+  isOnline?: () => boolean;
+  /** Minuteur injectable (tests). Par défaut setTimeout/clearTimeout, avec unref(). */
+  setTimer?: (fn: () => void, ms: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+  /** Plafond du délai de reprise après échecs successifs (ms). */
+  maxRetryDelayMs?: number;
 }
 
 export const OFFLINE_BOOT_RECOVERY_MIN_INTERVAL_MS = 30_000;
+export const OFFLINE_BOOT_RECOVERY_MAX_RETRY_DELAY_MS = 10 * 60_000;
+
+const defaultSetTimer = (fn: () => void, ms: number): unknown => {
+  const t = setTimeout(fn, ms);
+  (t as { unref?: () => void }).unref?.();
+  return t;
+};
+const defaultClearTimer = (handle: unknown): void => clearTimeout(handle as ReturnType<typeof setTimeout>);
 
 export interface OfflineBootRecoveryHandle {
   /** Vrai tant que l'écoute réseau est active. */
@@ -92,18 +115,48 @@ export function armOfflineBootUserRecovery(deps: OfflineBootRecoveryDeps): Offli
   // Lecture impossible : on ne présume pas d'un poste vide (pas d'écoute ajoutée).
   if (initialCount === null || initialCount > 0) return NOOP_HANDLE;
 
+  const maxRetryDelayMs = deps.maxRetryDelayMs ?? OFFLINE_BOOT_RECOVERY_MAX_RETRY_DELAY_MS;
+  const setTimer = deps.setTimer ?? defaultSetTimer;
+  const clearTimer = deps.clearTimer ?? defaultClearTimer;
+
   let armed = true;
   let inFlight: Promise<void> | null = null;
   let lastAttemptAt = Number.NEGATIVE_INFINITY;
+  // Minuteur de reprise unique (jamais plus d'un en attente) et délai croissant après échecs.
+  let retryTimer: unknown = null;
+  let failureDelayMs = minIntervalMs;
+
+  const cancelRetry = (): void => {
+    if (retryTimer !== null) {
+      clearTimer(retryTimer);
+      retryTimer = null;
+    }
+  };
 
   const disarm = (): void => {
     if (!armed) return;
     armed = false;
+    cancelRetry();
     deps.network.off('change', onChange);
+  };
+
+  /** Reprogramme une tentative dans `delayMs` si le réseau est encore en ligne à l'échéance. */
+  const scheduleRetry = (delayMs: number): void => {
+    if (!deps.isOnline || !armed || retryTimer !== null) return;
+    retryTimer = setTimer(() => {
+      retryTimer = null;
+      if (!armed || !deps.isOnline || !deps.isOnline()) return; // un futur passage ONLINE prendra le relais
+      attempt();
+    }, Math.max(0, delayMs));
   };
 
   function onChange(e: NetworkChangeEvent): void {
     if (!armed || !e || e.newState !== 'ONLINE' || e.oldState === 'ONLINE') return;
+    attempt();
+  }
+
+  function attempt(): void {
+    if (!armed) return;
     // Garde de concurrence : une seule tentative à la fois.
     if (inFlight) return;
 
@@ -118,9 +171,11 @@ export function armOfflineBootUserRecovery(deps: OfflineBootRecoveryDeps): Offli
 
     const t = now();
     if (t - lastAttemptAt < minIntervalMs) {
-      log.info('[OfflineBoot] Retour réseau trop rapproché de la tentative précédente : attente du prochain passage en ligne.');
+      log.info('[OfflineBoot] Retour réseau trop rapproché de la tentative précédente : tentative reportée.');
+      scheduleRetry(lastAttemptAt + minIntervalMs - t);
       return;
     }
+    cancelRetry();
     lastAttemptAt = t;
 
     log.info('[OfflineBoot] Réseau revenu et aucun compte actif local : relance du préchargement des comptes.');
@@ -135,7 +190,9 @@ export function armOfflineBootUserRecovery(deps: OfflineBootRecoveryDeps): Offli
         log.info(`[OfflineBoot] Préchargement de rattrapage réussi (${after} compte(s) actif(s)) : écoute réseau retirée.`);
         disarm();
       } else {
-        log.warn('[OfflineBoot] Toujours aucun compte actif après le rattrapage : nouvelle tentative au prochain retour du réseau.');
+        log.warn(`[OfflineBoot] Toujours aucun compte actif après le rattrapage : nouvelle tentative au prochain retour du réseau${deps.isOnline ? ` ou dans ${Math.round(failureDelayMs / 1000)} s si le réseau reste en ligne` : ''}.`);
+        scheduleRetry(failureDelayMs);
+        failureDelayMs = Math.min(failureDelayMs * 2, maxRetryDelayMs);
       }
     })().finally(() => {
       inFlight = null;

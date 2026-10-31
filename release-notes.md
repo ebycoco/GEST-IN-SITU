@@ -5,4 +5,4 @@
 - **Limite de tentatives** : la connexion et l'importation de base sont bloquées 5 minutes après 5 mots de passe erronés. L'écran de connexion affiche en clair le délai d'attente.
 
 ## 🛠️ Corrections & Fiabilité
-- **Poste démarré hors ligne sans compte actif** : le rapatriement des comptes se relance tout seul au retour du réseau, jusqu'à réussir.
+- **Poste démarré hors ligne sans compte actif** : le rapatriement des comptes se relance tout seul au retour du réseau, jusqu'à réussir (y compris quand le réseau reste stable après une tentative manquée : nouvel essai différé, espacé progressivement jusqu'à 10 minutes).

@@ -134,6 +134,90 @@ describe('armOfflineBootUserRecovery', () => {
     expect(net.listenerCount('change')).toBe(0);
   });
 
+  describe('reprise différée (P2-1 : réseau resté stable après une tentative sautée ou vide)', () => {
+    let timers: { fn: () => void; ms: number }[];
+    let online: boolean;
+    const timerDeps = (preload: () => Promise<void>) => ({
+      ...baseDeps(preload),
+      isOnline: () => online,
+      setTimer: (fn: () => void, ms: number) => { const t = { fn, ms }; timers.push(t); return t; },
+      clearTimer: (h: unknown) => { timers = timers.filter((t) => t !== h); }
+    });
+    const fire = (): void => { const t = timers.shift(); t?.fn(); };
+
+    beforeEach(() => { timers = []; online = true; });
+
+    it('tentative sautée (trop rapprochée) : reportée à l\'échéance du délai minimal, puis exécutée', async () => {
+      const preload = vi.fn()
+        .mockImplementationOnce(async () => undefined)
+        .mockImplementationOnce(async () => { activeCount = 1; });
+      const h = armOfflineBootUserRecovery(timerDeps(preload));
+
+      goOnline(net);
+      await h.currentAttempt();
+      expect(preload).toHaveBeenCalledTimes(1);
+      // L'échec programme déjà une reprise (30 s) : un seul minuteur, même après un passage sauté.
+      expect(timers).toHaveLength(1);
+      clock += 10_000;
+      goOnline(net, 'DEGRADED');
+      expect(preload).toHaveBeenCalledTimes(1);
+      expect(timers).toHaveLength(1);
+
+      clock += 30_000;
+      fire();
+      await h.currentAttempt();
+      expect(preload).toHaveBeenCalledTimes(2);
+      expect(h.isArmed()).toBe(false);
+      expect(timers).toHaveLength(0);
+    });
+
+    it('pendant une tentative en cours : aucun minuteur programmé', () => {
+      const preload = vi.fn(() => new Promise<void>(() => undefined)); // tentative jamais terminée
+      armOfflineBootUserRecovery(timerDeps(preload));
+      goOnline(net);
+      expect(timers).toHaveLength(0);
+    });
+
+    it('échecs successifs : délai doublé et plafonné, un seul minuteur à la fois', async () => {
+      const preload = vi.fn(async () => undefined);
+      const h = armOfflineBootUserRecovery({ ...timerDeps(preload), maxRetryDelayMs: 100_000 });
+      goOnline(net);
+      await h.currentAttempt();
+      const delays: number[] = [];
+      for (let i = 0; i < 4; i++) {
+        expect(timers).toHaveLength(1);
+        delays.push(timers[0].ms);
+        clock += timers[0].ms;
+        fire();
+        await h.currentAttempt();
+      }
+      expect(delays).toEqual([30_000, 60_000, 100_000, 100_000]);
+      expect(preload).toHaveBeenCalledTimes(5);
+    });
+
+    it('à l\'échéance hors ligne : rien n\'est relancé (le prochain passage ONLINE prendra le relais)', async () => {
+      const preload = vi.fn(async () => undefined);
+      const h = armOfflineBootUserRecovery(timerDeps(preload));
+      goOnline(net);
+      await h.currentAttempt();
+      online = false;
+      clock += 30_000;
+      fire();
+      expect(preload).toHaveBeenCalledTimes(1);
+      expect(h.isArmed()).toBe(true);
+    });
+
+    it('disarm annule le minuteur en attente', async () => {
+      const preload = vi.fn(async () => undefined);
+      const h = armOfflineBootUserRecovery(timerDeps(preload));
+      goOnline(net);
+      await h.currentAttempt();
+      expect(timers).toHaveLength(1);
+      h.disarm();
+      expect(timers).toHaveLength(0);
+    });
+  });
+
   it('disarm est idempotent', () => {
     const h = armOfflineBootUserRecovery(baseDeps(vi.fn(async () => undefined)));
     h.disarm();
