@@ -144,6 +144,21 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     expect(fk()).toBe(1);
   });
 
+  it('audit P0-1 : site de même code mais sync_id local différent (ensureSyncIds) → ni déplacé ni supprimé, références intactes', async () => {
+    const k = uid();
+    const S = 9400 + k;
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (?, 'ABO', ?, 1, ?)`).run(S, `ABO_${k}`, `uuid-local-${k}`);
+    db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, sync_id, is_dirty, statut_actif) VALUES (?, 'h', 'OPERATEUR_SAISIE', ?, ?, 0, 1)`)
+      .run(`agent_abo_${k}`, S, `sid-${k}-abo`);
+    cloudSites = [...DEFAULT_SITES, { id: S, nom: 'ABO', code: `ABO_${k}`, is_active: 1, max_centres: 4, sync_id: `uuid-cloud-${k}` }];
+
+    await downstream.preloadUsersFromCloud();
+
+    expect(db.prepare('SELECT id, sync_id FROM t_sites WHERE code = ?').all(`ABO_${k}`)).toEqual([{ id: S, sync_id: `uuid-cloud-${k}` }]);
+    expect(byLogin(`agent_abo_${k}`).site_id).toBe(S);
+    expect(fk()).toBe(1);
+  });
+
   it('runDownstream : site local dont l\'id désigne un autre site dans le cloud → SiteNotFoundError, rien n\'est écrit', async () => {
     const k = uid();
     const L_SITE = 9900 + k;

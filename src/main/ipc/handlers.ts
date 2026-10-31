@@ -6295,7 +6295,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         success: false,
         code: isSiteNotFound ? 'SITE_NOT_FOUND' : undefined,
         message: isSiteNotFound
-          ? 'Site introuvable côté cloud — contactez le SUPER ADMIN.'
+          ? (error.misaligned
+            ? 'Ce poste n\'est pas aligné sur le cloud pour ce site — redémarrez l\'application et attendez la fin du chargement avant de vous connecter.'
+            : 'Site introuvable côté cloud — contactez le SUPER ADMIN.')
           : (error.message || String(error))
       };
     } finally {

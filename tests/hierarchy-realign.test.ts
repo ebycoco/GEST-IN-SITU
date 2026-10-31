@@ -188,40 +188,85 @@ describe('hierarchy-realign — id local → id cloud', () => {
   });
 
   describe('reconcileBeforeCloudReplace (réception)', () => {
+    const RENUM = { allowRenumber: true };
+    const SESSION = { allowRenumber: false };
+
     it('poste créateur : site local 5 (cloud 40) et autre site cloud à l\'id 5 → réaligné puis id 5 libre, rien à ignorer', () => {
       site(5, 'site-x');
       user('agent', 5, null);
-      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x' }, { id: 5, sync_id: 'site-y' }], null);
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x', code: 'C_site-x' }, { id: 5, sync_id: 'site-y', code: 'C_site-y' }], RENUM);
       expect([...skip]).toEqual([]);
       expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-x').id).toBe(40);
       expect(one('SELECT COUNT(*) AS n FROM t_sites WHERE id = 5').n).toBe(0);
       expect(one(`SELECT site_id FROM t_users WHERE login = 'agent'`).site_id).toBe(40);
     });
 
-    it('ligne locale d\'une autre identité sur l\'id cloud (sans ligne cloud correspondante) → déplacée', () => {
+    it('ligne locale d\'une autre identité (autre code) sur l\'id cloud → déplacée', () => {
       site(5, 'site-local-only');
-      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], null);
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y', code: 'C_site-y' }], RENUM);
       expect([...skip]).toEqual([]);
       expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-local-only').id).toBeGreaterThan(5);
       expect(one('SELECT COUNT(*) AS n FROM t_sites WHERE id = 5').n).toBe(0);
     });
 
-    it('ligne locale sans sync_id sur l\'id cloud : laissée telle quelle (même site historique)', () => {
+    it('ligne locale sans sync_id sur l\'id cloud (autre code) : laissée telle quelle', () => {
       db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (5, 'OLD', 'OLD', 1, NULL)`).run();
-      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], null);
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y', code: 'C_site-y' }], RENUM);
       expect([...skip]).toEqual([]);
       expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBeNull();
     });
 
-    it('site de la session ouverte : jamais renuméroté, la ligne cloud est à ignorer', () => {
+    it('audit P0-1 : même site (même code), sync_id local différent du cloud → sync_id cloud adopté, rien déplacé ni orphelin', () => {
+      site(5, 'uuid-local-ensure');
+      user('agent', 5, null);
+      carte('carte-1', 5, null);
+      outbox('o-site', 't_sites', 'PENDING', { sync_id: 'uuid-local-ensure', nom: 'S' });
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'uuid-cloud', code: 'C_uuid-local-ensure' }], RENUM);
+      expect([...skip]).toEqual([]);
+      expect(one('SELECT id, sync_id FROM t_sites WHERE code = ?', 'C_uuid-local-ensure')).toEqual({ id: 5, sync_id: 'uuid-cloud' });
+      expect(one('SELECT COUNT(*) AS n FROM t_sites').n).toBe(1);
+      expect(one(`SELECT site_id FROM t_users WHERE login = 'agent'`).site_id).toBe(5);
+      expect(one(`SELECT site_id FROM t_cartes WHERE sync_id = 'carte-1'`).site_id).toBe(5);
+      expect(payloadOf('o-site').sync_id).toBe('uuid-cloud');
+    });
+
+    it('audit P0-1 : même code sous un autre id → sync_id adopté puis réaligné (hors session) ; en session, ligne cloud non écrite', () => {
+      site(5, 'uuid-local');
+      const cloud = [{ id: 40, sync_id: 'uuid-cloud', code: 'C_uuid-local' }];
+      expect([...realign.reconcileBeforeCloudReplace(db, 'site', cloud, SESSION)]).toEqual([40]);
+      expect(one('SELECT id, sync_id FROM t_sites WHERE code = ?', 'C_uuid-local')).toEqual({ id: 5, sync_id: 'uuid-cloud' });
+      expect([...realign.reconcileBeforeCloudReplace(db, 'site', cloud, RENUM)]).toEqual([]);
+      expect(one('SELECT id FROM t_sites WHERE code = ?', 'C_uuid-local').id).toBe(40);
+    });
+
+    it('centre de même site, numéro et nom (sync_id différent) → sync_id adopté, pas de déplacement', () => {
+      site(40, 'site-1');
+      db.prepare(`INSERT INTO t_centres (id, site_id, nom, numero, sync_id) VALUES (3, 40, 'Centre A', 1, 'centre-loc')`).run();
+      user('agent', 40, 3);
+      const skip = realign.reconcileBeforeCloudReplace(db, 'centre', [{ id: 3, sync_id: 'centre-cloud', site_id: 40, numero: 1, nom: ' centre a ' }], RENUM);
+      expect([...skip]).toEqual([]);
+      expect(one('SELECT id, sync_id FROM t_centres WHERE id = 3')).toEqual({ id: 3, sync_id: 'centre-cloud' });
+      expect(one(`SELECT centre_id FROM t_users WHERE login = 'agent'`).centre_id).toBe(3);
+    });
+
+    it('audit P1-4 : session ouverte → aucune renumérotation, lignes cloud concernées non écrites', () => {
       site(5, 'site-x');
-      const skip1 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x' }], 5);
+      const skip1 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x', code: 'C_site-x' }], SESSION);
       expect([...skip1]).toEqual([40]);
       expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-x').id).toBe(5);
-      const skip2 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], 5);
+      const skip2 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y', code: 'C_site-y' }], SESSION);
       expect([...skip2]).toEqual([5]);
       expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x');
     });
+  });
+
+  it('checkCloudSiteIdentity : ok, adopted (même code), mismatch (autre site)', () => {
+    site(5, 'site-x');
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: 'site-x', code: 'C_site-x' })).toBe('ok');
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: 'autre', code: 'AUTRE' })).toBe('mismatch');
+    expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x');
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: 'site-x-cloud', code: 'C_site-x' })).toBe('adopted');
+    expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x-cloud');
   });
 
   it('erreur SQL pendant le réalignement : tout est annulé et foreign_keys est restauré', () => {

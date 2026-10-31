@@ -8,36 +8,41 @@ import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { getSecureCurrentUser } from '../auth/session-heartbeat';
 import { upsertCloudUser, VALID_USER_ROLES, type UpsertCloudUserAction } from './users-sync.helper';
-import { reconcileBeforeCloudReplace } from './hierarchy-realign';
+import { reconcileBeforeCloudReplace, checkCloudSiteIdentity, type CloudHierarchyRow } from './hierarchy-realign';
 
 // ─── Réconciliation des ids de site / centre avant INSERT OR REPLACE (plan site_id 2026-10-31, E2-b) ──
 // Le poste qui a créé un site ou un centre l'a numéroté localement (L) ; le cloud lui a donné un autre
 // id (C). Sans réconciliation, l'INSERT OR REPLACE de la ligne cloud écrase la ligne locale qui occupe C
 // (ou, pour t_sites, celle de même `code`) et laisse ses références orphelines, ou crée un doublon de
 // centre. Voir reconcileBeforeCloudReplace (hierarchy-realign.ts). Les ids retournés ne sont pas écrits.
+// Aucune renumérotation tant qu'une session est ouverte (audit 2026-10-31, P1-4).
 function reconcileHierarchyBeforeReplace(
   db: NonNullable<ReturnType<typeof getDatabase>>,
   level: 'site' | 'centre',
-  cloudRows: ReadonlyArray<{ id: number; sync_id?: string | null }>
+  cloudRows: ReadonlyArray<CloudHierarchyRow>
 ): Set<number> {
-  const session = getSecureCurrentUser();
-  const sessionId = session ? (level === 'site' ? session.site_id : session.centre_id) : null;
-  return reconcileBeforeCloudReplace(db, level, cloudRows, sessionId != null ? Number(sessionId) : null);
+  return reconcileBeforeCloudReplace(db, level, cloudRows, { allowRenumber: !getSecureCurrentUser() });
 }
 
 /**
- * Garde anti-fuite inter-sites (§3) : `siteId` est un id LOCAL. Si la ligne locale porte un sync_id et
- * que la ligne cloud de même id en porte un autre, ce poste n'est pas aligné et l'id désigne un AUTRE
- * site dans le cloud : on refuse de télécharger quoi que ce soit pour ce site (réalignement au
- * prochain démarrage, par le préchargement).
+ * Garde anti-fuite inter-sites (§3) : `siteId` est un id LOCAL. Si la ligne cloud de même id est un
+ * AUTRE site (sync_id et code différents), ce poste n'est pas aligné : on refuse de télécharger quoi que
+ * ce soit pour ce site (réalignement au prochain démarrage, par le préchargement). Même code mais
+ * sync_id différent = même site (sync_id local généré par ensureSyncIds) : le sync_id cloud est adopté.
  */
-function assertCloudSiteIdentity(db: NonNullable<ReturnType<typeof getDatabase>>, siteId: number, cloudSyncId: string | null | undefined): void {
-  const local = db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(siteId) as { sync_id: string | null } | undefined;
-  if (local?.sync_id && cloudSyncId && local.sync_id !== cloudSyncId) {
-    log.error(`[SYNC] Site local ${siteId} (sync_id ${local.sync_id}) ≠ site cloud ${siteId} (sync_id ${cloudSyncId}) : poste non aligné, téléchargement refusé.`);
-    throw new SiteNotFoundError(siteId, 'le numéro local du site désigne un autre site dans le cloud ; redémarrez l\'application pour réaligner ce poste');
+function assertCloudSiteIdentity(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  siteId: number,
+  cloudSite: { sync_id?: string | null; code?: string | null }
+): void {
+  if (checkCloudSiteIdentity(db, siteId, cloudSite) === 'mismatch') {
+    log.error(`[SYNC] Site local ${siteId} ≠ site cloud ${siteId} (sync_id ${cloudSite.sync_id}, code ${cloudSite.code}) : poste non aligné, téléchargement refusé.`);
+    throw new SiteNotFoundError(siteId, SITE_MISALIGNED_CAUSE, true);
   }
 }
+
+/** Cause d'un SiteNotFoundError « poste non aligné » (message affiché par sync:pullSiteCards). */
+const SITE_MISALIGNED_CAUSE = 'le numéro local du site désigne un autre site dans le cloud ; redémarrez l\'application et attendez la fin du chargement avant de vous connecter';
 
 // ─── Signal explicite "site introuvable côté cloud" (correctif bug production 2026-08-30) ──
 // Avant ce correctif, runDownstream()/syncUsersFromCloud() retournaient silencieusement 0
@@ -53,10 +58,13 @@ function assertCloudSiteIdentity(db: NonNullable<ReturnType<typeof getDatabase>>
 // SITE_NOT_FOUND consommé par le renderer.
 export class SiteNotFoundError extends Error {
   public readonly siteId: number;
-  constructor(siteId: number, cause?: string) {
+  /** true : le site existe dans le cloud mais l'id local de ce poste désigne un autre site (plan site_id). */
+  public readonly misaligned: boolean;
+  constructor(siteId: number, cause?: string, misaligned: boolean = false) {
     super(`Site ${siteId} introuvable côté Supabase (t_sites)${cause ? ` : ${cause}` : ''}.`);
     this.name = 'SiteNotFoundError';
     this.siteId = siteId;
+    this.misaligned = misaligned;
   }
 }
 
@@ -177,7 +185,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
       throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
-    assertCloudSiteIdentity(db, siteId, siteData.sync_id);
+    assertCloudSiteIdentity(db, siteId, siteData);
     reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
 
     // ── Filet de sécurité FK (parité avec syncUsersFromCloud, ~ligne 452) ────
@@ -718,7 +726,7 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
       throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
-    assertCloudSiteIdentity(db, siteId, siteData.sync_id);
+    assertCloudSiteIdentity(db, siteId, siteData);
     reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
 
     // Filet de sécurité FK (parité avec la garde déjà appliquée un peu plus

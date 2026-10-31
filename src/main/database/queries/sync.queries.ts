@@ -2,7 +2,7 @@ import { getDatabase } from '../connection';
 import { networkMonitor } from '../../sync/network-monitor';
 import { getSupabaseClient } from '../../sync/supabase-client';
 import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
-import { reconcileBeforeCloudReplace } from '../../sync/hierarchy-realign';
+import { reconcileBeforeCloudReplace, checkCloudSiteIdentity } from '../../sync/hierarchy-realign';
 import { getSecureCurrentUser } from '../../auth/session-heartbeat';
 import log from 'electron-log';
 
@@ -185,10 +185,20 @@ export async function pullCentresFromCloud(siteId: number): Promise<{ success: b
       return { success: true, count: 0, message: 'Aucun centre trouvé sur Supabase pour ce site.' };
     }
 
-    // Plan site_id 2026-10-31 (E2-b) : centres locaux réalignés sur leur id cloud avant l'écriture
-    // (pas d'écrasement ni de doublon) ; le centre de la session ouverte n'est jamais renuméroté.
-    const sessionCentreId = getSecureCurrentUser()?.centre_id;
-    const skipIds = reconcileBeforeCloudReplace(db, 'centre', cloudCentres, sessionCentreId != null ? Number(sessionCentreId) : null);
+    // Garde anti-fuite (§3, audit 2026-10-31 P1-3) : `siteId` est un id LOCAL ; si le site cloud de même
+    // id est un autre site, ses centres ne doivent pas être écrits sous ce site local.
+    const { data: cloudSites, error: siteError } = await supabase.from('t_sites').select('sync_id, code').eq('id', siteId);
+    if (siteError || !cloudSites || cloudSites.length === 0) {
+      return { success: false, count: 0, message: siteError?.message || 'Site introuvable côté cloud.' };
+    }
+    if (checkCloudSiteIdentity(db, siteId, cloudSites[0]) === 'mismatch') {
+      log.error(`[pullCentresFromCloud] Site local ${siteId} ≠ site cloud ${siteId} : poste non aligné, aucun centre écrit.`);
+      return { success: false, count: 0, message: 'Ce poste n\'est pas aligné sur le cloud pour ce site — redémarrez l\'application et attendez la fin du chargement avant de vous connecter.' };
+    }
+
+    // Plan site_id 2026-10-31 (E2-b) : centres réconciliés avant l'écriture (pas d'écrasement ni de
+    // doublon) ; aucune renumérotation pendant une session ouverte (centres concernés non écrits).
+    const skipIds = reconcileBeforeCloudReplace(db, 'centre', cloudCentres, { allowRenumber: !getSecureCurrentUser() });
 
     let count = 0;
     db.transaction(() => {

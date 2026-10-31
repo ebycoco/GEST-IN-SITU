@@ -188,40 +188,129 @@ export function vacateLocalId(db: Database.Database, level: HierarchyLevel, id: 
   return result;
 }
 
+/** Ligne cloud t_sites / t_centres telle que lue par la réception (champs d'identité métier inclus). */
+export interface CloudHierarchyRow {
+  id: number;
+  sync_id?: string | null;
+  /** t_sites : code (UNIQUE localement et dans le cloud). */
+  code?: string | null;
+  /** t_centres : site_id + numero + nom identifient le même centre. */
+  site_id?: number | null;
+  numero?: number | null;
+  nom?: string | null;
+}
+
+type LocalHierarchyRow = { id: number; sync_id: string | null; code?: string | null; site_id?: number | null; numero?: number | null; nom?: string | null };
+
+const normName = (v: unknown): string => String(v ?? '').trim().toLowerCase();
+
+/**
+ * Même site / centre au sens MÉTIER, indépendamment du sync_id : ensureSyncIds() (au démarrage) donne
+ * un uuid local ALÉATOIRE à toute ligne sans sync_id ; si le cloud reçoit ensuite un sync_id pour cette
+ * ligne, chaque poste porte un sync_id différent du cloud pour la même ligne (audit 2026-10-31, P0-1).
+ * Site : même code. Centre : même site, même numéro et même nom.
+ */
+function sameIdentity(level: 'site' | 'centre', local: LocalHierarchyRow, cloud: CloudHierarchyRow): boolean {
+  if (level === 'site') return !!cloud.code && local.code === cloud.code;
+  return cloud.site_id != null && local.site_id === cloud.site_id
+    && cloud.numero != null && local.numero === cloud.numero
+    && !!normName(cloud.nom) && normName(local.nom) === normName(cloud.nom);
+}
+
+/**
+ * Remplace le sync_id local d'une ligne par celui du cloud (même ligne métier), payloads t_outbox en
+ * attente compris. Ne change aucun id : sans risque pour une session ouverte.
+ */
+function adoptCloudSyncId(db: Database.Database, def: LevelDef, localId: number, oldSyncId: string | null, newSyncId: string): void {
+  db.transaction(() => {
+    db.prepare(`UPDATE ${quote(def.table)} SET sync_id = ? WHERE id = ?`).run(newSyncId, localId);
+    if (oldSyncId) {
+      db.prepare(`
+        UPDATE t_outbox SET payload = json_set(payload, '$.sync_id', ?)
+        WHERE status IN ('PENDING', 'ERROR') AND table_name = ? AND json_valid(payload) AND json_extract(payload, '$.sync_id') = ?
+      `).run(newSyncId, def.table, oldSyncId);
+    }
+  })();
+  log.info(`[hierarchy-realign] ${def.table} id ${localId} : sync_id local ${oldSyncId ?? 'NULL'} remplacé par le sync_id cloud ${newSyncId} (même ${def.table === 't_sites' ? 'code' : 'site, numéro et nom'}).`);
+}
+
+const LOCAL_COLS: Record<'site' | 'centre', string> = {
+  site: 'id, sync_id, code',
+  centre: 'id, sync_id, site_id, numero, nom'
+};
+
+/**
+ * Identité du site cloud de même id que le site LOCAL `siteId` (garde anti-fuite §3, audit 2026-10-31 P1-1) :
+ * - ok : même sync_id, ou l'un des deux est absent ;
+ * - adopted : sync_id différents mais même code → même site, le sync_id cloud est adopté localement ;
+ * - mismatch : sync_id ET code différents → l'id local désigne un AUTRE site dans le cloud.
+ */
+export function checkCloudSiteIdentity(
+  db: Database.Database,
+  siteId: number,
+  cloudSite: { sync_id?: string | null; code?: string | null }
+): 'ok' | 'adopted' | 'mismatch' {
+  const local = db.prepare(`SELECT ${LOCAL_COLS.site} FROM t_sites WHERE id = ?`).get(siteId) as LocalHierarchyRow | undefined;
+  if (!local?.sync_id || !cloudSite.sync_id || local.sync_id === cloudSite.sync_id) return 'ok';
+  if (sameIdentity('site', local, { id: siteId, ...cloudSite })) {
+    adoptCloudSyncId(db, LEVELS.site, siteId, local.sync_id, cloudSite.sync_id);
+    return 'adopted';
+  }
+  return 'mismatch';
+}
+
 /**
  * Réconciliation avant INSERT OR REPLACE de lignes cloud t_sites / t_centres (plan site_id 2026-10-31, E2-b).
+ * 0. Une ligne locale de même identité métier (sameIdentity) mais d'un autre sync_id adopte le sync_id
+ *    cloud (aucun id modifié).
  * 1. Une ligne locale portant le sync_id d'une ligne cloud sous un autre id est réalignée (ou fusionnée).
- * 2. Une ligne locale d'une autre identité (sync_id non nul différent) occupant l'id cloud est déplacée.
- * `sessionId` (site_id ou centre_id de la session ouverte) n'est jamais renuméroté : la session garde
- * ses ids en mémoire (refreshSecureCurrentUser ne les met pas à jour). La ligne cloud concernée est
- * alors renvoyée dans l'ensemble retourné, que l'appelant NE DOIT PAS écrire (réalignement au prochain
- * démarrage, préchargement avant connexion). Même chose en cas d'échec d'un réalignement.
+ * 2. Une ligne locale d'une AUTRE identité (sync_id non nul différent, identité métier différente)
+ *    occupant l'id cloud est déplacée vers un id libre.
+ * Les étapes 1 et 2 renumérotent : elles ne sont faites que si `allowRenumber` (aucune session ouverte —
+ * la session, l'écran et les imports gardent leurs ids en mémoire, audit 2026-10-31 P1-4). Sinon, ou en
+ * cas d'échec, l'id cloud est renvoyé dans l'ensemble retourné : l'appelant NE DOIT PAS écrire cette
+ * ligne (réalignement au prochain démarrage, préchargement avant connexion).
  * Ne lève jamais : les échecs sont journalisés.
  */
 export function reconcileBeforeCloudReplace(
   db: Database.Database,
   level: 'site' | 'centre',
-  cloudRows: ReadonlyArray<{ id: number; sync_id?: string | null }>,
-  sessionId: number | null | undefined
+  cloudRows: ReadonlyArray<CloudHierarchyRow>,
+  opts: { allowRenumber: boolean }
 ): Set<number> {
   const def = LEVELS[level];
   const table = quote(def.table);
   const skipIds = new Set<number>();
-  const touchesSession = (id: number): boolean => sessionId != null && id === Number(sessionId);
+  const rows = cloudRows.filter(c => !!c?.sync_id && Number.isInteger(c.id));
+  const cloudSyncIds = new Set(rows.map(c => c.sync_id as string));
+  const skip = (id: number, why: string): void => {
+    skipIds.add(id);
+    log.warn(`[hierarchy-realign] ${def.table} id cloud ${id} non écrit : ${why}`);
+  };
 
-  for (const c of cloudRows) {
-    if (!c?.sync_id || !Number.isInteger(c.id)) continue;
+  // 0. Adoption du sync_id cloud par la ligne locale de même identité métier.
+  for (const c of rows) {
+    try {
+      if (db.prepare(`SELECT 1 FROM ${table} WHERE sync_id = ?`).get(c.sync_id)) continue;
+      const candidates = (db.prepare(`SELECT ${LOCAL_COLS[level]} FROM ${table} WHERE sync_id IS NULL OR sync_id != ?`).all(c.sync_id) as LocalHierarchyRow[])
+        .filter(l => sameIdentity(level, l, c) && !(l.sync_id && cloudSyncIds.has(l.sync_id)));
+      if (candidates.length === 1) adoptCloudSyncId(db, def, candidates[0].id, candidates[0].sync_id, c.sync_id as string);
+    } catch (err: any) {
+      log.error(`[hierarchy-realign] Adoption du sync_id cloud ${c.sync_id} (${def.table}) en échec :`, err?.message || err);
+    }
+  }
+
+  // 1. Réalignement des lignes locales portant le sync_id cloud sous un autre id.
+  for (const c of rows) {
     const locals = db.prepare(`SELECT id FROM ${table} WHERE sync_id = ? AND id != ?`).all(c.sync_id, c.id) as { id: number }[];
     for (const l of locals) {
-      const occupied = !!db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(c.id);
-      if (touchesSession(l.id) || (occupied && touchesSession(c.id))) {
-        log.warn(`[hierarchy-realign] ${def.table} sync_id=${c.sync_id} : id local ${l.id} ≠ id cloud ${c.id}, utilisé par la session ouverte — réalignement reporté au prochain démarrage.`);
-        skipIds.add(c.id);
+      if (!opts.allowRenumber) {
+        skip(c.id, `id local ${l.id} à réaligner (sync_id ${c.sync_id}), reporté au prochain démarrage (session ouverte)`);
         continue;
       }
       try {
-        const res = realignLocalId(db, level, l.id, c.id, c.sync_id);
-        if (res.action === 'skipped') skipIds.add(c.id);
+        const res = realignLocalId(db, level, l.id, c.id, c.sync_id as string);
+        if (res.action === 'skipped') skip(c.id, `réalignement de ${l.id} refusé (${res.reason})`);
       } catch (err: any) {
         log.error(`[hierarchy-realign] Réalignement ${def.table} ${l.id} → ${c.id} en échec :`, err?.message || err);
         skipIds.add(c.id);
@@ -229,21 +318,36 @@ export function reconcileBeforeCloudReplace(
     }
   }
 
-  for (const c of cloudRows) {
-    if (!c?.sync_id || !Number.isInteger(c.id) || skipIds.has(c.id)) continue;
-    const occ = db.prepare(`SELECT sync_id FROM ${table} WHERE id = ?`).get(c.id) as { sync_id: string | null } | undefined;
+  // 2. Libération de l'id cloud occupé par une ligne locale d'une autre identité.
+  for (const c of rows) {
+    if (skipIds.has(c.id)) continue;
+    const occ = db.prepare(`SELECT ${LOCAL_COLS[level]} FROM ${table} WHERE id = ?`).get(c.id) as LocalHierarchyRow | undefined;
     if (!occ || !occ.sync_id || occ.sync_id === c.sync_id) continue;
-    if (touchesSession(c.id)) {
-      log.warn(`[hierarchy-realign] ${def.table} id ${c.id} : occupé localement par une autre identité utilisée par la session ouverte — ligne cloud ignorée jusqu'au prochain démarrage.`);
-      skipIds.add(c.id);
+    if (sameIdentity(level, occ, c)) {
+      // Même ligne métier non adoptée (ambiguïté) : ne jamais la déplacer (sinon REPLACE par `code`
+      // la supprimerait avec ses références déjà renumérotées, audit P0-1) ; ancien comportement.
+      continue;
+    }
+    if (!opts.allowRenumber) {
+      skip(c.id, `occupé localement par une autre identité (sync_id ${occ.sync_id}), reporté au prochain démarrage (session ouverte)`);
       continue;
     }
     try {
       const res = vacateLocalId(db, level, c.id);
-      if (res.action === 'skipped') skipIds.add(c.id);
+      if (res.action === 'skipped') skip(c.id, `libération refusée (${res.reason})`);
     } catch (err: any) {
       log.error(`[hierarchy-realign] Libération de ${def.table} id ${c.id} en échec :`, err?.message || err);
       skipIds.add(c.id);
+    }
+  }
+
+  // t_sites.code est UNIQUE : un REPLACE supprimerait toute AUTRE ligne locale de même code. Ne pas
+  // écrire la ligne cloud si une telle ligne subsiste (identité ambiguë, réalignement reporté).
+  if (level === 'site') {
+    for (const c of rows) {
+      if (skipIds.has(c.id) || !c.code) continue;
+      const other = db.prepare(`SELECT id FROM t_sites WHERE code = ? AND id != ?`).get(c.code, c.id) as { id: number } | undefined;
+      if (other) skip(c.id, `une autre ligne locale (id ${other.id}) porte le même code`);
     }
   }
   return skipIds;
