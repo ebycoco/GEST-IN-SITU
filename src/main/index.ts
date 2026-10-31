@@ -35,6 +35,8 @@ import { preloadUsersFromCloud } from './sync/downstream';
 import { resetOutboxErrors } from './sync/outbox.service';
 
 import { stopSessionHeartbeat, getSecureCurrentUser } from './auth/session-heartbeat';
+import { openPreloadGate, isPreloadGateOpen } from './auth/preload-gate';
+import { getSupabaseClient } from './sync/supabase-client';
 import { recordPresenceLogoutAndWait, isPresenceTrackedRole } from './sync/presence.service';
 
 // ─── ISOLATION DEV/PROD DU DOSSIER userData (SQLite + fichiers annexes) ────────
@@ -78,7 +80,6 @@ let splashWindow: BrowserWindow | null = null;
 let isQuitting = false;
 // Garde anti-réentrance du flush de présence à la fermeture (voir mainWindow.on('close')).
 let isFlushingPresenceOnClose = false;
-let isPreloadingUsers = false; // R1: Déchaîner le Login, ne plus bloquer
 
 // Sécurisation de l'instance unique
 const gotTheLock = app.requestSingleInstanceLock();
@@ -179,6 +180,14 @@ function createWindow(): void {
     // ─── DÉMARRAGE DIFFÉRÉ DU PRELOAD DES UTILISATEURS ───────────────────────
     // Retardé de 3.5s (après le premier ping SyncEngine) pour éviter que
     // SupabaseClient ne crashe le service réseau.
+    // Porte de préchargement (plan site_id, P1-D) : le bouton de connexion reste désactivé jusqu'à
+    // la fin du préchargement (20 s max), seul moment où les ids de site/centre sont réalignés.
+    // Sans client Supabase (configuration absente, E2E isolé), le préchargement ne fait rien : pas de porte.
+    const closePreloadGate = getSupabaseClient()
+      ? openPreloadGate((isOpen) => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('auth:preload-status', isOpen);
+      })
+      : (): void => undefined;
     setTimeout(() => {
       // Garde de Premier Démarrage (Base Vide)
       let hasUsers = false;
@@ -198,8 +207,9 @@ function createWindow(): void {
           log.info('[INIT] Preload silencieux terminé.');
         }).catch((err) => {
           log.warn('[INIT] Échec du preload silencieux (mode hors-ligne) :', err?.message);
-        });
+        }).finally(closePreloadGate);
       } else {
+        closePreloadGate();
         log.info('[INIT] Base locale vide (Nouvelle machine). On délègue le rapatriement à la page Login (forceGlobal).');
       }
     }, 3500);
@@ -467,11 +477,9 @@ Aucune modification n'a été appliquée à la base locale. Le marqueur RECOVERY
   // Create main window IMMÉDIATEMENT (non bloquant)
   createWindow();
 
-  // État global pour savoir si on est en train de preload
-  // isPreloadingUsers est déclaré globalement en haut du fichier.
-
-  // Handler IPC pour que le Renderer puisse interroger l'état au montage
-  ipcMain.handle('auth:isPreloadingUsers', () => isPreloadingUsers);
+  // Handler IPC pour que le Renderer puisse interroger l'état au montage (porte de préchargement,
+  // src/main/auth/preload-gate.ts ; mises à jour poussées sur 'auth:preload-status').
+  ipcMain.handle('auth:isPreloadingUsers', () => isPreloadGateOpen());
 
   // Le lancement effectif de preloadUsersFromCloud a été déplacé dans ready-to-show
   // pour éviter de saturer/crasher le network_service_instance_impl au démarrage.

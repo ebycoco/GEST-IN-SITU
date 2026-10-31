@@ -238,8 +238,25 @@ export default function LoginPage() {
     };
   }, [maybeAutoRetry]);
 
+  // Préchargement de démarrage en cours (porte côté main, 20 s max) : la connexion attend sa fin,
+  // seul moment où le poste réaligne ses numéros de site / centre sur ceux du cloud.
+  const [isPreloading, setIsPreloading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    window.api.auth.isPreloadingUsers().then((v) => { if (!cancelled) setIsPreloading(v); }).catch(() => undefined);
+    const unsubscribe = window.api.auth.onPreloadStatus((v) => setIsPreloading(v));
+    // Filet : jamais bloqué si l'événement de fin était perdu (la porte main se ferme à 20 s).
+    const safety = setTimeout(() => setIsPreloading(false), 25000);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+      clearTimeout(safety);
+    };
+  }, []);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPreloading) return;
     if (!login.trim() || !password.trim()) {
       toast.error('Veuillez remplir tous les champs');
       return;
@@ -411,12 +428,12 @@ export default function LoginPage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={isLoading}
+              disabled={isLoading || isPreloading}
               style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
               data-testid="login-submit"
             >
-              {isLoading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
-              {isLoading ? 'Connexion...' : 'Se connecter'}
+              {isLoading || isPreloading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+              {isLoading ? 'Connexion...' : isPreloading ? 'Chargement des données...' : 'Se connecter'}
             </button>
           </form>
         )}
