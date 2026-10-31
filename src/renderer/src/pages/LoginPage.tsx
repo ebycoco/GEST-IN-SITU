@@ -240,10 +240,13 @@ export default function LoginPage() {
 
   // Préchargement de démarrage en cours (porte côté main, 20 s max) : la connexion attend sa fin,
   // seul moment où le poste réaligne ses numéros de site / centre sur ceux du cloud.
-  const [isPreloading, setIsPreloading] = useState(false);
+  // État initial « en attente » tant que le main n'a pas répondu (pas de bouton actif au premier rendu).
+  const [isPreloading, setIsPreloading] = useState(true);
   useEffect(() => {
     let cancelled = false;
-    window.api.auth.isPreloadingUsers().then((v) => { if (!cancelled) setIsPreloading(v); }).catch(() => undefined);
+    window.api.auth.isPreloadingUsers()
+      .then((v) => { if (!cancelled) setIsPreloading(v); })
+      .catch(() => { if (!cancelled) setIsPreloading(false); });
     const unsubscribe = window.api.auth.onPreloadStatus((v) => setIsPreloading(v));
     // Filet : jamais bloqué si l'événement de fin était perdu (la porte main se ferme à 20 s).
     const safety = setTimeout(() => setIsPreloading(false), 25000);
@@ -429,12 +432,24 @@ export default function LoginPage() {
               type="submit"
               className="btn btn-primary"
               disabled={isLoading || isPreloading}
-              style={{ width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8 }}
+              style={{
+                width: '100%', justifyContent: 'center', padding: '12px 24px', marginTop: 8,
+                ...(isPreloading && !isLoading ? { opacity: 0.55, cursor: 'wait' } : {})
+              }}
               data-testid="login-submit"
             >
               {isLoading || isPreloading ? <Loader size={16} style={{ animation: 'spin 1s linear infinite' }} /> : null}
               {isLoading ? 'Connexion...' : isPreloading ? 'Chargement des données...' : 'Se connecter'}
             </button>
+            {isPreloading && !isLoading && (
+              <p
+                role="status"
+                data-testid="login-preload-hint"
+                style={{ margin: '-8px 0 0', fontSize: '12px', color: '#9ca3af', lineHeight: 1.5, textAlign: 'center' }}
+              >
+                Mise à jour des comptes en cours — la connexion sera disponible dans quelques secondes (20 s au plus).
+              </p>
+            )}
           </form>
         )}
         </div>

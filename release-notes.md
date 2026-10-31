@@ -34,7 +34,7 @@
 
 - **Synchronisation : plus de téléchargement des données d'un autre site sur un poste non aligné** — si le numéro local du site d'un poste correspond, dans le cloud, à un autre site (code différent), le téléchargement des cartes, des agents et des centres est désormais refusé avec le message « Ce poste n'est pas aligné sur le cloud pour ce site — redémarrez l'application et attendez la fin du chargement avant de vous connecter », au lieu d'écrire sur ce poste les données de l'autre site.
 
-- **Démarrage : la connexion attend la fin du chargement des comptes (20 secondes au plus)** — au lancement de l'application, le bouton affiche « Chargement des données... » et reste inactif le temps que le poste récupère les comptes et aligne ses numéros de site et de centre sur ceux du cloud. Auparavant, une connexion trop rapide empêchait cet alignement. Sans réseau ou sur un réseau lent, le bouton se réactive au plus tard après 20 secondes.
+- **Démarrage : la connexion attend la fin du chargement des comptes (20 secondes au plus)** — au lancement de l'application, le bouton affiche « Chargement des données... », apparaît grisé avec un curseur d'attente, et la phrase « Mise à jour des comptes en cours — la connexion sera disponible dans quelques secondes (20 s au plus). » s'affiche dessous, le temps que le poste récupère les comptes et aligne ses numéros de site et de centre sur ceux du cloud. Auparavant, une connexion trop rapide empêchait cet alignement. Sans réseau ou sur un réseau lent, le bouton se réactive au plus tard après 20 secondes.
 
 ### 🚨 Sécurité
 
