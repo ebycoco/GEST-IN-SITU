@@ -30,6 +30,8 @@
 
 - **Création d'un agent par un SUPER ADMIN : plus de rattachement automatique au site n°1** — quand aucun site n'était choisi, le compte créé était rattaché au site n°1, qui peut ne pas exister : le compte était ensuite refusé par les autres postes. Un compte qui n'a que le rôle SUPER ADMIN est maintenant créé sans site. Pour les autres rôles, le site est celui sélectionné dans la barre latérale ou, en vue globale, celui du centre choisi ; un centre qui n'appartient pas au site sélectionné est refusé. Sans site ni centre, un message demande d'en choisir un.
 
+- **Préparation : alignement des numéros de site et de centre sur ceux du cloud** (sans effet visible dans cette étape) — ajout du mécanisme qui permettra au poste ayant créé un site ou un centre de reprendre le numéro attribué par le cloud, en mettant à jour les comptes, cartes, journaux et envois en attente qui s'y rattachent. Il n'est pas encore activé : il le sera dans les étapes suivantes du correctif « numéro de site local envoyé au cloud ».
+
 ### 🚨 Sécurité
 
 - **Le numéro interne d'un agent n'est plus envoyé au cloud** — chaque poste numérote ses agents à sa façon, sans rapport avec la numérotation du cloud : l'auteur d'une carte et l'agent d'une ligne du journal pouvaient être refusés par le cloud, ou attribués à un autre agent, sans aucun message. Ces numéros ne sont plus transmis (le journal garde l'identifiant de connexion de l'agent) ; ils restent enregistrés sur le poste pour les statistiques locales.
