@@ -135,22 +135,20 @@ export const NOT_ALIGNED_PREFIX = '[NON ALIGNÉ]';
 const REFERENCE_CHECK_TABLES = new Set(['t_users', 't_centres', 't_postes', 't_cartes', 't_logs']);
 
 type AlignmentVerdict = 'ok' | 'misaligned' | 'unknown';
-type AlignmentCheck =
-  | { kind: 'ok' }
-  | { kind: 'wait' }
-  | { kind: 'transient' }
-  | { kind: 'misaligned'; reason: string };
+type AlignmentCheck = { kind: 'ok' } | { kind: 'defer'; reason: string };
 
 /**
  * Avant l'envoi d'une entrée qui référence un site / centre par son id LOCAL : cet id doit désigner
  * la MÊME ligne dans le cloud (sinon l'entrée partirait rattachée à un autre site — fuite §3 — ou serait
  * refusée par une clé étrangère). Poste créateur non encore réaligné (session ouverte, réalignement au
  * prochain démarrage) : l'entrée est reportée, sans tentative comptée.
- * - wait : le site/centre local a encore son INSERT en attente → reporté sans message ;
- * - misaligned : la ligne cloud de même id est absente ou d'une autre identité → reporté avec message ;
- * - transient : lecture cloud en échec → reporté (réseau) ;
- * - ok : sinon, et dans tous les cas non vérifiables (ligne locale absente ou sans sync_id,
- *   client simulé sans select) — comportement antérieur.
+ * Reports (`defer`, motif préfixé NOT_ALIGNED_PREFIX → entrée en fin de lot, audit 2026-10-31 P1-2) :
+ * - le site/centre local a encore son INSERT en attente, ou en échec ;
+ * - la ligne cloud de même id est absente ou d'une autre identité (même sync_id, ou même identité
+ *   métier ; sync_id cloud absent : seul le code d'un site tranche, audit P1-1) ;
+ * - lecture cloud en échec (réseau).
+ * ok : sinon, et dans tous les cas non vérifiables (ligne locale absente ou sans sync_id,
+ * client simulé sans select) — comportement antérieur.
  * `cache` : verdict par table+id, limité au lot en cours.
  */
 async function _checkReferencesAligned(
@@ -176,9 +174,16 @@ async function _checkReferencesAligned(
     const local = db.prepare(`SELECT ${LOCAL_COLS[ref.level]} FROM ${ref.table} WHERE id = ?`).get(id) as LocalHierarchyRow | undefined;
     if (!local?.sync_id) continue;
     const pendingInsert = db.prepare(
-      `SELECT 1 FROM t_outbox WHERE id = ? AND table_name = ? AND operation = 'INSERT' AND status IN ('PENDING', 'ERROR')`
-    ).get(local.sync_id, ref.table);
-    if (pendingInsert) return { kind: 'wait' };
+      `SELECT status FROM t_outbox WHERE id = ? AND table_name = ? AND operation = 'INSERT' AND status IN ('PENDING', 'ERROR')`
+    ).get(local.sync_id, ref.table) as { status: string } | undefined;
+    if (pendingInsert) {
+      return {
+        kind: 'defer',
+        reason: pendingInsert.status === 'ERROR'
+          ? `${NOT_ALIGNED_PREFIX} ${ref.level} local ${id} en échec d'envoi vers le cloud — envoi reporté jusqu'à ce que le ${ref.level} soit accepté par le cloud.`
+          : `${NOT_ALIGNED_PREFIX} ${ref.level} local ${id} pas encore envoyé au cloud — envoi reporté.`
+      };
+    }
 
     const key = `${ref.table}:${id}`;
     let verdict = cache.get(key);
@@ -193,7 +198,13 @@ async function _checkReferencesAligned(
             verdict = 'unknown';
           } else {
             const row = Array.isArray(data) ? data[0] : null;
-            verdict = row && (row.sync_id === local.sync_id || !row.sync_id || sameIdentity(ref.level, local, row)) ? 'ok' : 'misaligned';
+            const sameRow = !!row && (
+              row.sync_id === local.sync_id ||
+              sameIdentity(ref.level, local, row) ||
+              // sync_id cloud absent : un site n'est accepté que si l'un des codes manque (sinon sameIdentity a tranché).
+              (!row.sync_id && ref.level === 'site' && (!row.code || !local.code))
+            );
+            verdict = sameRow ? 'ok' : 'misaligned';
           }
         } catch {
           verdict = 'unknown';
@@ -201,10 +212,12 @@ async function _checkReferencesAligned(
       }
       cache.set(key, verdict);
     }
-    if (verdict === 'unknown') return { kind: 'transient' };
+    if (verdict === 'unknown') {
+      return { kind: 'defer', reason: `${NOT_ALIGNED_PREFIX} vérification du ${ref.level} ${id} dans le cloud impossible (réseau) — envoi reporté.` };
+    }
     if (verdict === 'misaligned') {
       return {
-        kind: 'misaligned',
+        kind: 'defer',
         reason: `${NOT_ALIGNED_PREFIX} ${ref.level} local ${id} non aligné sur le cloud (numéro attribué par le cloud différent) — envoi reporté jusqu'au réalignement, au prochain démarrage de l'application.`
       };
     }
@@ -468,16 +481,23 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
       log.info('[OutboxService] Toggle "Envoi Automatique" désactivé — entrées t_cartes exclues de ce traitement automatique.');
     }
 
-    // Lire le prochain lot d'entrées PENDING
-    const pendingEntries = db.prepare(`
+    // Lire le prochain lot d'entrées PENDING. Les entrées reportées par la garde d'alignement
+    // (error_msg « [NON ALIGNÉ] … ») passent après les autres : elles ne bloquent pas la file.
+    // Deux lectures (et non un ORDER BY calculé) pour garder l'index idx_outbox_status(status,
+    // created_at) et s'arrêter à la limite (audit 2026-10-31, P2-1).
+    const selectBatch = (deferred: boolean, limit: number): OutboxEntry[] => db.prepare(`
       SELECT id, table_name, operation, payload, status, error_msg, attempts, depends_on
       FROM t_outbox
       WHERE status = 'PENDING'
         ${excludeCardsUpstream ? "AND table_name != 't_cartes'" : ''}
-      ORDER BY (CASE WHEN error_msg LIKE ? THEN 1 ELSE 0 END), created_at ASC
+        AND ${deferred ? 'error_msg LIKE ?' : '(error_msg IS NULL OR error_msg NOT LIKE ?)'}
+      ORDER BY created_at ASC
       LIMIT ?
-    `).all(`${NOT_ALIGNED_PREFIX}%`, OUTBOX_BATCH_SIZE) as OutboxEntry[];
-    // Entrées reportées par la garde d'alignement en fin de lot : elles ne bloquent pas les autres.
+    `).all(`${NOT_ALIGNED_PREFIX}%`, limit) as OutboxEntry[];
+    const freshEntries = selectBatch(false, OUTBOX_BATCH_SIZE);
+    const pendingEntries = freshEntries.length < OUTBOX_BATCH_SIZE
+      ? [...freshEntries, ...selectBatch(true, OUTBOX_BATCH_SIZE - freshEntries.length)]
+      : freshEntries;
 
     if (pendingEntries.length === 0) {
       return { processed: 0, errors: 0 };
@@ -492,6 +512,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
     }
 
     const alignmentCache = new Map<string, AlignmentVerdict>();
+    /** Motif de report → nombre d'entrées : une seule ligne de journal par motif et par lot (P2-3). */
+    const deferredReasons = new Map<string, number>();
     for (const entry of pendingEntries) {
       // ── Garde anti-course "ré-enfilage pendant traitement" (audit 2026-10-26, point 5) ──
       // L'id t_outbox est réutilisé pour une même entité : enqueueOutbox() remplace payload/
@@ -519,10 +541,9 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
 
       // Garde d'alignement (plan site_id, commit 6) : aucune tentative comptée si l'entrée est reportée.
       const alignment = await _checkReferencesAligned(db, supabase, entry, alignmentCache);
-      if (alignment.kind === 'wait' || alignment.kind === 'transient') continue;
-      if (alignment.kind === 'misaligned') {
-        log.warn(`[OutboxService] ${entry.table_name} (id=${entry.id}) reporté : ${alignment.reason}`);
-        _recordOutboxAttemptError(db, entry, alignment.reason);
+      if (alignment.kind === 'defer') {
+        if (entry.error_msg !== alignment.reason) _recordOutboxAttemptError(db, entry, alignment.reason);
+        deferredReasons.set(alignment.reason, (deferredReasons.get(alignment.reason) ?? 0) + 1);
         continue;
       }
 
@@ -821,7 +842,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         if (cloudHierarchyId !== null && await _realignAfterAck(db, entry.table_name, (payload as Record<string, unknown>).sync_id, cloudHierarchyId)) {
           // Payloads en attente réécrits (site_id/centre_id) : les entrées déjà lues dans ce lot
           // portent l'ancien id. Lot interrompu ; les suivantes repartent relues, au prochain passage.
-          scheduleOutboxProcessing();
+          scheduleOutboxProcessing(forceCards);
           break;
         }
 
@@ -835,6 +856,10 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // Trace de l'exception (audit 2026-10-26, chantier C3) : statut PENDING inchangé.
         _recordOutboxAttemptError(db, entry, `Exception : ${networkErr?.message || String(networkErr)}`);
       }
+    }
+
+    for (const [reason, count] of deferredReasons) {
+      log.warn(`[OutboxService] ${count} entrée(s) reportée(s) : ${reason}`);
     }
 
     if (processed > 0 || errors > 0) {

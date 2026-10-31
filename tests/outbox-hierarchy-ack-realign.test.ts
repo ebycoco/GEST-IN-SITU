@@ -157,6 +157,37 @@ describe('outbox — réalignement à l\'acquittement (plan site_id, commit 5)',
     expect(one(`SELECT COUNT(*) AS n FROM t_outbox WHERE error_msg LIKE ?`, `${outbox.NOT_ALIGNED_PREFIX}%`).n).toBe(55);
   });
 
+  it('audit P1-1 : site cloud sans sync_id → envoi reporté si le code diffère, autorisé si le code est le même', async () => {
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (9, 'S9', 'S9', 1, 4, 'uuid-local-9')`).run();
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (10, 'S10', 'S10', 1, 4, 'uuid-local-10')`).run();
+    cloudRows.push({ table: 't_sites', row: { id: 9, sync_id: null, code: 'AUTRE' } });
+    cloudRows.push({ table: 't_sites', row: { id: 10, sync_id: null, code: 'S10' } });
+    const ins = db.prepare(`INSERT INTO t_outbox (id, table_name, operation, payload, status) VALUES (?, 't_logs', 'INSERT', ?, 'PENDING')`);
+    ins.run('log-9', JSON.stringify({ sync_id: 'log-9', action: 'X', site_id: 9 }));
+    ins.run('log-10', JSON.stringify({ sync_id: 'log-10', action: 'X', site_id: 10 }));
+
+    await outbox.processOutboxPending(false, true);
+
+    expect(sent.map(s => s.payload.sync_id)).toEqual(['log-10']);
+    expect(one('SELECT error_msg FROM t_outbox WHERE id = ?', 'log-9').error_msg).toContain(outbox.NOT_ALIGNED_PREFIX);
+  });
+
+  it('audit P1-2 : site dont l\'INSERT est en ERROR → entrées reportées avec motif, en fin de lot, sans bloquer les autres (> 50)', async () => {
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (11, 'S11', 'S11', 1, 4, 'site-11')`).run();
+    db.prepare(`INSERT INTO t_outbox (id, table_name, operation, payload, status, created_at) VALUES ('site-11', 't_sites', 'INSERT', '{"sync_id":"site-11"}', 'ERROR', '2025-01-01 00:00:00')`).run();
+    const ins = db.prepare(`INSERT INTO t_outbox (id, table_name, operation, payload, status, created_at) VALUES (?, 't_logs', 'INSERT', ?, 'PENDING', ?)`);
+    for (let i = 0; i < 55; i++) ins.run(`log-e-${i}`, JSON.stringify({ sync_id: `log-e-${i}`, action: 'X', site_id: 11 }), `2026-01-01 00:00:${String(i).padStart(2, '0')}`);
+    ins.run('log-ok2', JSON.stringify({ sync_id: 'log-ok2', action: 'X', site_id: null }), '2026-01-02 00:00:00');
+
+    await outbox.processOutboxPending(false, true);
+    await outbox.processOutboxPending(false, true);
+
+    expect(sent.filter(s => s.table === 't_logs').map(s => s.payload.sync_id)).toEqual(['log-ok2']);
+    const deferred = one(`SELECT COUNT(*) AS n FROM t_outbox WHERE error_msg LIKE ? AND error_msg LIKE '%en échec%'`, `${outbox.NOT_ALIGNED_PREFIX}%`);
+    expect(deferred.n).toBe(55);
+    expect(one(`SELECT MAX(attempts) AS a FROM t_outbox WHERE id LIKE 'log-e-%'`).a).toBe(0);
+  });
+
   it('commit 6 : site cloud de même identité (même code, autre sync_id) → envoi autorisé', async () => {
     db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, max_centres, sync_id) VALUES (8, 'S8', 'S8', 1, 4, 'uuid-local-8')`).run();
     cloudRows.push({ table: 't_sites', row: { id: 8, sync_id: 'uuid-cloud-8', code: 'S8' } });
