@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 import * as queries from '../database/queries';
 import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
-import { hashPassword, verifyPassword } from '../auth/local-auth';
+import { verifyPassword } from '../auth/local-auth';
 import { createReadStream, openSync, readSync, closeSync, copyFileSync, existsSync, statSync } from 'fs';
 import { snapshotDatabase, performRestore, RestoreOutcome } from '../database/recovery';
 import { SCHEMA_VERSION } from '../database/schema';
@@ -142,6 +142,9 @@ const VERIFY_PASSWORD_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
 const verifyPasswordAttempts: Map<string, { count: number; firstAttempt: number; lockedUntil?: number }> = new Map();
 // Clé fixe du compteur de database:import (aucune identité disponible à l'écran de connexion).
 const DATABASE_IMPORT_ATTEMPT_KEY = 'database:import';
+// Clé fixe du compteur de confirmation par mot de passe ROOT (hierarchy:verifyPassword session ROOT,
+// users:createSuperAdmin). Clé réservée (non normalisée comme un login).
+const ROOT_VERIFY_ATTEMPT_KEY = 'verifyPassword:root';
 
 function isVerifyPasswordLocked(key: string): number {
   const entry = verifyPasswordAttempts.get(key);
@@ -472,75 +475,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('auth:registerSuperAdmin', async (_, data: { login: string; password: string; nom_user: string }) => {
-    try {
-      const supabase = getSupabaseClient();
-      if (!supabase) {
-        return { success: false, reason: 'Client Supabase non disponible (mode hors-ligne).' };
-      }
-      
-      const email = data.login;
-      
-      log.info(`auth:registerSuperAdmin: signing up ${email}...`);
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password: data.password
-      });
-
-      if (authError) {
-        log.error('Supabase Auth signUp error:', authError.message);
-        return { success: false, reason: authError.message };
-      }
-
-      const uuid = authData.user?.id;
-      if (!uuid) {
-        return { success: false, reason: 'Failed to retrieve auth user ID from Supabase.' };
-      }
-
-      log.info(`auth:registerSuperAdmin: auth user created with UUID: ${uuid}. Storing in SQLite...`);
-
-      const db = getDatabase()!;
-      const hash = hashPassword(data.password);
-      
-      const insertResult = db.prepare(`
-        INSERT INTO t_users (login, password_hash, role, nom_user, prenom_user, statut_actif, site_id, centre_id, sync_id, is_dirty)
-        VALUES (@login, @hash, 'SUPER ADMIN', @nom_user, '', 1, 1, NULL, @sync_id, 0)
-      `).run({
-        login: data.login,
-        hash,
-        nom_user: data.nom_user.toUpperCase(),
-        sync_id: uuid
-      });
-
-      const newUserId = insertResult.lastInsertRowid as number;
-
-      log.info(`auth:registerSuperAdmin: Inserting ${data.login} in Supabase t_users table...`);
-      const { error: dbError } = await supabase.from('t_users').insert({
-        id_user: newUserId,
-        login: data.login,
-        password_hash: hash,
-        role: 'SUPER ADMIN',
-        nom_user: data.nom_user.toUpperCase(),
-        prenom_user: '',
-        site_id: 1,
-        centre_id: null,
-        statut_actif: 1,
-        sync_id: uuid
-      });
-
-      if (dbError) {
-        log.warn(`[auth:registerSuperAdmin] Supabase db t_users insert failed: ${dbError.message}`);
-        db.prepare("UPDATE t_users SET is_dirty = 1 WHERE id_user = ?").run(newUserId);
-      } else {
-        db.prepare("UPDATE t_users SET synced_at = datetime('now') WHERE id_user = ?").run(newUserId);
-      }
-
-      return { success: true, count: 1, userId: newUserId, uuid };
-    } catch (e: any) {
-      log.error('auth:registerSuperAdmin error:', e);
-      return { success: false, reason: String(e.message || e) };
-    }
-  });
+  // auth:registerSuperAdmin retiré (audit 2026-10-26 B-04 : signUp Supabase public + insert cloud sans session).
+  // Remplacé par users:createSuperAdmin (réservé à la session ROOT).
 
   // PRESENCE DES AGENTS (lecture directe Supabase, cf. presence.service.ts décision D3).
   // Réservé SUPER ADMIN (tous sites) et ADMINISTRATEUR_SITE (son site uniquement — dérivé
@@ -3608,6 +3544,41 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     const res = await queries.createUser(data, secureUser);
     return res;
   });
+  // Création d'un SUPER ADMIN — RÉSERVÉE à la session ROOT de secours (id 999999, rôle actif SUPER ADMIN).
+  // Défense en profondeur : (1) la décision « ROOT » vient de getSecureCurrentUser() uniquement ;
+  // (2) le mot de passe ROOT est REVÉRIFIÉ ici (empreinte bcrypt) avec le verrou anti-bruteforce
+  // partagé avec hierarchy:verifyPassword (clé ROOT_VERIFY_ATTEMPT_KEY) — on ne se repose pas sur la
+  // modale du renderer. Ni le mot de passe du nouveau compte ni celui de ROOT ne sont journalisés.
+  // Écriture : transaction + outbox via queries.createSuperAdminAccount (site_id/centre_id NULL).
+  ipcMain.handle('users:createSuperAdmin', async (_, payload: { login?: unknown; nom_user?: unknown; prenom_user?: unknown; password?: unknown; rootPassword?: unknown }) => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || secureUser.id_user !== FAILSAFE_ROOT_ID || secureUser.role !== 'SUPER ADMIN') {
+      log.warn('[SECURITY] Accès refusé à users:createSuperAdmin : réservé à la session ROOT.');
+      throw new Error("Accès refusé. Seul le compte ROOT peut créer un SUPER ADMIN.");
+    }
+    const lockRemaining = isVerifyPasswordLocked(ROOT_VERIFY_ATTEMPT_KEY);
+    if (lockRemaining > 0) {
+      log.warn(`[SECURITY] users:createSuperAdmin bloqué (verrouillage anti-bruteforce actif, ${Math.ceil(lockRemaining / 1000)}s restantes).`);
+      throw new Error(`Trop de tentatives de confirmation échouées. Réessayez dans ${Math.ceil(lockRemaining / 60000)} minute(s).`);
+    }
+    const rootHash = resolveRootPasswordHash();
+    const rootValid = rootHash !== '' && isRootPasswordValid(payload?.rootPassword, rootHash);
+    registerVerifyPasswordAttempt(ROOT_VERIFY_ATTEMPT_KEY, rootValid);
+    if (!rootValid) {
+      log.warn('[SECURITY] users:createSuperAdmin refusé : mot de passe ROOT de confirmation incorrect.');
+      throw new Error("Mot de passe ROOT incorrect.");
+    }
+    try {
+      const created = queries.createSuperAdminAccount(
+        { login: payload?.login, nom_user: payload?.nom_user, prenom_user: payload?.prenom_user, password: payload?.password },
+        secureUser
+      );
+      return { success: true, id_user: created.id_user, login: created.login };
+    } catch (e) {
+      log.error('IPC Error: users:createSuperAdmin', (e as Error)?.message);
+      throw e;
+    }
+  });
   ipcMain.handle('users:update', async (_, id, data) => {
     // SECURITY fix : l'identité/le rôle de l'appelant (et donc le périmètre site/centre
     // vérifié dans updateUser) doivent provenir de la session sécurisée, pas d'un objet
@@ -4062,9 +4033,31 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   ipcMain.handle('hierarchy:verifyPassword', async (_, password, loginOverride?: string, actionName?: string) => {
     try {
+      const actionLabel = actionName ? ` (action : '${actionName}')` : '';
+
+      // Session ROOT de secours (id 999999, rôle actif SUPER ADMIN, AUCUNE ligne dans t_users) :
+      // la confirmation se fait contre l'empreinte bcrypt ROOT, pas contre t_users (où le login
+      // 'ROOT' n'existe pas -> le bon mot de passe était refusé). La décision « l'appelant est
+      // ROOT » vient EXCLUSIVEMENT de la session serveur (getSecureCurrentUser), jamais du
+      // `loginOverride` fourni par le renderer : un autre appelant envoyant 'ROOT' + le mot de
+      // passe ROOT reste dans la branche t_users ci-dessous (-> faux). Verrou anti-bruteforce
+      // dédié (clé fixe), mêmes seuils que le reste du fichier ; jamais de mot de passe journalisé.
+      const sessionUser = getSecureCurrentUser();
+      if (sessionUser && sessionUser.id_user === FAILSAFE_ROOT_ID && sessionUser.role === 'SUPER ADMIN') {
+        const lockRemaining = isVerifyPasswordLocked(ROOT_VERIFY_ATTEMPT_KEY);
+        if (lockRemaining > 0) {
+          log.warn(`[SECURITY] Vérification du mot de passe ROOT bloquée${actionLabel} (verrouillage anti-bruteforce actif, ${Math.ceil(lockRemaining / 1000)}s restantes).`);
+          return false;
+        }
+        const rootHash = resolveRootPasswordHash();
+        const rootValid = rootHash !== '' && isRootPasswordValid(password, rootHash);
+        log.info(`[hierarchy:verifyPassword] Vérification du mot de passe ROOT${actionLabel} : ${rootValid ? 'valide' : 'refusée'}.`);
+        registerVerifyPasswordAttempt(ROOT_VERIFY_ATTEMPT_KEY, rootValid);
+        return rootValid;
+      }
+
       const login = loginOverride || getCurrentUserLogin();
       const attemptKey = login || 'SUPERADMIN_FALLBACK';
-      const actionLabel = actionName ? ` (action : '${actionName}')` : '';
 
       const lockRemainingMs = isVerifyPasswordLocked(attemptKey);
       if (lockRemainingMs > 0) {

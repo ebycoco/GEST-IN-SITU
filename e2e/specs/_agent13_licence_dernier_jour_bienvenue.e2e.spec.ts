@@ -34,7 +34,7 @@ const execFileAsync = promisify(execFile);
 const SHOT_DIR = process.env.LICENCE_QA_SHOT_DIR || join(__dirname, '..', '..', 'test-results', 'agent13-licence-dernier-jour');
 const MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
 const CONTACT_MSG = 'Pour renouveler votre licence, contactez le super administrateur.';
-const ROOT_TEST_PWD = 'ZZTEST_root_jetable_2026';
+const ROOT_TEST_PWD = 'Root_E2E_Jetable_Sans_Valeur_Reelle_1!';
 const MULTI_LOGIN = 'QA_TERRAIN_MULTI_BIENVENUE';
 const MULTI_PWD = 'QA_Terrain_Pwd_2026!';
 
@@ -58,7 +58,7 @@ test.describe.serial('QA Terrain — licence dernier jour (A1) + toast de bienve
 
   test.beforeAll(async () => {
     mkdirSync(SHOT_DIR, { recursive: true });
-    process.env.FAILSAFE_ROOT_PASSWORD = ROOT_TEST_PWD; // valeur jetable, héritée par l'instance lancée
+    process.env.FAILSAFE_ROOT_PASSWORD_HASH = hashPassword(ROOT_TEST_PWD); // empreinte jetable, heritee par l'instance lancee
     env = await launchSeededApp();
     expect(env.seed.dbPath.startsWith(env.userDataDir)).toBe(true); // base jetable uniquement
     env.window.on('console', (m) => consoleMsgs.push({ type: m.type(), text: m.text() }));
@@ -66,7 +66,7 @@ test.describe.serial('QA Terrain — licence dernier jour (A1) + toast de bienve
   });
 
   test.afterAll(async () => {
-    delete process.env.FAILSAFE_ROOT_PASSWORD;
+    delete process.env.FAILSAFE_ROOT_PASSWORD_HASH;
     if (env) await teardownSeededApp(env, anyTestFailed);
   });
   test.afterEach(async ({}, testInfo) => {

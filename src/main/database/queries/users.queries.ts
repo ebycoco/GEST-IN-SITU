@@ -544,6 +544,67 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   return txResult.result;
 }
 
+// ── Création d'un SUPER ADMIN par le compte ROOT (remplace l'ancien auth:registerSuperAdmin) ──
+const SUPER_ADMIN_PASSWORD_MIN_LENGTH = 12;
+// bcrypt ignore silencieusement les octets au-delà de 72 : on refuse plutôt que de tronquer.
+const SUPER_ADMIN_PASSWORD_MAX_BYTES = 72;
+const SUPER_ADMIN_LOGIN_PATTERN = /^[\p{L}\p{N}._@-]{3,64}$/u;
+
+/**
+ * Crée un compte SUPER ADMIN (site_id/centre_id NULL, rôle SUPER ADMIN en t_users ET t_user_roles).
+ * Réservé à la session ROOT de secours (id 999999, rôle actif SUPER ADMIN) : `caller` DOIT venir de
+ * getSecureCurrentUser(), jamais du renderer. La confirmation par mot de passe ROOT (et son verrou
+ * anti-bruteforce) est faite par le handler IPC avant cet appel.
+ *
+ * Délègue à createUser() — une seule implémentation du quadriptyque transactionnel : transaction
+ * SQLite (t_users is_dirty=1 + t_user_roles), unicité de login NFC/insensible à la casse qui voit aussi
+ * les comptes supprimés (LOT 1b), enfilage t_outbox INSERT t_users (hash bcrypt seulement, jamais le
+ * mot de passe en clair) + t_user_roles, planification de l'envoi si ONLINE, insertAuditLog + logAudit
+ * (login et rôle uniquement). Aucune boucle lourde ; coût mémoire négligeable (une seule ligne).
+ * Garde d'alignement de l'outbox : site_id/centre_id NULL => aucune référence à vérifier, envoi non bloqué.
+ */
+export function createSuperAdminAccount(
+  data: { login: unknown; nom_user: unknown; prenom_user?: unknown; password: unknown },
+  caller: { id_user?: number; role?: string; login?: string } | null | undefined
+): { id_user: number; sync_id: string; login: string } {
+  if (!caller || caller.id_user !== FAILSAFE_ROOT_ID || caller.role !== 'SUPER ADMIN') {
+    throw new Error("Accès refusé. Seul le compte ROOT peut créer un SUPER ADMIN.");
+  }
+  const login = normalizeLoginInput(data.login);
+  if (!SUPER_ADMIN_LOGIN_PATTERN.test(login)) {
+    throw new Error("Identifiant invalide : 3 à 64 caractères (lettres, chiffres, point, tiret, tiret bas, @), sans espace.");
+  }
+  if (typeof data.nom_user !== 'string' || !data.nom_user.trim()) {
+    throw new Error("Le nom est obligatoire.");
+  }
+  if (data.prenom_user !== undefined && data.prenom_user !== null && typeof data.prenom_user !== 'string') {
+    throw new Error("Prénom invalide.");
+  }
+  if (typeof data.password !== 'string' || data.password.length < SUPER_ADMIN_PASSWORD_MIN_LENGTH) {
+    throw new Error(`Le mot de passe doit contenir au moins ${SUPER_ADMIN_PASSWORD_MIN_LENGTH} caractères.`);
+  }
+  if (Buffer.byteLength(data.password, 'utf8') > SUPER_ADMIN_PASSWORD_MAX_BYTES) {
+    throw new Error(`Le mot de passe est trop long (${SUPER_ADMIN_PASSWORD_MAX_BYTES} octets maximum).`);
+  }
+
+  createUser(
+    {
+      login,
+      password: data.password,
+      nom_user: data.nom_user.trim(),
+      prenom_user: typeof data.prenom_user === 'string' ? data.prenom_user.trim() : '',
+      role: 'SUPER ADMIN',
+      roles: ['SUPER ADMIN']
+    },
+    { id_user: FAILSAFE_ROOT_ID, role: 'SUPER ADMIN', login: caller.login || 'ROOT' }
+  );
+
+  const db = getDatabase()!;
+  const created = findLoginMatches(db, login).find(u => u.statut_actif === 1);
+  if (!created) throw new Error("Création du SUPER ADMIN non confirmée en base.");
+  return { id_user: created.id_user, sync_id: created.sync_id, login };
+}
+
 // ── Gardes de sécurité LOT 1 « sécurité des comptes agents » ────────────────────────────
 // Appelant de session sécurisée (getSecureCurrentUser()) : id_user + rôle ACTIF + site.
 type UserCaller = { id_user?: number; role: string; site_id?: number; centre_id?: number; login?: string };

@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { confirmService } from '../components/confirmService';
+import CreateSuperAdminModal from '../components/CreateSuperAdminModal';
 import { normalizeEmail, normalizePhone, validateEmail, validatePhone } from '../../../shared/utils/contact';
 import { resolveLastLogin, formatLastLoginShort, lastLoginOriginBadge } from './agentsLastLogin';
 
@@ -88,6 +89,8 @@ export default function AgentsPage() {
   const [centres, setCentres] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  // Modal de création d'un SUPER ADMIN (bouton visible seulement en session ROOT ; le serveur reste l'autorité).
+  const [showSuperAdminModal, setShowSuperAdminModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -616,6 +619,11 @@ export default function AgentsPage() {
           <button className="btn btn-primary" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, flex: '1 1 auto', minWidth: 'max-content' }} onClick={() => { closeModal(); setShowModal(true); }}>
             <Plus size={18} /> Nouvel Agent
           </button>
+          {isRootSession && (
+            <button className="btn btn-outline" data-testid="agents-create-superadmin" style={{ borderRadius: 14, height: 44, padding: '0 20px', fontWeight: 700, flex: '1 1 auto', minWidth: 'max-content', display: 'flex', alignItems: 'center', gap: 8 }} onClick={() => setShowSuperAdminModal(true)}>
+              <ShieldCheck size={18} /> Créer un SUPER ADMIN
+            </button>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ display: 'flex', gap: 8 }}>
               <button 
@@ -806,7 +814,7 @@ export default function AgentsPage() {
                 {/* ACTIONS */}
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexShrink: 0 }}>
                   {/* Un compte SUPER ADMIN (visible seulement pour ROOT) n'offre que la réinitialisation du mot de passe */}
-                  {u.role !== 'SUPER ADMIN' && (
+                  {u.role !== 'SUPER ADMIN' && (isRootSession || !isSuperAdminAccount(u)) && (
                     <button className="btn btn-icon btn-outline btn-sm" onClick={() => openEditModal(u)} title="Modifier">
                       <Edit size={14} />
                     </button>
@@ -816,7 +824,7 @@ export default function AgentsPage() {
                       <Key size={14} color="#fbbf24" />
                     </button>
                   )}
-                  {u.role !== 'SUPER ADMIN' && u.id_user !== userContext?.id_user && (
+                  {u.role !== 'SUPER ADMIN' && (isRootSession || !isSuperAdminAccount(u)) && u.id_user !== userContext?.id_user && (
                     <>
                       <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleToggleStatus(u)} title={u.statut_actif === 1 ? "Désactiver" : "Activer"}>
                         {u.statut_actif === 1 ? <UserX size={14} color="var(--text-muted)" /> : <UserCheck size={14} color="var(--accent-green)" />}
@@ -904,6 +912,10 @@ export default function AgentsPage() {
             </button>
           </div>
         </div>
+      )}
+
+      {isRootSession && showSuperAdminModal && (
+        <CreateSuperAdminModal onClose={() => setShowSuperAdminModal(false)} onCreated={() => { void loadData(); }} />
       )}
 
       {/* Modal - Modern Premium Style */}

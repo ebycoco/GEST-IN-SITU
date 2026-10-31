@@ -24,8 +24,6 @@ const api = {
       data: { nom_user?: string; prenom_user?: string; email?: string; telephone?: string; password?: string }
     ): Promise<{ success: boolean }> => 
       ipcRenderer.invoke('auth:updateSelfProfile', userId, data),
-    registerSuperAdmin: (data: Partial<IUser>): Promise<any> => 
-      ipcRenderer.invoke('auth:registerSuperAdmin', data),
     onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' | 'site_suspended' | 'license_expired' }) => void) => {
       const listener = (_: any, payload?: { reason?: 'revoked' | 'disabled' }) => callback(payload);
       ipcRenderer.on('auth:session-expired', listener);
@@ -338,6 +336,9 @@ const api = {
       ipcRenderer.invoke('users:getProfile', login),
     create: (data: Partial<IUser>): Promise<any> => 
       ipcRenderer.invoke('users:create', data),
+    // Réservé à la session ROOT ; le serveur revérifie la session ET le mot de passe ROOT.
+    createSuperAdmin: (data: { login: string; nom_user: string; prenom_user?: string; password: string; rootPassword: string }): Promise<{ success: boolean; id_user: number; login: string }> =>
+      ipcRenderer.invoke('users:createSuperAdmin', data),
     update: (id: number, data: Partial<IUser>): Promise<{ changes: number }> => 
       ipcRenderer.invoke('users:update', id, data),
     delete: (id: number): Promise<{ changes: number }> => 

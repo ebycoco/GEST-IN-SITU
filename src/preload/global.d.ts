@@ -10,7 +10,6 @@ declare global {
         logout: (login?: string) => Promise<boolean>;
         setActiveRole: (role: string) => Promise<{ success: boolean; activeRole?: string; message?: string }>;
         updateSelfProfile: (userId: number, data: any) => Promise<{ success: boolean; message?: string }>;
-        registerSuperAdmin: (data: any) => Promise<{ success: boolean; message: string }>;
         onSessionExpired: (callback: (payload?: { reason?: 'revoked' | 'disabled' | 'site_suspended' | 'license_expired' }) => void) => () => void;
         onSessionUpdated: (callback: (payload: { roles: string[] }) => void) => () => void;
         getSessionSnapshot: () => Promise<any>;
@@ -117,6 +116,7 @@ declare global {
         getAll: (siteId?: number, centreId?: number) => Promise<any[]>;
         getProfile: (login: string) => Promise<any>;
         create: (data: any) => Promise<any>;
+        createSuperAdmin: (data: { login: string; nom_user: string; prenom_user?: string; password: string; rootPassword: string }) => Promise<{ success: boolean; id_user: number; login: string }>;
         update: (id: number, data: any) => Promise<any>;
         delete: (id: number) => Promise<boolean>;
         hardDelete: (id: number) => Promise<{ changes?: number; outcome: 'deleted' | 'deactivated' }>;
