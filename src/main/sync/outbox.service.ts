@@ -74,6 +74,19 @@ const STATUS_BLOCK_COLUMNS = [
 /** Colonnes relues après l'upsert d'une carte (.select) : bloc statut + sync_id + updated_at. */
 const CARD_UPSERT_RETURN_COLUMNS = ['sync_id', 'updated_at', ...STATUS_BLOCK_COLUMNS].join(',');
 
+/** Clés de payload jamais écrites dans main.log (le payload envoyé à Supabase reste intact). */
+const LOG_REDACTED_KEYS = new Set(['password_hash', 'password']);
+
+/**
+ * JSON d'un payload pour les logs, avec les secrets masqués. Auparavant le payload t_users
+ * complet (password_hash compris) était journalisé à chaque enfilage et à chaque envoi.
+ */
+export function redactPayloadForLog(payload: unknown): string {
+  return JSON.stringify(payload, (key, value) =>
+    LOG_REDACTED_KEYS.has(key) && value != null ? '[MASQUÉ]' : value
+  );
+}
+
 // ─── Types internes ──────────────────────────────────────────────────────────
 interface OutboxEntry {
   id: string;
@@ -130,7 +143,7 @@ export function enqueueOutbox(
 
     const payloadJson = JSON.stringify(payload);
 
-    log.info(`[OutboxService] Enfilage outbox tenté (id=${id}, table=${tableName}, op=${operation}, payload=${payloadJson}, dependsOn=${dependsOnId})`);
+    log.info(`[OutboxService] Enfilage outbox tenté (id=${id}, table=${tableName}, op=${operation}, payload=${redactPayloadForLog(payload)}, dependsOn=${dependsOnId})`);
     
     // UPSERT : si l'UUID existe déjà, on met à jour le payload et on le repasse en PENDING.
     db.prepare(`
@@ -517,7 +530,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           }
 
           // INSERT ou UPDATE → upsert idempotent sur sync_id (ou user_sync_id,role pour t_user_roles)
-          log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, JSON.stringify(finalPayload));
+          log.info(`[OutboxService][DEBUG] Envoi du payload d'upsert pour ${entry.table_name} :`, redactPayloadForLog(finalPayload));
           const conflictKey = entry.table_name === 't_user_roles' ? 'user_sync_id,role' : 'sync_id';
           const upsertQuery: any = supabase
             .from(entry.table_name)
