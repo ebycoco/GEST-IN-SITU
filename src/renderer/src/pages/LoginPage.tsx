@@ -311,6 +311,22 @@ export default function LoginPage() {
           isAlert: true,
           isDanger: true
         });
+      } else if (error?.message?.includes('TROP_DE_TENTATIVES')) {
+        // Verrou anti-bruteforce du handler auth:login (5 échecs / 5 min -> verrou 5 min).
+        // Le message utile suit le préfixe "TROP_DE_TENTATIVES:" ; Electron peut le précéder de
+        // "Error invoking remote method 'auth:login': Error: " — on ne garde que la partie après
+        // le préfixe, avec un texte de repli si elle est vide.
+        const rawMessage: string = error.message;
+        const marker = 'TROP_DE_TENTATIVES:';
+        const markerIndex = rawMessage.indexOf(marker);
+        const detail = markerIndex >= 0 ? rawMessage.slice(markerIndex + marker.length).trim() : '';
+        await confirmService.confirm({
+          title: 'Connexion temporairement bloquée',
+          message: detail || 'Trop de tentatives de connexion échouées. Réessayez dans quelques minutes.',
+          isAlert: true,
+          isDanger: true
+        });
+        setPassword('');
       } else {
         toast.error("Erreur de connexion. Veuillez réessayer.");
       }
