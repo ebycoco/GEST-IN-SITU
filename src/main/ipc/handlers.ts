@@ -101,12 +101,14 @@ function maskSensitiveField(champ: string, val: string | null | undefined): stri
   return val;
 }
 
-// Anti-bruteforce pour hierarchy:verifyPassword : verrouille une identité après un nombre
+// Anti-bruteforce pour hierarchy:verifyPassword, auth:login et database:import : verrouille une identité après un nombre
 // d'échecs successifs, sur une fenêtre glissante (protection locale, en mémoire du process).
 const VERIFY_PASSWORD_MAX_ATTEMPTS = 5;
 const VERIFY_PASSWORD_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const VERIFY_PASSWORD_LOCKOUT_MS = 5 * 60 * 1000; // 5 minutes
 const verifyPasswordAttempts: Map<string, { count: number; firstAttempt: number; lockedUntil?: number }> = new Map();
+// Clé fixe du compteur de database:import (aucune identité disponible à l'écran de connexion).
+const DATABASE_IMPORT_ATTEMPT_KEY = 'database:import';
 
 function isVerifyPasswordLocked(key: string): number {
   const entry = verifyPasswordAttempts.get(key);
@@ -131,6 +133,12 @@ function registerVerifyPasswordAttempt(key: string, success: boolean): void {
     entry.lockedUntil = now + VERIFY_PASSWORD_LOCKOUT_MS;
     log.warn(`[SECURITY] Verrouillage anti-bruteforce déclenché pour '${key}' après ${entry.count} échecs de vérification de mot de passe.`);
   }
+}
+
+/** Message français affiché quand une identité est verrouillée (durée restante arrondie à la minute supérieure). */
+function formatLockoutMessage(remainingMs: number, what: string): string {
+  const minutes = Math.max(1, Math.ceil(remainingMs / 60000));
+  return `Trop de tentatives ${what} échouées. Réessayez dans ${minutes} minute${minutes > 1 ? 's' : ''}.`;
 }
 
 /**
@@ -192,6 +200,16 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
   });
   // AUTH
   ipcMain.handle('auth:login', async (event, login: string, password: string) => {
+    // Anti-bruteforce (2026-10-31) : même mécanisme en mémoire que hierarchy:verifyPassword
+    // (5 échecs sur 5 min -> verrou 5 min), clé = login normalisé (ROOT compris). Purement local,
+    // la connexion hors ligne n'est pas affectée. Seuls les refus d'identifiants comptent comme
+    // échec ; une connexion réussie remet le compteur à zéro.
+    const loginAttemptKey = `auth:login:${typeof login === 'string' ? login.trim().toLowerCase() : ''}`;
+    const loginLockRemainingMs = isVerifyPasswordLocked(loginAttemptKey);
+    if (loginLockRemainingMs > 0) {
+      log.warn(`[SECURITY] Connexion bloquée pour '${loginAttemptKey}' (verrouillage anti-bruteforce actif, ${Math.ceil(loginLockRemainingMs / 1000)}s restantes).`);
+      throw new Error(`TROP_DE_TENTATIVES: ${formatLockoutMessage(loginLockRemainingMs, 'de connexion')}`);
+    }
     try {
       // ── LOGIQUE ROOT FAILSAFE SECURISEE DANS LE MAIN PROCESS ──
       // Le mot de passe ROOT est lu depuis process.env.FAILSAFE_ROOT_PASSWORD.
@@ -200,9 +218,11 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (login && login.trim().toLowerCase() === 'root') {
         if (!rootPassword) {
           log.warn('[SECURITY] Tentative de connexion ROOT refusée : FAILSAFE_ROOT_PASSWORD non défini dans .env (compte désactivé).');
+          registerVerifyPasswordAttempt(loginAttemptKey, false);
           return null;
         }
         if (password === rootPassword) {
+          registerVerifyPasswordAttempt(loginAttemptKey, true);
           log.warn('🚨 [SECURITY] Connexion failsafe de l\'utilisateur ROOT sollicitée.');
           try {
             queries.logAction(FAILSAFE_ROOT_ID, 'SUPER ADMIN', 'ROOT_LOGIN', 'Connexion de secours failsafe ROOT effectuée.');
@@ -234,6 +254,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       }
 
       const user = await queries.authenticateUser(login, password);
+      // Refus d'identifiants (null) = échec compté ; succès = remise à zéro. Les erreurs levées
+      // (licence, site suspendu, session active, erreur BDD) ne sont pas comptées.
+      registerVerifyPasswordAttempt(loginAttemptKey, !!(user && user.sessionToken));
       if (user && user.sessionToken) {
         startSessionHeartbeat(user, user.sessionToken);
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion réussie de l'utilisateur ${user.login}.`);
@@ -6570,10 +6593,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // — LoginPage.tsx n'étant pas dans le périmètre autorisé de cette tâche, ce correctif choisit
     // volontairement un état fail-closed (fonctionnalité de restauration d'urgence indisponible)
     // plutôt que de laisser un écrasement de la base de production accessible sans authentification.
+    // Anti-bruteforce (2026-10-31) : mécanisme partagé avec hierarchy:verifyPassword, clé fixe
+    // (écran sans session). Le verrou est vérifié AVANT toute comparaison bcrypt.
+    const importLockRemainingMs = isVerifyPasswordLocked(DATABASE_IMPORT_ATTEMPT_KEY);
+    if (importLockRemainingMs > 0) {
+      log.warn(`[SECURITY] database:import bloqué (verrouillage anti-bruteforce actif, ${Math.ceil(importLockRemainingMs / 1000)}s restantes).`);
+      return { success: false, reason: formatLockoutMessage(importLockRemainingMs, "d'importation") };
+    }
     if (!password || !queries.verifySuperAdminPassword(password)) {
+      if (password) registerVerifyPasswordAttempt(DATABASE_IMPORT_ATTEMPT_KEY, false);
       log.warn('[SECURITY] Accès refusé à database:import : mot de passe SUPER ADMIN manquant ou invalide.');
       return { success: false, reason: 'unauthorized' };
     }
+    registerVerifyPasswordAttempt(DATABASE_IMPORT_ATTEMPT_KEY, true);
 
     try {
       const result = await dialog.showOpenDialog(mainWindow, {
