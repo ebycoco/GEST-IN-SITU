@@ -28,7 +28,7 @@
 
 - **Connexion : un SUPER ADMIN rattaché à un site inconnu du poste peut de nouveau se connecter** — un compte SUPER ADMIN dont le site, dans le cloud, n'existait pas sur le poste n'était pas récupéré au démarrage : sa connexion était refusée sur ce poste. Il est désormais récupéré sans site (un SUPER ADMIN n'est lié à aucun site). Les autres comptes dans ce cas restent écartés, mais leur motif est maintenant noté dans le journal technique du poste (au lieu d'être ignoré sans trace).
 
-- **Création d'un agent par un SUPER ADMIN : plus de rattachement automatique au site n°1** — quand aucun site n'était choisi, le compte créé était rattaché au site n°1, qui peut ne pas exister : le compte était ensuite refusé par les autres postes. Un nouveau SUPER ADMIN est maintenant créé sans site, et pour les autres rôles un site existant est obligatoire (message « Un site existant est obligatoire pour ce rôle. »).
+- **Création d'un agent par un SUPER ADMIN : plus de rattachement automatique au site n°1** — quand aucun site n'était choisi, le compte créé était rattaché au site n°1, qui peut ne pas exister : le compte était ensuite refusé par les autres postes. Un compte qui n'a que le rôle SUPER ADMIN est maintenant créé sans site. Pour les autres rôles, le site est celui sélectionné dans la barre latérale ou, en vue globale, celui du centre choisi ; un centre qui n'appartient pas au site sélectionné est refusé. Sans site ni centre, un message demande d'en choisir un.
 
 ### 🚨 Sécurité
 

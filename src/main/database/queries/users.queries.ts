@@ -309,19 +309,31 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   const primaryRole = (data.role as string) || inputRoles[0];
   assertRolesAssignable(creator.role, [...new Set([...inputRoles, primaryRole])]);
 
-  // Site d'un compte créé par un SUPER ADMIN : un SUPER ADMIN n'est rattaché à aucun site (NULL) ;
-  // tout autre rôle exige un site existant. L'ancien repli `|| 1` rattachait en silence au site 1,
-  // inexistant dans le cloud (compte refusé par les autres postes, cf. plan site_id 2026-10-31).
+  // Site d'un compte créé par un SUPER ADMIN : un compte dont TOUS les rôles sont SUPER ADMIN n'est
+  // rattaché à aucun site (NULL) ; sinon un site existant est obligatoire. L'ancien repli `|| 1`
+  // rattachait en silence au site 1, inexistant dans le cloud (compte refusé par les autres postes,
+  // cf. plan site_id 2026-10-31). En vue globale (aucun site actif), l'écran n'envoie pas de site :
+  // il est alors déduit du centre choisi ; un centre d'un autre site que celui envoyé est refusé.
   if (creator.role === 'SUPER ADMIN') {
-    if (primaryRole === 'SUPER ADMIN') {
+    if ([...inputRoles, primaryRole].every(r => r === 'SUPER ADMIN')) {
       targetSiteId = null;
       targetCentreId = null;
     } else {
-      const siteId = Number(data.site_id);
-      if (!Number.isInteger(siteId) || siteId <= 0 || !db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(siteId)) {
-        throw new Error("Un site existant est obligatoire pour ce rôle.");
+      const centre = targetCentreId
+        ? db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(targetCentreId) as { site_id: number } | undefined
+        : undefined;
+      if (targetCentreId && !centre) {
+        throw new Error("Centre introuvable.");
       }
-      targetSiteId = siteId;
+      const rawSite = data.site_id;
+      const siteId = rawSite === undefined || rawSite === null || rawSite === '' ? centre?.site_id : Number(rawSite);
+      if (!Number.isInteger(siteId) || (siteId as number) <= 0 || !db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(siteId)) {
+        throw new Error("Un site existant est obligatoire pour ce rôle : sélectionnez un site dans la barre latérale ou choisissez un centre.");
+      }
+      if (centre && centre.site_id !== siteId) {
+        throw new Error("Ce centre n'appartient pas au site sélectionné.");
+      }
+      targetSiteId = siteId as number;
     }
   }
 
