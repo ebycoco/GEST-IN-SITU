@@ -186,7 +186,8 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
     }
     const siteData = siteDataList[0];
     assertCloudSiteIdentity(db, siteId, siteData);
-    reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
+    // Ligne cloud à ne pas écrire (réalignement reporté, identité ambiguë) : site local conservé tel quel.
+    const skipSite = reconcileHierarchyBeforeReplace(db, 'site', [siteData]).has(siteData.id);
 
     // ── Filet de sécurité FK (parité avec syncUsersFromCloud, ~ligne 452) ────
     // `INSERT OR REPLACE` sur une PK déjà existante est un DELETE+INSERT
@@ -198,7 +199,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
     // t_cartes au même instant.
     db.exec('PRAGMA foreign_keys = OFF;');
     try {
-      db.prepare(`
+      if (!skipSite) db.prepare(`
         INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
         VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
       `).run({
@@ -727,14 +728,15 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
     }
     const siteData = siteDataList[0];
     assertCloudSiteIdentity(db, siteId, siteData);
-    reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
+    // Ligne cloud à ne pas écrire (réalignement reporté, identité ambiguë) : site local conservé tel quel.
+    const skipSite = reconcileHierarchyBeforeReplace(db, 'site', [siteData]).has(siteData.id);
 
     // Filet de sécurité FK (parité avec la garde déjà appliquée un peu plus
     // bas dans cette même fonction pour t_users) : voir le commentaire détaillé
     // sur le premier INSERT OR REPLACE t_sites de ce fichier (runDownstream).
     db.exec('PRAGMA foreign_keys = OFF;');
     try {
-      db.prepare(`
+      if (!skipSite) db.prepare(`
         INSERT OR REPLACE INTO t_sites (id, nom, code, is_active, max_centres, created_at, sync_id, expiry_date, is_permanent)
         VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
       `).run({

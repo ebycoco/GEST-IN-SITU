@@ -227,7 +227,35 @@ describe('hierarchy-realign — id local → id cloud', () => {
       expect(one('SELECT COUNT(*) AS n FROM t_sites').n).toBe(1);
       expect(one(`SELECT site_id FROM t_users WHERE login = 'agent'`).site_id).toBe(5);
       expect(one(`SELECT site_id FROM t_cartes WHERE sync_id = 'carte-1'`).site_id).toBe(5);
-      expect(payloadOf('o-site').sync_id).toBe('uuid-cloud');
+      expect(one(`SELECT COUNT(*) AS n FROM t_outbox WHERE id = 'o-site'`).n).toBe(0);
+    });
+
+    it('re-audit P1-C : adoption → anciens envois du site (ancien sync_id) écartés, jamais réécrits ; autres envois intacts', () => {
+      site(5, 'uuid-old');
+      outbox('uuid-old', 't_sites', 'ERROR', { sync_id: 'uuid-old', is_active: 1, max_centres: 4 });
+      outbox('o-upd', 't_sites', 'PENDING', { sync_id: 'uuid-old', expiry_date: '2020-01-01' });
+      outbox('o-done', 't_sites', 'SYNCED', { sync_id: 'uuid-old' });
+      outbox('o-autre', 't_sites', 'PENDING', { sync_id: 'autre-site' });
+      outbox('o-user', 't_users', 'PENDING', { sync_id: 'uuid-old', site_id: 5 });
+      realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'uuid-cloud', code: 'C_uuid-old' }], RENUM);
+      expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('uuid-cloud');
+      const ids = (db.prepare('SELECT id FROM t_outbox ORDER BY id').all() as { id: string }[]).map(r => r.id);
+      expect(ids).toEqual(['o-autre', 'o-done', 'o-user']);
+      expect(payloadOf('o-autre').sync_id).toBe('autre-site');
+    });
+
+    it('re-audit P1-A : ligne cloud sans sync_id, autre code sur l\'id d\'un site local → site local déplacé (hors session) ou ligne cloud non écrite (session)', () => {
+      site(5, 'site-local');
+      expect([...realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: null, code: 'AUTRE' }], SESSION)]).toEqual([5]);
+      expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-local').id).toBe(5);
+      expect([...realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: null, code: 'AUTRE' }], RENUM)]).toEqual([]);
+      expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-local').id).toBeGreaterThan(5);
+    });
+
+    it('re-audit P1-A : ligne cloud sans sync_id dont le code est porté par une autre ligne locale → non écrite', () => {
+      site(7, 'site-abo');
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 9, sync_id: null, code: 'C_site-abo' }], RENUM);
+      expect([...skip]).toEqual([9]);
     });
 
     it('audit P0-1 : même code sous un autre id → sync_id adopté puis réaligné (hors session) ; en session, ligne cloud non écrite', () => {
@@ -267,6 +295,10 @@ describe('hierarchy-realign — id local → id cloud', () => {
     expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x');
     expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: 'site-x-cloud', code: 'C_site-x' })).toBe('adopted');
     expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x-cloud');
+    // re-audit P1-A : sync_id cloud absent → seul le code tranche.
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: null, code: 'AUTRE' })).toBe('mismatch');
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: null, code: 'C_site-x' })).toBe('ok');
+    expect(realign.checkCloudSiteIdentity(db, 5, { sync_id: null, code: null })).toBe('ok');
   });
 
   it('erreur SQL pendant le réalignement : tout est annulé et foreign_keys est restauré', () => {

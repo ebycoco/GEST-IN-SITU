@@ -17,6 +17,13 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] }
 }));
 
+// Session simulée (null par défaut = comportement réel avant connexion).
+let fakeSession: Record<string, unknown> | null = null;
+vi.mock('../src/main/auth/session-heartbeat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/main/auth/session-heartbeat')>()),
+  getSecureCurrentUser: () => fakeSession
+}));
+
 const SITE_A = 981;
 const SITE_B = 982;
 let cloudUsers: any[] = [];
@@ -42,6 +49,7 @@ vi.mock('../src/main/sync/supabase-client', () => ({
       const builder: any = {
         select: () => builder,
         eq: (k: string, v: unknown) => { filters.push([k, v]); return builder; },
+        abortSignal: () => Promise.resolve(run()),
         then: (res: any, rej: any) => Promise.resolve(run()).then(res, rej)
       };
       return builder;
@@ -157,6 +165,33 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     expect(db.prepare('SELECT id, sync_id FROM t_sites WHERE code = ?').all(`ABO_${k}`)).toEqual([{ id: S, sync_id: `uuid-cloud-${k}` }]);
     expect(byLogin(`agent_abo_${k}`).site_id).toBe(S);
     expect(fk()).toBe(1);
+  });
+
+  it('re-audit P1-A : syncUsersFromCloud refuse un site cloud sans sync_id dont le code diffère du site local', async () => {
+    const k = uid();
+    const B = 9350 + k;
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (?, 'B', ?, 1, ?)`).run(B, `B3_${k}`, `uuid-b-${k}`);
+    cloudSites = [{ id: B, nom: 'AUTRE', code: `AUTRE3_${k}`, is_active: 1, max_centres: 4, sync_id: null }];
+    await expect(downstream.syncUsersFromCloud(B)).rejects.toBeInstanceOf(downstream.SiteNotFoundError);
+    expect(db.prepare('SELECT code FROM t_sites WHERE id = ?').get(B)).toEqual({ code: `B3_${k}` });
+  });
+
+  it('re-audit P1-B : en session, syncUsersFromCloud n\'écrit pas un site cloud à réaligner (pas de suppression par le code)', async () => {
+    const k = uid();
+    const L = 9300 + k, C = 9360 + k;
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (?, 'ABO', ?, 1, ?)`).run(L, `ABO3_${k}`, `uuid-a-${k}`);
+    db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, sync_id, is_dirty, statut_actif) VALUES (?, 'h', 'OPERATEUR_SAISIE', ?, ?, 0, 1)`)
+      .run(`agent_a_${k}`, L, `sid-${k}-a3`);
+    cloudSites = [{ id: C, nom: 'ABO', code: `ABO3_${k}`, is_active: 1, max_centres: 4, sync_id: `uuid-a-${k}` }];
+    fakeSession = { login: 'x', role: 'SUPER ADMIN', site_id: null, centre_id: null };
+    try {
+      await downstream.syncUsersFromCloud(C);
+    } finally {
+      fakeSession = null;
+    }
+    expect(db.prepare('SELECT id FROM t_sites WHERE code = ?').get(`ABO3_${k}`)).toEqual({ id: L });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM t_sites WHERE id = ?').get(C)).toEqual({ n: 0 });
+    expect(byLogin(`agent_a_${k}`).site_id).toBe(L);
   });
 
   it('runDownstream : site local dont l\'id désigne un autre site dans le cloud → SiteNotFoundError, rien n\'est écrit', async () => {

@@ -218,20 +218,29 @@ function sameIdentity(level: 'site' | 'centre', local: LocalHierarchyRow, cloud:
 }
 
 /**
- * Remplace le sync_id local d'une ligne par celui du cloud (même ligne métier), payloads t_outbox en
- * attente compris. Ne change aucun id : sans risque pour une session ouverte.
+ * Remplace le sync_id local d'une ligne par celui du cloud (même ligne métier). Ne change aucun id :
+ * sans risque pour une session ouverte.
+ * Les envois t_outbox en attente de CETTE ligne sous l'ancien sync_id sont écartés (supprimés et
+ * journalisés), jamais réécrits (re-audit 2026-10-31, P1-C) : sous l'ancien sync_id ils échouaient
+ * toujours (conflit sur le code UNIQUE cloud, aucun `id` dans le payload) et n'ont donc jamais été
+ * appliqués ; réécrits avec le sync_id cloud, ils écraseraient la ligne cloud (is_active, expiry_date,
+ * max_centres…) avec des valeurs anciennes. Leur id t_outbox (= ancien sync_id) échapperait aussi à
+ * cancelPendingInsert(sync_id courant) de deleteSite / deleteCentre.
  */
 function adoptCloudSyncId(db: Database.Database, def: LevelDef, localId: number, oldSyncId: string | null, newSyncId: string): void {
+  let discarded: { id: string; operation: string; status: string; created_at: string | null }[] = [];
   db.transaction(() => {
     db.prepare(`UPDATE ${quote(def.table)} SET sync_id = ? WHERE id = ?`).run(newSyncId, localId);
     if (oldSyncId) {
-      db.prepare(`
-        UPDATE t_outbox SET payload = json_set(payload, '$.sync_id', ?)
-        WHERE status IN ('PENDING', 'ERROR') AND table_name = ? AND json_valid(payload) AND json_extract(payload, '$.sync_id') = ?
-      `).run(newSyncId, def.table, oldSyncId);
+      const where = `status IN ('PENDING', 'ERROR') AND table_name = ? AND (id = ? OR (json_valid(payload) AND json_extract(payload, '$.sync_id') = ?))`;
+      discarded = db.prepare(`SELECT id, operation, status, created_at FROM t_outbox WHERE ${where}`).all(def.table, oldSyncId, oldSyncId) as typeof discarded;
+      db.prepare(`DELETE FROM t_outbox WHERE ${where}`).run(def.table, oldSyncId, oldSyncId);
     }
   })();
   log.info(`[hierarchy-realign] ${def.table} id ${localId} : sync_id local ${oldSyncId ?? 'NULL'} remplacé par le sync_id cloud ${newSyncId} (même ${def.table === 't_sites' ? 'code' : 'site, numéro et nom'}).`);
+  for (const e of discarded) {
+    log.warn(`[hierarchy-realign] Envoi t_outbox écarté (ancien sync_id ${oldSyncId}, jamais applicable au cloud) : id=${e.id} ${def.table} ${e.operation} ${e.status} créé le ${e.created_at ?? '?'}.`);
+  }
 }
 
 const LOCAL_COLS: Record<'site' | 'centre', string> = {
@@ -241,9 +250,10 @@ const LOCAL_COLS: Record<'site' | 'centre', string> = {
 
 /**
  * Identité du site cloud de même id que le site LOCAL `siteId` (garde anti-fuite §3, audit 2026-10-31 P1-1) :
- * - ok : même sync_id, ou l'un des deux est absent ;
+ * - ok : même sync_id ; ou un sync_id absent sans code différent ;
  * - adopted : sync_id différents mais même code → même site, le sync_id cloud est adopté localement ;
- * - mismatch : sync_id ET code différents → l'id local désigne un AUTRE site dans le cloud.
+ * - mismatch : code différent (sync_id différents, ou l'un absent — re-audit 2026-10-31, P1-A : le
+ *   cloud accepte un sync_id NULL) → l'id local désigne un AUTRE site dans le cloud.
  */
 export function checkCloudSiteIdentity(
   db: Database.Database,
@@ -251,7 +261,11 @@ export function checkCloudSiteIdentity(
   cloudSite: { sync_id?: string | null; code?: string | null }
 ): 'ok' | 'adopted' | 'mismatch' {
   const local = db.prepare(`SELECT ${LOCAL_COLS.site} FROM t_sites WHERE id = ?`).get(siteId) as LocalHierarchyRow | undefined;
-  if (!local?.sync_id || !cloudSite.sync_id || local.sync_id === cloudSite.sync_id) return 'ok';
+  if (!local) return 'ok';
+  if (!local.sync_id || !cloudSite.sync_id) {
+    return local.code && cloudSite.code && local.code !== cloudSite.code ? 'mismatch' : 'ok';
+  }
+  if (local.sync_id === cloudSite.sync_id) return 'ok';
   if (sameIdentity('site', local, { id: siteId, ...cloudSite })) {
     adoptCloudSyncId(db, LEVELS.site, siteId, local.sync_id, cloudSite.sync_id);
     return 'adopted';
@@ -318,11 +332,14 @@ export function reconcileBeforeCloudReplace(
     }
   }
 
-  // 2. Libération de l'id cloud occupé par une ligne locale d'une autre identité.
-  for (const c of rows) {
+  // 2. Libération de l'id cloud occupé par une ligne locale d'une autre identité. Ligne cloud sans
+  //    sync_id (re-audit P1-A) : seuls les sites sont traités, l'identité étant alors le seul code.
+  const allRows = cloudRows.filter(c => Number.isInteger(c?.id));
+  for (const c of allRows) {
     if (skipIds.has(c.id)) continue;
     const occ = db.prepare(`SELECT ${LOCAL_COLS[level]} FROM ${table} WHERE id = ?`).get(c.id) as LocalHierarchyRow | undefined;
     if (!occ || !occ.sync_id || occ.sync_id === c.sync_id) continue;
+    if (!c.sync_id && !(level === 'site' && occ.code && c.code && occ.code !== c.code)) continue;
     if (sameIdentity(level, occ, c)) {
       // Même ligne métier non adoptée (ambiguïté) : ne jamais la déplacer (sinon REPLACE par `code`
       // la supprimerait avec ses références déjà renumérotées, audit P0-1) ; ancien comportement.
@@ -344,7 +361,7 @@ export function reconcileBeforeCloudReplace(
   // t_sites.code est UNIQUE : un REPLACE supprimerait toute AUTRE ligne locale de même code. Ne pas
   // écrire la ligne cloud si une telle ligne subsiste (identité ambiguë, réalignement reporté).
   if (level === 'site') {
-    for (const c of rows) {
+    for (const c of allRows) {
       if (skipIds.has(c.id) || !c.code) continue;
       const other = db.prepare(`SELECT id FROM t_sites WHERE code = ? AND id != ?`).get(c.code, c.id) as { id: number } | undefined;
       if (other) skip(c.id, `une autre ligne locale (id ${other.id}) porte le même code`);
