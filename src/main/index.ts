@@ -36,6 +36,8 @@ import { resetOutboxErrors } from './sync/outbox.service';
 
 import { stopSessionHeartbeat, getSecureCurrentUser } from './auth/session-heartbeat';
 import { openPreloadGate, isPreloadGateOpen } from './auth/preload-gate';
+import { armOfflineBootUserRecovery, type OfflineBootRecoveryHandle } from './auth/offline-first-boot';
+import { networkMonitor } from './sync/network-monitor';
 import { getSupabaseClient } from './sync/supabase-client';
 import { recordPresenceLogoutAndWait, isPresenceTrackedRole } from './sync/presence.service';
 
@@ -80,6 +82,9 @@ let splashWindow: BrowserWindow | null = null;
 let isQuitting = false;
 // Garde anti-réentrance du flush de présence à la fermeture (voir mainWindow.on('close')).
 let isFlushingPresenceOnClose = false;
+// Rattrapage du préchargement des comptes au retour du réseau (poste sans compte actif, P1-3) :
+// armé au plus une fois par processus (voir src/main/auth/offline-first-boot.ts).
+let offlineBootRecovery: OfflineBootRecoveryHandle | null = null;
 
 // Sécurisation de l'instance unique
 const gotTheLock = app.requestSingleInstanceLock();
@@ -207,7 +212,31 @@ function createWindow(): void {
           log.info('[INIT] Preload silencieux terminé.');
         }).catch((err) => {
           log.warn('[INIT] Échec du preload silencieux (mode hors-ligne) :', err?.message);
-        }).finally(closePreloadGate);
+        }).finally(() => {
+          closePreloadGate();
+          // P1-3 (audit 2026-10-31) : le compte seed désactivé garde COUNT(*) > 0, donc ni
+          // app:checkFirstLaunch ni l'amorçage du sync-engine ne prennent le relais. Si ce
+          // préchargement n'a laissé AUCUN compte actif (hors ligne, erreur cloud), on relance
+          // preloadUsersFromCloud() au prochain passage ONLINE du NetworkMonitor, jusqu'au succès
+          // (une tentative à la fois, écoute retirée après succès). Mêmes conditions que ci-dessus :
+          // client Supabase requis (absent en E2E isolé). La porte de préchargement n'est pas rouverte.
+          if (offlineBootRecovery) return;
+          try {
+            offlineBootRecovery = armOfflineBootUserRecovery({
+              network: networkMonitor,
+              countActiveUsers: () => {
+                const db = getDatabase();
+                if (!db) throw new Error('Base locale non initialisée');
+                const row = db.prepare('SELECT COUNT(*) as count FROM t_users WHERE statut_actif = 1').get() as { count: number };
+                return row.count;
+              },
+              preload: preloadUsersFromCloud,
+              canPreload: () => !!getSupabaseClient()
+            });
+          } catch (armErr: any) {
+            log.warn('[INIT] Rattrapage du préchargement des comptes non armé (non bloquant) :', armErr?.message || armErr);
+          }
+        });
       } else {
         closePreloadGate();
         log.info('[INIT] Base locale vide (Nouvelle machine). On délègue le rapatriement à la page Login (forceGlobal).');
