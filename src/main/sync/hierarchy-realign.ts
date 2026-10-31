@@ -200,7 +200,7 @@ export interface CloudHierarchyRow {
   nom?: string | null;
 }
 
-type LocalHierarchyRow = { id: number; sync_id: string | null; code?: string | null; site_id?: number | null; numero?: number | null; nom?: string | null };
+export type LocalHierarchyRow = { id: number; sync_id: string | null; code?: string | null; site_id?: number | null; numero?: number | null; nom?: string | null };
 
 const normName = (v: unknown): string => String(v ?? '').trim().toLowerCase();
 
@@ -210,7 +210,7 @@ const normName = (v: unknown): string => String(v ?? '').trim().toLowerCase();
  * ligne, chaque poste porte un sync_id différent du cloud pour la même ligne (audit 2026-10-31, P0-1).
  * Site : même code. Centre : même site, même numéro et même nom.
  */
-function sameIdentity(level: 'site' | 'centre', local: LocalHierarchyRow, cloud: CloudHierarchyRow): boolean {
+export function sameIdentity(level: 'site' | 'centre', local: LocalHierarchyRow, cloud: CloudHierarchyRow): boolean {
   if (level === 'site') return !!cloud.code && local.code === cloud.code;
   return cloud.site_id != null && local.site_id === cloud.site_id
     && cloud.numero != null && local.numero === cloud.numero
@@ -243,7 +243,7 @@ function adoptCloudSyncId(db: Database.Database, def: LevelDef, localId: number,
   }
 }
 
-const LOCAL_COLS: Record<'site' | 'centre', string> = {
+export const LOCAL_COLS: Record<'site' | 'centre', string> = {
   site: 'id, sync_id, code',
   centre: 'id, sync_id, site_id, numero, nom'
 };

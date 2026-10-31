@@ -6,7 +6,7 @@ import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
 import { insertAuditLog } from '../database/queries/audit.queries';
-import { realignLocalId, type HierarchyLevel } from './hierarchy-realign';
+import { realignLocalId, sameIdentity, LOCAL_COLS, type HierarchyLevel, type LocalHierarchyRow } from './hierarchy-realign';
 
 // ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
 /**
@@ -125,6 +125,91 @@ async function _realignAfterAck(
     log.error(`[OutboxService] Réalignement après envoi de ${tableName} sync_id=${syncId} en échec :`, err?.message || err);
     return false;
   }
+}
+
+// ─── Garde d'alignement avant envoi (plan site_id, commit 6) ────────────────
+/** Préfixe de l'error_msg d'une entrée reportée par la garde (ces entrées passent en fin de lot). */
+export const NOT_ALIGNED_PREFIX = '[NON ALIGNÉ]';
+
+/** Tables dont le payload référence un site / centre par son id LOCAL. */
+const REFERENCE_CHECK_TABLES = new Set(['t_users', 't_centres', 't_postes', 't_cartes', 't_logs']);
+
+type AlignmentVerdict = 'ok' | 'misaligned' | 'unknown';
+type AlignmentCheck =
+  | { kind: 'ok' }
+  | { kind: 'wait' }
+  | { kind: 'transient' }
+  | { kind: 'misaligned'; reason: string };
+
+/**
+ * Avant l'envoi d'une entrée qui référence un site / centre par son id LOCAL : cet id doit désigner
+ * la MÊME ligne dans le cloud (sinon l'entrée partirait rattachée à un autre site — fuite §3 — ou serait
+ * refusée par une clé étrangère). Poste créateur non encore réaligné (session ouverte, réalignement au
+ * prochain démarrage) : l'entrée est reportée, sans tentative comptée.
+ * - wait : le site/centre local a encore son INSERT en attente → reporté sans message ;
+ * - misaligned : la ligne cloud de même id est absente ou d'une autre identité → reporté avec message ;
+ * - transient : lecture cloud en échec → reporté (réseau) ;
+ * - ok : sinon, et dans tous les cas non vérifiables (ligne locale absente ou sans sync_id,
+ *   client simulé sans select) — comportement antérieur.
+ * `cache` : verdict par table+id, limité au lot en cours.
+ */
+async function _checkReferencesAligned(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  supabase: NonNullable<ReturnType<typeof getSupabaseClient>>,
+  entry: Pick<OutboxEntry, 'table_name' | 'operation' | 'payload'>,
+  cache: Map<string, AlignmentVerdict>
+): Promise<AlignmentCheck> {
+  if (entry.operation === 'DELETE' || !REFERENCE_CHECK_TABLES.has(entry.table_name)) return { kind: 'ok' };
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(entry.payload);
+  } catch {
+    return { kind: 'ok' }; // payload invalide : traité plus loin (passage en ERROR)
+  }
+  const refs: Array<{ level: 'site' | 'centre'; table: 't_sites' | 't_centres'; id: unknown }> = [
+    { level: 'site', table: 't_sites', id: payload.site_id ?? payload.id_site },
+    { level: 'centre', table: 't_centres', id: payload.centre_id ?? payload.id_centre }
+  ];
+  for (const ref of refs) {
+    const id = Number(ref.id);
+    if (ref.id == null || !Number.isInteger(id) || id <= 0) continue;
+    const local = db.prepare(`SELECT ${LOCAL_COLS[ref.level]} FROM ${ref.table} WHERE id = ?`).get(id) as LocalHierarchyRow | undefined;
+    if (!local?.sync_id) continue;
+    const pendingInsert = db.prepare(
+      `SELECT 1 FROM t_outbox WHERE id = ? AND table_name = ? AND operation = 'INSERT' AND status IN ('PENDING', 'ERROR')`
+    ).get(local.sync_id, ref.table);
+    if (pendingInsert) return { kind: 'wait' };
+
+    const key = `${ref.table}:${id}`;
+    let verdict = cache.get(key);
+    if (!verdict) {
+      verdict = 'ok';
+      const builder: any = supabase.from(ref.table);
+      const query = typeof builder?.select === 'function' ? builder.select(ref.level === 'site' ? 'id, sync_id, code' : 'id, sync_id, site_id, numero, nom') : null;
+      if (query && typeof query.eq === 'function') {
+        try {
+          const { data, error } = await query.eq('id', id);
+          if (error) {
+            verdict = 'unknown';
+          } else {
+            const row = Array.isArray(data) ? data[0] : null;
+            verdict = row && (row.sync_id === local.sync_id || !row.sync_id || sameIdentity(ref.level, local, row)) ? 'ok' : 'misaligned';
+          }
+        } catch {
+          verdict = 'unknown';
+        }
+      }
+      cache.set(key, verdict);
+    }
+    if (verdict === 'unknown') return { kind: 'transient' };
+    if (verdict === 'misaligned') {
+      return {
+        kind: 'misaligned',
+        reason: `${NOT_ALIGNED_PREFIX} ${ref.level} local ${id} non aligné sur le cloud (numéro attribué par le cloud différent) — envoi reporté jusqu'au réalignement, au prochain démarrage de l'application.`
+      };
+    }
+  }
+  return { kind: 'ok' };
 }
 
 // ─── Types internes ──────────────────────────────────────────────────────────
@@ -389,9 +474,10 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
       FROM t_outbox
       WHERE status = 'PENDING'
         ${excludeCardsUpstream ? "AND table_name != 't_cartes'" : ''}
-      ORDER BY created_at ASC
+      ORDER BY (CASE WHEN error_msg LIKE ? THEN 1 ELSE 0 END), created_at ASC
       LIMIT ?
-    `).all(OUTBOX_BATCH_SIZE) as OutboxEntry[];
+    `).all(`${NOT_ALIGNED_PREFIX}%`, OUTBOX_BATCH_SIZE) as OutboxEntry[];
+    // Entrées reportées par la garde d'alignement en fin de lot : elles ne bloquent pas les autres.
 
     if (pendingEntries.length === 0) {
       return { processed: 0, errors: 0 };
@@ -405,6 +491,7 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
       return { processed: 0, errors: 0 };
     }
 
+    const alignmentCache = new Map<string, AlignmentVerdict>();
     for (const entry of pendingEntries) {
       // ── Garde anti-course "ré-enfilage pendant traitement" (audit 2026-10-26, point 5) ──
       // L'id t_outbox est réutilisé pour une même entité : enqueueOutbox() remplace payload/
@@ -428,6 +515,15 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         } else if (parent && parent.status === 'PENDING') {
           continue; // Parent pas encore prêt, on reporte à plus tard sans erreur
         }
+      }
+
+      // Garde d'alignement (plan site_id, commit 6) : aucune tentative comptée si l'entrée est reportée.
+      const alignment = await _checkReferencesAligned(db, supabase, entry, alignmentCache);
+      if (alignment.kind === 'wait' || alignment.kind === 'transient') continue;
+      if (alignment.kind === 'misaligned') {
+        log.warn(`[OutboxService] ${entry.table_name} (id=${entry.id}) reporté : ${alignment.reason}`);
+        _recordOutboxAttemptError(db, entry, alignment.reason);
+        continue;
       }
 
       const newAttempts = entry.attempts + 1;
