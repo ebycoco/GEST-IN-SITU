@@ -165,12 +165,14 @@ describe('LOT 1b — correctifs audit sécurité des comptes agents (users.queri
       expect(() => uq.updateUser(sa.id_user, { roles: ['OPERATEUR_SAISIE'] }, caller(ac))).toThrow(MSG);
       expect(row('sa')).toEqual(sa);
     });
-    it('SUPER ADMIN sur SUPER ADMIN = OK', () => {
+    it('SUPER ADMIN sur SUPER ADMIN = OK pour updateUser, refus pour resetAgentPassword', () => {
       const sa = mk('sa', 'SUPER ADMIN', SITE_A);
       const sa2 = mk('sa2', 'SUPER ADMIN', SITE_A);
       uq.updateUser(sa2.id_user, { nom_user: 'Modifie' }, caller(sa));
       expect(row('sa2').nom_user).toBe('Modifie');
-      expect(uq.resetAgentPassword(sa2.id_user, caller(sa)).success).toBe(true);
+      // Règle ROOT (2026-10-31) : la réinitialisation du mot de passe d'un SUPER ADMIN est désormais
+      // réservée au compte ROOT de secours (couvert par tests/users-reset-password-root.test.ts).
+      expect(() => uq.resetAgentPassword(sa2.id_user, caller(sa))).toThrow('seul le compte ROOT');
     });
   });
 

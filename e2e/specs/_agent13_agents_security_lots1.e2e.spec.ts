@@ -230,7 +230,9 @@ test.describe.serial('QA terrain — sécurité comptes agents lots 1/1b (offlin
     }
     await loginAs('E2E_SUPER_ADMIN');
     await allowed('contrôle: SUPER ADMIN modifie SA_C1 (nom)', () => call('update', saC1, { nom_user: 'MODIF_PAR_SA' }));
-    await allowed('contrôle: SUPER ADMIN reset mot de passe SA_C1', () => resetCall(saC1));
+    // Règle ROOT (2026-10-31) : la réinitialisation du mot de passe d'un SUPER ADMIN est réservée au
+    // compte ROOT de secours ; un SUPER ADMIN normal est refusé (SA_C1 détient SUPER ADMIN via t_user_roles).
+    await refused('contrôle: SUPER ADMIN reset mot de passe SA_C1 (réservé à ROOT)', () => resetCall(saC1));
   });
 
   test('S4 updateUser : statut, roles, password_hash, site, centre, ADMIN_CENTRE', async () => {

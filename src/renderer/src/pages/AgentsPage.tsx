@@ -60,9 +60,18 @@ const cleanIpcError = (err: unknown): string => {
   return raw.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, '').trim();
 };
 
+// Compte ROOT de secours (id fixe, aucune ligne dans t_users). Sert UNIQUEMENT à l'affichage :
+// le serveur (handlers.ts / users.queries.ts) tranche seul d'après la session sécurisée.
+const FAILSAFE_ROOT_ID = 999999;
+
+/** Compte détenant le rôle SUPER ADMIN (colonne principale ou rôles multiples). Pur, synchrone. */
+const isSuperAdminAccount = (u: { role: string; roles?: string[] }): boolean =>
+  u.role === 'SUPER ADMIN' || (u.roles || []).includes('SUPER ADMIN');
+
 export default function AgentsPage() {
   const { user: userContext, activeSiteId } = useAuthStore();
-  
+  const isRootSession = userContext?.id_user === FAILSAFE_ROOT_ID && userContext?.role === 'SUPER ADMIN';
+
   const visibleRoles = useMemo(() => {
     if (userContext?.role === 'SUPER ADMIN') {
       return AVAILABLE_ROLES;
@@ -99,9 +108,13 @@ export default function AgentsPage() {
   // OPTIM-4 fix : réinitialisation sécurisée via confirmService avec requirePassword: true
   const handleConfirmAndResetPassword = async (user: User) => {
     if (!userContext) return;
+    // Action sensible : cible Super Admin (visible uniquement pour le compte ROOT de secours).
+    const targetIsSuper = isSuperAdminAccount(user);
     const isConfirmed = await confirmService.confirm({
-      title: "Réinitialisation du mot de passe",
-      message: `Voulez-vous réinitialiser le mot de passe de l'agent @${user.login} ? Un nouveau mot de passe temporaire aléatoire lui sera attribué et vous sera affiché une seule fois. Communiquez-le ensuite à l'agent de vive voix.`,
+      title: targetIsSuper ? "Réinitialisation du mot de passe d'un SUPER ADMIN" : "Réinitialisation du mot de passe",
+      message: targetIsSuper
+        ? `ATTENTION : vous allez réinitialiser le mot de passe du SUPER ADMIN @${user.login}. Son mot de passe actuel cessera immédiatement de fonctionner. Un mot de passe temporaire aléatoire vous sera affiché une seule fois : communiquez-le à cette personne de vive voix.`
+        : `Voulez-vous réinitialiser le mot de passe de l'agent @${user.login} ? Un nouveau mot de passe temporaire aléatoire lui sera attribué et vous sera affiché une seule fois. Communiquez-le ensuite à l'agent de vive voix.`,
       isDanger: true,
       requirePassword: true,
       actionName: `Réinitialisation du mot de passe de l'agent ${user.login}`
@@ -692,7 +705,7 @@ export default function AgentsPage() {
           {/* La liste ou le corps du tableau (si virtualisé ou classique sous forme de lignes) */}
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {paginatedUsers.map(u => (
-              <div key={u.id_user} className="table-row-hover" style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID_COLUMNS, columnGap: 10, alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'all 0.2s' }}>
+              <div key={u.id_user} data-testid={`agent-row-${u.login}`} className="table-row-hover" style={{ display: 'grid', gridTemplateColumns: AGENTS_GRID_COLUMNS, columnGap: 10, alignItems: 'center', padding: '10px 12px', background: 'rgba(255,255,255,0.01)', borderBottom: '1px solid rgba(255,255,255,0.02)', transition: 'all 0.2s' }}>
                 
                 {/* AGENT */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
@@ -717,6 +730,7 @@ export default function AgentsPage() {
                     return (
                       <span
                         key={r}
+                        data-testid={`agent-role-badge-${u.login}-${r}`}
                         title={AVAILABLE_ROLES.find(ar => ar.value === r)?.label || r}
                         style={{
                           fontSize: 11, fontWeight: 700, lineHeight: 1.3, padding: '2px 8px', borderRadius: 6, whiteSpace: 'nowrap',
@@ -791,14 +805,19 @@ export default function AgentsPage() {
 
                 {/* ACTIONS */}
                 <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexShrink: 0 }}>
-                  <button className="btn btn-icon btn-outline btn-sm" onClick={() => openEditModal(u)} title="Modifier">
-                    <Edit size={14} />
-                  </button>
+                  {/* Un compte SUPER ADMIN (visible seulement pour ROOT) n'offre que la réinitialisation du mot de passe */}
+                  {u.role !== 'SUPER ADMIN' && (
+                    <button className="btn btn-icon btn-outline btn-sm" onClick={() => openEditModal(u)} title="Modifier">
+                      <Edit size={14} />
+                    </button>
+                  )}
+                  {u.id_user !== userContext?.id_user && (!isSuperAdminAccount(u) || isRootSession) && (
+                    <button className="btn btn-icon btn-outline btn-sm" data-testid={`agent-reset-password-${u.login}`} onClick={() => handleConfirmAndResetPassword(u)} title={isSuperAdminAccount(u) ? "Réinitialiser le mot de passe de ce Super Admin" : "Réinitialiser le mot de passe"} style={{ borderColor: 'rgba(251, 191, 36, 0.3)' }}>
+                      <Key size={14} color="#fbbf24" />
+                    </button>
+                  )}
                   {u.role !== 'SUPER ADMIN' && u.id_user !== userContext?.id_user && (
                     <>
-                      <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleConfirmAndResetPassword(u)} title="Réinitialiser le mot de passe" style={{ borderColor: 'rgba(251, 191, 36, 0.3)' }}>
-                        <Key size={14} color="#fbbf24" />
-                      </button>
                       <button className="btn btn-icon btn-outline btn-sm" onClick={() => handleToggleStatus(u)} title={u.statut_actif === 1 ? "Désactiver" : "Activer"}>
                         {u.statut_actif === 1 ? <UserX size={14} color="var(--text-muted)" /> : <UserCheck size={14} color="var(--accent-green)" />}
                       </button>

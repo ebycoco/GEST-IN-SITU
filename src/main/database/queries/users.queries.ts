@@ -46,6 +46,10 @@ function assertRolesAssignable(creatorRole: string, roles: string[]): void {
 // ── Helpers LOT 1b (audit agent-9 : logins, cibles SUPER ADMIN) ─────────────────────────
 const LOGIN_TAKEN_MESSAGE = "Ce login est déjà utilisé. Choisissez-en un autre.";
 const FORBIDDEN_TARGET_MESSAGE = "Accès non autorisé aux données de ce site";
+// Compte ROOT de secours (aucune ligne dans t_users) : même constante que handlers.ts/logs.queries.ts
+// (redéclarée ici pour éviter un import circulaire vers la couche IPC).
+const FAILSAFE_ROOT_ID = 999999;
+const ROOT_ONLY_SUPER_ADMIN_RESET_MESSAGE = "Accès non autorisé : seul le compte ROOT de secours peut réinitialiser le mot de passe d'un Super Admin.";
 
 type Db = NonNullable<ReturnType<typeof getDatabase>>;
 type LoginMatch = { id_user: number; login: string; sync_id: string; statut_actif: number; site_id: number | null };
@@ -230,24 +234,32 @@ export function getUserRoles(userId: number): string[] {
   return rows.map(r => r.role);
 }
 
-export function getUsers(siteId?: number, centreId?: number) {
+/**
+ * @param options.includeSuperAdmins Réservé au compte ROOT de secours : le HANDLER IPC le déduit de
+ *   getSecureCurrentUser() (jamais d'un paramètre renderer, CLAUDE.md §3). Par défaut (absent/false) :
+ *   comportement historique inchangé, les comptes SUPER ADMIN sont exclus. Quand actif, les SUPER ADMIN
+ *   (souvent sans site ni centre) sont inclus quel que soit le filtre site/centre demandé ; les filtres
+ *   continuent de s'appliquer aux autres comptes. Requête unique, aucune charge mémoire supplémentaire.
+ */
+export function getUsers(siteId?: number, centreId?: number, options?: { includeSuperAdmins?: boolean }) {
   const db = getDatabase()!;
+  const includeSA = options?.includeSuperAdmins === true;
   let query = `
     SELECT u.*, c.nom AS centre_nom, s.nom AS site_nom,
       (SELECT GROUP_CONCAT(role, ',') FROM t_user_roles WHERE id_user = u.id_user) as roles_concat
     FROM t_users u
     LEFT JOIN t_centres c ON u.centre_id = c.id
     LEFT JOIN t_sites s ON u.site_id = s.id
-    WHERE u.role != 'SUPER ADMIN' AND u.statut_actif != -1
+    WHERE ${includeSA ? '1 = 1' : "u.role != 'SUPER ADMIN'"} AND u.statut_actif != -1
   `;
-  
+
   const params: any[] = [];
   if (siteId) {
-    query += ' AND u.site_id = ?';
+    query += includeSA ? " AND (u.site_id = ? OR u.role = 'SUPER ADMIN')" : ' AND u.site_id = ?';
     params.push(siteId);
   }
   if (centreId) {
-    query += ' AND u.centre_id = ?';
+    query += includeSA ? " AND (u.centre_id = ? OR u.role = 'SUPER ADMIN')" : ' AND u.centre_id = ?';
     params.push(centreId);
   }
   
@@ -1124,8 +1136,22 @@ export function resetAgentPassword(targetUserId: number, caller: { id_user: numb
   if (caller.role === 'ADMINISTRATEUR_SITE' && caller.site_id !== target.site_id) {
     throw new Error("Accès non autorisé : L'agent cible n'appartient pas à votre site.");
   }
-  // LOT 1b (P1-1) : cible SUPER ADMIN interdite à un non-SUPER ADMIN (même rattachée au site).
-  assertTargetNotSuperAdmin(db, targetUserId, caller);
+  // Règle ROOT (2026-10-31) : seule la session du compte ROOT de secours (id 999999, rôle actif
+  // SUPER ADMIN, issue de getSecureCurrentUser()) peut réinitialiser le mot de passe d'un SUPER ADMIN.
+  // ROOT peut aussi viser un ADMINISTRATEUR_SITE de n'importe quel site (aucune borne de site).
+  // - ADMINISTRATEUR_SITE -> SUPER ADMIN : refusé (message LOT 1b historique, inchangé).
+  // - SUPER ADMIN normal  -> SUPER ADMIN : refusé (resserrement : l'ancien assertTargetNotSuperAdmin
+  //   laissait passer tout appelant SUPER ADMIN). Garde LOCALE à cette fonction : assertTargetNotSuperAdmin
+  //   n'est pas modifié car partagé avec updateUser/deleteUser/hardDeleteUser.
+  // userHoldsRole inspecte la CIBLE (colonne role OU t_user_roles), jamais l'appelant.
+  const callerIsRoot = caller.id_user === FAILSAFE_ROOT_ID && caller.role === 'SUPER ADMIN';
+  if (!callerIsRoot && userHoldsRole(db, targetUserId, 'SUPER ADMIN')) {
+    throw new Error(
+      caller.role === 'SUPER ADMIN'
+        ? ROOT_ONLY_SUPER_ADMIN_RESET_MESSAGE
+        : FORBIDDEN_TARGET_MESSAGE
+    );
+  }
 
   // SEC fix : l'ancienne implémentation réutilisait une valeur FIXE (DEFAULT_TEMP_PASSWORD
   // ou 'cnam2026!'), identique à chaque réinitialisation pour tout agent — un attaquant

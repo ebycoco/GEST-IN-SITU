@@ -3570,7 +3570,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     // paramètres envoyés par le renderer.
     const scopedSiteId = secureUser.role !== 'SUPER ADMIN' ? secureUser.site_id : siteId;
     const scopedCentreId = secureUser.role === 'ADMIN_CENTRE' ? secureUser.centre_id : centreId;
-    return queries.getUsers(scopedSiteId, scopedCentreId);
+    // Seul le compte ROOT de secours (session serveur id 999999, rôle actif SUPER ADMIN) reçoit aussi
+    // les comptes SUPER ADMIN, pour pouvoir réinitialiser leur mot de passe. Déduit EXCLUSIVEMENT de
+    // getSecureCurrentUser() : aucun paramètre renderer ne peut l'activer (§3). Les autres rôles,
+    // SUPER ADMIN normal compris, gardent le filtre historique.
+    const isRootSession = secureUser.id_user === FAILSAFE_ROOT_ID && secureUser.role === 'SUPER ADMIN';
+    return queries.getUsers(scopedSiteId, scopedCentreId, { includeSuperAdmins: isRootSession });
   });
   ipcMain.handle('users:getProfile', async (_, login: string) => {
     // Sécurité (P2) : ce handler n'avait aucune vérification — tout compte authentifié
