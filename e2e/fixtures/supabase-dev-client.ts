@@ -25,10 +25,43 @@
  * projet ne contient et ne contiendra jamais de données citoyennes réelles.
  */
 import { createClient } from '@supabase/supabase-js';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { parseEnv } from 'node:util';
 
-export const E2E_CLOUD_SUPABASE_URL = 'https://ajadkziqaskadlzboeqo.supabase.co';
-export const E2E_CLOUD_SUPABASE_ANON_KEY =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFqYWRremlxYXNrYWRsemJvZXFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE2NTU4MTksImV4cCI6MjEwNzIzMTgxOX0.D3rFCGoeCi_L9lnY7XbQ4n5q7DSDuMlFLX0I2_8uWv4';
+/**
+ * Les identifiants (URL + clé anon du projet DEV) ne sont PLUS écrits dans le dépôt : ils sont lus
+ * dans `.env.e2e` (racine, ignoré par Git) — mêmes clés que celles utilisées par le build e2e
+ * (electron.vite.config.ts : VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY) — ou, à défaut, dans
+ * l'environnement du process (CI). Seul `.env.e2e` est lu, jamais `.env` (qui peut cibler la prod).
+ * Garde-fou : une URL pointant sur le projet de PRODUCTION est refusée.
+ */
+const PROD_PROJECT_REF = 'itvyayakwgzvfqvdrgyv'; // référence de projet (identifiant public, pas un secret)
+
+function readE2eEnvFile(): Record<string, string | undefined> {
+  try {
+    const envPath = resolve(__dirname, '..', '..', '.env.e2e');
+    return existsSync(envPath) ? parseEnv(readFileSync(envPath, 'utf8')) : {};
+  } catch {
+    return {};
+  }
+}
+
+const e2eEnv = readE2eEnvFile();
+const rawUrl = process.env.E2E_CLOUD_SUPABASE_URL || e2eEnv.VITE_SUPABASE_URL || '';
+const rawKey = process.env.E2E_CLOUD_SUPABASE_ANON_KEY || e2eEnv.VITE_SUPABASE_ANON_KEY || '';
+
+if (rawUrl.includes(PROD_PROJECT_REF)) {
+  throw new Error('[e2e] supabase-dev-client : l\'URL configurée cible le projet de PRODUCTION — refusé.');
+}
+if (!rawUrl || !rawKey) {
+  console.warn('[e2e] supabase-dev-client : VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY absents de .env.e2e — les specs cloud échoueront.');
+}
+
+// Valeurs de repli factices : l'import ne plante jamais (les specs non cloud qui importent ce module
+// restent chargeables), mais les assertions « URL du projet dev » des specs cloud échouent clairement.
+export const E2E_CLOUD_SUPABASE_URL = rawUrl || 'https://env-e2e-manquant.invalid';
+export const E2E_CLOUD_SUPABASE_ANON_KEY = rawKey || 'cle-anon-e2e-manquante';
 
 export const supabaseDev = createClient(E2E_CLOUD_SUPABASE_URL, E2E_CLOUD_SUPABASE_ANON_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }

@@ -54,6 +54,10 @@ Le build de production (`build:win`) et la publication de release ne sont décle
 
 L'application nécessite un fichier `.env` (non versionné) avec les identifiants de connexion à l'instance Supabase du projet. Voir l'équipe du projet pour obtenir les valeurs de configuration.
 
+### Compte de secours ROOT
+
+Le compte de secours ROOT est vérifié par empreinte bcrypt (clé `FAILSAFE_ROOT_PASSWORD_HASH` du fichier `.env`), jamais par un mot de passe en clair. Pour définir ou changer son mot de passe : `node scripts/set-root-password.mjs` (saisie masquée, 16 caractères minimum), puis reconstruire et publier une version. Aucun mot de passe ni clé secrète ne doit être écrit dans le dépôt : utiliser `.env` (ou `.env.e2e` pour les tests e2e), tous deux non versionnés.
+
 ## Auteur
 
 **EBYCHOCO** — [github.com/ebycoco](https://github.com/ebycoco)

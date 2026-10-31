@@ -61,10 +61,11 @@
 import { test, expect } from '@playwright/test';
 import { launchSeededApp, teardownSeededApp, type E2EEnvironment } from '../../fixtures/electron-app';
 import { getTestUser } from '../../fixtures/test-users';
+import bcrypt from 'bcryptjs';
 import { execFileSync } from 'child_process';
 import { join } from 'path';
 
-const ROOT_PASSWORD = 'ZZTEST_Root_Failsafe_2026!';
+const ROOT_PASSWORD = 'Root_E2E_Jetable_Sans_Valeur_Reelle_1!'; // Mot de passe JETABLE de test, sans lien avec le vrai ROOT.
 const ZZ_PWD = 'ZZTEST_Pwd_2026!';
 
 function dbPathOf(userDataDir: string): string {
@@ -101,7 +102,7 @@ test.describe.serial('Wave 2 audit sécurité — vérification vivante (agent-1
   const OP_LOGISTIQUE_LOGIN = 'ZZTEST_OP_LOGISTIQUE';
 
   test.beforeAll(async () => {
-    process.env.FAILSAFE_ROOT_PASSWORD = ROOT_PASSWORD;
+    process.env.FAILSAFE_ROOT_PASSWORD_HASH = bcrypt.hashSync(ROOT_PASSWORD, 4); // empreinte bcrypt jetable
     env = await launchSeededApp();
     dbPath = dbPathOf(env.userDataDir);
   });

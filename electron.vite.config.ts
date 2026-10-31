@@ -62,8 +62,13 @@ export default defineConfig(({ mode }) => {
       // Injecter les variables Supabase dans le bundle Main (process.env)
       'process.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL || ''),
       'process.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY || ''),
-      'process.env.SUPABASE_SUPERADMIN_PASSWORD': JSON.stringify(env.SUPABASE_SUPERADMIN_PASSWORD || ''),
-      'process.env.SUPABASE_SITE_PASSWORD_PREFIX': JSON.stringify(env.SUPABASE_SITE_PASSWORD_PREFIX || ''),
+      // Compte de secours ROOT : EMPREINTE bcrypt uniquement (jamais le mot de passe en clair).
+      // Générée par `node scripts/set-root-password.mjs` dans .env (clé FAILSAFE_ROOT_PASSWORD_HASH,
+      // lue ici via loadEnv sans préfixe VITE_ — comme les variables Supabase ci-dessus).
+      // Exposée au code sous un nom distinct (BAKED_...) : ainsi l'environnement d'exécution
+      // (FAILSAFE_ROOT_PASSWORD_HASH) ne peut servir qu'hors paquet (dev/tests/e2e), cf.
+      // resolveRootPasswordHash() dans handlers.ts. Vide si absente : ROOT désactivé.
+      'process.env.BAKED_FAILSAFE_ROOT_PASSWORD_HASH': JSON.stringify(env.FAILSAFE_ROOT_PASSWORD_HASH || ''),
     },
     build: {
       outDir: `${outBase}/main`,

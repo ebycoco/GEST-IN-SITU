@@ -36,3 +36,7 @@ bash.exe.stackdump
 # Copie temporaire horodatée d'electron.vite.config.ts régénérée par electron-vite
 # à chaque dev/build — artefact sans valeur propre, jamais à committer.
 electron.vite.config.*.mjs
+# Memos/brouillons locaux pouvant contenir des identifiants : jamais suivis par Git (retires de l'index le 2026-10-31).
+MEMO_DRIVE_SUPER_ADMIN.txt
+diff.txt
+scratch/

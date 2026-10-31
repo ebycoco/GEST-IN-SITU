@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 import * as queries from '../database/queries';
 import { getDbPath, getDatabase, getBackupDir, closeDatabase, initDatabase } from '../database/connection';
-import { hashPassword } from '../auth/local-auth';
+import { hashPassword, verifyPassword } from '../auth/local-auth';
 import { createReadStream, openSync, readSync, closeSync, copyFileSync, existsSync, statSync } from 'fs';
 import { snapshotDatabase, performRestore, RestoreOutcome } from '../database/recovery';
 import { SCHEMA_VERSION } from '../database/schema';
@@ -29,6 +29,39 @@ import { classifyImportOutcome, isSupportedImportFile, UNSUPPORTED_IMPORT_FILE_M
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 
 const FAILSAFE_ROOT_ID = 999999;
+
+/**
+ * Empreinte bcrypt valide ($2a$/$2b$/$2y$, coût sur 2 chiffres, 53 caractères de sel+hash).
+ * Toute autre forme (texte en clair, valeur tronquée) est rejetée : ROOT reste alors désactivé.
+ */
+const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
+
+/**
+ * Retourne l'empreinte bcrypt du compte ROOT, ou '' si absente/invalide (ROOT désactivé).
+ * - Poste installé (app.isPackaged) : UNIQUEMENT la valeur figée à la compilation
+ *   (BAKED_FAILSAFE_ROOT_PASSWORD_HASH, bloc `define` de electron.vite.config.ts) —
+ *   l'environnement d'exécution est IGNORÉ (un utilisateur local ne peut pas injecter sa propre empreinte).
+ * - Hors paquet (dev, tests, e2e) : la variable d'environnement d'exécution
+ *   FAILSAFE_ROOT_PASSWORD_HASH l'emporte (les specs injectent une empreinte jetable), avec
+ *   repli sur la valeur figée.
+ */
+function resolveRootPasswordHash(): string {
+  const baked = process.env.BAKED_FAILSAFE_ROOT_PASSWORD_HASH || '';
+  const runtime = process.env.FAILSAFE_ROOT_PASSWORD_HASH || '';
+  const candidate = app.isPackaged ? baked : (runtime || baked);
+  return BCRYPT_HASH_PATTERN.test(candidate) ? candidate : '';
+}
+
+/** Compare le mot de passe saisi à l'empreinte ROOT ; toute erreur bcrypt = refus (jamais d'exception). */
+function isRootPasswordValid(password: unknown, rootHash: string): boolean {
+  if (typeof password !== 'string' || password.length === 0) return false;
+  try {
+    return verifyPassword(password, rootHash);
+  } catch (err) {
+    log.error('[SECURITY] Vérification de l\'empreinte ROOT impossible :', err);
+    return false;
+  }
+}
 let activeImportsCount = 0;
 export function isImportActive(): boolean {
   return activeImportsCount > 0;
@@ -212,16 +245,19 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     try {
       // ── LOGIQUE ROOT FAILSAFE SECURISEE DANS LE MAIN PROCESS ──
-      // Le mot de passe ROOT est lu depuis process.env.FAILSAFE_ROOT_PASSWORD.
-      // Si la variable n'est pas définie, le compte ROOT est DÉSACTIVÉ (sécurité par défaut en prod).
-      const rootPassword = process.env.FAILSAFE_ROOT_PASSWORD || '';
+      // Le compte ROOT est vérifié par EMPREINTE bcrypt (jamais de mot de passe en clair dans le
+      // code, le bundle ou l'environnement) : FAILSAFE_ROOT_PASSWORD_HASH, figée à la compilation
+      // (electron.vite.config.ts) et générée par `node scripts/set-root-password.mjs`.
+      // Empreinte absente ou non bcrypt : ROOT DÉSACTIVÉ. Le verrou anti-bruteforce
+      // (clé auth:login:root) reste appliqué : contrôle en amont + compteur d'échecs ci-dessous.
       if (login && login.trim().toLowerCase() === 'root') {
-        if (!rootPassword) {
-          log.warn('[SECURITY] Tentative de connexion ROOT refusée : FAILSAFE_ROOT_PASSWORD non défini dans .env (compte désactivé).');
+        const rootHash = resolveRootPasswordHash();
+        if (!rootHash) {
+          log.warn('[SECURITY] Tentative de connexion ROOT refusée : empreinte FAILSAFE_ROOT_PASSWORD_HASH absente ou invalide (compte désactivé).');
           registerVerifyPasswordAttempt(loginAttemptKey, false);
           return null;
         }
-        if (password === rootPassword) {
+        if (isRootPasswordValid(password, rootHash)) {
           registerVerifyPasswordAttempt(loginAttemptKey, true);
           log.warn('🚨 [SECURITY] Connexion failsafe de l\'utilisateur ROOT sollicitée.');
           try {

@@ -54,7 +54,7 @@ describe('Limite de tentatives — auth:login et database:import', () => {
   const PWD = 'Bon_Mdp_Test_2026';
 
   beforeAll(async () => {
-    delete process.env.FAILSAFE_ROOT_PASSWORD;
+    delete process.env.FAILSAFE_ROOT_PASSWORD_HASH;
     connection = await import('../src/main/database/connection');
     const handlersModule = await import('../src/main/ipc/handlers');
     const { hashPassword } = await import('../src/main/auth/local-auth');

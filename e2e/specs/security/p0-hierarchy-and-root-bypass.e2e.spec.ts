@@ -26,20 +26,21 @@
  * uniquement la procédure via `npx playwright test <ce fichier>`.
  *
  * ── ROOT failsafe dans cet environnement e2e ────────────────────────────
- * `FAILSAFE_ROOT_PASSWORD` est défini dans `.env` (racine du dépôt), mais
- * `process.env` du process de TEST Playwright (Node système) ne le contient
- * pas automatiquement — seul un poste de maintenance réel le positionnerait
- * en variable d'environnement OS avant de lancer l'application packagée. On
- * le fixe donc explicitement ici, AVANT `launchSeededApp()`, pour que
- * `baseEnv = {...process.env}` (voir electron-app.ts) le propage au process
- * Electron lancé par le test — sans toucher au fichier `.env` ni à aucune
+ * Le compte ROOT est vérifié par EMPREINTE bcrypt (`FAILSAFE_ROOT_PASSWORD_HASH`,
+ * figée au build en production — jamais de mot de passe en clair dans le dépôt).
+ * Hors paquet (cas de ce test), l'application accepte l'empreinte via la
+ * variable d'environnement d'exécution. On fixe donc ici, AVANT
+ * `launchSeededApp()`, l'empreinte d'un mot de passe JETABLE propre au test,
+ * pour que `baseEnv = {...process.env}` (voir electron-app.ts) la propage au
+ * process Electron lancé — sans toucher au fichier `.env` ni à aucune
  * fixture partagée.
  */
 import { test, expect } from '@playwright/test';
 import { launchSeededApp, teardownSeededApp, type E2EEnvironment } from '../../fixtures/electron-app';
 import { getTestUser } from '../../fixtures/test-users';
+import bcrypt from 'bcryptjs';
 
-const ROOT_PASSWORD = 'Root@Abobo2026!'; // Valeur réelle de FAILSAFE_ROOT_PASSWORD dans .env (racine du dépôt).
+const ROOT_PASSWORD = 'Root_E2E_Jetable_Sans_Valeur_Reelle_1!'; // Mot de passe JETABLE de test, sans lien avec le vrai ROOT (jamais un secret reel).
 
 test.describe.serial('SÉCURITÉ P0 — cloisonnement hierarchy:* et bypass FAILSAFE_ROOT_ID', () => {
   let env: E2EEnvironment;
@@ -52,7 +53,7 @@ test.describe.serial('SÉCURITÉ P0 — cloisonnement hierarchy:* et bypass FAIL
   let homeSiteId: number;
 
   test.beforeAll(async () => {
-    process.env.FAILSAFE_ROOT_PASSWORD = ROOT_PASSWORD;
+    process.env.FAILSAFE_ROOT_PASSWORD_HASH = bcrypt.hashSync(ROOT_PASSWORD, 4); // empreinte bcrypt jetable (voir en-tete)
     env = await launchSeededApp();
     homeSiteId = env.seed.siteId;
   });
