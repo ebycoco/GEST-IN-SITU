@@ -101,6 +101,19 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     expect(fk()).toBe(1);
   });
 
+  it('SUPER ADMIN dont le site cloud est absent localement : inséré sans site ; autre rôle au site absent : refusé', async () => {
+    const k = uid();
+    ensureSites();
+    cloudUsers = [
+      cu(`sa_absent_${k}`, `sid-${k}-sa`, { site_id: 12, role: 'SUPER ADMIN' }),
+      cu(`op_absent_${k}`, `sid-${k}-op`, { site_id: 12 })
+    ];
+    await downstream.preloadUsersFromCloud();
+    expect(byLogin(`sa_absent_${k}`)).toMatchObject({ site_id: null, centre_id: null, role: 'SUPER ADMIN', is_dirty: 0 });
+    expect(byLogin(`op_absent_${k}`)).toBeUndefined();
+    expect(fk()).toBe(1);
+  });
+
   it('renommage cloud : pas d\'exception, autres comptes préchargés, FK restaurées', async () => {
     const k = uid();
     const idR = local(`old_${k}`, `sid-${k}-a`);

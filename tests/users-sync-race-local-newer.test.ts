@@ -192,7 +192,10 @@ describe('course lecture cloud / push : local plus récent (users-sync.helper)',
     helper.upsertCloudUser(db, mk(`lg_x_${k}`, `sid-lgx-${k}`), { readAt: Date.now() });
     helper.upsertCloudUser(db, mk(`lg_n_${k}`, `sid-lgn-${k}`), { readAt: Date.now() });
     helper.upsertCloudUser(db, mk(`lg_p_${k}`, `sid-lgp-${k}`), { readAt: Date.now() });
+    // Compte nouveau dont le site cloud n'existe pas localement : refus (skipped_invalid) désormais journalisé.
+    expect(helper.upsertCloudUser(db, cloudRow(`lg_i_${k}`, `sid-lgi-${k}`, { site_id: 99912, password_hash: 'SECRET-HASH-XYZ' }) as any).action).toBe('skipped_invalid');
     const lines = spy.mock.calls.map(c => String(c[0]));
+    expect(lines.some(l => l.includes(`lg_i_${k}`) && l.includes('skipped_invalid') && l.includes('site 99912 absent localement'))).toBe(true);
     expect(lines.some(l => l.includes(`lg_d_${k}`) && l.includes('is_dirty=1'))).toBe(true);
     expect(lines.some(l => l.includes(`lg_x_${k}`) && l.includes('supprimée (-1)'))).toBe(true);
     expect(lines.some(l => l.includes(`lg_n_${k}`) && l.includes('local plus récent'))).toBe(true);
@@ -200,7 +203,7 @@ describe('course lecture cloud / push : local plus récent (users-sync.helper)',
     expect(lines.join(' | ')).not.toContain('SECRET-HASH-XYZ');
     expect(lines.join(' | ')).not.toContain('old-hash');
 
-    // plafond : 30 comptes sales -> au plus 20 lignes détaillées (4 déjà consommées) puis un résumé
+    // plafond : 30 comptes sales -> au plus 20 lignes détaillées puis un résumé
     helper.flushSkipLogSummary(); spy.mockClear();
     for (let i = 0; i < 30; i++) {
       const id = local(`lg_m${i}_${k}`, `sid-lgm${i}-${k}`, null);

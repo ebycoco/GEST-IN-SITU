@@ -278,9 +278,10 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
     throw new Error("Accès non autorisé : Rôle insuffisant pour créer un utilisateur.");
   }
 
-  // Si c'est un ADMIN_CENTRE, on utilise son site et son centre. Si c'est un ADMINISTRATEUR_SITE, on utilise son site. Sinon (SUPER ADMIN), on prend data.site_id.
-  const targetSiteId = (creator.role === 'ADMINISTRATEUR_SITE' || creator.role === 'ADMIN_CENTRE') ? creator.site_id : (Number(data.site_id) || 1);
-  const targetCentreId = creator.role === 'ADMIN_CENTRE' ? creator.centre_id : (data.centre_id ? Number(data.centre_id) : null);
+  // Si c'est un ADMIN_CENTRE, on utilise son site et son centre. Si c'est un ADMINISTRATEUR_SITE, on utilise son site. Sinon (SUPER ADMIN), on prend data.site_id
+  // (résolu plus bas, une fois le rôle principal connu).
+  let targetSiteId: number | null | undefined = (creator.role === 'ADMINISTRATEUR_SITE' || creator.role === 'ADMIN_CENTRE') ? creator.site_id : null;
+  let targetCentreId: number | null | undefined = creator.role === 'ADMIN_CENTRE' ? creator.centre_id : (data.centre_id ? Number(data.centre_id) : null);
 
   if (creator.role === 'ADMINISTRATEUR_SITE' && targetCentreId) {
     const centre = db.prepare('SELECT site_id FROM t_centres WHERE id = ?').get(targetCentreId) as { site_id?: number } | undefined;
@@ -307,6 +308,22 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   }
   const primaryRole = (data.role as string) || inputRoles[0];
   assertRolesAssignable(creator.role, [...new Set([...inputRoles, primaryRole])]);
+
+  // Site d'un compte créé par un SUPER ADMIN : un SUPER ADMIN n'est rattaché à aucun site (NULL) ;
+  // tout autre rôle exige un site existant. L'ancien repli `|| 1` rattachait en silence au site 1,
+  // inexistant dans le cloud (compte refusé par les autres postes, cf. plan site_id 2026-10-31).
+  if (creator.role === 'SUPER ADMIN') {
+    if (primaryRole === 'SUPER ADMIN') {
+      targetSiteId = null;
+      targetCentreId = null;
+    } else {
+      const siteId = Number(data.site_id);
+      if (!Number.isInteger(siteId) || siteId <= 0 || !db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(siteId)) {
+        throw new Error("Un site existant est obligatoire pour ce rôle.");
+      }
+      targetSiteId = siteId;
+    }
+  }
 
   // LOT 1b (P2-2) : login normalisé (trim + NFC) et obligatoire.
   const loginValue = normalizeLoginInput(data.login);

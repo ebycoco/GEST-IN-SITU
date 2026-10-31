@@ -129,7 +129,8 @@ export function flushSkipLogSummary(): void {
 }
 
 function logSkippedUser(login: string, res: UpsertCloudUserResult): void {
-  if (res.action !== 'skipped_dirty' && res.action !== 'skipped_pending_outbox' && res.action !== 'skipped_deleted') return;
+  // skipped_invalid inclus (motifs sans secret : site/centre absent, rôle invalide, champ cloud manquant).
+  if (res.action !== 'skipped_dirty' && res.action !== 'skipped_pending_outbox' && res.action !== 'skipped_deleted' && res.action !== 'skipped_invalid') return;
   if (!skipLogTimer) {
     skipLogTimer = setTimeout(flushSkipLogSummary, SKIP_LOG_WINDOW_MS);
     (skipLogTimer as any).unref?.();

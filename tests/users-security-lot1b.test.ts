@@ -91,6 +91,23 @@ describe('LOT 1b — correctifs audit sécurité des comptes agents (users.queri
       expect(() => uq.createUser({ login: 'x', password: 'x12345', role: 'OPERATEUR_QUALITE', roles: ['OPERATEUR_SAISIE'] }, caller(adm))).toThrow('rôle principal');
       expect(count()).toBe(n);
     });
+    // Plan site_id 2026-10-31 : plus de repli silencieux sur le site 1.
+    it('créateur SUPER ADMIN : un compte SUPER ADMIN est créé sans site ni centre', () => {
+      const sa = mk('sa', 'SUPER ADMIN', SITE_A);
+      uq.createUser({ login: 'sa2', password: 'x12345', role: 'SUPER ADMIN', roles: ['SUPER ADMIN'], site_id: SITE_B, centre_id: centreA }, caller(sa));
+      expect(row('sa2')).toMatchObject({ role: 'SUPER ADMIN', site_id: null, centre_id: null });
+    });
+    it.each([[undefined], [99901]])('créateur SUPER ADMIN : autre rôle avec site %s (absent ou inexistant) = refus, aucun compte créé', (site) => {
+      const sa = mk('sa', 'SUPER ADMIN', SITE_A);
+      const n = count();
+      expect(() => uq.createUser({ login: 'op', password: 'x12345', roles: ['OPERATEUR_SAISIE'], site_id: site }, caller(sa))).toThrow('Un site existant est obligatoire');
+      expect(count()).toBe(n);
+    });
+    it('créateur SUPER ADMIN : autre rôle avec un site existant = rattaché à ce site', () => {
+      const sa = mk('sa', 'SUPER ADMIN', SITE_A);
+      uq.createUser({ login: 'op', password: 'x12345', roles: ['OPERATEUR_SAISIE'], site_id: SITE_B }, caller(sa));
+      expect(row('op').site_id).toBe(SITE_B);
+    });
     it('création normale (role = roles[0]) OK', () => {
       const adm = mk('adm', 'ADMINISTRATEUR_SITE', SITE_A);
       uq.createUser({ login: 'ok', password: 'x12345', role: 'OPERATEUR_SAISIE', roles: ['OPERATEUR_SAISIE', 'OPERATEUR_QUALITE'] }, caller(adm));

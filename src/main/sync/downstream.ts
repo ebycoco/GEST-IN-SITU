@@ -1147,12 +1147,13 @@ export async function preloadUsersFromCloud(): Promise<void> {
             let idUser = res.id_user;
             let freshInsert = res.action === 'inserted';
 
-            // Comportement historique conservé : un SUPER ADMIN cloud sans site (site_id NULL) doit pouvoir
-            // être préchargé. Le helper refuse l'insertion sans site local ; à ce stade aucune ligne locale
+            // Un SUPER ADMIN cloud sans site (site_id NULL) OU dont le site est absent localement (id local
+            // d'un autre poste envoyé au cloud, plan site_id 2026-10-31) doit pouvoir être préchargé : il est
+            // inséré sans site. Le helper refuse l'insertion sans site local ; à ce stade aucune ligne locale
             // ne porte ce sync_id ni ce login (le helper n'atteint la vérification du site qu'en absence de
             // cible), l'INSERT direct est donc sûr (même protections : validé rôle, mot de passe, sync_id, statut != -1).
             if (
-              res.action === 'skipped_invalid' && u.role === 'SUPER ADMIN' && u.site_id == null &&
+              res.action === 'skipped_invalid' && u.role === 'SUPER ADMIN' &&
               u.statut_actif !== -1 && typeof u.login === 'string' && u.login &&
               typeof u.sync_id === 'string' && u.sync_id && typeof u.password_hash === 'string' && u.password_hash &&
               /^site .* absent localement$/.test(res.reason || '')
@@ -1174,6 +1175,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
               idUser = r2;
               freshInsert = true;
               superAdminFallback++;
+              log.info(`Preload: SUPER ADMIN "${u.login}" inséré sans site (site cloud ${u.site_id ?? 'NULL'} absent localement).`);
             }
             summary[action]++;
 
