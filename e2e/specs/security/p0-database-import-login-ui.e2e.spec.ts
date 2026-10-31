@@ -23,29 +23,30 @@
  *      `app.relaunch()`/`app.exit()` (risque d'orphelin documenté dans
  *      electron-app.ts, volontairement évité ici comme dans le spec RBAC).
  *
- * Découverte en écrivant ce spec : `queries.verifySuperAdminPassword()`
- * (hierarchy.queries.ts) sélectionne `WHERE role = 'SUPER ADMIN'` SANS
- * filtre supplémentaire ni tri explicite — comportement pré-existant, hors
- * périmètre de cette tâche (voir commentaire équivalent dans
- * p0-database-export-import-rbac.e2e.spec.ts). Sur une base seedée fraîche,
- * `runMigrations()` (schema.ts) crée TOUJOURS `id_user=1, login='superadmin',
- * password='admin'` en premier — c'est cette ligne que `.get()` renvoie en
- * pratique (ordre naturel par rowid), pas un compte SUPER ADMIN inséré après
- * coup. Ce spec utilise donc directement ce compte par défaut plutôt que
- * d'en insérer un second qui ne serait de toute façon jamais consulté par le
- * gate.
+ * Compte utilisé (mis à jour le 2026-10-31, durcissement bee7d20) :
+ * `queries.verifySuperAdminPassword()` (hierarchy.queries.ts), appelée ici
+ * SANS session (écran de connexion), n'accepte plus que les comptes
+ * SUPER ADMIN ACTIFS (statut_actif = 1) ET synchronisés (sync_id non vide),
+ * rôle primaire ou t_user_roles. Le compte seed `id_user=1, login='superadmin'`
+ * créé par `runMigrations()` (schema.ts) est désormais DÉSACTIVÉ, avec un mot
+ * de passe aléatoire non conservé : il n'est plus jamais candidat. Ce spec
+ * utilise donc le compte de test `getTestUser('superAdmin')`
+ * (e2e/fixtures/test-users.ts), inséré par `seed-database.ts` avec
+ * statut_actif = 1, un sync_id non vide, un hash bcrypt et une ligne
+ * t_user_roles 'SUPER ADMIN' — il remplit toutes les conditions du gate.
  */
 import { test, expect } from '@playwright/test';
 import { launchSeededApp, teardownSeededApp, type E2EEnvironment } from '../../fixtures/electron-app';
+import { getTestUser } from '../../fixtures/test-users';
 import { readFileSync } from 'fs';
 
 test.describe.serial('SÉCURITÉ P0 — database:import, plomberie UI réelle (LoginPage.tsx)', () => {
   let env: E2EEnvironment;
   let anyTestFailed = false;
-  // Compte SUPER ADMIN par défaut créé par runMigrations() (schema.ts) sur
-  // toute base fraîchement seedée — c'est celui-ci que `verifySuperAdminPassword()`
-  // consulte réellement (voir note ci-dessus).
-  const SUPER_ADMIN_PASSWORD = 'admin';
+  // Compte SUPER ADMIN de test (actif + sync_id non vide, voir seed-database.ts) :
+  // seul type de compte que `verifySuperAdminPassword()` accepte sans session
+  // (voir note ci-dessus). Le compte seed 'superadmin' / 'admin' est désactivé.
+  const SUPER_ADMIN_PASSWORD = getTestUser('superAdmin').password;
 
   test.beforeAll(async () => {
     env = await launchSeededApp();

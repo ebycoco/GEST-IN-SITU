@@ -44,15 +44,14 @@
  * ── Portée volontairement testée par surface publique réelle ──────────────
  * `contextIsolation: true` / `nodeIntegration: false` (src/main/index.ts) :
  * le renderer n'a accès qu'à `window.api.*` (pont preload), jamais à
- * `ipcRenderer` brut. Le pont preload pour `database.import` n'expose
- * aujourd'hui AUCUN paramètre mot de passe (`ipcRenderer.invoke('database:import', currentUser)`
- * — voir src/preload/index.ts) : c'est un choix délibéré du correctif (voir
- * rapport de l'agent), qui laisse le chemin "mot de passe correct → succès"
- * injoignable depuis l'UI tant que LoginPage.tsx + preload/index.ts n'auront
- * pas été mis à jour pour collecter ce mot de passe (hors périmètre de cette
- * intervention, signalé en STOP & WARN). Ce spec vérifie donc ce qui est
- * réellement exploitable/exercable via la surface publique actuelle : le
- * rejet par défaut (fail-closed). La correction logique du gate elle-même
+ * `ipcRenderer` brut. À l'écriture de ce spec, le pont preload pour
+ * `database.import` n'exposait AUCUN paramètre mot de passe ; LoginPage.tsx +
+ * preload/index.ts collectent et transmettent depuis ce mot de passe, et le
+ * chemin UI complet ("mot de passe correct → gate franchi") est couvert par
+ * p0-database-import-login-ui.e2e.spec.ts (compte E2E_SUPER_ADMIN actif et
+ * synchronisé ; le compte seed 'superadmin' est désactivé depuis 2026-10-31).
+ * Ce spec-ci vérifie le rejet par défaut (fail-closed) via la surface publique.
+ * La correction logique du gate elle-même
  * (`queries.verifySuperAdminPassword`) est vérifiée séparément en dernier
  * test, en appelant directement cette fonction pré-existante (déjà utilisée
  * en production par `hierarchy:verifyPassword`) contre une vraie base SQLite,
@@ -205,9 +204,9 @@ test.describe.serial('SÉCURITÉ P0 — database:export / database:import sans c
   });
 
   test('NON-RÉGRESSION (vérification directe, hors cycle app.relaunch) — queries.verifySuperAdminPassword accepte le bon mot de passe SUPER ADMIN et rejette un mauvais', async () => {
-    // Le seed e2e (e2e/fixtures/seed-database.ts) ne crée aucun compte SUPER ADMIN réel (seuls
-    // operateurVerification / administrateurSite / operateurQualite existent — le failsafe ROOT
-    // n'est PAS une ligne t_users, voir handlers.ts FAILSAFE_ROOT_ID). On insère donc directement,
+    // Écrit à l'origine quand le seed e2e (e2e/fixtures/seed-database.ts) ne créait aucun compte
+    // SUPER ADMIN (il crée depuis E2E_SUPER_ADMIN, clé 'superAdmin' de test-users.ts ; le failsafe
+    // ROOT n'est PAS une ligne t_users, voir handlers.ts FAILSAFE_ROOT_ID). On insère directement,
     // par SQL brut contre la vraie base seedée (même mécanisme ELECTRON_RUN_AS_NODE que
     // seed-runner.ts, requis pour l'ABI native better-sqlite3 — voir electron-app.ts), un compte
     // SUPER ADMIN de test, puis on appelle la VRAIE fonction `verifySuperAdminPassword` (celle
@@ -249,13 +248,14 @@ test.describe.serial('SÉCURITÉ P0 — database:export / database:import sans c
       const bcrypt = require('bcryptjs');
       const db = new Database(process.argv[1], { timeout: 15000 });
       try {
-        // NOTE méthodologique (découverte en cours de rédaction) : le schéma réel (schema.ts,
-        // runMigrations()) seed TOUJOURS un compte SUPER ADMIN par défaut (id_user=1,
-        // login='superadmin') sur une base neuve — il y a donc déjà 2 lignes role='SUPER ADMIN'
-        // dans cette base de test (celle-ci + notre insertion directe ci-dessus). On filtre
-        // explicitement par notre propre login pour cibler sans ambiguïté la ligne insérée par ce
-        // test (queries.verifySuperAdminPassword(), elle, ne filtre QUE par role — comportement
-        // pré-existant, hors périmètre de ce correctif, qui suppose un site à un seul SUPER ADMIN).
+        // NOTE méthodologique (mise à jour 2026-10-31) : la base de test contient plusieurs lignes
+        // role='SUPER ADMIN' — le compte seed par défaut (id_user=1, login='superadmin', créé
+        // DÉSACTIVÉ par runMigrations()/schema.ts avec un mot de passe aléatoire), le compte de
+        // test E2E_SUPER_ADMIN (seed-database.ts) et notre insertion directe ci-dessus. On filtre
+        // donc explicitement par notre propre login pour cibler sans ambiguïté la ligne insérée par
+        // ce test. Depuis le durcissement 2026-10-31, queries.verifySuperAdminPassword() sans
+        // session ne retient que les SUPER ADMIN actifs (statut_actif = 1) ET synchronisés (sync_id
+        // non vide), rôle primaire ou t_user_roles, et accepte si l'un d'eux correspond.
         const row = db.prepare("SELECT password_hash FROM t_users WHERE login = 'E2E_SUPERADMIN_DIRECT_INSERT'").get();
         const goodMatch = bcrypt.compareSync(process.argv[2], row.password_hash);
         const badMatch = bcrypt.compareSync('MotDePasse_Incorrect_2026', row.password_hash);
