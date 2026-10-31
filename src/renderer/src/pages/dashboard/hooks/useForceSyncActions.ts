@@ -119,8 +119,9 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         setAllowInvalid(false);
       } else if ((res as any).cancelled) {
         toast('⚠️ Transfert annulé par l\'agent.', { id: toastId, icon: '🛑' });
-      } else if ((res as any).refused) {
-        // Envoi refusé avant tout envoi (réseau injoignable, poste non aligné) : le motif doit rester visible.
+      } else if ((res as any).refused || (!(res as any).status && res.message)) {
+        // Échec avec motif (refus avant envoi : réseau injoignable, poste non aligné ; envoi interrompu par un
+        // réseau défaillant…) : le motif doit rester visible. Les blocages métier (`status`) ont leur encart.
         toast.error(res.message, { id: toastId, duration: 8000 });
       } else {
         toast.dismiss(toastId);
@@ -149,7 +150,8 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
     toast.loading('🛑 Annulation du transfert en cours...', { id: 'cancel-bulk' });
     try {
       await window.api.sync.cancelBulk(user);
-      toast.success('Transfert annulé. Les cartes déjà envoyées sont conservées.', { id: 'cancel-bulk', duration: 5000 });
+      // Le message d'annulation est affiché une seule fois, par handleStartBulkUpload (`cancelled`).
+      toast.dismiss('cancel-bulk');
     } catch (err: any) {
       toast.error(`Échec de l'annulation : ${err.message || err}`, { id: 'cancel-bulk' });
     }

@@ -5525,9 +5525,14 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       // ping réseau ni le vidage forcé de t_outbox ci-dessous (audit agent-13 2026-10-31, P2-1 : ~5 s de
       // blocage inutile). Le vidage de t_outbox repart de toute façon par les cycles périodiques, qui
       // portent eux-mêmes la garde d'alignement.
-      if (uploadResult.refused) {
+      // Idem après une annulation de l'agent (audit agent-13, 2e passe : ~5 s d'écran bloqué après le clic).
+      if (uploadResult.refused || uploadResult.cancelled) {
         logAudit(userLogin, 'MASS_UPLOAD_FAILURE', JSON.stringify({ site_id: siteId, error: uploadResult.message }));
-        return { success: false, uploadedCount: 0, message: uploadResult.message, refused: true, strictCount: 0, probableCount: 0, invalidCount: 0 };
+        return {
+          success: false, uploadedCount: 0, message: uploadResult.message,
+          ...(uploadResult.refused ? { refused: true } : { cancelled: true }),
+          strictCount: 0, probableCount: 0, invalidCount: 0
+        };
       }
 
       // ── Porte de sortie garantie pour t_outbox (piège de régression identifié) ──────

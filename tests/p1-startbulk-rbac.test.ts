@@ -236,4 +236,28 @@ describe('sync:startBulk — garde RBAC serveur (correctif audit pré-release)',
     expect(res.success).toBe(false);
     expect(res.cancelled).toBe(true);
   });
+
+  it('(g) annulation : retour immédiat, sans ping réseau ni vidage forcé', async () => {
+    mockGetSecureCurrentUser.mockReturnValue(sessionFor(ID_ROLE_BASE + 1, 'ADMINISTRATEUR_SITE'));
+    mockRunBulkUpload.mockResolvedValueOnce({ success: false, uploadedCount: 0, cancelled: true, message: 'Transfert annulé par l\'utilisateur.' } as any);
+    const pingSpy = vi.mocked(networkMonitorModule.networkMonitor.forcePing);
+    pingSpy.mockClear();
+
+    const res = await startBulkHandler({} as any, SITE_A, false, false, false, false, undefined);
+
+    expect(res.cancelled).toBe(true);
+    expect(pingSpy).not.toHaveBeenCalled();
+  });
+
+  it('(h) échec du worker (réseau interrompu) : success=false et message relayés tels quels au renderer', async () => {
+    mockGetSecureCurrentUser.mockReturnValue(sessionFor(ID_ROLE_BASE + 1, 'ADMINISTRATEUR_SITE'));
+    mockRunBulkUpload.mockResolvedValueOnce({ success: false, uploadedCount: 0, message: 'Envoi interrompu : le réseau est devenu indisponible. Vérifiez la connexion et réessayez.' } as any);
+
+    const res = await startBulkHandler({} as any, SITE_A, false, false, false, false, undefined);
+
+    expect(res.success).toBe(false);
+    expect(res.message).toContain('Envoi interrompu');
+    expect(res.refused).toBeUndefined();
+    expect(res.status).toBeUndefined(); // le hook affiche alors le motif (toast d'erreur)
+  });
 });
