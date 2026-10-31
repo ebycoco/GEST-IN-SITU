@@ -27,6 +27,7 @@ export default function SyncStatusDashboard() {
     queueCount: number;
     outboxCount: number;
     outboxErrorCount: number;
+    outboxMisalignedCount: number;
     errors: SyncError[];
   }>({
     state: 'OFFLINE',
@@ -34,6 +35,7 @@ export default function SyncStatusDashboard() {
     queueCount: 0,
     outboxCount: 0,
     outboxErrorCount: 0,
+    outboxMisalignedCount: 0,
     errors: []
   });
 
@@ -48,6 +50,7 @@ export default function SyncStatusDashboard() {
           queueCount: res.queueCount !== undefined ? res.queueCount : 0,
           outboxCount: res.outboxCount !== undefined ? res.outboxCount : 0,
           outboxErrorCount: res.outboxErrorCount !== undefined ? res.outboxErrorCount : 0,
+          outboxMisalignedCount: res.outboxMisalignedCount !== undefined ? res.outboxMisalignedCount : 0,
           errors: res.errors || []
         });
         if (showToast) {
@@ -88,6 +91,7 @@ export default function SyncStatusDashboard() {
           queueCount: newStatus.queueCount !== undefined ? newStatus.queueCount : prev.queueCount,
           outboxCount: newStatus.outboxCount !== undefined ? newStatus.outboxCount : prev.outboxCount,
           outboxErrorCount: newStatus.outboxErrorCount !== undefined ? newStatus.outboxErrorCount : prev.outboxErrorCount,
+          outboxMisalignedCount: newStatus.outboxMisalignedCount !== undefined ? newStatus.outboxMisalignedCount : prev.outboxMisalignedCount,
           errors: newStatus.errors || prev.errors
         }));
       });
@@ -537,8 +541,29 @@ export default function SyncStatusDashboard() {
                   {status.outboxErrorCount} en échec
                 </span>
               )}
+              {status.outboxMisalignedCount > 0 && (
+                <span
+                  data-testid="outbox-misaligned-badge"
+                  title="Ces envois sont suspendus : le site ou le centre de ce poste n'a pas le même numéro dans le cloud. Redémarrez l'application et attendez la fin du chargement avant de vous connecter."
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 800,
+                    color: '#fb923c',
+                    background: 'rgba(251, 146, 60, 0.1)',
+                    border: '1px solid rgba(251, 146, 60, 0.25)',
+                    borderRadius: 20,
+                    padding: '2px 8px'
+                  }}
+                >
+                  {status.outboxMisalignedCount} en attente d'alignement
+                </span>
+              )}
             </div>
-            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Mises à jour prêtes à l'envoi cloud</span>
+            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              {status.outboxMisalignedCount > 0
+                ? 'Envois suspendus (poste non aligné sur le cloud) : redémarrez l\'application'
+                : 'Mises à jour prêtes à l\'envoi cloud'}
+            </span>
           </div>
         </div>
 

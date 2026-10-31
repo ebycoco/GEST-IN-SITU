@@ -23,7 +23,7 @@ import { runStatsWorker } from '../database/queries/stats.queries';
 import { normalizeDate } from '../../shared/utils/date';
 import { formatNumSecu } from '../../shared/utils/numSecu';
 import { isValidCalendarDateFlexible } from '../../shared/utils/validators';
-import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxErrorIds, getOutboxActionableCount, isOutboxProcessing } from '../sync/outbox.service';
+import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOutboxPending, getOutboxPendingCount, getOutboxCountByStatus, getOutboxErrorIds, getOutboxActionableCount, getOutboxMisalignedCount, isOutboxProcessing } from '../sync/outbox.service';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { classifyImportOutcome, isSupportedImportFile, UNSUPPORTED_IMPORT_FILE_MESSAGE } from '../import/import-outcome';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
@@ -5332,6 +5332,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       queueCount,
       outboxCount,
       outboxErrorCount,
+      // Envois reportés faute d'alignement site/centre sur le cloud (sous-ensemble de outboxCount).
+      outboxMisalignedCount: getOutboxMisalignedCount(),
       errors
     };
   });

@@ -1026,6 +1026,25 @@ export function getOutboxCountByStatus(tableName: string, status: 'PENDING' | 'S
 }
 
 /**
+ * Nombre d'entrées PENDING reportées par la garde d'alignement site/centre (error_msg « [NON ALIGNÉ] … »),
+ * toutes tables confondues. Elles restent en PENDING sans tentative comptée : ce compteur les rend visibles
+ * (tableau de synchro) au lieu de les laisser noyées dans « en attente ». Décision utilisateur 2026-10-31 :
+ * compteur seul, pas de passage en ERROR (les ERROR sont de toute façon remises en PENDING par le cycle).
+ */
+export function getOutboxMisalignedCount(): number {
+  try {
+    const db = getDatabase();
+    if (!db) return 0;
+    const row = db.prepare(
+      `SELECT COUNT(*) as count FROM t_outbox WHERE status = 'PENDING' AND error_msg LIKE ?`
+    ).get(`${NOT_ALIGNED_PREFIX}%`) as { count: number } | undefined;
+    return row ? row.count : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Retourne l'ENSEMBLE des `id` (TEXT PRIMARY KEY, cf. schema.ts) actuellement en statut
  * ERROR pour une table donnée — jamais un simple compte.
  *
