@@ -10,7 +10,8 @@ import log from 'electron-log';
  * Supabase lui attribue le sien. Ce module renumérote la ligne locale L → C et toutes ses références
  * (colonnes site_id/centre_id/poste_id de toutes les tables, payloads t_outbox en attente).
  *
- * Aucun appelant branché pour l'instant (commits suivants : acquittement d'envoi et réception).
+ * Appelants : réception (downstream.ts, réconciliation avant INSERT OR REPLACE). L'acquittement d'envoi
+ * suivra (commit 5 du plan).
  *
  * Écart volontaire au quadriptyque (validé par l'utilisateur le 2026-10-31) : renumérotation technique
  * pour rejoindre le cloud, pas une mutation métier → ni is_dirty, ni t_outbox, ni t_logs.
@@ -38,9 +39,13 @@ const LEVELS: Record<HierarchyLevel, LevelDef> = {
 };
 
 export interface RealignResult {
-  action: 'noop' | 'realigned' | 'skipped';
+  /**
+   * realigned : ligne renumérotée ; merged : doublon local (même sync_id déjà présent sous l'id cloud)
+   * fusionné dans la ligne cloud puis supprimé ; vacated : ligne déplacée vers un id libre.
+   */
+  action: 'noop' | 'realigned' | 'merged' | 'vacated' | 'skipped';
   reason?: string;
-  /** Id libre vers lequel une ligne locale occupant déjà l'id cloud a été déplacée. */
+  /** Id libre vers lequel une ligne locale occupant l'id cloud (ou l'id à libérer) a été déplacée. */
   movedOccupantTo?: number;
   /** Lignes modifiées (références + payloads t_outbox), hors ligne renumérotée. */
   rowsUpdated?: number;
@@ -59,14 +64,9 @@ function tablesWithColumn(db: Database.Database, column: string): string[] {
     .filter(name => (db.prepare(`PRAGMA table_info(${quote(name)})`).all() as { name: string }[]).some(c => c.name === column));
 }
 
-/**
- * Renumérote `from` → `to` dans la table du niveau, ses références et les payloads t_outbox en attente.
- * À appeler dans une transaction (foreign_keys déjà désactivé). Retourne le nombre de lignes de
- * références/payloads modifiées.
- */
-function renumber(db: Database.Database, def: LevelDef, from: number, to: number, refTables: string[]): number {
+/** Remplace `from` par `to` dans les références et les payloads t_outbox PENDING/ERROR (pas la ligne elle-même). */
+function rewriteReferences(db: Database.Database, def: LevelDef, from: number, to: number, refTables: string[]): number {
   let changes = 0;
-  db.prepare(`UPDATE ${quote(def.table)} SET id = ? WHERE id = ?`).run(to, from);
   for (const table of refTables) {
     changes += db.prepare(`UPDATE ${quote(table)} SET ${quote(def.refColumn)} = ? WHERE ${quote(def.refColumn)} = ?`).run(to, from).changes;
   }
@@ -84,10 +84,34 @@ function renumber(db: Database.Database, def: LevelDef, from: number, to: number
     WHERE status IN ('PENDING', 'ERROR') AND table_name = ? AND json_valid(payload)
       AND json_type(payload, '$.id') IN ('integer', 'text') AND CAST(json_extract(payload, '$.id') AS INTEGER) = ?
   `).run(to, def.table, from).changes;
+  return changes;
+}
+
+/** Renumérote la ligne `from` → `to` (libre) et ses références. À appeler dans une transaction. */
+function renumber(db: Database.Database, def: LevelDef, from: number, to: number, refTables: string[]): number {
+  db.prepare(`UPDATE ${quote(def.table)} SET id = ? WHERE id = ?`).run(to, from);
   // AUTOINCREMENT : un UPDATE de l'id ne fait pas avancer sqlite_sequence ; sans ce rattrapage, une
   // création locale ultérieure pourrait recevoir l'id `to` (contrainte PRIMARY KEY violée).
   db.prepare(`UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?`).run(to, def.table);
-  return changes;
+  return rewriteReferences(db, def, from, to, refTables);
+}
+
+/** Premier id libre de la table, au-delà de MAX(id) et de sqlite_sequence. */
+function freeId(db: Database.Database, def: LevelDef): number {
+  const seq = db.prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).get(def.table) as { seq: number } | undefined;
+  const maxId = (db.prepare(`SELECT MAX(id) AS m FROM ${quote(def.table)}`).get() as { m: number | null }).m ?? 0;
+  return Math.max(maxId, seq?.seq ?? 0) + 1;
+}
+
+/** Exécute `fn` dans une transaction avec foreign_keys désactivé, puis restaure la valeur d'origine. */
+function withForeignKeysOff<T>(db: Database.Database, fn: () => T): T {
+  const fkBefore = db.pragma('foreign_keys', { simple: true }) as number;
+  db.pragma('foreign_keys = OFF');
+  try {
+    return db.transaction(fn)();
+  } finally {
+    db.pragma(`foreign_keys = ${fkBefore ? 'ON' : 'OFF'}`);
+  }
 }
 
 /**
@@ -95,6 +119,8 @@ function renumber(db: Database.Database, def: LevelDef, from: number, to: number
  * - noop si déjà aligné ;
  * - skipped (sans rien modifier) si la ligne locale est introuvable, porte un autre sync_id, si les
  *   ids sont invalides ou si une transaction est déjà ouverte ;
+ * - si la ligne sous `cloudId` porte le MÊME sync_id (doublon créé par un ancien INSERT OR REPLACE),
+ *   les références de `localId` sont reportées sur elle et la ligne `localId` est supprimée (merged) ;
  * - si une AUTRE ligne locale occupe déjà `cloudId` (forcément une ligne locale non alignée, deux lignes
  *   cloud ne pouvant partager un id), elle est d'abord déplacée vers un id libre, avec ses références.
  */
@@ -117,34 +143,113 @@ export function realignLocalId(
   if (db.inTransaction) return { action: 'skipped', reason: 'transaction déjà ouverte (foreign_keys non désactivable)' };
 
   const refTables = tablesWithColumn(db, def.refColumn);
-  const fkBefore = db.pragma('foreign_keys', { simple: true }) as number;
-  db.pragma('foreign_keys = OFF');
-  try {
-    const result = db.transaction((): RealignResult => {
-      let movedOccupantTo: number | undefined;
-      let rowsUpdated = 0;
-      const occupant = db.prepare(`SELECT sync_id FROM ${quote(def.table)} WHERE id = ?`).get(cloudId) as { sync_id: string | null } | undefined;
-      if (occupant) {
-        const seq = db.prepare(`SELECT seq FROM sqlite_sequence WHERE name = ?`).get(def.table) as { seq: number } | undefined;
-        const maxId = (db.prepare(`SELECT MAX(id) AS m FROM ${quote(def.table)}`).get() as { m: number | null }).m ?? 0;
-        movedOccupantTo = Math.max(maxId, seq?.seq ?? 0) + 1;
-        rowsUpdated += renumber(db, def, cloudId, movedOccupantTo, refTables);
-      }
-      rowsUpdated += renumber(db, def, localId, cloudId, refTables);
-      return { action: 'realigned', movedOccupantTo, rowsUpdated };
-    })();
-    log.info(
-      `[hierarchy-realign] ${def.table} sync_id=${syncId} : id local ${localId} → id cloud ${cloudId}` +
-      `${result.movedOccupantTo !== undefined ? ` (ligne locale qui occupait ${cloudId} déplacée vers ${result.movedOccupantTo})` : ''}` +
-      `, ${result.rowsUpdated} référence(s) mise(s) à jour.`
-    );
-    return result;
-  } finally {
-    db.pragma(`foreign_keys = ${fkBefore ? 'ON' : 'OFF'}`);
-  }
+  const result = withForeignKeysOff(db, (): RealignResult => {
+    const occupant = db.prepare(`SELECT sync_id FROM ${quote(def.table)} WHERE id = ?`).get(cloudId) as { sync_id: string | null } | undefined;
+    if (occupant && occupant.sync_id === syncId) {
+      const rowsUpdated = rewriteReferences(db, def, localId, cloudId, refTables);
+      db.prepare(`DELETE FROM ${quote(def.table)} WHERE id = ?`).run(localId);
+      return { action: 'merged', rowsUpdated };
+    }
+    let movedOccupantTo: number | undefined;
+    let rowsUpdated = 0;
+    if (occupant) {
+      movedOccupantTo = freeId(db, def);
+      rowsUpdated += renumber(db, def, cloudId, movedOccupantTo, refTables);
+    }
+    rowsUpdated += renumber(db, def, localId, cloudId, refTables);
+    return { action: 'realigned', movedOccupantTo, rowsUpdated };
+  });
+  log.info(
+    `[hierarchy-realign] ${def.table} sync_id=${syncId} : id local ${localId} → id cloud ${cloudId}` +
+    (result.action === 'merged' ? ' (doublon fusionné dans la ligne cloud)' : '') +
+    (result.movedOccupantTo !== undefined ? ` (ligne locale qui occupait ${cloudId} déplacée vers ${result.movedOccupantTo})` : '') +
+    `, ${result.rowsUpdated} référence(s) mise(s) à jour.`
+  );
+  return result;
 }
 
-export const realignLocalSite = (db: Database.Database, localId: number, cloudId: number, syncId: string): RealignResult =>
+/**
+ * Libère l'id `id` : la ligne locale qui l'occupe (non alignée, autre sync_id que la ligne cloud qui va
+ * y être écrite) est déplacée vers un id libre, avec ses références. Évite qu'un INSERT OR REPLACE de
+ * la ligne cloud ne l'écrase (perte de la ligne, références orphelines).
+ */
+export function vacateLocalId(db: Database.Database, level: HierarchyLevel, id: number): RealignResult {
+  const def = LEVELS[level];
+  if (!Number.isInteger(id) || id <= 0) return { action: 'skipped', reason: 'paramètres invalides' };
+  if (!db.prepare(`SELECT 1 FROM ${quote(def.table)} WHERE id = ?`).get(id)) return { action: 'noop' };
+  if (db.inTransaction) return { action: 'skipped', reason: 'transaction déjà ouverte (foreign_keys non désactivable)' };
+
+  const refTables = tablesWithColumn(db, def.refColumn);
+  const result = withForeignKeysOff(db, (): RealignResult => {
+    const to = freeId(db, def);
+    return { action: 'vacated', movedOccupantTo: to, rowsUpdated: renumber(db, def, id, to, refTables) };
+  });
+  log.info(`[hierarchy-realign] ${def.table} : ligne locale ${id} déplacée vers ${result.movedOccupantTo} (id requis par le cloud), ${result.rowsUpdated} référence(s) mise(s) à jour.`);
+  return result;
+}
+
+/**
+ * Réconciliation avant INSERT OR REPLACE de lignes cloud t_sites / t_centres (plan site_id 2026-10-31, E2-b).
+ * 1. Une ligne locale portant le sync_id d'une ligne cloud sous un autre id est réalignée (ou fusionnée).
+ * 2. Une ligne locale d'une autre identité (sync_id non nul différent) occupant l'id cloud est déplacée.
+ * `sessionId` (site_id ou centre_id de la session ouverte) n'est jamais renuméroté : la session garde
+ * ses ids en mémoire (refreshSecureCurrentUser ne les met pas à jour). La ligne cloud concernée est
+ * alors renvoyée dans l'ensemble retourné, que l'appelant NE DOIT PAS écrire (réalignement au prochain
+ * démarrage, préchargement avant connexion). Même chose en cas d'échec d'un réalignement.
+ * Ne lève jamais : les échecs sont journalisés.
+ */
+export function reconcileBeforeCloudReplace(
+  db: Database.Database,
+  level: 'site' | 'centre',
+  cloudRows: ReadonlyArray<{ id: number; sync_id?: string | null }>,
+  sessionId: number | null | undefined
+): Set<number> {
+  const def = LEVELS[level];
+  const table = quote(def.table);
+  const skipIds = new Set<number>();
+  const touchesSession = (id: number): boolean => sessionId != null && id === Number(sessionId);
+
+  for (const c of cloudRows) {
+    if (!c?.sync_id || !Number.isInteger(c.id)) continue;
+    const locals = db.prepare(`SELECT id FROM ${table} WHERE sync_id = ? AND id != ?`).all(c.sync_id, c.id) as { id: number }[];
+    for (const l of locals) {
+      const occupied = !!db.prepare(`SELECT 1 FROM ${table} WHERE id = ?`).get(c.id);
+      if (touchesSession(l.id) || (occupied && touchesSession(c.id))) {
+        log.warn(`[hierarchy-realign] ${def.table} sync_id=${c.sync_id} : id local ${l.id} ≠ id cloud ${c.id}, utilisé par la session ouverte — réalignement reporté au prochain démarrage.`);
+        skipIds.add(c.id);
+        continue;
+      }
+      try {
+        const res = realignLocalId(db, level, l.id, c.id, c.sync_id);
+        if (res.action === 'skipped') skipIds.add(c.id);
+      } catch (err: any) {
+        log.error(`[hierarchy-realign] Réalignement ${def.table} ${l.id} → ${c.id} en échec :`, err?.message || err);
+        skipIds.add(c.id);
+      }
+    }
+  }
+
+  for (const c of cloudRows) {
+    if (!c?.sync_id || !Number.isInteger(c.id) || skipIds.has(c.id)) continue;
+    const occ = db.prepare(`SELECT sync_id FROM ${table} WHERE id = ?`).get(c.id) as { sync_id: string | null } | undefined;
+    if (!occ || !occ.sync_id || occ.sync_id === c.sync_id) continue;
+    if (touchesSession(c.id)) {
+      log.warn(`[hierarchy-realign] ${def.table} id ${c.id} : occupé localement par une autre identité utilisée par la session ouverte — ligne cloud ignorée jusqu'au prochain démarrage.`);
+      skipIds.add(c.id);
+      continue;
+    }
+    try {
+      const res = vacateLocalId(db, level, c.id);
+      if (res.action === 'skipped') skipIds.add(c.id);
+    } catch (err: any) {
+      log.error(`[hierarchy-realign] Libération de ${def.table} id ${c.id} en échec :`, err?.message || err);
+      skipIds.add(c.id);
+    }
+  }
+  return skipIds;
+}
+
+export const realignLocalSite =(db: Database.Database, localId: number, cloudId: number, syncId: string): RealignResult =>
   realignLocalId(db, 'site', localId, cloudId, syncId);
 
 export const realignLocalCentre = (db: Database.Database, localId: number, cloudId: number, syncId: string): RealignResult =>

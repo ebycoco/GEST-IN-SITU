@@ -21,20 +21,27 @@ const SITE_A = 981;
 const SITE_B = 982;
 let cloudUsers: any[] = [];
 let cloudRoles: { user_sync_id: string; role: string }[] = [];
+const DEFAULT_SITES = [
+  { id: 981, nom: 'S_PA', code: 'S_PA', is_active: 1, max_centres: 4, sync_id: 'site-pa' },
+  { id: 982, nom: 'S_PB', code: 'S_PB', is_active: 1, max_centres: 4, sync_id: 'site-pb' }
+];
+let cloudSites: any[] = DEFAULT_SITES;
+let cloudCentres: any[] = [];
 vi.mock('../src/main/sync/supabase-client', () => ({
   getSupabaseClient: () => ({
     from: (table: string) => {
+      const filters: Array<[string, unknown]> = [];
       const run = () => {
-        if (table === 't_sites') return { data: [
-          { id: 981, nom: 'S_PA', code: 'S_PA', is_active: 1, max_centres: 4, sync_id: 'site-pa' },
-          { id: 982, nom: 'S_PB', code: 'S_PB', is_active: 1, max_centres: 4, sync_id: 'site-pb' }
-        ], error: null };
-        if (table === 't_centres') return { data: [], error: null };
-        if (table === 't_user_roles') return { data: cloudRoles, error: null };
-        return { data: cloudUsers, error: null };
+        let data: any[];
+        if (table === 't_sites') data = cloudSites;
+        else if (table === 't_centres') data = cloudCentres;
+        else if (table === 't_user_roles') data = cloudRoles;
+        else data = cloudUsers;
+        return { data: data.filter(r => filters.every(([k, v]) => r[k] === v)), error: null };
       };
       const builder: any = {
         select: () => builder,
+        eq: (k: string, v: unknown) => { filters.push([k, v]); return builder; },
         then: (res: any, rej: any) => Promise.resolve(run()).then(res, rej)
       };
       return builder;
@@ -57,7 +64,7 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     connection.closeDatabase();
     if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
   });
-  beforeEach(() => { cloudUsers = []; cloudRoles = []; });
+  beforeEach(() => { cloudUsers = []; cloudRoles = []; cloudSites = DEFAULT_SITES; cloudCentres = []; });
 
   const uid = () => ++n;
   const cu = (login: string, syncId: string, over: Record<string, unknown> = {}) => ({
@@ -112,6 +119,41 @@ describe('preloadUsersFromCloud via upsertCloudUser (L2-1d)', () => {
     expect(byLogin(`sa_absent_${k}`)).toMatchObject({ site_id: null, centre_id: null, role: 'SUPER ADMIN', is_dirty: 0 });
     expect(byLogin(`op_absent_${k}`)).toBeUndefined();
     expect(fk()).toBe(1);
+  });
+
+  it('poste créateur (plan site_id) : site et centre locaux réalignés sur leurs ids cloud, sans écrasement ni doublon', async () => {
+    const k = uid();
+    const L_SITE = 9500 + k, C_SITE = 9600 + k, L_CENTRE = 9700 + k, C_CENTRE = 9800 + k;
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (?, 'NOUVEAU', ?, 1, ?)`).run(L_SITE, `NV_${k}`, `site-nv-${k}`);
+    db.prepare(`INSERT INTO t_centres (id, site_id, nom, numero, sync_id) VALUES (?, ?, 'CENTRE NV', 1, ?)`).run(L_CENTRE, L_SITE, `centre-nv-${k}`);
+    db.prepare(`INSERT INTO t_users (login, password_hash, role, site_id, centre_id, sync_id, is_dirty, statut_actif) VALUES (?, 'h', 'ADMINISTRATEUR_SITE', ?, ?, ?, 0, 1)`)
+      .run(`admin_nv_${k}`, L_SITE, L_CENTRE, `sid-${k}-adm`);
+    cloudSites = [
+      ...DEFAULT_SITES,
+      { id: C_SITE, nom: 'NOUVEAU', code: `NV_${k}`, is_active: 1, max_centres: 4, sync_id: `site-nv-${k}` },
+      { id: L_SITE, nom: 'AUTRE', code: `AU_${k}`, is_active: 1, max_centres: 4, sync_id: `site-autre-${k}` }
+    ];
+    cloudCentres = [{ id: C_CENTRE, site_id: C_SITE, nom: 'CENTRE NV', numero: 1, sync_id: `centre-nv-${k}` }];
+
+    await downstream.preloadUsersFromCloud();
+
+    expect(db.prepare('SELECT id FROM t_sites WHERE sync_id = ?').get(`site-nv-${k}`)).toEqual({ id: C_SITE });
+    expect(db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(L_SITE)).toEqual({ sync_id: `site-autre-${k}` });
+    expect(db.prepare('SELECT id, site_id FROM t_centres WHERE sync_id = ?').all(`centre-nv-${k}`)).toEqual([{ id: C_CENTRE, site_id: C_SITE }]);
+    expect(byLogin(`admin_nv_${k}`)).toMatchObject({ site_id: C_SITE, centre_id: C_CENTRE });
+    expect(fk()).toBe(1);
+  });
+
+  it('runDownstream : site local dont l\'id désigne un autre site dans le cloud → SiteNotFoundError, rien n\'est écrit', async () => {
+    const k = uid();
+    const L_SITE = 9900 + k;
+    db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (?, 'LOCAL', ?, 1, ?)`).run(L_SITE, `LO_${k}`, `site-lo-${k}`);
+    cloudSites = [{ id: L_SITE, nom: 'AUTRE', code: `AU2_${k}`, is_active: 1, max_centres: 4, sync_id: `site-autre2-${k}` }];
+    cloudCentres = [{ id: 99990 + k, site_id: L_SITE, nom: 'CENTRE AUTRE', numero: 1, sync_id: `centre-autre2-${k}` }];
+
+    await expect(downstream.runDownstream(L_SITE)).rejects.toBeInstanceOf(downstream.SiteNotFoundError);
+    expect(db.prepare('SELECT nom, sync_id FROM t_sites WHERE id = ?').get(L_SITE)).toEqual({ nom: 'LOCAL', sync_id: `site-lo-${k}` });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM t_centres WHERE sync_id = ?').get(`centre-autre2-${k}`)).toEqual({ n: 0 });
   });
 
   it('renommage cloud : pas d\'exception, autres comptes préchargés, FK restaurées', async () => {

@@ -30,7 +30,9 @@
 
 - **Création d'un agent par un SUPER ADMIN : plus de rattachement automatique au site n°1** — quand aucun site n'était choisi, le compte créé était rattaché au site n°1, qui peut ne pas exister : le compte était ensuite refusé par les autres postes. Un compte qui n'a que le rôle SUPER ADMIN est maintenant créé sans site. Pour les autres rôles, le site est celui sélectionné dans la barre latérale ou, en vue globale, celui du centre choisi ; un centre qui n'appartient pas au site sélectionné est refusé. Sans site ni centre, un message demande d'en choisir un.
 
-- **Préparation : alignement des numéros de site et de centre sur ceux du cloud** (sans effet visible dans cette étape) — ajout du mécanisme qui permettra au poste ayant créé un site ou un centre de reprendre le numéro attribué par le cloud, en mettant à jour les comptes, cartes, journaux et envois en attente qui s'y rattachent. Il n'est pas encore activé : il le sera dans les étapes suivantes du correctif « numéro de site local envoyé au cloud ».
+- **Poste ayant créé un site ou un centre : il reprend le numéro attribué par le cloud** — le poste qui créait un site ou un centre lui donnait son propre numéro, différent de celui du cloud. Au téléchargement suivant, la fiche du site pouvait disparaître du poste (comptes et cartes rattachés à un site inexistant) et les centres apparaître en double. Au démarrage, le poste aligne désormais ces numéros sur ceux du cloud et met à jour les comptes, cartes, journaux et envois en attente qui s'y rattachent ; les centres en double sont fusionnés. Le site ou le centre de la session ouverte n'est jamais renuméroté en cours de session : l'alignement se fait au démarrage suivant.
+
+- **Synchronisation : plus de téléchargement des données d'un autre site sur un poste non aligné** — si le numéro local du site d'un poste correspond, dans le cloud, à un autre site, le téléchargement est désormais refusé avec le message « site introuvable » invitant à redémarrer l'application, au lieu d'écrire sur ce poste les centres, agents ou cartes de l'autre site.
 
 ### 🚨 Sécurité
 

@@ -2,6 +2,8 @@ import { getDatabase } from '../connection';
 import { networkMonitor } from '../../sync/network-monitor';
 import { getSupabaseClient } from '../../sync/supabase-client';
 import { enqueueOutbox, scheduleOutboxProcessing } from '../../sync/outbox.service';
+import { reconcileBeforeCloudReplace } from '../../sync/hierarchy-realign';
+import { getSecureCurrentUser } from '../../auth/session-heartbeat';
 import log from 'electron-log';
 
 export function enqueueSyncOp(tableName: string, recordId: number, operation: string, syncId: string, siteId: number, lastUpdatedAtLocal?: string) {
@@ -183,6 +185,11 @@ export async function pullCentresFromCloud(siteId: number): Promise<{ success: b
       return { success: true, count: 0, message: 'Aucun centre trouvé sur Supabase pour ce site.' };
     }
 
+    // Plan site_id 2026-10-31 (E2-b) : centres locaux réalignés sur leur id cloud avant l'écriture
+    // (pas d'écrasement ni de doublon) ; le centre de la session ouverte n'est jamais renuméroté.
+    const sessionCentreId = getSecureCurrentUser()?.centre_id;
+    const skipIds = reconcileBeforeCloudReplace(db, 'centre', cloudCentres, sessionCentreId != null ? Number(sessionCentreId) : null);
+
     let count = 0;
     db.transaction(() => {
       const insertStmt = db.prepare(`
@@ -191,6 +198,7 @@ export async function pullCentresFromCloud(siteId: number): Promise<{ success: b
       `);
 
       for (const c of cloudCentres) {
+        if (skipIds.has(c.id)) continue;
         insertStmt.run({
           id: c.id,
           site_id: c.site_id,

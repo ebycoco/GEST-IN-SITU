@@ -8,6 +8,36 @@ import { Worker } from 'worker_threads';
 import { join } from 'path';
 import { getSecureCurrentUser } from '../auth/session-heartbeat';
 import { upsertCloudUser, VALID_USER_ROLES, type UpsertCloudUserAction } from './users-sync.helper';
+import { reconcileBeforeCloudReplace } from './hierarchy-realign';
+
+// ─── Réconciliation des ids de site / centre avant INSERT OR REPLACE (plan site_id 2026-10-31, E2-b) ──
+// Le poste qui a créé un site ou un centre l'a numéroté localement (L) ; le cloud lui a donné un autre
+// id (C). Sans réconciliation, l'INSERT OR REPLACE de la ligne cloud écrase la ligne locale qui occupe C
+// (ou, pour t_sites, celle de même `code`) et laisse ses références orphelines, ou crée un doublon de
+// centre. Voir reconcileBeforeCloudReplace (hierarchy-realign.ts). Les ids retournés ne sont pas écrits.
+function reconcileHierarchyBeforeReplace(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  level: 'site' | 'centre',
+  cloudRows: ReadonlyArray<{ id: number; sync_id?: string | null }>
+): Set<number> {
+  const session = getSecureCurrentUser();
+  const sessionId = session ? (level === 'site' ? session.site_id : session.centre_id) : null;
+  return reconcileBeforeCloudReplace(db, level, cloudRows, sessionId != null ? Number(sessionId) : null);
+}
+
+/**
+ * Garde anti-fuite inter-sites (§3) : `siteId` est un id LOCAL. Si la ligne locale porte un sync_id et
+ * que la ligne cloud de même id en porte un autre, ce poste n'est pas aligné et l'id désigne un AUTRE
+ * site dans le cloud : on refuse de télécharger quoi que ce soit pour ce site (réalignement au
+ * prochain démarrage, par le préchargement).
+ */
+function assertCloudSiteIdentity(db: NonNullable<ReturnType<typeof getDatabase>>, siteId: number, cloudSyncId: string | null | undefined): void {
+  const local = db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(siteId) as { sync_id: string | null } | undefined;
+  if (local?.sync_id && cloudSyncId && local.sync_id !== cloudSyncId) {
+    log.error(`[SYNC] Site local ${siteId} (sync_id ${local.sync_id}) ≠ site cloud ${siteId} (sync_id ${cloudSyncId}) : poste non aligné, téléchargement refusé.`);
+    throw new SiteNotFoundError(siteId, 'le numéro local du site désigne un autre site dans le cloud ; redémarrez l\'application pour réaligner ce poste');
+  }
+}
 
 // ─── Signal explicite "site introuvable côté cloud" (correctif bug production 2026-08-30) ──
 // Avant ce correctif, runDownstream()/syncUsersFromCloud() retournaient silencieusement 0
@@ -147,6 +177,8 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
       throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
+    assertCloudSiteIdentity(db, siteId, siteData.sync_id);
+    reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
 
     // ── Filet de sécurité FK (parité avec syncUsersFromCloud, ~ligne 452) ────
     // `INSERT OR REPLACE` sur une PK déjà existante est un DELETE+INSERT
@@ -194,6 +226,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
     if (centresError) {
       log.error(`[SYNC] Impossible de récupérer les centres du site ${siteId} :`, centresError.message);
     } else if (centresData && centresData.length > 0) {
+      const skipCentreIds = reconcileHierarchyBeforeReplace(db, 'centre', centresData);
       // Même filet de sécurité FK que pour t_sites ci-dessus : t_cartes référence
       // centre_id sans cascade, et ce REPLACE tourne en boucle tant que la session
       // reste connectée.
@@ -205,6 +238,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
             VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
           `);
           for (const c of centresData) {
+            if (skipCentreIds.has(c.id)) continue;
             insertCentreStmt.run({
               id: c.id,
               site_id: c.site_id,
@@ -684,6 +718,8 @@ export async function syncUsersFromCloud(siteId: number): Promise<number> {
       throw new SiteNotFoundError(siteId, siteError?.message);
     }
     const siteData = siteDataList[0];
+    assertCloudSiteIdentity(db, siteId, siteData.sync_id);
+    reconcileHierarchyBeforeReplace(db, 'site', [siteData]);
 
     // Filet de sécurité FK (parité avec la garde déjà appliquée un peu plus
     // bas dans cette même fonction pour t_users) : voir le commentaire détaillé
@@ -1008,6 +1044,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
       } else if (!sitesData || sitesData.length === 0) {
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_sites', error: 'Données non récupérées ou vides' });
       } else {
+        const skipSiteIds = reconcileHierarchyBeforeReplace(db, 'site', sitesData);
         // Filet de sécurité FK — même justification que runDownstream/syncUsersFromCloud.
         db.exec('PRAGMA foreign_keys = OFF;');
         try {
@@ -1017,6 +1054,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
               VALUES (@id, @nom, @code, @is_active, @max_centres, @created_at, @sync_id, @expiry_date, @is_permanent)
             `);
             for (const s of sitesData) {
+              if (skipSiteIds.has(s.id)) continue;
               insertSiteStmt.run({
                 id: s.id,
                 nom: s.nom,
@@ -1049,6 +1087,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
       } else if (!centresData || centresData.length === 0) {
         logAudit('SYSTEM', 'SYS_INIT_EMPTY_TABLE', { table: 't_centres', error: 'Données non récupérées' });
       } else {
+        const skipCentreIds = reconcileHierarchyBeforeReplace(db, 'centre', centresData);
         // Filet de sécurité FK — même justification que runDownstream/syncUsersFromCloud.
         db.exec('PRAGMA foreign_keys = OFF;');
         try {
@@ -1058,6 +1097,7 @@ export async function preloadUsersFromCloud(): Promise<void> {
               VALUES (@id, @site_id, @nom, @numero, @created_at, @sync_id, @prefixe_rangement, @code, @lieu)
             `);
             for (const c of centresData) {
+              if (skipCentreIds.has(c.id)) continue;
               insertCentreStmt.run({
                 id: c.id,
                 site_id: c.site_id,

@@ -159,6 +159,71 @@ describe('hierarchy-realign — id local → id cloud', () => {
     expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
   });
 
+  it('doublon de centre (même sync_id sous l\'id local et l\'id cloud) : fusionné dans la ligne cloud', () => {
+    site(40, 'site-1');
+    centre(3, 40, 'centre-x');
+    centre(21, 40, 'centre-x');
+    user('agent', 40, 3);
+    carte('carte-1', 40, 3);
+    outbox('o-carte', 't_cartes', 'PENDING', { sync_id: 'carte-1', centre_id: 3 });
+
+    const res = realign.realignLocalCentre(db, 3, 21, 'centre-x');
+
+    expect(res.action).toBe('merged');
+    expect(one(`SELECT COUNT(*) AS n FROM t_centres WHERE sync_id = 'centre-x'`).n).toBe(1);
+    expect(one(`SELECT id FROM t_centres WHERE sync_id = 'centre-x'`).id).toBe(21);
+    expect(one(`SELECT centre_id FROM t_users WHERE login = 'agent'`).centre_id).toBe(21);
+    expect(one(`SELECT centre_id FROM t_cartes WHERE sync_id = 'carte-1'`).centre_id).toBe(21);
+    expect(payloadOf('o-carte').centre_id).toBe(21);
+  });
+
+  it('vacateLocalId : la ligne occupant un id requis par le cloud est déplacée avec ses références', () => {
+    site(5, 'site-local');
+    user('agent', 5, null);
+    const res = realign.vacateLocalId(db, 'site', 5);
+    expect(res.action).toBe('vacated');
+    expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-local').id).toBe(res.movedOccupantTo);
+    expect(one(`SELECT site_id FROM t_users WHERE login = 'agent'`).site_id).toBe(res.movedOccupantTo);
+    expect(realign.vacateLocalId(db, 'site', 5).action).toBe('noop');
+  });
+
+  describe('reconcileBeforeCloudReplace (réception)', () => {
+    it('poste créateur : site local 5 (cloud 40) et autre site cloud à l\'id 5 → réaligné puis id 5 libre, rien à ignorer', () => {
+      site(5, 'site-x');
+      user('agent', 5, null);
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x' }, { id: 5, sync_id: 'site-y' }], null);
+      expect([...skip]).toEqual([]);
+      expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-x').id).toBe(40);
+      expect(one('SELECT COUNT(*) AS n FROM t_sites WHERE id = 5').n).toBe(0);
+      expect(one(`SELECT site_id FROM t_users WHERE login = 'agent'`).site_id).toBe(40);
+    });
+
+    it('ligne locale d\'une autre identité sur l\'id cloud (sans ligne cloud correspondante) → déplacée', () => {
+      site(5, 'site-local-only');
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], null);
+      expect([...skip]).toEqual([]);
+      expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-local-only').id).toBeGreaterThan(5);
+      expect(one('SELECT COUNT(*) AS n FROM t_sites WHERE id = 5').n).toBe(0);
+    });
+
+    it('ligne locale sans sync_id sur l\'id cloud : laissée telle quelle (même site historique)', () => {
+      db.prepare(`INSERT INTO t_sites (id, nom, code, is_active, sync_id) VALUES (5, 'OLD', 'OLD', 1, NULL)`).run();
+      const skip = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], null);
+      expect([...skip]).toEqual([]);
+      expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBeNull();
+    });
+
+    it('site de la session ouverte : jamais renuméroté, la ligne cloud est à ignorer', () => {
+      site(5, 'site-x');
+      const skip1 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 40, sync_id: 'site-x' }], 5);
+      expect([...skip1]).toEqual([40]);
+      expect(one('SELECT id FROM t_sites WHERE sync_id = ?', 'site-x').id).toBe(5);
+      const skip2 = realign.reconcileBeforeCloudReplace(db, 'site', [{ id: 5, sync_id: 'site-y' }], 5);
+      expect([...skip2]).toEqual([5]);
+      expect(one('SELECT sync_id FROM t_sites WHERE id = 5').sync_id).toBe('site-x');
+    });
+  });
+
   it('erreur SQL pendant le réalignement : tout est annulé et foreign_keys est restauré', () => {
     site(5, 'site-new');
     user('agent', 5, null);
