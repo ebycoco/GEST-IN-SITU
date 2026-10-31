@@ -179,6 +179,8 @@ export function createSite(data: { nom: string; code: string; max_centres: numbe
       is_permanent: data.is_permanent || 0
     });
 
+    // Dépendance explicite (plan site_id, commit 5) : l'admin ne part qu'après l'acquittement du
+    // site (sinon même lot, même seconde : ordre non garanti, site_id inconnu du cloud).
     enqueueOutbox(userSyncId, 't_users', 'INSERT', {
       sync_id: userSyncId,
       login: data.admin.login,
@@ -189,7 +191,7 @@ export function createSite(data: { nom: string; code: string; max_centres: numbe
       statut_actif: 1,
       site_id: siteId,
       centre_id: null
-    });
+    }, siteSyncId);
 
     return siteResult;
   });
@@ -612,14 +614,6 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
 
   const placeholders = columns.map(() => '?').join(', ');
 
-  // ── 1. Insertion locale immédiate (toujours, online ET offline) ──────────
-  const result = db.prepare(`
-    INSERT INTO t_centres (${columns.join(', ')})
-    VALUES (${placeholders})
-  `).run(...values);
-
-  const centreId = result.lastInsertRowid as number;
-
   // ── 2. Construction du payload outbox ────────────────────────────────────
   const outboxPayload: Record<string, unknown> = {
     sync_id: centreSyncId,
@@ -630,8 +624,19 @@ export function createCentre(data: { site_id: number; nom: string; code?: string
   if (data.lieu !== undefined)               outboxPayload.lieu = data.lieu || null;
   if (data.prefixe_rangement !== undefined)  outboxPayload.prefixe_rangement = data.prefixe_rangement || null;
 
-  // ── 3. Enfilage dans t_outbox (idempotent via UUID) ──────────────────────
-  enqueueOutbox(centreSyncId, 't_centres', 'INSERT', outboxPayload);
+  // Dépendance explicite (plan site_id, commit 5) : si le site parent a encore son envoi en attente
+  // (site créé sur ce poste), le centre ne part qu'après lui. Sans entrée t_outbox du site : aucun effet.
+  const siteSyncId = (db.prepare('SELECT sync_id FROM t_sites WHERE id = ?').get(data.site_id) as { sync_id: string | null } | undefined)?.sync_id ?? null;
+
+  // ── 1 + 3. Insertion locale et enfilage t_outbox dans une seule transaction (plan site_id, commit 5) ──
+  const result = db.transaction(() => {
+    const res = db.prepare(`
+      INSERT INTO t_centres (${columns.join(', ')})
+      VALUES (${placeholders})
+    `).run(...values);
+    enqueueOutbox(centreSyncId, 't_centres', 'INSERT', outboxPayload, siteSyncId);
+    return res;
+  })();
 
   // ── 4. Déclenchement immédiat si online (via setImmediate → non bloquant) ─
   if (networkMonitor.getState() === 'ONLINE') {

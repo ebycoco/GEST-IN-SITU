@@ -6,6 +6,7 @@ import { getSupabaseClient } from './supabase-client';
 import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
 import { insertAuditLog } from '../database/queries/audit.queries';
+import { realignLocalId, type HierarchyLevel } from './hierarchy-realign';
 
 // ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
 /**
@@ -85,6 +86,45 @@ export function redactPayloadForLog(payload: unknown): string {
   return JSON.stringify(payload, (key, value) =>
     LOG_REDACTED_KEYS.has(key) && value != null ? '[MASQUÉ]' : value
   );
+}
+
+/** Tables de hiérarchie dont l'id cloud est relu à l'envoi (plan site_id, commit 5). */
+const HIERARCHY_LEVEL_BY_TABLE: Record<string, HierarchyLevel> = {
+  t_sites: 'site',
+  t_centres: 'centre',
+  t_postes: 'poste'
+};
+
+/**
+ * Après l'acquittement d'un upsert t_sites / t_centres / t_postes : si le cloud a attribué un id
+ * différent de l'id local (ligne créée sur ce poste), réaligne l'id local (hierarchy-realign.ts).
+ * Jamais pendant une session ouverte (session, écrans et imports gardent les ids en mémoire, re-audit
+ * 2026-10-31 P1-4) : reporté au préchargement du prochain démarrage, qui réaligne par sync_id.
+ * Retourne true si des ids locaux ont changé. Ne lève jamais.
+ */
+async function _realignAfterAck(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  tableName: string,
+  syncId: unknown,
+  cloudId: number
+): Promise<boolean> {
+  const level = HIERARCHY_LEVEL_BY_TABLE[tableName];
+  if (!level || typeof syncId !== 'string' || !syncId) return false;
+  try {
+    const local = db.prepare(`SELECT id FROM ${tableName} WHERE sync_id = ?`).get(syncId) as { id: number } | undefined;
+    if (!local || local.id === cloudId) return false;
+    // Import différé : session-heartbeat → users.queries → outbox.service (cycle au chargement).
+    const { getSecureCurrentUser } = await import('../auth/session-heartbeat');
+    if (getSecureCurrentUser()) {
+      log.info(`[OutboxService] ${tableName} sync_id=${syncId} : id local ${local.id} ≠ id cloud ${cloudId}, session ouverte — réalignement au prochain démarrage.`);
+      return false;
+    }
+    const res = realignLocalId(db, level, local.id, cloudId, syncId);
+    return res.action === 'realigned' || res.action === 'merged';
+  } catch (err: any) {
+    log.error(`[OutboxService] Réalignement après envoi de ${tableName} sync_id=${syncId} en échec :`, err?.message || err);
+    return false;
+  }
 }
 
 // ─── Types internes ──────────────────────────────────────────────────────────
@@ -466,6 +506,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         // t_cartes seulement : ligne renvoyée par le cloud (bloc statut + sync_id + updated_at).
         let cloudCardRow: Record<string, unknown> | null = null;
         let sentCardPayload: Record<string, unknown> | null = null;
+        // t_sites / t_centres / t_postes seulement : id attribué par le cloud (plan site_id, commit 5).
+        let cloudHierarchyId: number | null = null;
 
         if (entry.operation === 'DELETE') {
           // Un payload DELETE ne contient que { sync_id } (ou { user_sync_id } pour t_user_roles)
@@ -548,6 +590,16 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
               cloudCardRow = (res.data as Record<string, unknown>[]).find(
                 (r) => r && r.sync_id === (finalPayload as Record<string, unknown>).sync_id
               ) ?? null;
+            }
+          } else if (entry.table_name in HIERARCHY_LEVEL_BY_TABLE && typeof upsertQuery.select === 'function') {
+            // Plan site_id (commit 5) : id attribué par le cloud, pour réaligner l'id local.
+            const res = await upsertQuery.select('id, sync_id');
+            error = res.error;
+            if (!error && Array.isArray(res.data)) {
+              const row = (res.data as { id?: unknown; sync_id?: unknown }[]).find(
+                (r) => r && r.sync_id === (finalPayload as Record<string, unknown>).sync_id
+              );
+              cloudHierarchyId = row && Number.isInteger(row.id) ? (row.id as number) : null;
             }
           } else {
             ({ error } = await upsertQuery);
@@ -669,6 +721,13 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
         processed++;
         onEntryProcessed?.({ tableName: entry.table_name, success: true });
         if (entry.table_name === 't_users' && entry.operation !== 'DELETE') usersSyncedCount++;
+
+        if (cloudHierarchyId !== null && await _realignAfterAck(db, entry.table_name, (payload as Record<string, unknown>).sync_id, cloudHierarchyId)) {
+          // Payloads en attente réécrits (site_id/centre_id) : les entrées déjà lues dans ce lot
+          // portent l'ancien id. Lot interrompu ; les suivantes repartent relues, au prochain passage.
+          scheduleOutboxProcessing();
+          break;
+        }
 
       } catch (networkErr: any) {
         // Exception réseau (timeout, DNS, etc.) → conserver PENDING
