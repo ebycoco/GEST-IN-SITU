@@ -56,8 +56,8 @@ export async function runBulkUpload(
   centreId: number | null = null,
   progressCallback: (progress: number) => void,
   userLogin: string = 'system'
-): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean }> {
-  
+): Promise<{ success: boolean; uploadedCount: number; message: string; cancelled?: boolean; refused?: boolean }> {
+
   // ─── GARDE-FOU E2E (positionnée UNIQUEMENT par e2e/fixtures/electron-app.ts) ─
   // Ce flux construit son propre client Supabase à partir des variables d'env
   // DANS le Worker Thread (upload-worker.js), en contournant entièrement
@@ -111,11 +111,12 @@ export async function runBulkUpload(
         const advice = /réseau/.test(alignment.reason)
           ? 'Vérifiez la connexion et réessayez.'
           : 'Redémarrez l\'application et attendez la fin du chargement avant de vous connecter.';
-        return { success: false, uploadedCount: 0, message: `Envoi refusé : ${alignment.reason} ${advice}` };
+        // refused : refus avant tout envoi (aucune carte partie) — le handler IPC rend la main aussitôt.
+        return { success: false, uploadedCount: 0, message: `Envoi refusé : ${alignment.reason} ${advice}`, refused: true };
       }
     } catch (err: any) {
       log.error('[BulkUpload] Garde d\'alignement en échec :', err?.message || err);
-      return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.' };
+      return { success: false, uploadedCount: 0, message: 'Vérification du site impossible : envoi annulé.', refused: true };
     } finally {
       clearTimeout(timer);
     }

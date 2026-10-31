@@ -119,6 +119,9 @@ export function useForceSyncActions(user: any, activeSiteId: number | null, load
         setAllowInvalid(false);
       } else if ((res as any).cancelled) {
         toast('⚠️ Transfert annulé par l\'agent.', { id: toastId, icon: '🛑' });
+      } else if ((res as any).refused) {
+        // Envoi refusé avant tout envoi (réseau injoignable, poste non aligné) : le motif doit rester visible.
+        toast.error(res.message, { id: toastId, duration: 8000 });
       } else {
         toast.dismiss(toastId);
         if ((res as any).uploadedCount > 0) {

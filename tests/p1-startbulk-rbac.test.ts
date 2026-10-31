@@ -206,4 +206,34 @@ describe('sync:startBulk — garde RBAC serveur (correctif audit pré-release)',
     expect(mockRunBulkUpload).toHaveBeenCalledTimes(1);
     expect(res.success).toBe(true);
   });
+
+  // ── Audit agent-13 2026-10-31 (commit 3ec9e98) : P1-1 refus visible, P2-1 retour immédiat ──
+  it('(e) envoi refusé par la garde d\'alignement : retour immédiat (refused), ni ping réseau ni vidage forcé', async () => {
+    mockGetSecureCurrentUser.mockReturnValue(sessionFor(ID_ROLE_BASE + 1, 'ADMINISTRATEUR_SITE'));
+    mockRunBulkUpload.mockResolvedValueOnce({
+      success: false, uploadedCount: 0, refused: true,
+      message: 'Envoi refusé : vérification du site 970 dans le cloud impossible (réseau). Vérifiez la connexion et réessayez.'
+    } as any);
+    const pingSpy = vi.mocked(networkMonitorModule.networkMonitor.forcePing);
+    pingSpy.mockClear();
+    const endSpy = vi.spyOn(syncEngineModule.syncEngine, 'endBulkUpload');
+
+    const res = await startBulkHandler({} as any, SITE_A, false, false, false, false, undefined);
+
+    expect(res).toMatchObject({ success: false, refused: true, uploadedCount: 0 });
+    expect(res.message).toContain('Vérifiez la connexion');
+    expect(pingSpy).not.toHaveBeenCalled();
+    expect(endSpy).toHaveBeenCalledTimes(1); // verrou libéré
+    endSpy.mockRestore();
+  });
+
+  it('(f) annulation : `cancelled` est transmis au renderer', async () => {
+    mockGetSecureCurrentUser.mockReturnValue(sessionFor(ID_ROLE_BASE + 1, 'ADMINISTRATEUR_SITE'));
+    mockRunBulkUpload.mockResolvedValueOnce({ success: false, uploadedCount: 0, cancelled: true, message: 'Transfert annulé par l\'utilisateur.' } as any);
+
+    const res = await startBulkHandler({} as any, SITE_A, false, false, false, false, undefined);
+
+    expect(res.success).toBe(false);
+    expect(res.cancelled).toBe(true);
+  });
 });

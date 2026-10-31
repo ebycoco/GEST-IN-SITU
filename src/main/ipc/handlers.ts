@@ -5508,7 +5508,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
       const db = getDatabase()!;
 
-      let uploadResult: { success: boolean; uploadedCount: number; message: string };
+      let uploadResult: { success: boolean; uploadedCount: number; message: string; cancelled?: boolean; refused?: boolean };
       try {
         const centreId = secureUser?.role === 'ADMIN_CENTRE' && secureUser?.centre_id ? secureUser.centre_id : null;
         uploadResult = await runBulkUpload(Number(siteId), allowProbable, allowInvalid, allowMissing, onlyModified, centreId, (progress: number) => {
@@ -5519,6 +5519,15 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }, secureUser?.login || 'system');
       } finally {
         // Nettoyage : aucun ecouteur focus attache a ce handler
+      }
+
+      // Envoi refusé par la garde d'alignement (avant tout envoi) : on rend la main aussitôt, sans le
+      // ping réseau ni le vidage forcé de t_outbox ci-dessous (audit agent-13 2026-10-31, P2-1 : ~5 s de
+      // blocage inutile). Le vidage de t_outbox repart de toute façon par les cycles périodiques, qui
+      // portent eux-mêmes la garde d'alignement.
+      if (uploadResult.refused) {
+        logAudit(userLogin, 'MASS_UPLOAD_FAILURE', JSON.stringify({ site_id: siteId, error: uploadResult.message }));
+        return { success: false, uploadedCount: 0, message: uploadResult.message, refused: true, strictCount: 0, probableCount: 0, invalidCount: 0 };
       }
 
       // ── Porte de sortie garantie pour t_outbox (piège de régression identifié) ──────
@@ -5853,6 +5862,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         success: uploadResult.success,
         uploadedCount: uploadResult.uploadedCount,
         message: uploadResult.message,
+        // Annulation transmise au renderer (useForceSyncActions lit `cancelled` pour son toast dédié).
+        ...(uploadResult.cancelled ? { cancelled: true } : {}),
         strictCount,
         probableCount,
         invalidCount

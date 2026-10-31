@@ -59,6 +59,7 @@ describe('runBulkUpload — délai du contrôle d\'alignement et annulation (aud
     expect(res.success).toBe(false);
     expect(res.message).toContain('délai dépassé');
     expect(res.message).toContain('Vérifiez la connexion');
+    expect(res.refused).toBe(true);
     expect(h.workers).toHaveLength(0);
   });
 
