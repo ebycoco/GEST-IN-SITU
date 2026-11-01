@@ -168,6 +168,10 @@ export default function AgentsPage() {
           </div>
         ),
         {
+          // id fixe (react-hot-toast) : un nouveau toast de mot de passe temporaire remplace le
+          // précédent au lieu de s'empiler, pour qu'un ancien temporaire ne soit pas pris pour
+          // le plus récent. Durée d'affichage inchangée (15 s).
+          id: 'agents-temp-password-toast',
           duration: 15000,
           style: {
             background: '#12131e',

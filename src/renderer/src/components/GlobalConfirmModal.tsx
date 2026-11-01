@@ -45,8 +45,19 @@ export const GlobalConfirmModal: React.FC = () => {
           setLoading(false);
           return;
         }
-      } catch (err: any) {
-        toast.error("Erreur lors de la vérification : " + (err.message || err));
+      } catch (err: unknown) {
+        const rawMessage = err instanceof Error ? err.message : String(err);
+        // Verrou anti-bruteforce de hierarchy:verifyPassword : le handler lève
+        // "TROP_DE_TENTATIVES: <message>" (Electron peut le préfixer par "Error invoking remote
+        // method ..."). On n'affiche que la partie utile, avec un repli si elle est vide.
+        const marker = 'TROP_DE_TENTATIVES:';
+        const markerIndex = rawMessage.indexOf(marker);
+        if (markerIndex >= 0) {
+          const detail = rawMessage.slice(markerIndex + marker.length).trim();
+          toast.error(detail || 'Trop de tentatives de confirmation échouées. Réessayez dans quelques minutes.');
+        } else {
+          toast.error("Erreur lors de la vérification : " + rawMessage);
+        }
         setLoading(false);
         return;
       }

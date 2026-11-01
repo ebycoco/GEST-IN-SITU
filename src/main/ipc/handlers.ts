@@ -4047,7 +4047,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         const lockRemaining = isVerifyPasswordLocked(ROOT_VERIFY_ATTEMPT_KEY);
         if (lockRemaining > 0) {
           log.warn(`[SECURITY] Vérification du mot de passe ROOT bloquée${actionLabel} (verrouillage anti-bruteforce actif, ${Math.ceil(lockRemaining / 1000)}s restantes).`);
-          return false;
+          // Verrou actif : erreur explicite (même format que auth:login) au lieu de `false`, pour ne pas
+          // faire croire à un mauvais mot de passe. Aucune information sur la validité du mot de passe
+          // n'est révélée (le mot de passe n'est pas évalué pendant le verrou).
+          throw new Error(`TROP_DE_TENTATIVES: ${formatLockoutMessage(lockRemaining, 'de confirmation')}`);
         }
         const rootHash = resolveRootPasswordHash();
         const rootValid = rootHash !== '' && isRootPasswordValid(password, rootHash);
@@ -4062,7 +4065,9 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       const lockRemainingMs = isVerifyPasswordLocked(attemptKey);
       if (lockRemainingMs > 0) {
         log.warn(`[SECURITY] Tentative de vérification de mot de passe bloquée pour '${attemptKey}'${actionLabel} (verrouillage anti-bruteforce actif, ${Math.ceil(lockRemainingMs / 1000)}s restantes).`);
-        return false;
+        // Verrou actif : erreur explicite (voir branche ROOT ci-dessus) ; les appelants existants
+        // ont tous un try/catch, le comportement hors verrou (true/false) reste inchangé.
+        throw new Error(`TROP_DE_TENTATIVES: ${formatLockoutMessage(lockRemainingMs, 'de confirmation')}`);
       }
 
       let isValid: boolean;

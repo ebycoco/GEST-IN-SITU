@@ -85,6 +85,15 @@ describe('createSuperAdminAccount (ROOT) et cibles SUPER ADMIN en second rôle',
     const audits = JSON.stringify(db.prepare('SELECT * FROM audit_logs').all());
     expect(audits).toContain('sa.un');
     expect(audits).not.toContain(GOOD_PWD);
+
+    // Trace explicite « CRÉATION SUPER ADMIN » (en plus de la ligne générique de createUser) :
+    // mentionne le rôle et le login, ni mot de passe ni hash.
+    const saTrace = db.prepare("SELECT * FROM audit_logs WHERE details LIKE '%CRÉATION SUPER ADMIN%'").all() as { details: string }[];
+    expect(saTrace).toHaveLength(1);
+    expect(saTrace[0].details).toContain('SUPER ADMIN');
+    expect(saTrace[0].details).toContain('sa.un');
+    expect(JSON.stringify(saTrace)).not.toContain(GOOD_PWD);
+    expect(JSON.stringify(saTrace)).not.toContain(r.password_hash);
   });
 
   it.each([

@@ -602,6 +602,21 @@ export function createSuperAdminAccount(
   const db = getDatabase()!;
   const created = findLoginMatches(db, login).find(u => u.statut_actif === 1);
   if (!created) throw new Error("Création du SUPER ADMIN non confirmée en base.");
+
+  // Trace d'audit explicite (la ligne générique « [CREATION] Agent … » écrite par createUser ne
+  // mentionne pas le rôle). Écriture locale seule dans audit_logs (ni t_outbox ni t_logs). Après coup
+  // (la transaction de createUser est déjà validée) : insertAuditLog() capture elle-même ses erreurs
+  // d'écriture, le try/catch ci-dessous garantit en plus qu'un échec ne peut jamais faire échouer la
+  // création. Ni mot de passe ni hash dans le texte.
+  try {
+    insertAuditLog(
+      caller.login || 'ROOT',
+      'AGENT',
+      `[CRÉATION SUPER ADMIN] Compte ${login} créé par ROOT (ID ${FAILSAFE_ROOT_ID}).`
+    );
+  } catch (auditErr) {
+    log.warn('[createSuperAdminAccount] Trace d\'audit SUPER ADMIN non écrite (création conservée).', auditErr);
+  }
   return { id_user: created.id_user, sync_id: created.sync_id, login };
 }
 

@@ -122,10 +122,28 @@ describe('ROOT : confirmation par mot de passe et création de SUPER ADMIN', () 
     it('session ROOT : le login fourni par le renderer ne change rien (un autre mot de passe est refusé)', async () => {
       expect(await verify({}, 'Mdp-SA-normal-2026', 'sa.normal')).toBe(false);
     });
-    it('5 échecs -> verrou : même le bon mot de passe ROOT est refusé', async () => {
+    it('5 échecs -> verrou : même le bon mot de passe ROOT est refusé, avec une erreur explicite TROP_DE_TENTATIVES', async () => {
       for (let i = 0; i < 5; i++) expect(await verify({}, 'mauvais', 'ROOT')).toBe(false);
-      expect(await verify({}, ROOT_PWD, 'ROOT')).toBe(false);
+      // Verrou actif : erreur (et non plus `false`) ; le message ne dépend pas de la validité du mot de passe.
+      await expect(verify({}, ROOT_PWD, 'ROOT')).rejects.toThrow(/^TROP_DE_TENTATIVES: Trop de tentatives de confirmation échouées\. Réessayez dans \d+ minutes?\.$/);
+      await expect(verify({}, 'mauvais', 'ROOT')).rejects.toThrow(/^TROP_DE_TENTATIVES: /);
       await unlockRoot();
+      // Hors verrou : booléens inchangés.
+      expect(await verify({}, ROOT_PWD, 'ROOT')).toBe(true);
+    });
+    it('rôle non ROOT : 5 échecs -> verrou avec erreur explicite, puis retour aux booléens après expiration', async () => {
+      setSession({ id_user: 1, role: 'SUPER ADMIN', login: 'sa.normal' });
+      // Remise à zéro du compteur de ce login (des tests précédents ont pu laisser un échec).
+      expect(await verify({}, 'Mdp-SA-normal-2026', 'sa.normal')).toBe(true);
+      for (let i = 0; i < 5; i++) expect(await verify({}, 'faux', 'sa.normal')).toBe(false);
+      await expect(verify({}, 'Mdp-SA-normal-2026', 'sa.normal')).rejects.toThrow(/^TROP_DE_TENTATIVES: Trop de tentatives de confirmation échouées\. Réessayez dans \d+ minutes?\.$/);
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + 6 * 60 * 1000);
+      try {
+        expect(await verify({}, 'Mdp-SA-normal-2026', 'sa.normal')).toBe(true);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
