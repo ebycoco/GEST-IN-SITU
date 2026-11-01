@@ -16,7 +16,7 @@
  *    et les fins de ligne du fichier sont conservées telles quelles ;
  *  - le mot de passe n'est ni écrit sur disque, ni affiché, ni journalisé.
  *
- * Note `$` : une empreinte bcrypt contient des `$` ($2b$10$...). electron-vite lit .env via
+ * Note `$` : une empreinte bcrypt contient des `$` ($2b$12$...). electron-vite lit .env via
  * vite.loadEnv (dotenv-expand) qui interpréterait `$2b` comme une variable ; chaque `$` est donc
  * écrit échappé (`\$`), forme prouvée relue à l'identique par loadEnv (tests/set-root-password.test.ts).
  *
@@ -30,7 +30,9 @@ import bcrypt from 'bcryptjs';
 
 export const ENV_KEY = 'FAILSAFE_ROOT_PASSWORD_HASH';
 export const MIN_PASSWORD_LENGTH = 16;
-export const BCRYPT_ROUNDS = 10;
+// Coût 12 (audit agent-9 du 2026-11-01) : l'empreinte est copiée en clair dans l'installeur public ;
+// un coût plus élevé ralentit d'autant le cassage hors ligne. isRootPasswordValid() accepte tout coût.
+export const BCRYPT_ROUNDS = 12;
 
 // Ligne entière de la clé (multiligne, global) ; [ \t] et non \s pour ne jamais déborder sur
 // les lignes voisines. `.*` s'arrête avant \r ou \n.
@@ -47,7 +49,7 @@ export function validateRootPassword(password, confirmation) {
   return null;
 }
 
-/** Empreinte bcrypt (10 tours) du mot de passe. */
+/** Empreinte bcrypt (coût BCRYPT_ROUNDS) du mot de passe. */
 export function hashRootPassword(password) {
   return bcrypt.hashSync(password, BCRYPT_ROUNDS);
 }
