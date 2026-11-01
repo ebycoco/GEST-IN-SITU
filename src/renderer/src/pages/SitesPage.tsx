@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
 import { confirmService } from '../components/confirmService';
 import { isLicenseExpired } from '../../../shared/utils/license';
+import { extractLockoutMessage } from '../utils/lockoutMessage';
 
 interface Site { 
   id: number; 
@@ -297,7 +298,7 @@ export default function SitesPage() {
       // notifie les autres composants montés (ex: Sidebar) qu'un site a été modifié/supprimé.
       window.dispatchEvent(new CustomEvent('app:data-updated'));
     } catch (err: any) {
-      toast.error(err.message || 'Une erreur est survenue lors de l\'opération');
+      toast.error(extractLockoutMessage(err) ?? (err.message || 'Une erreur est survenue lors de l\'opération'));
     } finally {
       setIsVerifying(false);
     }

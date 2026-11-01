@@ -34,6 +34,7 @@ import {
   Loader
 } from 'lucide-react';
 import { toast } from 'react-hot-toast';
+import { extractLockoutMessage } from '../../../utils/lockoutMessage';
 
 interface SiteAdminViewProps {
   stats: StatsKpi | null;
@@ -371,7 +372,7 @@ export function SiteAdminView({
             setConfirmInputVal('');
           }
         } catch (e) {
-          toast.error("Erreur lors du vidage de la base.");
+          toast.error(extractLockoutMessage(e) ?? "Erreur lors du vidage de la base.");
         } finally {
           setLoading(false);
         }
@@ -405,7 +406,7 @@ export function SiteAdminView({
             await handleClearCloudDatabase();
           }
         } catch (e) {
-          toast.error("Erreur lors de la purge cloud.");
+          toast.error(extractLockoutMessage(e) ?? "Erreur lors de la purge cloud.");
         } finally {
           setLoading(false);
         }

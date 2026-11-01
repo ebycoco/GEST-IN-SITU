@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../stores/authStore';
+import { extractLockoutMessage } from '../utils/lockoutMessage';
 
 interface LogEntry {
   id: number;
@@ -210,7 +211,7 @@ export default function MaintenancePage() {
         }
       }
     } catch (err: any) {
-      const errMsg = err.message || String(err);
+      const errMsg = extractLockoutMessage(err) ?? (err.message || String(err));
       setStatusMessage({ message: errMsg, type: 'error' });
     } finally {
       setIsProcessing(false);

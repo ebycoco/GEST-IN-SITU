@@ -14,6 +14,7 @@
 - **Page Agents** : le compte ROOT dispose d'un bouton « Créer un SUPER ADMIN » (identifiant, nom, mot de passe d'au moins 12 caractères, confirmation par le mot de passe ROOT).
 
 ## 🛠️ Corrections & Fiabilité
+- **Verrou de confirmation du mot de passe dans tous les écrans** : les purges de la base locale et du cloud, la réinitialisation du mot de passe d'un site, le changement de statut d'un site et la gestion des sites affichent désormais « Trop de tentatives… Réessayez dans N minute(s) » au lieu d'une erreur générique ou technique.
 - **Confirmation par mot de passe** : quand le verrou anti-tentatives est actif, la fenêtre de confirmation affiche « Trop de tentatives… Réessayez dans N minute(s) » au lieu de « Mot de passe incorrect » ; les réinitialisations successives n'empilent plus les notifications de mot de passe temporaire (la plus récente remplace la précédente) ; la création d'un Super Admin laisse une trace explicite dans le journal d'audit.
 - **ROOT peut de nouveau confirmer une action sensible par son mot de passe** (réinitialisation du mot de passe d'un agent ou d'un Super Admin depuis l'interface) : la confirmation refusait le bon mot de passe ROOT.
 - **Poste démarré hors ligne sans compte actif** : le rapatriement des comptes se relance tout seul au retour du réseau, jusqu'à réussir (y compris quand le réseau reste stable après une tentative manquée : nouvel essai différé, espacé progressivement jusqu'à 10 minutes).

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useOnlineStatus } from '../../../hooks/useOnlineStatus';
 import { toast } from 'react-hot-toast';
+import { extractLockoutMessage } from '../../../utils/lockoutMessage';
 
 interface GovernanceViewProps {
   globalStats: any;
@@ -94,7 +95,7 @@ export function GovernanceView({
       toast.success("Mot de passe réinitialisé avec succès.");
       setResetPassModal({ isOpen: false, site: null, newPass: '', adminPass: '' });
     } catch (e) {
-      toast.error("Erreur lors de la réinitialisation.");
+      toast.error(extractLockoutMessage(e) ?? "Erreur lors de la réinitialisation.");
     } finally {
       setLoading(false);
     }
@@ -115,7 +116,7 @@ export function GovernanceView({
       setConfirmStatusModal({ isOpen: false, site: null, adminPass: '' });
       loadGlobalData();
     } catch (e) {
-      toast.error("Erreur lors de la mise à jour.");
+      toast.error(extractLockoutMessage(e) ?? "Erreur lors de la mise à jour.");
     } finally {
       setLoading(false);
     }
