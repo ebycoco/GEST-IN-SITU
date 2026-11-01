@@ -4,6 +4,47 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.0] - 2026-11-01
+
+### 🚨 Sécurité
+
+- **Compte « superadmin » par défaut neutralisé** — le compte local au mot de passe d'origine est désactivé automatiquement au démarrage (une trace est écrite dans le journal d'audit local, sans aucun envoi au cloud) et créé désactivé sur un poste neuf. Un compte local « superadmin » dont le mot de passe a été changé reste actif et un avertissement est noté dans le journal technique. L'importation technique de base n'accepte plus que le mot de passe d'un SUPER ADMIN actif et synchronisé avec le cloud.
+
+- **Limite de tentatives** — la connexion et l'importation de base sont bloquées 5 minutes après 5 mots de passe erronés. L'écran de connexion affiche en clair le délai d'attente.
+
+- **Compte de secours ROOT par empreinte chiffrée** — il n'utilise plus de mot de passe en clair : il est vérifié par une empreinte bcrypt (coût 12) intégrée à l'installeur et reste protégé par le verrou anti-tentatives. Il fonctionne désormais aussi sur les postes installés, une fois l'empreinte définie avant la compilation.
+
+- **Secrets et journaux retirés de Git** — code d'authentification inutilisé et mots de passe de repli supprimés, mots de passe retirés de l'installeur, fichiers de notes, scripts de dépannage et journaux locaux sortis du dépôt et ignorés.
+
+- **Création de SUPER ADMIN sécurisée** — suppression du canal de création d'un SUPER ADMIN sans session (qui rattachait le compte au site 1). Seul ROOT peut créer un SUPER ADMIN, depuis la page Agents, avec confirmation par son mot de passe. Les comptes d'un autre niveau ne voient plus les boutons de gestion d'un compte qui détient aussi le rôle SUPER ADMIN.
+
+- **Mots de passe des administrateurs** — seul ROOT peut poser ou réinitialiser le mot de passe d'un SUPER ADMIN (autre que soi), y compris via la modification d'un agent. Une confirmation renforcée par mot de passe est demandée avant de toucher à un SUPER ADMIN.
+
+### 🚀 Nouveautés & Ergonomie
+
+- **Réinitialisation des mots de passe des administrateurs** — ROOT peut réinitialiser le mot de passe d'un SUPER ADMIN et d'un Administrateur de site (de n'importe quel site). Un SUPER ADMIN peut réinitialiser celui d'un Administrateur de site, mais plus celui d'un autre SUPER ADMIN.
+
+- **Page Agents : bouton « Créer un SUPER ADMIN »** — réservé à ROOT (identifiant, nom, mot de passe d'au moins 12 caractères, confirmation par le mot de passe ROOT).
+
+- **Garde-fou de compilation** — `npm run build:win` et `npm run release` s'arrêtent avec un message clair si la configuration de compilation est incomplète (adresse ou clé Supabase absentes, empreinte ROOT absente ou mal écrite), au lieu de produire un installeur sans synchronisation et sans compte de secours. Une Release GitHub qui reconstruit l'installeur sans cette configuration échouera désormais.
+
+### 🛠️ Corrections & Fiabilité
+
+- **Verrou de confirmation du mot de passe dans tous les écrans** — les purges de la base locale et du cloud, la réinitialisation du mot de passe d'un site, le changement de statut d'un site et la gestion des sites affichent « Trop de tentatives… Réessayez dans N minute(s) » au lieu d'une erreur générique ou technique. La fenêtre de confirmation fait de même au lieu de « Mot de passe incorrect ».
+
+- **Notifications et audit** — les réinitialisations successives n'empilent plus les notifications de mot de passe temporaire (la plus récente remplace la précédente) ; la création d'un SUPER ADMIN laisse une trace explicite dans le journal d'audit.
+
+- **ROOT peut de nouveau confirmer une action sensible par son mot de passe** — la confirmation refusait le bon mot de passe ROOT lors de la réinitialisation du mot de passe d'un agent ou d'un SUPER ADMIN.
+
+- **Poste démarré hors ligne sans compte actif** — le rapatriement des comptes se relance tout seul au retour du réseau, jusqu'à réussir (y compris quand le réseau reste stable après une tentative manquée : nouvel essai différé, espacé progressivement jusqu'à 10 minutes).
+
+### ℹ️ À savoir (administrateurs)
+
+- Le compte « superadmin » par défaut est désactivé au premier démarrage : utilisez un compte SUPER ADMIN personnel.
+- Un SUPER ADMIN créé ou réinitialisé par ROOT n'apparaît sur les autres postes qu'après le redémarrage de l'application sur ces postes.
+- Le compte de secours ROOT n'est actif que si l'installeur est compilé avec l'empreinte ROOT définie ; un poste neuf doit être démarré une première fois en ligne.
+- Aucune migration de base (locale ou cloud) dans cette version : `SCHEMA_VERSION` reste à 72.
+
 ## [2.25.0] - 2026-10-31
 
 ### 🛠️ Corrections & Fiabilité
