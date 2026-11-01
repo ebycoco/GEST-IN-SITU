@@ -726,6 +726,20 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
     }
   }
 
+  // Règle ROOT (2026-11-01) : poser un mot de passe sur un compte détenant SUPER ADMIN (colonne role
+  // OU t_user_roles de la CIBLE) est réservé au compte ROOT de secours, comme resetAgentPassword.
+  // Sans cette garde, un SUPER ADMIN (qui saute toutes les gardes ci-dessus) contournait la règle via
+  // users:update { password }. Même test de présence que le hachage plus bas (`data.password` truthy).
+  // Exceptions : modifier SON PROPRE compte (cible = appelant) reste permis ; les autres champs
+  // (nom, etc.) d'un autre SUPER ADMIN restent modifiables ; appel interne sans creator inchangé.
+  // Garde LOCALE : assertTargetNotSuperAdmin (partagé) n'est pas modifié. Aucune écriture avant ce contrôle.
+  if (creator && data.password && creator.id_user !== id) {
+    const callerIsRoot = creator.id_user === FAILSAFE_ROOT_ID && creator.role === 'SUPER ADMIN';
+    if (!callerIsRoot && userHoldsRole(db, id, 'SUPER ADMIN')) {
+      throw new Error(creator.role === 'SUPER ADMIN' ? ROOT_ONLY_SUPER_ADMIN_RESET_MESSAGE : FORBIDDEN_TARGET_MESSAGE);
+    }
+  }
+
   // ── Validations préalables (aucune écriture avant qu'elles passent toutes) ──────────
   // Rôles : seuls les rôles NOUVELLEMENT attribués (absents des rôles actuels de la cible)
   // sont soumis à assertRolesAssignable. Un rôle déjà détenu (ex. ADMINISTRATEUR_SITE
