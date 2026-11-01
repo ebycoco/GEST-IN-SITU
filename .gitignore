@@ -40,3 +40,6 @@ electron.vite.config.*.mjs
 MEMO_DRIVE_SUPER_ADMIN.txt
 diff.txt
 scratch/
+
+# Journaux locaux (peuvent contenir des empreintes de mots de passe)
+*.log
