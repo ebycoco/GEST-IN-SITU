@@ -4,6 +4,25 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.26.1] - 2026-11-13
+
+### 🚨 Sécurité
+
+- **Protection des comptes SUPER ADMIN sur le serveur** (côté cloud : migration Supabase `0007`, appliquée en production) — le serveur refuse désormais, sans bloquer la synchronisation des postes, toute tentative de créer un SUPER ADMIN actif, de transformer un compte en SUPER ADMIN, de changer le mot de passe ou l'identifiant d'un SUPER ADMIN, ou de le supprimer. Chaque tentative est notée dans un journal réservé à l'administrateur. Conséquence temporaire : un SUPER ADMIN créé, ou un mot de passe SUPER ADMIN réinitialisé depuis un poste, doit être validé par l'administrateur sur le serveur. Sans cette validation, le compte ou le nouveau mot de passe ne fonctionne nulle part, même sur le poste qui l'a créé, après le prochain redémarrage.
+
+- **Garde-fou des cartes délivrées en service** (côté cloud : migration Supabase `0006`, désormais appliquée en production) — une carte déjà délivrée ne peut plus être remise « en stock » par un poste qui revient en ligne avec une ancienne copie.
+
+- **Clé de connexion au serveur renouvelée** — l'installeur utilise désormais la clé publique Supabase de nouvelle génération (« publishable ») à la place de l'ancienne clé `anon`, en prévision du retrait des anciennes clés par Supabase. Aucune action n'est requise sur les postes.
+
+### 🛠️ Corrections & Fiabilité
+
+- **Rôles des agents conservés lors de l'envoi au serveur** — quand on ajoute un rôle à un agent, le rôle qu'il avait déjà n'est plus perdu sur le serveur : la suppression des anciens rôles d'un compte part toujours avant l'envoi des nouveaux. Les autres postes reçoivent désormais l'agent avec tous ses rôles, et si un envoi échoue, les rôles attendent au lieu d'être effacés.
+
+### ℹ️ À savoir (administrateurs)
+
+- La création d'un SUPER ADMIN ou la réinitialisation de son mot de passe depuis un poste doit être validée par l'administrateur sur le serveur.
+- Aucune migration de base locale dans cette version : `SCHEMA_VERSION` reste à 72.
+
 ## [2.26.0] - 2026-11-01
 
 ### 🚨 Sécurité

@@ -1,9 +1,10 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.26.1 (13 novembre 2026)
 
 ## 🚨 Sécurité
 
 - **Protection des comptes SUPER ADMIN sur le serveur.** Le serveur refuse désormais, sans bloquer la synchronisation des postes, toute tentative de créer un SUPER ADMIN actif, de transformer un compte en SUPER ADMIN, de changer le mot de passe ou l'identifiant d'un SUPER ADMIN, ou de le supprimer. Chaque tentative est notée dans un journal réservé à l'administrateur. Conséquence temporaire : un SUPER ADMIN créé, ou un mot de passe SUPER ADMIN réinitialisé depuis un poste, doit être validé par l'administrateur sur le serveur. Sans cette validation, le compte ou le nouveau mot de passe ne fonctionne nulle part, même sur le poste qui l'a créé, après le prochain redémarrage.
 - **Garde-fou des cartes délivrées en service.** Une carte déjà délivrée ne peut plus être remise « en stock » par un poste qui revient en ligne avec une ancienne copie.
+- **Connexion au serveur préparée pour l'avenir.** L'application utilise un nouveau moyen d'accès au serveur, en prévision d'un changement prévu par le fournisseur. Rien ne change pour vous, aucune action n'est à faire sur les postes.
 
 ## 🛠️ Corrections & Fiabilité
 
