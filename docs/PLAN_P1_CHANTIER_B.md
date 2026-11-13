@@ -199,6 +199,11 @@ Rappels permanents :
 - **Geste utilisateur** : appliquer 0009 en prod avec 0008 (même fenêtre).
 
 ### P1-3 — Diagnostic site/centre (dev, lecture seule en prod)
+- **Suite (2026-11-13, nuit)** : sur décision de l'utilisateur (import d'essai), les 2 614 cartes du
+  site 6 inexistant ont été **supprimées en prod** après sauvegarde dans
+  `public.bak_cartes_site6_20261113` (2 614 lignes, RLS active, illisible pour anon). Contrôle :
+  0 carte site 6, 222 472 cartes restantes. Restent : rôles principaux absents de `t_user_roles`
+  pour 2 comptes, site 5 sans sync_id.
 - **Fichiers** : requêtes de diagnostic (agent-1), pas de migration si lecture seule.
 - **Agent** : agent-4.
 - **Lien** : bogue connu « site_id local envoyé au cloud » (mémoire 2026-10-27), à mesurer avant
