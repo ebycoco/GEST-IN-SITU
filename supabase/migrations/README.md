@@ -122,13 +122,17 @@ présente mise en place — voir limitation ci-dessous.
   `t_write_audit_config`, 24 triggers STATEMENT `trg_wa_<table>_ins|upd|del` sur t_cartes,
   t_users, t_user_roles, t_logs, t_sites, t_centres, t_postes, t_user_presence. Ne lève jamais
   d'erreur vers le poste, ne modifie aucune ligne métier. Test :
-  `supabase/tests/0008_mesure_ecritures_cles.test.sql`. **Dev : appliquée le 2026-11-13.
-  Production : non appliquée.**
+  `supabase/tests/0008_mesure_ecritures_cles.test.sql`. **Dev : appliquée le 2026-11-13, puis
+  version corrigée (réserves de l'audit agent-9 : `lock_timeout` de protection en tête,
+  `classe` dans la clé primaire, `anon` sans claims classé `autre`) réappliquée le même jour
+  après retour arrière. Production : non appliquée** (procédure ci-dessous).
 - **`0009_versions_postes.sql`** — table `t_client_versions` (une ligne par poste, illisible
   par anon) + RPC `fn_report_client_version(poste_key, app_version, user_sync_id, site_sync_id)`
-  ouverte à anon/authenticated, paramètres bornés, renvoie seulement un booléen ; la classe de
-  clé est calculée côté serveur. **Dépend de 0008.** Aucun appel côté poste avant P2. Test :
-  `supabase/tests/0009_versions_postes.test.sql`. **Dev : appliquée le 2026-11-13.
+  **fermée par défaut** (`REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` en fin de
+  fichier, jusqu'à P2), paramètres bornés, renvoie seulement un booléen ; la classe de clé est
+  calculée côté serveur. **Dépend de 0008.** Aucun appel côté poste avant P2. Test :
+  `supabase/tests/0009_versions_postes.test.sql`. **Dev : appliquée le 2026-11-13, puis
+  version corrigée (RPC fermée, `lock_timeout` de protection) réappliquée le même jour.
   Production : non appliquée.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
@@ -144,19 +148,175 @@ présente mise en place — voir limitation ci-dessous.
 2. **Prod** (`itvyayakwgzvfqvdrgyv`) : geste de l'utilisateur seulement, hors heures de
    travail des postes si la migration crée des triggers sur une table métier (verrou court
    `ShareRowExclusiveLock` à la création du trigger). Coller le fichier entier dans le SQL
-   Editor du projet prod, exécuter, puis faire les vérifications en lecture indiquées en tête
-   du fichier. **Ne jamais exécuter un fichier `supabase/tests/*` en prod.**
+   Editor du projet prod, entouré de `BEGIN;` … `COMMIT;` quand le fichier commence par
+   `SET LOCAL lock_timeout` (0008, 0009 : procédure détaillée plus bas), exécuter, puis faire
+   les vérifications en lecture indiquées. **Ne jamais exécuter un fichier `supabase/tests/*` en prod.**
 3. Mettre à jour la ligne « Application » en tête du fichier et ce README.
 
-## 0008 / 0009 : interrupteur, lecture, retour arrière
+## 0008 / 0009 : procédure de production (réserves de l'audit agent-9 levées le 2026-11-13)
 
-- **Couper la mesure 0008 (immédiat, sans perte, réversible)** :
-  `UPDATE public.t_write_audit_config SET enabled = false, updated_at = now() WHERE id = 1;`
-  (réactivation : `enabled = true`). Désactivée, chaque écriture fait seulement une lecture de
-  cette ligne (les tables de transition restent capturées par Postgres).
-  Plus radical, sans DROP : `ALTER TABLE public.<table> DISABLE TRIGGER trg_wa_<table>_ins;`
-  (idem `_upd`, `_del`).
-- **Couper la RPC 0009** : `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
+**Quand** : hors heures de travail des postes (aucun poste en synchronisation). 0008 crée 24
+triggers : chaque `CREATE TRIGGER` prend un `ShareRowExclusiveLock` sur la table métier
+(niveau confirmé par la doc PostgreSQL 17 et mesuré sur le dev), qui bloque les écritures des
+postes le temps de la création.
+
+**Étape 0 — vérification préalable, lecture seule** (SQL Editor du projet prod). Toutes les
+lignes doivent être `OK` ; une seule ligne `KO - ARRETER` → ne rien appliquer.
+
+```sql
+WITH
+objets(o) AS (VALUES
+  (to_regclass('public.t_write_audit')::text), (to_regclass('public.t_write_audit_config')::text),
+  (to_regclass('public.t_client_versions')::text),
+  (to_regprocedure('public.fn_write_audit_stmt()')::text), (to_regprocedure('public.fn_write_audit_classe()')::text),
+  (to_regprocedure('public.fn_write_audit_client_info()')::text), (to_regprocedure('public.fn_write_audit_claim_keys()')::text),
+  (to_regprocedure('public.fn_write_audit_claims()')::text),
+  (to_regprocedure('public.fn_report_client_version(text,text,text,text)')::text)),
+metier(t) AS (VALUES ('t_cartes'), ('t_users'), ('t_user_roles'), ('t_logs'), ('t_sites'), ('t_centres'), ('t_postes'), ('t_user_presence')),
+chk(n, verification, observe, ok) AS (
+  SELECT 1, 'objets 0008/0009 absents (to_regclass / to_regprocedure tous NULL)',
+         (SELECT count(*) FROM objets WHERE o IS NOT NULL)::text || ' present(s)',
+         (SELECT count(*) FROM objets WHERE o IS NOT NULL) = 0
+  UNION ALL
+  SELECT 2, 'aucun trigger trg_wa_%',
+         (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg\_wa\_%')::text,
+         (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg\_wa\_%') = 0
+  UNION ALL
+  SELECT 3, 'aucune transaction ouverte depuis plus de 60 s (hors cette session)',
+         (SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND xact_start < now() - interval '60 seconds')::text,
+         (SELECT count(*) FROM pg_stat_activity WHERE pid <> pg_backend_pid() AND xact_start < now() - interval '60 seconds') = 0
+  UNION ALL
+  SELECT 4, 'aucun autovacuum "to prevent wraparound" en cours',
+         (SELECT count(*) FROM pg_stat_activity WHERE query ILIKE 'autovacuum:%wraparound%')::text,
+         (SELECT count(*) FROM pg_stat_activity WHERE query ILIKE 'autovacuum:%wraparound%') = 0
+  UNION ALL
+  SELECT 5, 'aucun verrou tenu par une autre session sur les 8 tables metier',
+         (SELECT count(*) FROM pg_locks l JOIN metier m ON l.relation = to_regclass('public.' || m.t)
+           WHERE l.pid <> pg_backend_pid() AND l.mode NOT IN ('AccessShareLock'))::text,
+         (SELECT count(*) FROM pg_locks l JOIN metier m ON l.relation = to_regclass('public.' || m.t)
+           WHERE l.pid <> pg_backend_pid() AND l.mode NOT IN ('AccessShareLock')) = 0
+)
+SELECT n, verification, observe, CASE WHEN ok THEN 'OK' ELSE 'KO - ARRETER' END AS resultat FROM chk ORDER BY n;
+```
+
+**Étape 1 — appliquer 0008, un seul bloc.** Dans un nouvel onglet du SQL Editor, écrire
+`BEGIN;`, coller **tout** le fichier `0008_mesure_ecritures_cles.sql`, écrire `COMMIT;` à la
+fin, puis exécuter l'onglet en une fois. Le fichier commence par
+`SET LOCAL lock_timeout = '3s';` et un contrôle qui arrête tout si ce réglage n'est pas actif.
+- Erreur **55P03** (`lock_not_available` / « canceling statement due to lock timeout ») : un
+  verrou n'a pas été obtenu en 3 s, **tout est annulé**, rien n'est créé. Rejouer plus tard
+  (refaire l'étape 0 avant).
+- Toute autre erreur : tout est annulé de même ; ne pas réessayer, transmettre le message.
+- Après une erreur, vérifier qu'aucune session n'est restée ouverte :
+  `SELECT pid, state, xact_start FROM pg_stat_activity WHERE state LIKE 'idle in transaction%';`
+  Si une ligne apparaît pour votre session, exécuter `ROLLBACK;` seul dans l'onglet.
+
+**Étape 2 — appliquer 0009**, même méthode (`BEGIN;` + fichier entier + `COMMIT;`). 0009
+vérifie lui-même que 0008 est en place. La RPC reste **fermée** (voir plus bas).
+
+**Étape 3 — contrôle, lecture seule.** Toutes les lignes doivent être `OK`. Une ligne `KO` →
+interrupteur (ordre d'urgence n° 1) puis transmettre le résultat.
+
+```sql
+WITH
+tabs(t) AS (VALUES ('public.t_write_audit'), ('public.t_write_audit_config'), ('public.t_client_versions')),
+roles(r) AS (VALUES ('anon'), ('authenticated')),
+fns(f) AS (VALUES ('public.fn_write_audit_stmt()'), ('public.fn_write_audit_classe()'),
+                  ('public.fn_write_audit_client_info()'), ('public.fn_write_audit_claim_keys()'),
+                  ('public.fn_write_audit_claims()')),
+rpc AS (SELECT to_regprocedure('public.fn_report_client_version(text,text,text,text)') AS oid),
+trg AS (SELECT to_regprocedure('public.fn_write_audit_stmt()') AS oid),
+chk(n, verification, attendu, observe, ok) AS (
+  SELECT 1, '24 triggers trg_wa_% actifs sur fn_write_audit_stmt', '24',
+         (SELECT count(*) FROM pg_trigger x, trg WHERE x.tgname LIKE 'trg\_wa\_%' AND x.tgenabled = 'O' AND x.tgfoid = trg.oid)::text,
+         (SELECT count(*) FROM pg_trigger x, trg WHERE x.tgname LIKE 'trg\_wa\_%' AND x.tgenabled = 'O' AND x.tgfoid = trg.oid) = 24
+  UNION ALL
+  SELECT 2, 't_write_audit_config.enabled', 'true',
+         COALESCE((SELECT enabled::text FROM public.t_write_audit_config WHERE id = 1), 'absent'),
+         COALESCE((SELECT enabled FROM public.t_write_audit_config WHERE id = 1), false)
+  UNION ALL
+  SELECT 3, 'RLS active sur les 3 tables', '3',
+         (SELECT count(*) FROM tabs JOIN pg_class c ON c.oid = to_regclass(tabs.t) WHERE c.relrowsecurity)::text,
+         (SELECT count(*) FROM tabs JOIN pg_class c ON c.oid = to_regclass(tabs.t) WHERE c.relrowsecurity) = 3
+  UNION ALL
+  SELECT 4, 'aucune politique sur les 3 tables', '0',
+         (SELECT count(*) FROM pg_policy p JOIN tabs ON p.polrelid = to_regclass(tabs.t))::text,
+         (SELECT count(*) FROM pg_policy p JOIN tabs ON p.polrelid = to_regclass(tabs.t)) = 0
+           AND (SELECT count(*) FROM tabs WHERE to_regclass(tabs.t) IS NULL) = 0
+  UNION ALL
+  SELECT 5, 'aucun droit anon/authenticated (SELECT,INSERT,UPDATE,DELETE,TRUNCATE) sur les 3 tables', '0',
+         (SELECT count(*) FROM tabs, roles
+           WHERE to_regclass(tabs.t) IS NULL
+              OR has_table_privilege(roles.r, to_regclass(tabs.t), 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE'))::text,
+         (SELECT count(*) FROM tabs, roles
+           WHERE to_regclass(tabs.t) IS NULL
+              OR has_table_privilege(roles.r, to_regclass(tabs.t), 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')) = 0
+  UNION ALL
+  SELECT 6, 'aucun EXECUTE anon/authenticated sur fn_write_audit_* (5 fonctions)', '0',
+         (SELECT count(*) FROM fns, roles
+           WHERE to_regprocedure(fns.f) IS NULL OR has_function_privilege(roles.r, to_regprocedure(fns.f), 'EXECUTE'))::text,
+         (SELECT count(*) FROM fns, roles
+           WHERE to_regprocedure(fns.f) IS NULL OR has_function_privilege(roles.r, to_regprocedure(fns.f), 'EXECUTE')) = 0
+  UNION ALL
+  -- Etat voulu en P1 : RPC FERMEE. En P2 (RPC ouverte), remplacer "= 0" par "= 2" et attendu par '2'.
+  SELECT 7, 'fn_report_client_version : EXECUTE anon/authenticated (P1 : ferme)', '0',
+         (SELECT count(*) FROM rpc, roles WHERE rpc.oid IS NOT NULL AND has_function_privilege(roles.r, rpc.oid, 'EXECUTE'))::text,
+         (SELECT oid FROM rpc) IS NOT NULL
+           AND (SELECT count(*) FROM rpc, roles WHERE has_function_privilege(roles.r, rpc.oid, 'EXECUTE')) = 0
+  UNION ALL
+  SELECT 8, 'SECURITY DEFINER : fn_write_audit_stmt et fn_report_client_version', '2',
+         (SELECT count(*) FROM pg_proc WHERE prosecdef AND oid IN ((SELECT oid FROM trg), (SELECT oid FROM rpc)))::text,
+         (SELECT count(*) FROM pg_proc WHERE prosecdef AND oid IN ((SELECT oid FROM trg), (SELECT oid FROM rpc))) = 2
+  UNION ALL
+  SELECT 9, 'search_path fige sur les 6 fonctions', '6',
+         (SELECT count(*) FROM pg_proc p WHERE p.oid IN (SELECT to_regprocedure(f) FROM fns UNION SELECT oid FROM rpc)
+             AND EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%'))::text,
+         (SELECT count(*) FROM pg_proc p WHERE p.oid IN (SELECT to_regprocedure(f) FROM fns UNION SELECT oid FROM rpc)
+             AND EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%')) = 6
+  UNION ALL
+  SELECT 10, 'lock_timeout=200ms sur fn_write_audit_stmt et fn_report_client_version', '2',
+         (SELECT count(*) FROM pg_proc p WHERE p.oid IN ((SELECT oid FROM trg), (SELECT oid FROM rpc))
+             AND 'lock_timeout=200ms' = ANY (p.proconfig))::text,
+         (SELECT count(*) FROM pg_proc p WHERE p.oid IN ((SELECT oid FROM trg), (SELECT oid FROM rpc))
+             AND 'lock_timeout=200ms' = ANY (p.proconfig)) = 2
+  UNION ALL
+  SELECT 11, 'cle primaire de t_write_audit contient classe', 'oui',
+         CASE WHEN EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+                            WHERE c.conrelid = to_regclass('public.t_write_audit') AND c.contype = 'p' AND a.attname = 'classe')
+              THEN 'oui' ELSE 'non' END,
+         EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+                  WHERE c.conrelid = to_regclass('public.t_write_audit') AND c.contype = 'p' AND a.attname = 'classe')
+  UNION ALL
+  SELECT 12, '6 triggers 0006/0007 toujours actifs', '6',
+         (SELECT count(*) FROM pg_trigger WHERE tgenabled = 'O' AND tgname IN
+            ('trg_t_cartes_status_guard', 'trg_t_users_sa_guard_ins', 'trg_t_users_sa_guard_upd',
+             'trg_t_users_sa_guard_del', 'trg_t_user_roles_sa_guard_ins', 'trg_t_user_roles_sa_guard_upd'))::text,
+         (SELECT count(*) FROM pg_trigger WHERE tgenabled = 'O' AND tgname IN
+            ('trg_t_cartes_status_guard', 'trg_t_users_sa_guard_ins', 'trg_t_users_sa_guard_upd',
+             'trg_t_users_sa_guard_del', 'trg_t_user_roles_sa_guard_ins', 'trg_t_user_roles_sa_guard_upd')) = 6
+)
+SELECT n, verification, attendu, observe, CASE WHEN ok THEN 'OK' ELSE 'KO' END AS resultat
+FROM chk ORDER BY n;
+```
+
+Résultat sur le dev le 2026-11-13 (après réapplication) : 12/12 `OK`.
+
+**Ordre d'urgence (du plus doux au plus lourd)** — blocs complets en tête de
+`0008_mesure_ecritures_cles.sql` :
+1. **Interrupteur** (immédiat, réversible, aucun verrou de table) :
+   `UPDATE public.t_write_audit_config SET enabled = false, updated_at = now() WHERE id = 1;`
+   (réactivation : `enabled = true`). Désactivée, chaque écriture fait seulement une lecture de
+   cette ligne.
+2. **Débrancher les 24 triggers sans DROP** : `ALTER TABLE … DISABLE TRIGGER` dans
+   `BEGIN; SET LOCAL lock_timeout = '3s'; … COMMIT;` (`ShareRowExclusiveLock`, court).
+3. **Retour arrière complet (DROP), seulement hors heures** : `DROP TRIGGER` prend un
+   `AccessExclusiveLock` sur la table métier (mesuré sur le dev) ; retirer 0009 avant 0008 ;
+   même protection `lock_timeout`. Blocs prouvés sur le dev le 2026-11-13.
+
+- **Couper la RPC 0009** (déjà fermée par défaut) :
+  `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
+  L'ouvrir seulement pour la preuve contrôlée de P1-1b (puis refermer aussitôt) et en P2
+  (`GRANT EXECUTE … TO anon, authenticated`). Rejouer 0009 la referme.
 - **Lire les compteurs** :
   ```sql
   SELECT jour, classe, table_name, op, jwt_role, claim_keys, client_info,

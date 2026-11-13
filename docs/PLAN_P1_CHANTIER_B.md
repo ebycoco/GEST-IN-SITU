@@ -21,7 +21,7 @@ Rappels permanents :
 | C1-C10 | Recommandations d'agent-1 retenues par défaut, recopiées en annexe A (fin de fichier). |
 | 0007 | **STOP & WARN maintenu** : le garde 0007 neutralise les gestes SA faits avec la clé anon. Il devra être adapté (laisser passer un appelant `authenticated` légitime) **avant P2**, pas en P1. Ne pas le modifier pendant P1. |
 | Ordre en prod | **P1-1 (mesure) et P1-2 (versions) d'abord**, seuls, pour commencer à collecter. Le reste suit après validation sur le dev. |
-| Ancienne clé anon prod | Désactivation dès que la mesure P1-1 montre zéro écriture « legacy » pendant 7 jours (D6) **et** que tout le parc est en ≥ 2.26.1. Geste de l'utilisateur. |
+| Ancienne clé anon prod | **D6 (corrigée le 2026-11-13, réserve P1-3 de l'audit agent-9)** : désactivation seulement si (1) la **preuve contrôlée** de P1-1b a donné `legacy_suppose` ; (2) pendant **7 jours consécutifs**, 0 compteur `legacy_suppose` **et** 0 compteur `autre` avec `jwt_role = 'anon'` dans `t_write_audit`, vérifié en lisant aussi `claim_keys` (toute forme de claims inconnue bloque D6) et pas seulement `classe` ; (3) tout le parc en ≥ 2.26.1 (voir P1-1b pour la source de cette information). Aucune autre échappatoire. Geste de l'utilisateur. |
 
 ## Constats qui changent le plan initial
 
@@ -93,7 +93,18 @@ Rappels permanents :
 - **Nettoyage** : cartes, comptes, site, compteurs et versions de test supprimés ; contrôle :
   t_cartes, t_users, t_sites, t_logs, t_write_audit, t_client_versions = 0 ligne ; tables et
   triggers laissés en place sur le dev.
-- **Reste** : application en prod (geste utilisateur), puis P1-1b.
+- **Correctif après audit agent-9 (2026-11-13, agent-4)** : `SET LOCAL lock_timeout = '3s'` +
+  contrôle d'arrêt en tête du fichier (application `BEGIN; <fichier> COMMIT;`), `classe` ajoutée à
+  la clé primaire et à l'`ON CONFLICT`, `anon` sans claims lisibles classé `autre` (et non plus
+  `publishable`), blocs de retour arrière protégés, ordre d'urgence. Dev : retour arrière (tables
+  vides vérifiées) puis réapplication. Tests : 0008 **26/26** (6 cas ajoutés : écriture gardée
+  par 0006 comptée selon les lignes réellement écrites ; écritures ignorées par 0007 R5/R6 → 0
+  ligne comptée ; `lock_timeout` appelant restauré ; `authenticated` refusé sur les deux tables ;
+  `TRUNCATE` refusé ; anon sans claims → `autre`), 0009 **17/17**, 0006 **19/19**, 0007
+  **20/20**. Appel REST réel (clé publishable du dev) : INSERT/UPDATE/DELETE t_cartes et t_sites
+  classés `publishable`, `claim_keys = role` (donc claims réelles `{"role":"anon"}`) ; RPC
+  refusée (42501). Requête de contrôle du README : 12/12 OK. Dev nettoyé.
+- **Reste** : application en prod (geste utilisateur, procédure du README), puis P1-1b.
 - **Fichiers** : `supabase/migrations/0008_mesure_ecritures_cles.sql`,
   `supabase/tests/0008_mesure_ecritures_cles.test.sql`.
 - **Agent** : agent-4 (écriture + dev), utilisateur (prod).
@@ -113,8 +124,9 @@ Rappels permanents :
     normal de l'upsert : un des deux triggers voit 0 ligne), **rien n'est écrit**.
   - Tables surveillées : t_cartes, t_users, t_user_roles, t_logs, t_sites, t_centres, t_postes,
     t_user_presence.
-  - Classement : `role='anon' AND NOT (claims ? 'iss')` → `publishable` ;
-    `role='anon' AND claims ?& array['iss','ref','iat','exp']` → `legacy_suppose`.
+  - Classement : `role='anon'` avec claims lisibles `AND NOT (claims ? 'iss')` → `publishable` ;
+    `role='anon' AND claims ?& array['iss','ref','iat','exp']` → `legacy_suppose` ; `role='anon'`
+    **sans** claims lisibles (rôle lu seulement dans `request.jwt.claim.role`) → `autre`.
 - **Tests (dev)** : test SQL en transaction annulée (claims simulées : publishable, JWT legacy
   simulé, authenticated, service_role, postgres sans claims ; upsert à 0 ligne ; DELETE ; aucune
   valeur de claim stockée) ; appel REST réel avec la clé publishable du dev → une ligne
@@ -125,14 +137,41 @@ Rappels permanents :
 
 ### P1-1b — Preuve en prod de la forme des claims « legacy » (sous-étape de P1-1)
 - **But** : prouver le discriminant du constat 2 sans lire aucune clé.
-- **Moyen** : 0008 elle-même suffit (elle enregistre role + liste des noms de clés + x-client-info).
-  Pendant que le parc tourne encore sur l'ancienne clé, les postes en version < 2.26.1 doivent
-  apparaître en `legacy_suppose` et les postes ≥ 2.26.1 en `publishable`.
+- **Moyen** : une preuve contrôlée (un appel, ci-dessous) puis la collecte de 0008.
+- **Preuve contrôlée (obligatoire avant D6, geste de l'utilisateur)** — ne touche aucune table
+  métier ; la valeur de la clé n'est jamais collée dans un chat ni un fichier suivi :
+  1. SQL Editor prod : ouvrir la RPC
+     `GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;`
+  2. depuis le poste de l'utilisateur, **un seul** appel `POST <URL prod>/rest/v1/rpc/fn_report_client_version`
+     avec l'**ancienne** clé anon de prod (en-têtes `apikey` et `Authorization: Bearer`), corps
+     `{"p_poste_key":"preuve-legacy-0001","p_app_version":"0.0.1"}` (réponse attendue : `true`) ;
+  3. refermer aussitôt :
+     `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
+  4. lire `SELECT key_kind, client_info FROM public.t_client_versions WHERE poste_key = 'preuve-legacy-0001';`
+     → attendu `legacy_suppose` ;
+  5. supprimer la ligne : `DELETE FROM public.t_client_versions WHERE poste_key = 'preuve-legacy-0001';`
+  Si `key_kind` n'est pas `legacy_suppose` : **corriger le classement de 0008 avant toute
+  décision** (et refaire la preuve). Faire de même, en contre-épreuve, avec la clé publishable
+  (attendu `publishable`, ligne `preuve-publi-0001` supprimée ensuite).
+- **Collecte** : 0008 enregistre role + noms des claims + x-client-info. Les postes < 2.26.1
+  doivent apparaître en `legacy_suppose`, les postes ≥ 2.26.1 en `publishable`.
 - **Agent** : agent-4 (lecture des compteurs agrégés, lecture seule, avec accord).
-- **Critère de fin** : au moins un compteur `legacy_suppose` **et** un compteur `publishable`
-  observés en prod, ou constat explicite qu'aucun poste n'utilise plus l'ancienne clé. Si la forme
-  réelle diffère (ex. claims legacy sans `iss`), corriger le classement avant toute décision.
-- **Geste utilisateur** : laisser tourner ; autoriser la lecture des compteurs.
+- **Critère de fin (= conditions de D6)** : preuve contrôlée = `legacy_suppose` ; puis 7 jours
+  consécutifs avec **0** compteur `legacy_suppose` **et 0** compteur `autre` dont
+  `jwt_role = 'anon'`, contrôlé en lisant `classe`, `jwt_role` **et** `claim_keys` (une forme de
+  claims nouvelle ou inattendue bloque la décision jusqu'à explication). Plus d'échappatoire
+  « constat explicite ».
+  Requête de lecture (7 derniers jours) :
+  `SELECT jour, classe, jwt_role, claim_keys, client_info, sum(nb_instructions), sum(nb_lignes) FROM public.t_write_audit WHERE jour >= current_date - 7 GROUP BY 1,2,3,4,5 ORDER BY 1 DESC, 2;`
+- **Condition « tout le parc ≥ 2.26.1 »** : **non mesurable avant P2** (aucun poste n'appelle
+  encore `fn_report_client_version`, et `x-client-info` donne la version de supabase-js, pas
+  celle de l'application). Source à utiliser d'ici là : à défaut d'une autre source fiable,
+  **inventaire manuel** poste par poste (version affichée dans l'application, par site),
+  consigné par l'utilisateur. (`t_user_presence` ne porte pas de colonne de version d'après
+  `0002_t_user_presence.sql` ; d'autres sources éventuelles — journaux de l'auto-updater, etc. —
+  **non vérifiées**.)
+- **Geste utilisateur** : preuve contrôlée ; laisser tourner ; inventaire des versions ;
+  autoriser la lecture des compteurs.
 
 ### P1-2 — Table des versions de postes (dev puis prod) — FAIT SUR LE DEV (2026-11-13)
 - **Résultat dev (agent-4)** : 0009 appliquée sur le dev ; test SQL **14/14** (paramètres
@@ -141,6 +180,13 @@ Rappels permanents :
   publishable : `true`, ligne `key_kind = publishable` ; appel invalide : `false` sans erreur ;
   SELECT et INSERT directs sur `t_client_versions` par anon : refusés (42501). Ligne de test
   supprimée. Aucun appel côté poste (P2).
+- **Correctif après audit agent-9 (2026-11-13)** : la RPC est **fermée par défaut**
+  (`REVOKE EXECUTE … FROM PUBLIC, anon, authenticated` en fin de fichier ; les privilèges par
+  défaut du schéma public donnent EXECUTE à anon/authenticated, vérifié dans `pg_default_acl`
+  du dev). Ouverte seulement le temps de la preuve contrôlée P1-1b, puis en P2. Test 0009
+  **17/17** (RPC fermée : appels anon/authenticated réels refusés ; rouverte le temps du test
+  dans la transaction annulée ; refermeture). Appel REST réel avec la clé publishable : refusé
+  (42501).
 - **Fichiers** : `supabase/migrations/0009_versions_postes.sql` + test (contenu : agent-1).
 - **Agent** : agent-4.
 - **But** : savoir quels postes tournent encore une version qui utilise l'ancienne clé, avant D6.

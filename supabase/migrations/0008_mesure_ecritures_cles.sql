@@ -21,7 +21,9 @@
 -- Ce que fait ce fichier :
 --   1. t_write_audit_config : interrupteur (une ligne, id = 1).
 --   2. t_write_audit : COMPTEURS agreges (pas une ligne par appel), cle
---      (jour, table_name, op, jwt_role, claim_keys, client_info).
+--      (jour, table_name, op, jwt_role, claim_keys, client_info, classe)
+--      (classe ajoutee a la cle le 2026-11-13, reserve P2-2 de l'audit
+--      agent-9 : une ligne ne melange jamais deux classes).
 --      claim_keys = liste triee des NOMS de cles de request.jwt.claims.
 --      Aucune VALEUR de claim n'est stockee, sauf le role (jwt_role), demande
 --      explicitement par le plan. client_info = en-tete x-client-info,
@@ -30,12 +32,18 @@
 --   3. fn_write_audit_classe() : classement de l'appelant courant
 --      (aussi reutilise par 0009) :
 --        role = 'anon' ET claims ?& {iss,ref,iat,exp}   -> legacy_suppose
---        role = 'anon' ET NOT (claims ? 'iss')          -> publishable
+--        role = 'anon' ET claims lisibles ET NOT ? 'iss' -> publishable
 --        role = 'authenticated'                         -> authenticated
 --        role = 'service_role'                          -> service_role
 --        aucun claim ET session_user <> 'authenticator' -> postgres
---        tout le reste (anon avec iss incomplet, role inconnu, API sans
---        claims, JSON illisible via l'API)             -> autre
+--        tout le reste (anon avec iss incomplet, anon SANS claims lisibles
+--        -- role lu seulement dans request.jwt.claim.role --, role inconnu,
+--        API sans claims, JSON illisible via l'API)    -> autre
+--      (anon sans claims = autre et non publishable depuis le 2026-11-13,
+--      reserve P1-3 : un cas inconnu ne doit jamais etre compte comme la
+--      nouvelle cle. Verifie sur le dev le 2026-11-13 : un vrai appel REST
+--      avec la cle publishable donne des claims {"role":"anon"}, donc reste
+--      publishable.)
 --   4. fn_write_audit_stmt() : fonction trigger STATEMENT, SECURITY DEFINER,
 --      search_path fige, lock_timeout 200 ms ; ne leve JAMAIS d'erreur vers
 --      le poste (EXCEPTION WHEN others -> RAISE WARNING avec SQLSTATE seul).
@@ -72,28 +80,59 @@
 -- donnee metier modifiee. Les triggers sont AFTER : ils ne changent jamais
 -- les lignes ecrites.
 --
--- Interrupteur (immediat, reversible, sans DROP) :
---   UPDATE public.t_write_audit_config SET enabled = false, updated_at = now() WHERE id = 1;
---   (reactivation : enabled = true). Ligne absente = mesure INACTIVE.
---   Desactive, le trigger fait une seule lecture de la ligne de config.
--- Retour arriere complet (dans cet ordre, a coller dans le SQL Editor) :
---   DO $rb$ DECLARE t TEXT; BEGIN
---     FOREACH t IN ARRAY ARRAY['t_cartes','t_users','t_user_roles','t_logs',
---       't_sites','t_centres','t_postes','t_user_presence'] LOOP
---       IF to_regclass('public.' || t) IS NOT NULL THEN
---         EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_ins', t);
---         EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_upd', t);
---         EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_del', t);
---       END IF;
---     END LOOP; END $rb$;
---   DROP FUNCTION IF EXISTS public.fn_write_audit_stmt();
---   -- fn_write_audit_classe est utilisee par 0009 : retirer 0009 avant.
---   DROP FUNCTION IF EXISTS public.fn_write_audit_classe();
---   DROP FUNCTION IF EXISTS public.fn_write_audit_client_info();
---   DROP FUNCTION IF EXISTS public.fn_write_audit_claim_keys();
---   DROP FUNCTION IF EXISTS public.fn_write_audit_claims();
---   DROP TABLE IF EXISTS public.t_write_audit;
---   DROP TABLE IF EXISTS public.t_write_audit_config;
+-- APPLICATION (reserve P1-1 de l'audit agent-9) : ce fichier commence par
+-- SET LOCAL lock_timeout = '3s' et un controle qui ARRETE tout si ce reglage
+-- n'est pas actif (fichier execute hors transaction). En prod, l'utilisateur
+-- colle UN SEUL bloc dans le SQL Editor :  BEGIN;  <tout ce fichier>  COMMIT;
+-- Chaque verrou (ShareRowExclusiveLock par CREATE TRIGGER, mesure sur le dev)
+-- attend au plus 3 s ; au-dela, erreur 55P03 et TOUT est annule (rien n'est
+-- cree) : rejouer plus tard. Hors heures de travail des postes. Verification
+-- prealable et requete de CONTROLE : supabase/migrations/README.md.
+--
+-- ORDRE D'URGENCE (du plus doux au plus lourd ; reserve P1-2) :
+--   1. Interrupteur (immediat, reversible, aucun verrou de table) :
+--        UPDATE public.t_write_audit_config SET enabled = false, updated_at = now() WHERE id = 1;
+--      (reactivation : enabled = true). Ligne absente = mesure INACTIVE.
+--      Desactive, le trigger fait une seule lecture de la ligne de config.
+--   2. Debrancher les triggers sans DROP (ShareRowExclusiveLock court) :
+--        BEGIN;
+--        SET LOCAL lock_timeout = '3s';
+--        DO $dis$ DECLARE t TEXT; BEGIN
+--          FOREACH t IN ARRAY ARRAY['t_cartes','t_users','t_user_roles','t_logs',
+--            't_sites','t_centres','t_postes','t_user_presence'] LOOP
+--            IF to_regclass('public.' || t) IS NOT NULL THEN
+--              EXECUTE format('ALTER TABLE public.%I DISABLE TRIGGER %I', t, 'trg_wa_' || t || '_ins');
+--              EXECUTE format('ALTER TABLE public.%I DISABLE TRIGGER %I', t, 'trg_wa_' || t || '_upd');
+--              EXECUTE format('ALTER TABLE public.%I DISABLE TRIGGER %I', t, 'trg_wa_' || t || '_del');
+--            END IF;
+--          END LOOP; END $dis$;
+--        COMMIT;
+--      (reactivation : meme bloc avec ENABLE TRIGGER).
+--   3. Retour arriere complet, SEULEMENT hors heures (DROP TRIGGER prend un
+--      AccessExclusiveLock sur la table metier, mesure sur le dev). Retirer
+--      0009 AVANT (0009 utilise fn_write_audit_classe et
+--      fn_write_audit_client_info). Un seul bloc :
+--        BEGIN;
+--        SET LOCAL lock_timeout = '3s';
+--        DO $rb$ DECLARE t TEXT; BEGIN
+--          FOREACH t IN ARRAY ARRAY['t_cartes','t_users','t_user_roles','t_logs',
+--            't_sites','t_centres','t_postes','t_user_presence'] LOOP
+--            IF to_regclass('public.' || t) IS NOT NULL THEN
+--              EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_ins', t);
+--              EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_upd', t);
+--              EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'trg_wa_' || t || '_del', t);
+--            END IF;
+--          END LOOP; END $rb$;
+--        DROP FUNCTION IF EXISTS public.fn_write_audit_stmt();
+--        DROP FUNCTION IF EXISTS public.fn_write_audit_classe();
+--        DROP FUNCTION IF EXISTS public.fn_write_audit_client_info();
+--        DROP FUNCTION IF EXISTS public.fn_write_audit_claim_keys();
+--        DROP FUNCTION IF EXISTS public.fn_write_audit_claims();
+--        DROP TABLE IF EXISTS public.t_write_audit;
+--        DROP TABLE IF EXISTS public.t_write_audit_config;
+--        COMMIT;
+--      En cas d'erreur 55P03 : rien n'est retire, l'etape 1 ou 2 reste en
+--      place ; rejouer plus tard.
 --
 -- Lecture des compteurs (SQL Editor) :
 --   SELECT jour, classe, table_name, op, jwt_role, claim_keys, client_info,
@@ -105,10 +144,35 @@
 -- classes "publishable" avec les bons nb_lignes ; 10 upserts concurrents sans
 -- erreur ni compteur perdu ; verrou tenu 4 s par une autre transaction : 3
 -- requetes retardees d'environ 220 ms, aucune erreur, 3 compteurs perdus (attendu).
+-- Version corrigee (reserves de l'audit agent-9 : lock_timeout de
+-- protection, classe dans la cle, anon sans claims = autre) : dev retour
+-- arriere puis REAPPLIQUEE le 2026-11-13 (agent-4) ; resultats des tests :
+-- docs/PLAN_P1_CHANTIER_B.md (P1-1).
 -- Production itvyayakwgzvfqvdrgyv : NON appliquee ; geste de l'utilisateur
 -- (SQL Editor), avec 0009, apres validation dev.
 -- Test : supabase/tests/0008_mesure_ecritures_cles.test.sql
 -- ============================================================
+
+-- ------------------------------------------------------------
+-- 0. Protection : verrous bornes a 3 s, sinon tout est annule (55P03)
+-- ------------------------------------------------------------
+SET LOCAL lock_timeout = '3s';
+
+DO $garde$
+BEGIN
+  IF current_setting('lock_timeout') <> '3s' THEN
+    RAISE EXCEPTION '0008 : lock_timeout de protection inactif (fichier execute hors transaction). Executer en un seul bloc : BEGIN; <fichier> COMMIT;';
+  END IF;
+  -- Ancienne version (cle sans classe) deja en place : retour arriere d'abord.
+  IF to_regclass('public.t_write_audit') IS NOT NULL AND NOT EXISTS (
+       SELECT 1 FROM pg_constraint c
+       JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+       WHERE c.conrelid = to_regclass('public.t_write_audit')
+         AND c.contype = 'p' AND a.attname = 'classe') THEN
+    RAISE EXCEPTION '0008 : t_write_audit existe avec une ancienne cle primaire sans classe : faire le retour arriere (etape 3) puis reappliquer.';
+  END IF;
+END;
+$garde$;
 
 -- ------------------------------------------------------------
 -- 1. Interrupteur (une seule ligne, id = 1)
@@ -142,7 +206,7 @@ CREATE TABLE IF NOT EXISTS public.t_write_audit (
   premiere_vue    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   derniere_vue    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT t_write_audit_pkey
-    PRIMARY KEY (jour, table_name, op, jwt_role, claim_keys, client_info)
+    PRIMARY KEY (jour, table_name, op, jwt_role, claim_keys, client_info, classe)
 );
 
 CREATE INDEX IF NOT EXISTS idx_write_audit_classe_jour ON public.t_write_audit(classe, jour);
@@ -240,9 +304,11 @@ BEGIN
   END IF;
 
   IF v_role = 'anon' THEN
-    IF v_j IS NOT NULL AND v_j ?& ARRAY['iss', 'ref', 'iat', 'exp'] THEN
+    IF v_j IS NULL THEN
+      RETURN 'autre'; -- role anon sans claims lisibles : forme inconnue (P1-3)
+    ELSIF v_j ?& ARRAY['iss', 'ref', 'iat', 'exp'] THEN
       RETURN 'legacy_suppose';
-    ELSIF v_j IS NULL OR NOT (v_j ? 'iss') THEN
+    ELSIF NOT (v_j ? 'iss') THEN
       RETURN 'publishable';
     END IF;
     RETURN 'autre';
@@ -301,10 +367,9 @@ BEGIN
        left(regexp_replace(COALESCE(v_role, ''), '[^A-Za-z0-9_.-]', '?', 'g'), 32),
        public.fn_write_audit_claim_keys(), public.fn_write_audit_client_info(),
        public.fn_write_audit_classe(), 1, v_n, NOW(), NOW())
-    ON CONFLICT (jour, table_name, op, jwt_role, claim_keys, client_info) DO UPDATE SET
+    ON CONFLICT (jour, table_name, op, jwt_role, claim_keys, client_info, classe) DO UPDATE SET
       nb_instructions = a.nb_instructions + 1,
       nb_lignes       = a.nb_lignes + EXCLUDED.nb_lignes,
-      classe          = EXCLUDED.classe,
       derniere_vue    = GREATEST(a.derniere_vue, EXCLUDED.derniere_vue);
   EXCEPTION WHEN others THEN
     -- Jamais d'erreur renvoyee au poste : le compteur de cette instruction est perdu.

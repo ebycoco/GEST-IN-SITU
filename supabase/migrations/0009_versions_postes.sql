@@ -19,8 +19,8 @@
 --      authenticated, service_role, postgres, autre) ; jamais declaree par le
 --      poste. client_info = x-client-info borne (64 caracteres).
 --   2. fn_report_client_version(p_poste_key, p_app_version, p_user_sync_id,
---      p_site_sync_id) : SECURITY DEFINER, search_path fige, EXECUTE ouvert a
---      anon et authenticated. Renvoie seulement un booleen (true = accepte,
+--      p_site_sync_id) : SECURITY DEFINER, search_path fige, EXECUTE FERME
+--      par defaut (voir "RPC fermee jusqu'a P2" plus bas). Renvoie seulement un booleen (true = accepte,
 --      false = refuse), ne renvoie JAMAIS de ligne ni d'erreur (EXCEPTION WHEN
 --      others -> false + WARNING avec SQLSTATE seul). Parametres bornes :
 --        p_poste_key    : ^[A-Za-z0-9_-]{8,64}$ (uuid conseille) ;
@@ -39,13 +39,27 @@
 -- Idempotent : CREATE TABLE/INDEX IF NOT EXISTS, CREATE OR REPLACE FUNCTION.
 -- Aucune table metier touchee.
 --
--- Interrupteur (immediat, sans DROP) : retirer l'acces a la RPC
---   REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;
---   (reactivation : GRANT EXECUTE ... TO anon, authenticated). Un poste P2
---   doit traiter l'erreur "permission denied" comme un simple echec silencieux.
--- Retour arriere complet :
+-- RPC FERMEE JUSQU'A P2 (reserve P2-1 de l'audit agent-9) : ce fichier se
+-- termine par REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated. Aucun
+-- poste ne l'appelle avant P2 ; la laisser ouverte ne servirait qu'a un
+-- appelant exterieur. Ouvrir / fermer (SQL Editor, une ligne, sans verrou de
+-- table metier) :
+--   ouvrir : GRANT  EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
+--   fermer : REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;
+--   - preuve controlee P1-3/D6 (docs/PLAN_P1_CHANTIER_B.md, P1-1b) : ouvrir,
+--     faire l'appel de test, FERMER aussitot ;
+--   - P2 (client qui declare sa version) : ouvrir durablement, au moment de
+--     la publication de la version P2. Un poste P2 doit traiter l'erreur
+--     "permission denied" comme un simple echec silencieux.
+--   ATTENTION : rejouer ce fichier referme la RPC (REVOKE final).
+-- Application : comme 0008, un seul bloc  BEGIN; <ce fichier> COMMIT;
+-- (SET LOCAL lock_timeout = '3s' + controle en tete).
+-- Retour arriere complet (aucune table metier touchee ; meme protection) :
+--   BEGIN;
+--   SET LOCAL lock_timeout = '3s';
 --   DROP FUNCTION IF EXISTS public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT);
 --   DROP TABLE IF EXISTS public.t_client_versions;
+--   COMMIT;
 --
 -- Lecture (SQL Editor) :
 --   SELECT poste_key, app_version, key_kind, client_info, site_sync_id,
@@ -56,10 +70,29 @@
 -- apply_migration) ; test SQL 14/14 ; appel REST reel avec la cle
 -- publishable -> true, key_kind publishable ; lecture/ecriture directe de la
 -- table refusee a anon (42501).
+-- Version corrigee (RPC fermee par defaut, lock_timeout de protection) : dev
+-- retour arriere puis REAPPLIQUEE le 2026-11-13 (agent-4).
 -- Production itvyayakwgzvfqvdrgyv : NON appliquee ; geste de l'utilisateur
 -- (SQL Editor), juste apres 0008.
 -- Test : supabase/tests/0009_versions_postes.test.sql
 -- ============================================================
+
+-- ------------------------------------------------------------
+-- 0. Protection : verrous bornes a 3 s, sinon tout est annule (55P03)
+-- ------------------------------------------------------------
+SET LOCAL lock_timeout = '3s';
+
+DO $garde$
+BEGIN
+  IF current_setting('lock_timeout') <> '3s' THEN
+    RAISE EXCEPTION '0009 : lock_timeout de protection inactif (fichier execute hors transaction). Executer en un seul bloc : BEGIN; <fichier> COMMIT;';
+  END IF;
+  IF to_regprocedure('public.fn_write_audit_classe()') IS NULL
+     OR to_regprocedure('public.fn_write_audit_client_info()') IS NULL THEN
+    RAISE EXCEPTION '0009 : 0008 absente (fn_write_audit_classe / fn_write_audit_client_info) : appliquer 0008 d''abord.';
+  END IF;
+END;
+$garde$;
 
 -- ------------------------------------------------------------
 -- 1. Table (une ligne par poste)
@@ -147,5 +180,7 @@ EXCEPTION WHEN others THEN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
+-- RPC FERMEE par defaut jusqu'a P2 (voir en-tete pour l'ouvrir / la fermer).
+-- anon et authenticated sont cites explicitement : les privileges par defaut
+-- de Supabase leur donnent EXECUTE sur toute nouvelle fonction de public.
+REVOKE ALL ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM PUBLIC, anon, authenticated;

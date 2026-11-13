@@ -4,7 +4,9 @@
 -- et 0009, dans le SQL Editor (role postgres). Transaction ANNULEE (ROLLBACK
 -- final) : aucune ligne ne reste (postes de test 't9-*').
 -- Les cas 1 a 9 simulent l'appelant par request.jwt.claims ; les cas 10 a 12
--- rejouent un vrai SET LOCAL ROLE anon.
+-- rejouent un vrai SET LOCAL ROLE anon, RPC rouverte (GRANT) le temps du test
+-- seulement ; 14-15 : RPC fermee par defaut (refus reel anon/authenticated) ;
+-- 16 : refermeture par REVOKE.
 -- Resultat : table _t, puis un bloc qui LEVE UNE ERREUR si un cas vaut false.
 -- ============================================================
 BEGIN;
@@ -22,13 +24,37 @@ BEGIN
   PERFORM set_config('request.headers', '', true);
 
   -- ---------- 0. Preconditions ----------
-  INSERT INTO _t VALUES (0, 'Preconditions : table en RLS sans politique, RPC SECURITY DEFINER, EXECUTE anon/authenticated',
+  INSERT INTO _t VALUES (0, 'Preconditions : table en RLS sans politique, RPC SECURITY DEFINER, EXECUTE FERME a anon/authenticated (defaut P1)',
     (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.t_client_versions'::regclass)
       AND NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 't_client_versions')
       AND (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_report_client_version(text,text,text,text)'::regprocedure)
-      AND has_function_privilege('anon', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
-      AND has_function_privilege('authenticated', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE'),
+      AND NOT has_function_privilege('anon', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE'),
     NULL);
+
+  -- (14) RPC fermee : un vrai appel anon est refuse (42501), aucune ligne
+  BEGIN
+    PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
+    SET LOCAL ROLE anon;
+    b := public.fn_report_client_version('t9-poste-ferme', '2.26.2');
+    RESET ROLE;
+    INSERT INTO _t VALUES (14, 'RPC fermee par defaut : appel anon refuse', false, format('appel accepte ok=%s', b));
+  EXCEPTION WHEN insufficient_privilege THEN
+    RESET ROLE;
+    INSERT INTO _t VALUES (14, 'RPC fermee par defaut : appel anon refuse (42501), aucune ligne',
+      NOT EXISTS (SELECT 1 FROM public.t_client_versions WHERE poste_key = 't9-poste-ferme'),
+      'permission refusee (attendu)');
+  END;
+  BEGIN
+    SET LOCAL ROLE authenticated;
+    b := public.fn_report_client_version('t9-poste-ferme2', '2.26.2');
+    RESET ROLE;
+    INSERT INTO _t VALUES (15, 'RPC fermee par defaut : appel authenticated refuse', false, 'appel accepte');
+  EXCEPTION WHEN insufficient_privilege THEN
+    RESET ROLE;
+    INSERT INTO _t VALUES (15, 'RPC fermee par defaut : appel authenticated refuse (42501)', true, 'permission refusee (attendu)');
+  END;
+  PERFORM set_config('request.jwt.claims', '', true);
 
   -- ---------- 1. Premier appel publishable ----------
   PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
@@ -106,6 +132,9 @@ BEGIN
     n_cnt = 0, format('lignes_fautives=%s', n_cnt));
 
   -- ---------- 10-12. Vrai role anon ----------
+  -- RPC rouverte le temps du test SEULEMENT (GRANT annule par le ROLLBACK final),
+  -- comme pour la preuve controlee P1-3 ou en P2.
+  GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
   BEGIN
     PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
     SET LOCAL ROLE anon;
@@ -137,9 +166,16 @@ BEGIN
     INSERT INTO _t VALUES (12, 't_client_versions non modifiable directement par anon', true, 'permission refusee (attendu)');
   END;
 
-  INSERT INTO _t VALUES (13, 'aucun droit anon/authenticated sur la table',
-    NOT has_table_privilege('anon', 'public.t_client_versions', 'SELECT,INSERT,UPDATE,DELETE')
-      AND NOT has_table_privilege('authenticated', 'public.t_client_versions', 'SELECT,INSERT,UPDATE,DELETE'),
+  INSERT INTO _t VALUES (13, 'aucun droit anon/authenticated sur la table (TRUNCATE compris)',
+    NOT has_table_privilege('anon', 'public.t_client_versions', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+      AND NOT has_table_privilege('authenticated', 'public.t_client_versions', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE'),
+    NULL);
+
+  -- (16) refermeture : apres REVOKE, plus d'EXECUTE (procedure de fin de preuve P1-3)
+  REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;
+  INSERT INTO _t VALUES (16, 'REVOKE de fin de preuve : EXECUTE de nouveau ferme',
+    NOT has_function_privilege('anon', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE'),
     NULL);
 
   PERFORM set_config('request.jwt.claims', '', true);

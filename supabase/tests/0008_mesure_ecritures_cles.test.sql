@@ -9,6 +9,9 @@
 -- (request.jwt.claims, request.headers) en postgres. Le cas 15 rejoue un vrai
 -- SET LOCAL ROLE anon (politiques allow_all du dev aligne sur la prod) : si
 -- les droits du dev le refusent, il est marque NON CONCLUANT (ok = NULL).
+-- Cas 20 a 25 (reserves de l'audit agent-9, 2026-11-13) : ecriture gardee par
+-- 0006, ecritures ignorees par 0007 (R5/R6), restauration du lock_timeout de
+-- l'appelant, refus authenticated et TRUNCATE, anon sans claims = autre.
 -- Non couvert ici : la contention entre deux sessions concurrentes (une seule
 -- session dans un test SQL) -> essai reel par appels REST paralleles, cf. plan.
 --
@@ -25,7 +28,9 @@ DO $$
 DECLARE
   a      public.t_write_audit;
   n_rows INT;
+  n_rows2 INT;
   n_cnt  INT;
+  n_cnt2 INT;
   v_txt  TEXT;
   v_site BIGINT;
 BEGIN
@@ -34,12 +39,16 @@ BEGIN
   PERFORM set_config('request.headers', '', true);
 
   -- ---------- 0. Preconditions ----------
-  INSERT INTO _t VALUES (0, 'Preconditions : 24 triggers STATEMENT actifs, mesure active, fonction SECURITY DEFINER',
+  INSERT INTO _t VALUES (0, 'Preconditions : 24 triggers STATEMENT actifs, mesure active, fonction SECURITY DEFINER, classe dans la cle primaire',
     (SELECT count(*) FROM pg_trigger t
        WHERE t.tgname LIKE 'trg\_wa\_%' AND t.tgenabled = 'O'
          AND t.tgfoid = 'public.fn_write_audit_stmt()'::regprocedure) = 24
       AND (SELECT enabled FROM public.t_write_audit_config WHERE id = 1)
-      AND (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_write_audit_stmt()'::regprocedure),
+      AND (SELECT prosecdef FROM pg_proc WHERE oid = 'public.fn_write_audit_stmt()'::regprocedure)
+      AND EXISTS (SELECT 1 FROM pg_constraint c
+                  JOIN pg_attribute att ON att.attrelid = c.conrelid AND att.attnum = ANY (c.conkey)
+                  WHERE c.conrelid = 'public.t_write_audit'::regclass AND c.contype = 'p'
+                    AND att.attname = 'classe'),
     format('triggers=%s', (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'trg\_wa\_%')));
 
   -- Site de test cree en postgres sans claims (compte en classe postgres).
@@ -250,6 +259,122 @@ BEGIN
     (SELECT nb_lignes FROM public.t_write_audit WHERE client_info = 't8-casc' AND table_name = 't_users' AND op = 'DELETE') = 1
       AND (SELECT nb_lignes FROM public.t_write_audit WHERE client_info = 't8-casc' AND table_name = 't_user_roles' AND op = 'DELETE') = 1,
     NULL);
+
+  -- ===== Reserves P2-4 / P1-3 de l'audit agent-9 (cas 20 a 25) =====
+
+  -- (20) ecriture t_cartes gardee par 0006 (retour EN STOCK d'une carte DELIVRE,
+  -- evenement plus ancien) : la ligne est ecrite (bloc statut repris d'OLD),
+  -- le compteur suit les lignes reellement ecrites (ROW_COUNT).
+  PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g06i"}', true);
+  INSERT INTO public.t_cartes (sync_id, noms, prenoms, statut, date_delivrance, agent_distributeur, id_site)
+  VALUES ('t8-g1', 'G1', 'X', 'DELIVRE', '2026-10-27T09:00:00Z', 'AGENT_T8', v_site);
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g06"}', true);
+  UPDATE public.t_cartes SET statut = 'EN STOCK', date_delivrance = NULL, agent_distributeur = NULL
+   WHERE sync_id = 't8-g1';
+  GET DIAGNOSTICS n_rows = ROW_COUNT;
+  SELECT statut INTO v_txt FROM public.t_cartes WHERE sync_id = 't8-g1';
+  SELECT * INTO a FROM public.t_write_audit WHERE client_info = 't8-g06' AND table_name = 't_cartes' AND op = 'UPDATE';
+  INSERT INTO _t VALUES (20, 'ecriture gardee par 0006 : statut conserve DELIVRE, compteur = lignes reellement ecrites',
+    v_txt = 'DELIVRE' AND n_rows = 1 AND a.nb_lignes = n_rows AND a.nb_instructions = 1 AND a.classe = 'publishable',
+    format('statut=%s row_count=%s compteur=%s', v_txt, n_rows, a.nb_lignes));
+
+  -- (21) ecritures ignorees par 0007 (RETURN NULL) : rien n'est compte pour elles.
+  PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g07pg"}', true);
+  INSERT INTO public.t_users (login, password_hash, role, nom_user, statut_actif, sync_id, site_id) VALUES
+    ('t8_sa', 'HASH_TEST_T8', 'SUPER ADMIN', 'SA T8', 1, 't8-sa', v_site),
+    ('t8_u2', 'HASH_TEST_T8', 'OPERATEUR_SAISIE', 'U2', 1, 't8-u2', v_site),
+    ('t8_u3', 'HASH_TEST_T8', 'OPERATEUR_SAISIE', 'U3', 1, 't8-u3', v_site);
+  PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
+  -- R5 seul : DELETE d'un SA -> 0 ligne -> aucun compteur
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g07d0"}', true);
+  DELETE FROM public.t_users WHERE sync_id = 't8-sa';
+  GET DIAGNOSTICS n_rows = ROW_COUNT;
+  SELECT count(*) INTO n_cnt FROM public.t_write_audit WHERE client_info = 't8-g07d0';
+  -- R5 melange : DELETE SA + non-SA -> 1 ligne ecrite -> compteur 1
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g07d1"}', true);
+  DELETE FROM public.t_users WHERE sync_id IN ('t8-sa', 't8-u2');
+  GET DIAGNOSTICS n_cnt2 = ROW_COUNT;
+  -- R6 : INSERT t_user_roles 'SUPER ADMIN' pour un non-SA -> 0 ligne -> aucun compteur
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-g07r"}', true);
+  INSERT INTO public.t_user_roles (user_sync_id, role) VALUES ('t8-u3', 'SUPER ADMIN');
+  GET DIAGNOSTICS n_rows2 = ROW_COUNT;
+  INSERT INTO _t VALUES (21, 'ecritures ignorees par 0007 (R5 DELETE SA, R6 role SA) : 0 ligne comptee ; DELETE mixte : 1 ligne',
+    n_rows = 0 AND n_cnt = 0
+      AND n_cnt2 = 1
+      AND (SELECT nb_lignes FROM public.t_write_audit WHERE client_info = 't8-g07d1' AND table_name = 't_users' AND op = 'DELETE') = 1
+      AND n_rows2 = 0
+      AND NOT EXISTS (SELECT 1 FROM public.t_write_audit WHERE client_info = 't8-g07r')
+      AND EXISTS (SELECT 1 FROM public.t_users WHERE sync_id = 't8-sa'),
+    format('R5 seul=%s/%s compteurs, mixte=%s, R6=%s', n_rows, n_cnt, n_cnt2, n_rows2));
+
+  -- (22) lock_timeout de l'appelant restaure apres une ecriture (SET de fonction)
+  PERFORM set_config('lock_timeout', '7s', true);
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-lt"}', true);
+  UPDATE public.t_cartes SET noms = 'LT' WHERE sync_id = 't8-c1';
+  SELECT current_setting('lock_timeout') INTO v_txt;
+  INSERT INTO _t VALUES (22, 'lock_timeout appelant (7s) restaure apres le trigger (200ms limite a la fonction)',
+    v_txt = '7s' AND EXISTS (SELECT 1 FROM public.t_write_audit WHERE client_info = 't8-lt'),
+    format('lock_timeout apres=%s', v_txt));
+  PERFORM set_config('lock_timeout', '0', true);
+
+  -- (23) authenticated refuse aussi sur t_write_audit_config et t_write_audit
+  BEGIN
+    SET LOCAL ROLE authenticated;
+    UPDATE public.t_write_audit_config SET enabled = false WHERE id = 1;
+    RESET ROLE;
+    INSERT INTO _t VALUES (23, 't_write_audit_config non modifiable par authenticated', false, 'UPDATE autorise');
+  EXCEPTION WHEN insufficient_privilege THEN
+    RESET ROLE;
+    BEGIN
+      SET LOCAL ROLE authenticated;
+      PERFORM 1 FROM public.t_write_audit LIMIT 1;
+      RESET ROLE;
+      INSERT INTO _t VALUES (23, 't_write_audit illisible par authenticated', false, 'SELECT autorise');
+    EXCEPTION WHEN insufficient_privilege THEN
+      RESET ROLE;
+      INSERT INTO _t VALUES (23, 'authenticated : t_write_audit_config non modifiable, t_write_audit illisible (reel + catalogue)',
+        NOT has_table_privilege('authenticated', 'public.t_write_audit_config', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+          AND NOT has_table_privilege('authenticated', 'public.t_write_audit', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE'),
+        'permission refusee (attendu)');
+    END;
+  END;
+
+  -- (24) TRUNCATE refuse a anon et authenticated (catalogue + essai reel)
+  BEGIN
+    SET LOCAL ROLE anon;
+    TRUNCATE public.t_write_audit;
+    RESET ROLE;
+    INSERT INTO _t VALUES (24, 'TRUNCATE t_write_audit refuse a anon', false, 'TRUNCATE autorise');
+  EXCEPTION WHEN insufficient_privilege THEN
+    RESET ROLE;
+    BEGIN
+      SET LOCAL ROLE authenticated;
+      TRUNCATE public.t_write_audit_config;
+      RESET ROLE;
+      INSERT INTO _t VALUES (24, 'TRUNCATE t_write_audit_config refuse a authenticated', false, 'TRUNCATE autorise');
+    EXCEPTION WHEN insufficient_privilege THEN
+      RESET ROLE;
+      INSERT INTO _t VALUES (24, 'TRUNCATE refuse a anon/authenticated sur t_write_audit et t_write_audit_config',
+        NOT has_table_privilege('anon', 'public.t_write_audit', 'TRUNCATE')
+          AND NOT has_table_privilege('authenticated', 'public.t_write_audit', 'TRUNCATE')
+          AND NOT has_table_privilege('anon', 'public.t_write_audit_config', 'TRUNCATE')
+          AND NOT has_table_privilege('authenticated', 'public.t_write_audit_config', 'TRUNCATE'),
+        'permission refusee (attendu)');
+    END;
+  END;
+
+  -- (25) role anon SANS claims lisibles (repli request.jwt.claim.role) : classe autre, plus publishable
+  PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM set_config('request.jwt.claim.role', 'anon', true);
+  PERFORM set_config('request.headers', '{"x-client-info":"t8-noclaims"}', true);
+  UPDATE public.t_cartes SET noms = 'NC' WHERE sync_id = 't8-c1';
+  SELECT * INTO a FROM public.t_write_audit WHERE client_info = 't8-noclaims' AND table_name = 't_cartes' AND op = 'UPDATE';
+  INSERT INTO _t VALUES (25, 'anon sans claims lisibles : classe autre (jwt_role anon, claim_keys vide)',
+    a.classe = 'autre' AND a.jwt_role = 'anon' AND a.claim_keys = '' AND public.fn_write_audit_classe() = 'autre',
+    format('classe=%s role=%s keys=%s', a.classe, a.jwt_role, a.claim_keys));
+  PERFORM set_config('request.jwt.claim.role', '', true);
 
   PERFORM set_config('request.jwt.claims', '', true);
   PERFORM set_config('request.headers', '', true);
