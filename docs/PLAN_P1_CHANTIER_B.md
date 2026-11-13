@@ -206,6 +206,26 @@ Rappels permanents :
 - **Critère de fin** : liste des comptes/cartes dont le site cloud est incohérent, sans données
   personnelles dans le rapport.
 - **Geste utilisateur** : autoriser la lecture prod.
+- **Résultat (agent-4, 2026-11-13, PROD itvyayakwgzvfqvdrgyv, SELECT uniquement)** — requête
+  réutilisable `supabase/diagnostics/p1_coherence_sites.sql` (4 blocs). Prod : 4 sites, 6 centres,
+  0 poste, 17 comptes, 35 rôles, 225 086 cartes, 2 729 journaux, 13 présences.
+  - Sain : aucun doublon de code site ni de centre, aucun centre orphelin, aucun compte au site ou
+    centre inexistant, aucun compte dont le centre est d'un autre site, aucun non-SA sans site,
+    1 SUPER ADMIN (sans site), présences et journaux cohérents en site/centre, 0 sync_id manquant
+    (sauf site 5 PLATEAU, vide).
+  - **Anomalie 1 (P3)** : 2 614 cartes avec `id_site = 6` et `id_centre` 14/15/16, ni site ni
+    centres existants (créées le 2026-08-29, jamais modifiées depuis ; 818 DELIVRE, 1 789 EN STOCK,
+    7 DOUBLON). 2 606 partagent leur `cle_doublon` avec une carte d'ABOBO (site 4). Probables ids
+    locaux d'ADJAME (site 11, centres 17/18/19 créés le même jour, préfixes CH/UN identiques) :
+    **supposition**, non prouvée. Décision utilisateur : rattacher à ADJAME ou supprimer (import
+    d'essai en double ?).
+  - **Anomalie 2 (P1-4, hook)** : 2 comptes dont le rôle primaire manque dans `t_user_roles`
+    (id_user 64 SUPER ADMIN, id_user 247 ADMINISTRATEUR_SITE d'ADJAME). Un hook qui ne lirait que
+    `t_user_roles` priverait le SUPER ADMIN de `gis_is_super_admin`.
+  - Informatif : 2 070 journaux (11 id_user distincts) dont `id_user` est un id local de poste,
+    pas un id cloud : ne pas filtrer t_logs par `id_user` dans les règles. Site 5 PLATEAU sans
+    sync_id et vide ; site 14 BOCANDA sans centre (1 admin).
+  - Rien n'a été réparé.
 
 ### P1-4 — Prérequis S2 : clé secrète du dev — FAIT (2026-11-13)
 - **Résultat : S2 prouvé en réel sur le dev.** `admin.createUser` (email synthétique, `app_metadata.sync_id`)
