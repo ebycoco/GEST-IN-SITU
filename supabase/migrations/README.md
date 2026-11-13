@@ -112,8 +112,9 @@ présente mise en place — voir limitation ci-dessous.
 - **`0007_t_users_super_admin_guard.sql`** — garde-fou anti-SUPER ADMIN via la clé anon
   (neutralisation silencieuse, jamais d'erreur renvoyée au poste) : triggers sur `t_users`
   et `t_user_roles`, interrupteur `t_security_guard_config`, journal `t_security_guard_events`.
-  Test : `supabase/tests/0007_t_users_super_admin_guard.test.sql`. **Dev et production : PAS
-  APPLIQUÉE** (geste explicite de l'utilisateur ; ordre : dev, test, puis prod). Idempotente.
+  Test : `supabase/tests/0007_t_users_super_admin_guard.test.sql`. Appliquée sur le **dev** et
+  la **production le 2026-11-13** (test 20/20, appels REST réels et test vivant agent-13 :
+  journal `jwt_role = anon`). Idempotente.
 
 ## 0007 : procédures manuelles (période transitoire)
 
@@ -123,6 +124,13 @@ création (le compte arrive en quarantaine, `statut_actif = 0`), reset ou change
 de passe ou de login d'un SUPER ADMIN (le cloud garde l'ancien hash/login), élévation,
 rétrogradation, réactivation, suppression. Ils se rejouent à la main dans le **SQL Editor**
 du projet (rôle `postgres`, non filtré par le garde). Remplacer les valeurs `<...>`.
+
+**Attention, le poste qui a fait le geste est aussi concerné.** À la descente suivante des
+comptes (redémarrage, « Télécharger les agents »), le poste recopie `statut_actif` et
+`password_hash` depuis le cloud (`src/main/sync/users-sync.helper.ts:203`, `:310-318`) : un
+SUPER ADMIN créé par ROOT redevient inactif, et un mot de passe réinitialisé par ROOT
+reprend l'ancienne valeur, **y compris sur le poste qui les a faits**. Faire la procédure
+SQL ci-dessous **avant** tout redémarrage du poste.
 
 **Lire le journal du garde**
 
