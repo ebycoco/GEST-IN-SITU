@@ -74,8 +74,10 @@
 --   ALTER TABLE public.t_cartes DISABLE TRIGGER trg_t_cartes_status_guard;
 --
 -- Application : dev ajadkziqaskadlzboeqo le 2026-10-27 (agent-4, validee par
--- l'utilisateur). Production itvyayakwgzvfqvdrgyv : PAS APPLIQUEE, geste
--- explicite a valider par l'utilisateur (README.md, CLAUDE.md).
+-- l'utilisateur). Production itvyayakwgzvfqvdrgyv : APPLIQUEE le 2026-11-01
+-- (apply_migration, geste valide par l'utilisateur) ; verifiee : trigger
+-- trg_t_cartes_status_guard actif, 2 fonctions (fn_try_ts,
+-- fn_t_cartes_status_guard), t_sync_conflicts en RLS active, 0 ligne.
 -- Test : supabase/tests/0006_t_cartes_status_guard.test.sql
 -- ============================================================
 

@@ -105,6 +105,93 @@ présente mise en place — voir limitation ci-dessous.
   défaut `escalade_niveau = 'CENTRE'` et `has_invalid_date = 0` que le dev n'a pas — sans
   incidence, l'application envoie toujours ces valeurs). Aucune application sur la production
   n'est nécessaire. Idempotente.
+- **`0006_t_cartes_status_guard.sql`** — garde-fou serveur du « bloc statut » de `t_cartes`
+  (trigger `trg_t_cartes_status_guard`, journal `t_sync_conflicts`). Appliquée sur le dev le
+  2026-10-27 et sur la **production le 2026-11-01** (vérifiée : trigger actif, 2 fonctions,
+  `t_sync_conflicts` en RLS, 0 ligne). Test : `supabase/tests/0006_t_cartes_status_guard.test.sql`.
+- **`0007_t_users_super_admin_guard.sql`** — garde-fou anti-SUPER ADMIN via la clé anon
+  (neutralisation silencieuse, jamais d'erreur renvoyée au poste) : triggers sur `t_users`
+  et `t_user_roles`, interrupteur `t_security_guard_config`, journal `t_security_guard_events`.
+  Test : `supabase/tests/0007_t_users_super_admin_guard.test.sql`. **Dev et production : PAS
+  APPLIQUÉE** (geste explicite de l'utilisateur ; ordre : dev, test, puis prod). Idempotente.
+
+## 0007 : procédures manuelles (période transitoire)
+
+Tant que l'application écrit `t_users` / `t_user_roles` avec la clé anon, le garde 0007
+neutralise **aussi** les gestes légitimes qui touchent un SUPER ADMIN depuis un poste :
+création (le compte arrive en quarantaine, `statut_actif = 0`), reset ou changement de mot
+de passe ou de login d'un SUPER ADMIN (le cloud garde l'ancien hash/login), élévation,
+rétrogradation, réactivation, suppression. Ils se rejouent à la main dans le **SQL Editor**
+du projet (rôle `postgres`, non filtré par le garde). Remplacer les valeurs `<...>`.
+
+**Lire le journal du garde**
+
+```sql
+SELECT id, created_at, table_name, op, reason, login, sync_id, jwt_role, attempted
+FROM public.t_security_guard_events
+ORDER BY created_at DESC
+LIMIT 100;
+```
+
+**Activer un SUPER ADMIN en quarantaine** (après avoir vérifié avec ROOT que la création
+est légitime)
+
+```sql
+-- 1. Repérer le compte (journal + ligne)
+SELECT created_at, login, sync_id, jwt_role, attempted
+FROM public.t_security_guard_events
+WHERE reason = 'SA_INSERT_QUARANTAINE'
+ORDER BY created_at DESC;
+
+SELECT id_user, login, role, statut_actif, site_id, created_at
+FROM public.t_users
+WHERE role = 'SUPER ADMIN'
+ORDER BY created_at DESC;
+
+-- 2. Activer (une seule ligne attendue : "UPDATE 1")
+UPDATE public.t_users
+SET statut_actif = 1, updated_at = now()
+WHERE sync_id = '<SYNC_ID_DU_COMPTE>'
+  AND role = 'SUPER ADMIN'
+  AND statut_actif = 0;
+```
+
+**Reporter dans le cloud le hash d'un SUPER ADMIN depuis un poste** (après un reset ou un
+changement de mot de passe fait sur ce poste)
+
+1. Sur le poste où le mot de passe a été changé, lire la ligne dans la base SQLite locale
+   (outil SQLite en lecture seule, application fermée) :
+   ```sql
+   SELECT sync_id, login, password_hash FROM t_users WHERE login = '<LOGIN_DU_SA>';
+   ```
+2. Dans le SQL Editor, vérifier que le format du hash copié ressemble à l'actuel (mêmes
+   premiers caractères), sans afficher le hash entier :
+   ```sql
+   SELECT login, left(password_hash, 7) AS debut_hash, length(password_hash) AS longueur
+   FROM public.t_users WHERE sync_id = '<SYNC_ID_DU_SA>' AND role = 'SUPER ADMIN';
+   ```
+3. Reporter le hash (une seule ligne attendue : "UPDATE 1") :
+   ```sql
+   UPDATE public.t_users
+   SET password_hash = '<HASH_COPIE_DU_POSTE>', updated_at = now()
+   WHERE sync_id = '<SYNC_ID_DU_SA>'
+     AND role = 'SUPER ADMIN';
+   ```
+
+Le hash est un secret : ne jamais le coller dans un chat, un ticket, un commit ni le
+Second-cerveau ; effacer l'onglet du SQL Editor après usage.
+
+**Autres gestes** (élévation, rétrogradation, changement de login, suppression d'un SUPER
+ADMIN) : même principe, `UPDATE` / `DELETE` ciblé par `sync_id` dans le SQL Editor.
+
+**Retour arrière du garde** : immédiat et réversible
+`UPDATE public.t_security_guard_config SET enabled = false, updated_at = now() WHERE id = 1;`
+(réactivation : `enabled = true`) ; complet : `ALTER TABLE ... DISABLE TRIGGER` pour les
+5 triggers listés en tête du fichier 0007.
+
+**Vérification après application** : rejouer le test SQL sur le dev, puis faire un appel
+REST réel avec la clé anon (ex. changement de nom d'un compte de test SUPER ADMIN du dev)
+et contrôler dans le journal que `jwt_role` vaut `anon`.
 
 ## Limitation connue / travail restant
 
