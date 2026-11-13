@@ -28,7 +28,7 @@ import { ensureSyncIds } from './database/queries/hierarchy.queries';
 import { setupAutoUpdater, isUpdateReadyToInstall, triggerUpdateInstall } from './auto-updater';
 import { loadInitialNavigation } from './startup-navigation';
 import * as fs from 'fs';
-import { initBackupScheduler } from './backup';
+import { initBackupScheduler, setBackupBusyCheck } from './backup';
 import log from 'electron-log';
 import { syncEngine } from './sync/sync-engine';
 import { preloadUsersFromCloud } from './sync/downstream';
@@ -606,6 +606,10 @@ Aucune modification n'a été appliquée à la base locale. Le marqueur RECOVERY
   // destructrice tenant le verrou global du SyncEngine (purges locale, d'urgence et cloud via
   // acquireGlobalSyncLock). Injecté ici pour éviter que connection.ts importe sync/handlers.
   setFtsMaintenanceBusyCheck(
+    () => syncEngine.isCurrentlySyncing() || syncEngine.isGlobalSyncLocked() || isImportActive()
+  );
+  // Même garde pour la sauvegarde quotidienne (backup.ts) : report d'1 h si occupé (sauf > 48 h).
+  setBackupBusyCheck(
     () => syncEngine.isCurrentlySyncing() || syncEngine.isGlobalSyncLocked() || isImportActive()
   );
 
