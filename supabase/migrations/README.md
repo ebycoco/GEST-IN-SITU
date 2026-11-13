@@ -115,6 +115,65 @@ présente mise en place — voir limitation ci-dessous.
   Test : `supabase/tests/0007_t_users_super_admin_guard.test.sql`. Appliquée sur le **dev** et
   la **production le 2026-11-13** (test 20/20, appels REST réels et test vivant agent-13 :
   journal `jwt_role = anon`). Idempotente.
+- **`0008_mesure_ecritures_cles.sql`** — mesure silencieuse des écritures par type de clé
+  (chantier B, P1-1) : compteurs agrégés `t_write_audit` (jour, table, opération, rôle JWT,
+  **noms** des claims, `x-client-info` borné, classe `publishable` / `legacy_suppose` /
+  `authenticated` / `service_role` / `postgres` / `autre`), interrupteur
+  `t_write_audit_config`, 24 triggers STATEMENT `trg_wa_<table>_ins|upd|del` sur t_cartes,
+  t_users, t_user_roles, t_logs, t_sites, t_centres, t_postes, t_user_presence. Ne lève jamais
+  d'erreur vers le poste, ne modifie aucune ligne métier. Test :
+  `supabase/tests/0008_mesure_ecritures_cles.test.sql`. **Dev : appliquée le 2026-11-13.
+  Production : non appliquée.**
+- **`0009_versions_postes.sql`** — table `t_client_versions` (une ligne par poste, illisible
+  par anon) + RPC `fn_report_client_version(poste_key, app_version, user_sync_id, site_sync_id)`
+  ouverte à anon/authenticated, paramètres bornés, renvoie seulement un booléen ; la classe de
+  clé est calculée côté serveur. **Dépend de 0008.** Aucun appel côté poste avant P2. Test :
+  `supabase/tests/0009_versions_postes.test.sql`. **Dev : appliquée le 2026-11-13.
+  Production : non appliquée.**
+- **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
+  numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
+  `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
+  2026-11-13.
+
+## Appliquer une migration (dev puis prod)
+
+1. **Dev** (`ajadkziqaskadlzboeqo`) : coller le fichier dans le SQL Editor du dev (ou
+   `apply_migration` de l'outil MCP, par agent-4 avec accord), puis rejouer son test
+   `supabase/tests/NNNN_*.test.sql` (transaction annulée) et les tests des migrations
+   précédentes qui touchent les mêmes tables (0006, 0007).
+2. **Prod** (`itvyayakwgzvfqvdrgyv`) : geste de l'utilisateur seulement, hors heures de
+   travail des postes si la migration crée des triggers sur une table métier (verrou court
+   `ShareRowExclusiveLock` à la création du trigger). Coller le fichier entier dans le SQL
+   Editor du projet prod, exécuter, puis faire les vérifications en lecture indiquées en tête
+   du fichier. **Ne jamais exécuter un fichier `supabase/tests/*` en prod.**
+3. Mettre à jour la ligne « Application » en tête du fichier et ce README.
+
+## 0008 / 0009 : interrupteur, lecture, retour arrière
+
+- **Couper la mesure 0008 (immédiat, sans perte, réversible)** :
+  `UPDATE public.t_write_audit_config SET enabled = false, updated_at = now() WHERE id = 1;`
+  (réactivation : `enabled = true`). Désactivée, chaque écriture fait seulement une lecture de
+  cette ligne (les tables de transition restent capturées par Postgres).
+  Plus radical, sans DROP : `ALTER TABLE public.<table> DISABLE TRIGGER trg_wa_<table>_ins;`
+  (idem `_upd`, `_del`).
+- **Couper la RPC 0009** : `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
+- **Lire les compteurs** :
+  ```sql
+  SELECT jour, classe, table_name, op, jwt_role, claim_keys, client_info,
+         nb_instructions, nb_lignes, derniere_vue
+  FROM public.t_write_audit ORDER BY jour DESC, classe, table_name, op;
+  ```
+- **Lire les versions** :
+  ```sql
+  SELECT poste_key, app_version, key_kind, client_info, site_sync_id, last_seen_at, nb_reports
+  FROM public.t_client_versions ORDER BY last_seen_at DESC;
+  ```
+- **Retour arrière complet** : blocs écrits en tête de chaque fichier (retirer 0009 avant
+  0008, car 0009 utilise `fn_write_audit_classe`).
+- **Limite connue de 0008** : si deux transactions se disputent la même ligne de compteur
+  plus de 200 ms (`lock_timeout` de la fonction), le compteur de la seconde est perdu
+  (avertissement Postgres, écriture métier inchangée). Sous-comptage possible, jamais de
+  blocage ni d'erreur côté poste.
 
 ## 0007 : procédures manuelles (période transitoire)
 

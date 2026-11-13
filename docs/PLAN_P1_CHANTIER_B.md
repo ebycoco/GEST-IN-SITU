@@ -71,7 +71,29 @@ Rappels permanents :
 - **Critère de fin** : atteint.
 - **Geste utilisateur** : aucun.
 
-### P1-1 — Mesure des écritures par type de clé (dev puis prod)
+### P1-1 — Mesure des écritures par type de clé (dev puis prod) — FAIT SUR LE DEV (2026-11-13)
+- **Résultat dev (agent-4)** : 0008 appliquée sur le dev (24 triggers actifs, interrupteur
+  actif). Test SQL 0008 **20/20** ; tests 0006 **19/19** et 0007 **20/20** rejoués après coup
+  (transactions annulées). Appels REST réels avec la clé publishable du dev (supabase-js
+  2.105.1) : t_cartes INSERT 1 instruction / 3 lignes, UPDATE 2 / 4 (upsert de 3 + update de 1),
+  DELETE 1 / 3 ; t_users INSERT, UPDATE, DELETE 1 / 1 chacun ; tous classés `publishable`,
+  `claim_keys = role`, `client_info = supabase-js-node/2.105.1`. Lecture de `t_write_audit` et
+  modification de `t_write_audit_config` par anon : refusées (42501).
+- **Contention** : 10 upserts parallèles de 20 cartes : 0 erreur, 10 instructions / 200 lignes
+  comptées (aucune perte). Ligne de compteur verrouillée 4 s par une autre transaction : les
+  3 requêtes tombées pendant ce temps ont pris ~370 ms au lieu de ~150 ms (attente bornée par
+  `lock_timeout = 200ms`), 0 erreur, leurs 3 compteurs perdus (comportement prévu) ; les 9
+  autres comptées. `ON CONFLICT DO UPDATE` suffit pour l'unicité ; le `lock_timeout` borne
+  l'attente des transactions longues.
+- **Surcoût (upsert de 500 cartes)** : en REST, médianes sur 7 essais — triggers actifs
+  235 ms (insertion) / 234 ms (mise à jour) ; interrupteur coupé 240 / 235 ; triggers désactivés
+  227 / 243 : écart dans le bruit réseau. Côté serveur (mesure dans Postgres, bruitée) : de
+  l'ordre de +3 ms à l'insertion et +10 à 15 ms à la mise à jour pour 500 lignes (25 à 50 ms
+  au total). Jugé acceptable.
+- **Nettoyage** : cartes, comptes, site, compteurs et versions de test supprimés ; contrôle :
+  t_cartes, t_users, t_sites, t_logs, t_write_audit, t_client_versions = 0 ligne ; tables et
+  triggers laissés en place sur le dev.
+- **Reste** : application en prod (geste utilisateur), puis P1-1b.
 - **Fichiers** : `supabase/migrations/0008_mesure_ecritures_cles.sql`,
   `supabase/tests/0008_mesure_ecritures_cles.test.sql`.
 - **Agent** : agent-4 (écriture + dev), utilisateur (prod).
@@ -112,7 +134,13 @@ Rappels permanents :
   réelle diffère (ex. claims legacy sans `iss`), corriger le classement avant toute décision.
 - **Geste utilisateur** : laisser tourner ; autoriser la lecture des compteurs.
 
-### P1-2 — Table des versions de postes (dev puis prod)
+### P1-2 — Table des versions de postes (dev puis prod) — FAIT SUR LE DEV (2026-11-13)
+- **Résultat dev (agent-4)** : 0009 appliquée sur le dev ; test SQL **14/14** (paramètres
+  bornés, une ligne par poste, plafond 5000 postes, classe de clé calculée côté serveur, table
+  illisible et non modifiable par anon). Appel REST réel `fn_report_client_version` avec la clé
+  publishable : `true`, ligne `key_kind = publishable` ; appel invalide : `false` sans erreur ;
+  SELECT et INSERT directs sur `t_client_versions` par anon : refusés (42501). Ligne de test
+  supprimée. Aucun appel côté poste (P2).
 - **Fichiers** : `supabase/migrations/0009_versions_postes.sql` + test (contenu : agent-1).
 - **Agent** : agent-4.
 - **But** : savoir quels postes tournent encore une version qui utilise l'ancienne clé, avant D6.
