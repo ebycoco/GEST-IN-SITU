@@ -101,7 +101,40 @@ if (!gotTheLock) {
   });
 }
 
-function createSplashWindow(): void {
+// ─── AFFICHAGE GARANTI DU SPLASH AVANT LE TRAVAIL SYNCHRONE DE DÉMARRAGE ─────
+// initDatabase() (better-sqlite3, entièrement synchrone) bloque la boucle d'événements
+// du processus principal, parfois ~16 s à froid. Si le splash n'est pas encore affiché
+// à ce moment-là, l'événement 'ready-to-show' n'est traité qu'APRÈS ce blocage : l'agent
+// ne voit rien et croit que l'application ne s'ouvre pas.
+// createSplashWindow() renvoie donc une promesse que whenReady() attend avant
+// initDatabase(). Elle se résout (ne rejette JAMAIS) sur le premier de ces cas :
+//   - 'ready-to-show' : show(), puis SPLASH_PAINT_DELAY_MS pour laisser le système
+//     peindre la fenêtre avant que le processus principal ne soit bloqué ;
+//   - 'did-fail-load' / échec de loadFile() / fermeture du splash : on n'attend pas plus ;
+//   - plafond SPLASH_SHOW_TIMEOUT_MS : le démarrage n'est jamais retardé au-delà.
+// Le 'ready-to-show' reste branché même après le plafond (comportement d'origine :
+// le splash s'affiche dès que possible). Aucune donnée retenue : les écouteurs sont
+// à usage unique (once) et la fenêtre est fermée comme avant dans createWindow().
+const SPLASH_SHOW_TIMEOUT_MS = 1500;
+const SPLASH_PAINT_DELAY_MS = 100;
+
+function createSplashWindow(): Promise<void> {
+  let settle: () => void = () => undefined;
+  const shown = new Promise<void>((resolve) => {
+    let done = false;
+    let cap: NodeJS.Timeout | null = null;
+    settle = (): void => {
+      if (done) return;
+      done = true;
+      if (cap) clearTimeout(cap);
+      resolve();
+    };
+    cap = setTimeout(() => {
+      if (!done) log.warn(`[PERF] Splash non affiché après ${SPLASH_SHOW_TIMEOUT_MS} ms, démarrage poursuivi.`);
+      settle();
+    }, SPLASH_SHOW_TIMEOUT_MS);
+  });
+
   splashWindow = new BrowserWindow({
     width: 480,
     height: 320,
@@ -120,14 +153,26 @@ function createSplashWindow(): void {
     backgroundColor: '#0a0e27'
   });
 
+  const splash = splashWindow;
+  splash.once('ready-to-show', () => {
+    if (splash.isDestroyed()) {
+      settle();
+      return;
+    }
+    splash.show();
+    log.info(`[PERF] Splash affiché à ${(performance.now() - appStartTime).toFixed(0)} ms`);
+    setTimeout(settle, SPLASH_PAINT_DELAY_MS);
+  });
+  splash.webContents.once('did-fail-load', () => settle());
+  splash.once('closed', () => settle());
+
   const splashPath = join(__dirname, '../../resources/splash.html');
-  splashWindow.loadFile(splashPath).catch((e) => {
+  splash.loadFile(splashPath).catch((e) => {
     log.error('Erreur chargement splash.html:', e);
+    settle();
   });
 
-  splashWindow.once('ready-to-show', () => {
-    splashWindow?.show();
-  });
+  return shown;
 }
 
 function createWindow(): void {
@@ -332,6 +377,11 @@ function createWindow(): void {
     }
   });
 
+  // Repère de mesure du démarrage (journal seul, aucun effet) : fin du chargement du renderer.
+  mainWindow.webContents.once('did-finish-load', () => {
+    log.info(`[PERF] Fenêtre principale chargée (did-finish-load) à ${(performance.now() - appStartTime).toFixed(0)} ms`);
+  });
+
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
     return { action: 'deny' };
@@ -433,9 +483,13 @@ app.whenReady().then(async () => {
   // ──────────────────────────────────────────────────────────────────────────────
 
   electronApp.setAppUserModelId('com.ebycoco.gest-in-situ');
-  createSplashWindow();
+  const splashShown = createSplashWindow();
 
   checkPendingUpdateMarker();
+
+  // Attente bornée (1,5 s max, ne rejette jamais) : le splash doit être visible AVANT le
+  // blocage synchrone de initDatabase(). Voir createSplashWindow().
+  await splashShown;
 
   // Initialize database
   try {
@@ -445,6 +499,12 @@ app.whenReady().then(async () => {
       // Base existante dont la migration a échoué : aucune réinstallation, aucune écriture automatique.
       // Sortie unique : restauration explicite d'une sauvegarde validée, puis redémarrage.
       log.error('[STARTUP] Base en RECOVERY_REQUIRED, démarrage arrêté.', dbErr.info);
+      // Le splash est désormais visible à ce stade et reste « toujours au premier plan » :
+      // on le ferme pour qu'il ne masque pas la boîte de dialogue (sans parent) ci-dessous.
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.destroy();
+        splashWindow = null;
+      }
       const dbPath: string = dbErr.info.dbPath;
       const choice = dialog.showMessageBoxSync({
         type: 'error',
