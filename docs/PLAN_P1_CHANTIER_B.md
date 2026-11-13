@@ -71,7 +71,10 @@ Rappels permanents :
 - **Critère de fin** : atteint.
 - **Geste utilisateur** : aucun.
 
-### P1-1 — Mesure des écritures par type de clé (dev puis prod) — FAIT SUR LE DEV (2026-11-13)
+### P1-1 — Mesure des écritures par type de clé (dev puis prod) — FAIT SUR LE DEV ET EN PROD (2026-11-13)
+- **Prod** : appliquée le 2026-11-13 vers 23 h 40 (vérification préalable 5/5 OK, contrôle
+  post-application 12/12 OK, compteurs vides à l'application). Prochaine étape : P1-1b (preuve
+  contrôlée avec l'ancienne clé) et collecte.
 - **Résultat dev (agent-4)** : 0008 appliquée sur le dev (24 triggers actifs, interrupteur
   actif). Test SQL 0008 **20/20** ; tests 0006 **19/19** et 0007 **20/20** rejoués après coup
   (transactions annulées). Appels REST réels avec la clé publishable du dev (supabase-js
@@ -173,7 +176,8 @@ Rappels permanents :
 - **Geste utilisateur** : preuve contrôlée ; laisser tourner ; inventaire des versions ;
   autoriser la lecture des compteurs.
 
-### P1-2 — Table des versions de postes (dev puis prod) — FAIT SUR LE DEV (2026-11-13)
+### P1-2 — Table des versions de postes (dev puis prod) — FAIT SUR LE DEV ET EN PROD (2026-11-13)
+- **Prod** : appliquée le 2026-11-13 juste après 0008, RPC fermée (contrôle 12/12 OK).
 - **Résultat dev (agent-4)** : 0009 appliquée sur le dev ; test SQL **14/14** (paramètres
   bornés, une ligne par poste, plafond 5000 postes, classe de clé calculée côté serveur, table
   illisible et non modifiable par anon). Appel REST réel `fn_report_client_version` avec la clé

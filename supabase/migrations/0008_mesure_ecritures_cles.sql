@@ -148,8 +148,10 @@
 -- protection, classe dans la cle, anon sans claims = autre) : dev retour
 -- arriere puis REAPPLIQUEE le 2026-11-13 (agent-4) ; resultats des tests :
 -- docs/PLAN_P1_CHANTIER_B.md (P1-1).
--- Production itvyayakwgzvfqvdrgyv : NON appliquee ; geste de l'utilisateur
--- (SQL Editor), avec 0009, apres validation dev.
+-- Production itvyayakwgzvfqvdrgyv : APPLIQUEE le 2026-11-13 vers 23 h 40
+-- (session principale, apply_migration, sur autorisation ecrite de
+-- l'utilisateur), apres verification prealable 5/5 OK ; controle
+-- post-application 12/12 OK. Compteurs vides a l'application (nuit).
 -- Test : supabase/tests/0008_mesure_ecritures_cles.test.sql
 -- ============================================================
 

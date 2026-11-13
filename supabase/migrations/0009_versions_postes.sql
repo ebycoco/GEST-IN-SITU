@@ -72,8 +72,9 @@
 -- table refusee a anon (42501).
 -- Version corrigee (RPC fermee par defaut, lock_timeout de protection) : dev
 -- retour arriere puis REAPPLIQUEE le 2026-11-13 (agent-4).
--- Production itvyayakwgzvfqvdrgyv : NON appliquee ; geste de l'utilisateur
--- (SQL Editor), juste apres 0008.
+-- Production itvyayakwgzvfqvdrgyv : APPLIQUEE le 2026-11-13 vers 23 h 40,
+-- juste apres 0008 (session principale, apply_migration, sur autorisation
+-- ecrite de l'utilisateur) ; RPC fermee ; controle 12/12 OK.
 -- Test : supabase/tests/0009_versions_postes.test.sql
 -- ============================================================
 
