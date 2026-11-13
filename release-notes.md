@@ -1,4 +1,4 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.26.2 (13 novembre 2026)
 
 ## ⚡ Performances
 - **Ouverture plus rapide** : le contrôle complet de l'index de recherche ne bloque plus le démarrage (environ 13 s gagnées à froid sur disque lent). Il tourne désormais en arrière-plan, au plus une fois par semaine, avec réparation automatique conservée. Il est reporté automatiquement pendant une synchronisation, un import ou une purge, pour ne pas figer l'application en plein travail.
