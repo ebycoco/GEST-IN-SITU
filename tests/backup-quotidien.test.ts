@@ -12,12 +12,33 @@ import * as os from 'os';
  */
 const state = vi.hoisted(() => ({
   backupDir: '',
-  db: null as null | { backup: (p: string) => Promise<unknown> }
+  db: null as null | { backup: (p: string) => Promise<unknown> },
+  /** Nombre de prochains appels à renameSync qui échouent (EBUSY simulé). */
+  renameFailures: 0,
+  renameCalls: 0
 }));
 
 vi.mock('electron-log', () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
+
+// renameSync instrumenté : peut échouer N fois (antivirus/indexeur simulé), sinon vrai renommage.
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>();
+  const renameSync = (oldPath: import('fs').PathLike, newPath: import('fs').PathLike): void => {
+    state.renameCalls++;
+    if (state.renameFailures > 0) {
+      state.renameFailures--;
+      const err = new Error('EBUSY: resource busy or locked, rename') as NodeJS.ErrnoException;
+      err.code = 'EBUSY';
+      throw err;
+    }
+    actual.renameSync(oldPath, newPath);
+  };
+  return { ...actual, default: { ...actual, renameSync }, renameSync };
+});
+
+import log from 'electron-log';
 
 vi.mock('../src/main/database/connection', () => ({
   getBackupDir: () => state.backupDir,
@@ -60,6 +81,11 @@ describe('Sauvegarde automatique quotidienne (backup.ts)', () => {
       fs.writeFileSync(p, 'SQLite format 3\0copie');
     });
     state.db = { backup: backupSpy };
+    state.renameFailures = 0;
+    state.renameCalls = 0;
+    vi.mocked(log.warn).mockClear();
+    vi.mocked(log.info).mockClear();
+    backup.stopBackupScheduler(); // remet aussi à zéro la mémoire d'échec et le compteur de reports
     backup.setBackupBusyCheck(null);
   });
 
@@ -194,15 +220,18 @@ describe('Sauvegarde automatique quotidienne (backup.ts)', () => {
     expect(listDir().filter(f => f.endsWith('.db'))).toHaveLength(1);
   });
 
-  it('planificateur : rien avant 10 min, puis contrôle toutes les heures', async () => {
+  it('planificateur : rien avant le délai normal, puis contrôle toutes les heures', async () => {
+    // Sauvegarde due (30 h) mais pas « sans sauvegarde fiable » (< 48 h) → délai normal.
+    const d30 = new Date(Date.now() - 30 * HOUR);
+    makeBackupFile(nameFor(d30), d30);
     vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
     backup.initBackupScheduler();
 
-    await vi.advanceTimersByTimeAsync(9 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(backup.BACKUP_INITIAL_DELAY_MS - 60 * 1000);
     expect(backupSpy).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(1 * 60 * 1000 + 10);
-    expect(backupSpy).toHaveBeenCalledTimes(1); // aucune sauvegarde → due → faite
+    await vi.advanceTimersByTimeAsync(60 * 1000 + 10);
+    expect(backupSpy).toHaveBeenCalledTimes(1); // plus récente > 24 h → due → faite
 
     // contrôles horaires suivants : la sauvegarde vient d'être faite → rien
     await vi.advanceTimersByTimeAsync(3 * HOUR);
@@ -215,5 +244,140 @@ describe('Sauvegarde automatique quotidienne (backup.ts)', () => {
     }
     await vi.advanceTimersByTimeAsync(HOUR);
     expect(backupSpy).toHaveBeenCalledTimes(2);
+  });
+
+  // ─── Réserves d'audit du 13/11/2026 (P1-1, P2-1 à P2-4) ──────────────────
+
+  it('planificateur : délai initial court quand aucune sauvegarde', async () => {
+    expect(backup.getInitialBackupDelayMs()).toBe(backup.BACKUP_SHORT_INITIAL_DELAY_MS);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'setInterval', 'clearTimeout', 'clearInterval'] });
+    backup.initBackupScheduler();
+
+    await vi.advanceTimersByTimeAsync(backup.BACKUP_SHORT_INITIAL_DELAY_MS - 1000);
+    expect(backupSpy).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1000 + 10);
+    expect(backupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('délai initial : court si > 48 h ou datée dans le futur, normal si récente', () => {
+    const d50 = new Date(Date.now() - 50 * HOUR);
+    makeBackupFile(nameFor(d50), d50);
+    expect(backup.getInitialBackupDelayMs()).toBe(backup.BACKUP_SHORT_INITIAL_DELAY_MS);
+
+    const d3 = new Date(Date.now() - 3 * HOUR);
+    makeBackupFile(nameFor(d3), d3);
+    expect(backup.getInitialBackupDelayMs()).toBe(backup.BACKUP_INITIAL_DELAY_MS);
+
+    const future = new Date(Date.now() + 3 * DAY);
+    makeBackupFile(nameFor(future, '_futur'), future);
+    expect(backup.getInitialBackupDelayMs()).toBe(backup.BACKUP_SHORT_INITIAL_DELAY_MS);
+  });
+
+  it('horloge reculée : une sauvegarde datée +3 jours ne bloque plus, la nouvelle n\'est pas supprimée', async () => {
+    const future = new Date(Date.now() + 3 * DAY);
+    const futureName = nameFor(future, '_futur');
+    makeBackupFile(futureName, future);
+    // Application occupée : la sauvegarde est malgré tout faite (traitée comme « en retard »).
+    backup.setBackupBusyCheck(() => true);
+
+    expect(backup.getLatestBackupAgeMs(state.backupDir)).toBeNull();
+    expect(backup.isBackupDue(state.backupDir)).toBe(true);
+    expect(await backup.runBackupIfDue('test')).toBe(true);
+    expect(backupSpy).toHaveBeenCalledTimes(1);
+
+    const files = listDir();
+    expect(files).toHaveLength(2);
+    expect(files).toContain(futureName); // hors rotation, conservée
+    const created = files.filter(f => f !== futureName);
+    expect(created).toHaveLength(1);
+    expect(created[0]).toMatch(/^gest_in_situ_backup_.*\.db$/);
+    expect(vi.mocked(log.warn).mock.calls.some(c => String(c[0]).includes('datée(s) dans le futur'))).toBe(true);
+
+    // Contrôle suivant : la sauvegarde du présent est récente → pas de sauvegarde en boucle.
+    expect(await backup.runBackupIfDue('test')).toBe(false);
+    expect(backupSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('horloge reculée : 7 jours futurs + historique ancien → la sauvegarde du jour reste', async () => {
+    for (let k = 1; k <= 7; k++) {
+      const f = new Date(Date.now() + k * DAY);
+      makeBackupFile(nameFor(f, `_futur${k}`), f);
+    }
+    for (let k = 1; k <= 10; k++) makeBackupFile(nameFor(localDay(k), `_passe${k}`), localDay(k));
+
+    expect(await backup.runBackupIfDue('test')).toBe(true);
+    const files = listDir();
+    // 7 futurs intacts + nouvelle + J-1..J-6 (7 jours distincts du présent)
+    expect(files.filter(f => f.includes('_futur'))).toHaveLength(7);
+    const fresh = files.filter(f => !f.includes('_futur') && !f.includes('_passe'));
+    expect(fresh).toHaveLength(1);
+    expect(files.filter(f => f.includes('_passe'))).toHaveLength(6);
+  });
+
+  it('rotation : un nom protégé n\'est jamais supprimé, même plus ancien que 7 jours distincts', () => {
+    const files: backup.BackupFileInfo[] = [];
+    for (let k = 1; k <= 8; k++) files.push({ name: `futur-${k}`, mtimeMs: Date.now() + k * DAY });
+    files.push({ name: 'nouvelle', mtimeMs: Date.now() });
+    // Sans protection ni `now` (comportement historique) : la nouvelle serait supprimée.
+    expect(backup.selectBackupsToDelete(files)).toContain('nouvelle');
+    // Avec protection nommée : jamais supprimée.
+    expect(backup.selectBackupsToDelete(files, 7, { protectedNames: ['nouvelle'] })).not.toContain('nouvelle');
+    // Avec `now` : les fichiers futurs sont exclus du calcul (ni supprimés, ni comptés).
+    expect(backup.selectBackupsToDelete(files, 7, { now: Date.now() })).toEqual([]);
+  });
+
+  it('renommage : échec au 1er essai puis réussite au 2e', async () => {
+    state.renameFailures = 1;
+    expect(await backup.runBackupIfDue('test')).toBe(true);
+    expect(state.renameCalls).toBe(2);
+    const files = listDir();
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^gest_in_situ_backup_.*\.db$/);
+  });
+
+  it('échec définitif : .tmp supprimé, pas de nouvel essai avant 6 h', async () => {
+    state.renameFailures = 99;
+    const t0 = Date.now();
+    expect(await backup.runBackupIfDue('test', t0)).toBe(true);
+    expect(state.renameCalls).toBe(backup.BACKUP_RENAME_MAX_ATTEMPTS);
+    expect(listDir()).toEqual([]); // aucun fichier final, .tmp nettoyé
+
+    state.renameFailures = 0;
+    expect(await backup.runBackupIfDue('test', t0 + HOUR)).toBe(false);
+    expect(await backup.runBackupIfDue('test', t0 + backup.BACKUP_FAILURE_RETRY_DELAY_MS - 1000)).toBe(false);
+    expect(backupSpy).toHaveBeenCalledTimes(1);
+
+    expect(await backup.runBackupIfDue('test', t0 + backup.BACKUP_FAILURE_RETRY_DELAY_MS + 1000)).toBe(true);
+    expect(backupSpy).toHaveBeenCalledTimes(2);
+    expect(listDir()).toHaveLength(1);
+  });
+
+  it('deux appels simultanés : une seule sauvegarde', async () => {
+    const results = await Promise.all([backup.runBackupIfDue('a'), backup.runBackupIfDue('b')]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(backupSpy).toHaveBeenCalledTimes(1);
+    expect(listDir()).toHaveLength(1);
+  });
+
+  it('garde « occupé » : log.warn à partir du 2e report d\'affilée, compteur remis à zéro', async () => {
+    const busyWarns = () =>
+      vi.mocked(log.warn).mock.calls.filter(c => String(c[0]).includes('application occupée')).length;
+    backup.setBackupBusyCheck(() => true);
+    const d30 = new Date(Date.now() - 30 * HOUR);
+    makeBackupFile(nameFor(d30), d30);
+
+    expect(await backup.runBackupIfDue('test')).toBe(false);
+    expect(busyWarns()).toBe(0);
+    expect(await backup.runBackupIfDue('test')).toBe(false);
+    expect(busyWarns()).toBe(1);
+
+    // Sauvegarde non due → compteur remis à zéro : le report suivant redevient un simple log.info.
+    const recent = new Date(Date.now() - HOUR);
+    makeBackupFile(nameFor(recent, '_recente'), recent);
+    expect(await backup.runBackupIfDue('test')).toBe(false);
+    fs.rmSync(path.join(state.backupDir, nameFor(recent, '_recente')));
+    expect(await backup.runBackupIfDue('test')).toBe(false);
+    expect(busyWarns()).toBe(1);
   });
 });

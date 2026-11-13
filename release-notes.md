@@ -7,3 +7,4 @@
 
 ## 🛠️ Corrections & Fiabilité
 - **Historique des sauvegardes fiable** : on garde désormais une sauvegarde par jour sur les 7 derniers jours, au lieu des 7 derniers fichiers (7 ouvertures effaçaient tout l'historique). Une sauvegarde interrompue n'est plus jamais prise pour une sauvegarde valide.
+- **Sauvegardes robustes** : une horloge de poste qui recule ne bloque plus les sauvegardes automatiques ; première sauvegarde après 2 min si aucune sauvegarde récente ; en cas d'échec (disque plein, fichier bloqué par l'antivirus), nouvel essai du renommage puis attente de 6 h au lieu d'une copie complète toutes les heures.
