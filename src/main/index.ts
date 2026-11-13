@@ -20,7 +20,7 @@ if (process.platform === 'win32') {
 import { app, BrowserWindow, ipcMain, Notification, shell, nativeTheme, dialog } from 'electron';
 import { join, dirname } from 'path';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
-import { initDatabase, getDatabase } from './database/connection';
+import { initDatabase, getDatabase, setFtsMaintenanceBusyCheck } from './database/connection';
 import { registerIpcHandlers, isImportActive } from './ipc/handlers';
 import { recoveryMarkerPath, performRestore } from './database/recovery';
 import { SCHEMA_VERSION } from './database/schema';
@@ -500,10 +500,14 @@ app.whenReady().then(async () => {
       // Sortie unique : restauration explicite d'une sauvegarde validée, puis redémarrage.
       log.error('[STARTUP] Base en RECOVERY_REQUIRED, démarrage arrêté.', dbErr.info);
       // Le splash est désormais visible à ce stade et reste « toujours au premier plan » :
-      // on le ferme pour qu'il ne masque pas la boîte de dialogue (sans parent) ci-dessous.
+      // on le MASQUE (sans le détruire) pour qu'il ne couvre pas la boîte de dialogue (sans
+      // parent) ci-dessous. Le détruire fermerait la dernière fenêtre et pourrait déclencher
+      // 'window-all-closed' → app.quit() pendant que la boîte de dialogue est ouverte. La
+      // référence est conservée ; ce chemin se termine toujours par app.exit()/relaunch, qui
+      // libère la fenêtre.
       if (splashWindow && !splashWindow.isDestroyed()) {
-        splashWindow.destroy();
-        splashWindow = null;
+        splashWindow.setAlwaysOnTop(false);
+        splashWindow.hide();
       }
       const dbPath: string = dbErr.info.dbPath;
       const choice = dialog.showMessageBoxSync({
@@ -596,6 +600,14 @@ Aucune modification n'a été appliquée à la base locale. Le marqueur RECOVERY
       return syncEngine.retryConnection();
     });
   }
+
+  // Garde « occupé » du contrôle FTS5 différé (connection.ts) : le contrôle synchrone est
+  // reporté pendant une synchronisation/un transfert de masse, un import, ou une opération
+  // destructrice tenant le verrou global du SyncEngine (purges locale, d'urgence et cloud via
+  // acquireGlobalSyncLock). Injecté ici pour éviter que connection.ts importe sync/handlers.
+  setFtsMaintenanceBusyCheck(
+    () => syncEngine.isCurrentlySyncing() || syncEngine.isGlobalSyncLocked() || isImportActive()
+  );
 
   // Auto-updater (production only / temporairement activé en dev)
   try {

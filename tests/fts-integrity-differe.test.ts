@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import BetterSqlite3 from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
 /**
@@ -116,19 +117,122 @@ describe('Contrôle FTS5 différé et hebdomadaire (connection.ts)', () => {
     expect(readKey()).toBeUndefined();
   });
 
-  it('initDatabase() ne fait plus le contrôle en synchrone : il part après le délai différé', async () => {
-    connection.closeDatabase();
-    vi.useFakeTimers();
-    db = await connection.initDatabase();
-    // Base déjà à jour (pas de migration) et contrôle ancien : rien ne doit se passer à l'ouverture.
-    const old = new Date(Date.now() - 10 * DAY).toISOString();
-    db.prepare('INSERT OR REPLACE INTO t_config (key, value) VALUES (?, ?)').run(connection.FTS_CHECK_CONFIG_KEY, old);
-    const spy = vi.spyOn(db, 'exec');
-    expect(integrityCalls(spy)).toBe(0);
-    vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS - 1);
-    expect(integrityCalls(spy)).toBe(0);
-    vi.advanceTimersByTime(1);
-    expect(integrityCalls(spy)).toBe(1);
-    expect(readKey()).not.toBe(old);
+  describe('planification différée (timer) et garde « occupé »', () => {
+    /**
+     * Rouvre la base (déjà à SCHEMA_VERSION : aucune migration) sous horloge simulée, avec une
+     * date de dernier contrôle posée AVANT l'ouverture. Les espions sont posés sur le PROTOTYPE
+     * better-sqlite3 avant initDatabase() : ils voient tout exec()/prepare() de l'ouverture.
+     */
+    const reopen = async (lastCheck: string) => {
+      setLast(new Date(lastCheck));
+      connection.closeDatabase();
+      vi.useFakeTimers();
+      const execSpy = vi.spyOn(BetterSqlite3.prototype, 'exec');
+      const prepareSpy = vi.spyOn(BetterSqlite3.prototype, 'prepare');
+      db = await connection.initDatabase();
+      return { execSpy, prepareSpy };
+    };
+    const oldIso = () => new Date(Date.now() - 10 * DAY).toISOString();
+
+    afterEach(async () => {
+      connection.setFtsMaintenanceBusyCheck(null);
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      // Chaque test démarre avec une base ouverte (certains la ferment volontairement).
+      if (!connection.getDatabase()) db = await connection.initDatabase();
+    });
+
+    it("initDatabase() sur base existante : 0 integrity-check pendant l'ouverture, pas de marquage, contrôle après le délai", async () => {
+      const old = oldIso();
+      const { execSpy, prepareSpy } = await reopen(old);
+      // Pendant initDatabase() : aucun integrity-check (ni exec, ni prepare) et date inchangée.
+      expect(integrityCalls(execSpy)).toBe(0);
+      expect(integrityCalls(prepareSpy)).toBe(0);
+      expect(readKey()).toBe(new Date(old).toISOString());
+
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS - 1);
+      expect(integrityCalls(execSpy)).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(integrityCalls(execSpy)).toBe(1);
+      expect(readKey()).not.toBe(new Date(old).toISOString());
+    });
+
+    it('closeDatabase() annule le contrôle planifié', async () => {
+      const { execSpy } = await reopen(oldIso());
+      connection.closeDatabase();
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS);
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS * 2);
+      expect(integrityCalls(execSpy)).toBe(0);
+    });
+
+    it('occupé au déclenchement : report, puis contrôle au report suivant une fois libre', async () => {
+      let busy = true;
+      const busyCheck = vi.fn(() => busy);
+      connection.setFtsMaintenanceBusyCheck(busyCheck);
+      const old = oldIso();
+      const { execSpy } = await reopen(old);
+
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS);
+      expect(busyCheck).toHaveBeenCalledTimes(1);
+      expect(integrityCalls(execSpy)).toBe(0);
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS);
+      expect(busyCheck).toHaveBeenCalledTimes(2);
+      expect(integrityCalls(execSpy)).toBe(0);
+      expect(readKey()).toBe(new Date(old).toISOString());
+
+      busy = false;
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS - 1);
+      expect(integrityCalls(execSpy)).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(integrityCalls(execSpy)).toBe(1);
+      expect(readKey()).not.toBe(new Date(old).toISOString());
+    });
+
+    it('occupé au-delà de la limite : abandon pour la session, sans marquage de date', async () => {
+      let busy = true;
+      const busyCheck = vi.fn(() => busy);
+      connection.setFtsMaintenanceBusyCheck(busyCheck);
+      const old = oldIso();
+      const { execSpy } = await reopen(old);
+
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS);
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS * connection.FTS_BUSY_MAX_RETRIES);
+      // 1 essai initial + FTS_BUSY_MAX_RETRIES reports, tous occupés.
+      expect(busyCheck).toHaveBeenCalledTimes(1 + connection.FTS_BUSY_MAX_RETRIES);
+      expect(integrityCalls(execSpy)).toBe(0);
+
+      // Abandon effectif : même redevenue libre, l'application ne relance plus rien cette session.
+      busy = false;
+      vi.advanceTimersByTime(DAY);
+      expect(busyCheck).toHaveBeenCalledTimes(1 + connection.FTS_BUSY_MAX_RETRIES);
+      expect(integrityCalls(execSpy)).toBe(0);
+      expect(readKey()).toBe(new Date(old).toISOString());
+    });
+
+    it('garde en erreur : considérée « occupée » (report), contrôle au report suivant', async () => {
+      let fail = true;
+      connection.setFtsMaintenanceBusyCheck(() => {
+        if (fail) throw new Error('garde indisponible');
+        return false;
+      });
+      const { execSpy } = await reopen(oldIso());
+
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS);
+      expect(integrityCalls(execSpy)).toBe(0);
+      fail = false;
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS);
+      expect(integrityCalls(execSpy)).toBe(1);
+    });
+
+    it("contrôle non dû : la garde n'est pas consultée et aucun report n'est planifié", async () => {
+      const busyCheck = vi.fn(() => true);
+      connection.setFtsMaintenanceBusyCheck(busyCheck);
+      const { execSpy } = await reopen(new Date(Date.now() - 1 * DAY).toISOString());
+
+      vi.advanceTimersByTime(connection.FTS_CHECK_DELAY_MS);
+      vi.advanceTimersByTime(connection.FTS_BUSY_RETRY_DELAY_MS * 3);
+      expect(busyCheck).not.toHaveBeenCalled();
+      expect(integrityCalls(execSpy)).toBe(0);
+    });
   });
 });

@@ -17,6 +17,43 @@ export const FTS_CHECK_INTERVAL_DAYS = 7;
 /** Délai après initDatabase() : la fenêtre principale est affichée bien avant. */
 export const FTS_CHECK_DELAY_MS = 90_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** Report du contrôle quand l'application est occupée (sync, import, purge) au déclenchement. */
+export const FTS_BUSY_RETRY_DELAY_MS = 5 * 60_000;
+/** Nombre maximal de reports (12 × 5 min = 1 h) avant abandon pour la session en cours. */
+export const FTS_BUSY_MAX_RETRIES = 12;
+
+/**
+ * Garde « occupé » du contrôle FTS5 différé. Fournie par index.ts (setFtsMaintenanceBusyCheck)
+ * pour que ce module n'importe ni le moteur de sync ni les handlers IPC (pas de dépendance
+ * circulaire : handlers.ts et sync-engine.ts dépendent eux-mêmes de la couche base de données).
+ * null = aucune garde enregistrée (tests, démarrage incomplet) → considéré « libre ».
+ */
+let ftsBusyCheck: (() => boolean) | null = null;
+
+/**
+ * Enregistre (ou retire avec null) le rappel indiquant qu'une opération lourde est en cours
+ * (synchronisation, import, purge). Appelé une fois depuis index.ts après l'enregistrement des
+ * handlers IPC ; le rappel n'est consulté qu'au déclenchement du timer FTS5 différé.
+ */
+export function setFtsMaintenanceBusyCheck(fn: (() => boolean) | null): void {
+  ftsBusyCheck = fn;
+}
+
+/**
+ * Lit la garde « occupé ». En cas d'erreur du rappel, on considère l'application OCCUPÉE :
+ * lancer à l'aveugle un contrôle synchrone de plusieurs secondes pendant une écriture massive
+ * est le risque que cette garde doit éviter, alors qu'un report ne coûte rien (le nombre de
+ * reports est borné par FTS_BUSY_MAX_RETRIES, puis le contrôle est retenté au démarrage suivant).
+ */
+function isFtsMaintenanceBusy(): boolean {
+  if (!ftsBusyCheck) return false;
+  try {
+    return ftsBusyCheck() === true;
+  } catch (err) {
+    log.warn('[FTS5] Garde « occupé » en erreur, contrôle FTS5 reporté par prudence :', err);
+    return true;
+  }
+}
 
 export type FtsMaintenanceOutcome = 'skipped' | 'ok' | 'rebuilt' | 'rebuild-failed' | 'error';
 
@@ -96,19 +133,41 @@ export function runFtsIntegrityMaintenance(database: Database.Database, now: Dat
   }
 }
 
-/** Planifie le contrôle FTS5 différé (un seul timer actif, unref : ne retient pas la fermeture). */
-function scheduleFtsIntegrityMaintenance(database: Database.Database): void {
+/**
+ * Planifie le contrôle FTS5 différé (un seul timer actif, unref : ne retient pas la fermeture ;
+ * closeDatabase() annule le timer en cours, y compris un report).
+ *
+ * Garde « occupé » : si le contrôle est dû mais qu'une synchronisation, un import ou une purge
+ * est en cours au déclenchement, le contrôle (synchrone, bloquant le processus principal) est
+ * reporté de FTS_BUSY_RETRY_DELAY_MS, au plus FTS_BUSY_MAX_RETRIES fois. Au-delà, abandon pour
+ * cette session SANS enregistrer de date : le contrôle sera retenté au prochain démarrage.
+ * La garde n'est consultée que si le contrôle est dû (sinon aucun report inutile).
+ */
+function scheduleFtsIntegrityMaintenance(
+  database: Database.Database,
+  delayMs: number = FTS_CHECK_DELAY_MS,
+  retriesDone: number = 0
+): void {
   if (ftsCheckTimer) clearTimeout(ftsCheckTimer);
   ftsCheckTimer = setTimeout(() => {
     ftsCheckTimer = null;
     // La connexion a pu être fermée ou remplacée entre-temps (fermeture, restauration).
     if (db !== database || !database.open) return;
     try {
+      if (isFtsIntegrityCheckDue(database, new Date()) && isFtsMaintenanceBusy()) {
+        if (retriesDone < FTS_BUSY_MAX_RETRIES) {
+          log.info(`[FTS5] Application occupée (sync/import/purge) : contrôle FTS5 reporté de ${FTS_BUSY_RETRY_DELAY_MS / 60_000} min (report ${retriesDone + 1}/${FTS_BUSY_MAX_RETRIES}).`);
+          scheduleFtsIntegrityMaintenance(database, FTS_BUSY_RETRY_DELAY_MS, retriesDone + 1);
+        } else {
+          log.info(`[FTS5] Application toujours occupée après ${FTS_BUSY_MAX_RETRIES} reports : contrôle FTS5 abandonné pour cette session (retenté au prochain démarrage).`);
+        }
+        return;
+      }
       runFtsIntegrityMaintenance(database);
     } catch (err) {
       log.error('[FTS5] Échec inattendu de la maintenance FTS5 différée :', err);
     }
-  }, FTS_CHECK_DELAY_MS);
+  }, delayMs);
   ftsCheckTimer.unref?.();
 }
 // ────────────────────────────────────────────────────────────────────────────
