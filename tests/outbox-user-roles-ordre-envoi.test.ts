@@ -160,6 +160,23 @@ describe('outbox — ordre d\'envoi des rôles d\'un agent (P1-1 2026-11-13)', (
     expect(cloud.ops[0]).toBe('DELETE ROLES');
   });
 
+  it('(f) DELETE des rôles déjà en ERROR : ses rôles sont suspendus avec un message explicite, rien n\'est envoyé', async () => {
+    const u = await agentDejaEnvoye();
+    ajoutRoleQualite(u);
+    sameSecond();
+    db.prepare(`UPDATE t_outbox SET status = 'ERROR', attempts = 5 WHERE id = ?`).run(`${u}_roles_del`);
+
+    await outbox.processOutboxPending(false, true);
+
+    expect(cloud.ops.filter(o => o.startsWith('UPSERT OPERATEUR'))).toEqual([]);
+    expect(cloud.roles.get(u)).toEqual(new Set(['OPERATEUR_SAISIE']));
+    for (const role of ['OPERATEUR_QUALITE', 'OPERATEUR_SAISIE']) {
+      const row = db.prepare('SELECT status, error_msg FROM t_outbox WHERE id = ?').get(`${u}_${role}`) as { status: string; error_msg: string | null };
+      expect(row.status).not.toBe('SYNCED');
+      expect(row.error_msg).toContain('Suppression préalable des rôles du compte en échec');
+    }
+  });
+
   it('(c) compatibilité : rôles renvoyés par « forcer la synchro » (UPDATE) après un DELETE en attente', async () => {
     const u = await agentDejaEnvoye();
     rolesDel(u);

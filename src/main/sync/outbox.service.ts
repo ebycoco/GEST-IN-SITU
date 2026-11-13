@@ -1254,21 +1254,6 @@ function _computeErrorBackoffMinutes(attempts: number): number {
 }
 
 /**
- * Retry automatique des entrées `t_outbox` en échec définitif (ERROR).
- *
- * Sélectionne les entrées ERROR dont le backoff (voir _computeErrorBackoffMinutes)
- * est écoulé depuis `last_attempt_at`, et les repasse en PENDING pour qu'elles
- * soient reprises par la boucle de traitement de processOutboxPending juste après.
- *
- * IMPORTANT : `attempts` n'est JAMAIS réinitialisé ici. Le compteur doit continuer
- * de croître à chaque nouvel échec pour alimenter le calcul de backoff au tour
- * suivant — le réinitialiser provoquerait une boucle de tentatives rapprochées à
- * l'infini sur une entrée durablement en échec (ex: payload invalide).
- *
- * N'est appelée que depuis le cycle périodique (voir paramètre `fromPeriodicCycle`
- * de processOutboxPending) — jamais depuis les appels post-mutation immédiats.
- */
-/**
  * Statut du DELETE des rôles (`<user_sync_id>_roles_del`, convention de users.queries.ts et
  * hierarchy.queries.ts) qui doit précéder une entrée rôle (INSERT/UPDATE t_user_roles) : 'PENDING'
  * ou 'ERROR' s'il est encore à envoyer ET enfilé au plus tard dans la même seconde que ce rôle ;
@@ -1296,6 +1281,21 @@ function _pendingRolesDeleteStatus(
   return row ? row.status : null;
 }
 
+/**
+ * Retry automatique des entrées `t_outbox` en échec définitif (ERROR).
+ *
+ * Sélectionne les entrées ERROR dont le backoff (voir _computeErrorBackoffMinutes)
+ * est écoulé depuis `last_attempt_at`, et les repasse en PENDING pour qu'elles
+ * soient reprises par la boucle de traitement de processOutboxPending juste après.
+ *
+ * IMPORTANT : `attempts` n'est JAMAIS réinitialisé ici. Le compteur doit continuer
+ * de croître à chaque nouvel échec pour alimenter le calcul de backoff au tour
+ * suivant — le réinitialiser provoquerait une boucle de tentatives rapprochées à
+ * l'infini sur une entrée durablement en échec (ex: payload invalide).
+ *
+ * N'est appelée que depuis le cycle périodique (voir paramètre `fromPeriodicCycle`
+ * de processOutboxPending) — jamais depuis les appels post-mutation immédiats.
+ */
 function _promoteEligibleErrorsToPending(db: NonNullable<ReturnType<typeof getDatabase>>): void {
   try {
     const errorEntries = db.prepare(
