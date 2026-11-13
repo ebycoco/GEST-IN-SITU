@@ -515,13 +515,20 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
     // (error_msg « [NON ALIGNÉ] … ») passent après les autres : elles ne bloquent pas la file.
     // Deux lectures (et non un ORDER BY calculé) pour garder l'index idx_outbox_status(status,
     // created_at) et s'arrêter à la limite (audit 2026-10-31, P2-1).
+    // Départage à created_at égal (résolution à la seconde, P1-1 du 2026-11-13) : le DELETE des
+    // rôles d'un compte (`<sync>_roles_del`) d'abord, puis l'ordre d'insertion (rowid). Sans lui,
+    // un rôle déjà envoyé auparavant (ligne réutilisée par ON CONFLICT(id), donc ancien rowid)
+    // partait avant le DELETE enfilé dans la même seconde, qui l'effaçait ensuite dans le cloud.
+    // L'index sert toujours le premier critère (tri complémentaire limité aux égalités).
     const selectBatch = (deferred: boolean, limit: number): OutboxEntry[] => db.prepare(`
-      SELECT id, table_name, operation, payload, status, error_msg, attempts, depends_on
+      SELECT id, table_name, operation, payload, status, error_msg, attempts, depends_on, created_at
       FROM t_outbox
       WHERE status = 'PENDING'
         ${excludeCardsUpstream ? "AND table_name != 't_cartes'" : ''}
         AND ${deferred ? 'error_msg LIKE ?' : '(error_msg IS NULL OR error_msg NOT LIKE ?)'}
-      ORDER BY created_at ASC
+      ORDER BY created_at ASC,
+        CASE WHEN table_name = 't_user_roles' AND operation = 'DELETE' THEN 0 ELSE 1 END ASC,
+        rowid ASC
       LIMIT ?
     `).all(`${NOT_ALIGNED_PREFIX}%`, limit) as OutboxEntry[];
     const freshEntries = selectBatch(false, OUTBOX_BATCH_SIZE);
@@ -566,6 +573,26 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           continue;
         } else if (parent && parent.status === 'PENDING') {
           continue; // Parent pas encore prêt, on reporte à plus tard sans erreur
+        }
+      }
+
+      // Dépendance implicite des rôles (P1-1 du 2026-11-13) : un rôle (INSERT/UPDATE t_user_roles)
+      // ne part qu'après le DELETE des rôles du même compte enfilé avant lui ou dans la même
+      // seconde — sinon, si ce DELETE échoue puis est rejoué, il effacerait dans le cloud les rôles
+      // déjà envoyés. Mêmes règles que depends_on ci-dessus (parent en échec → entrée suspendue en
+      // ERROR, rejouée avec lui ; parent en attente → report sans tentative comptée). Couvre aussi
+      // les entrées déjà en file (2.26.0 et avant), qui ne portent pas de depends_on.
+      // Un DELETE enfilé strictement APRÈS le rôle (suppression du compte) ne le bloque pas.
+      if (entry.table_name === 't_user_roles' && entry.operation !== 'DELETE') {
+        const parentStatus = _pendingRolesDeleteStatus(db, entry);
+        if (parentStatus === 'ERROR') {
+          if (markError(entry.attempts + 1, "Suppression préalable des rôles du compte en échec. Opération suspendue.")) {
+            errors++;
+            onEntryProcessed?.({ tableName: entry.table_name, success: false });
+          }
+          continue;
+        } else if (parentStatus === 'PENDING') {
+          continue;
         }
       }
 
@@ -1241,6 +1268,34 @@ function _computeErrorBackoffMinutes(attempts: number): number {
  * N'est appelée que depuis le cycle périodique (voir paramètre `fromPeriodicCycle`
  * de processOutboxPending) — jamais depuis les appels post-mutation immédiats.
  */
+/**
+ * Statut du DELETE des rôles (`<user_sync_id>_roles_del`, convention de users.queries.ts et
+ * hierarchy.queries.ts) qui doit précéder une entrée rôle (INSERT/UPDATE t_user_roles) : 'PENDING'
+ * ou 'ERROR' s'il est encore à envoyer ET enfilé au plus tard dans la même seconde que ce rôle ;
+ * null sinon (aucun DELETE, déjà SYNCED, enfilé après le rôle, ou payload illisible — ce dernier
+ * cas est traité plus loin par le passage en ERROR). Une lecture par clé primaire (Low-Memory).
+ */
+function _pendingRolesDeleteStatus(
+  db: NonNullable<ReturnType<typeof getDatabase>>,
+  entry: Pick<OutboxEntry, 'id' | 'payload' | 'created_at'>
+): 'PENDING' | 'ERROR' | null {
+  let userSyncId: unknown;
+  try {
+    userSyncId = (JSON.parse(entry.payload) as Record<string, unknown>).user_sync_id;
+  } catch {
+    return null;
+  }
+  if (typeof userSyncId !== 'string' || !userSyncId) return null;
+  const delId = `${userSyncId}_roles_del`;
+  if (delId === entry.id) return null;
+  const row = db.prepare(
+    `SELECT status FROM t_outbox
+     WHERE id = ? AND table_name = 't_user_roles' AND operation = 'DELETE'
+       AND status IN ('PENDING', 'ERROR') AND created_at <= ?`
+  ).get(delId, entry.created_at) as { status: 'PENDING' | 'ERROR' } | undefined;
+  return row ? row.status : null;
+}
+
 function _promoteEligibleErrorsToPending(db: NonNullable<ReturnType<typeof getDatabase>>): void {
   try {
     const errorEntries = db.prepare(
