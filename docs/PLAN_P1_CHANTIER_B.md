@@ -202,8 +202,10 @@ Rappels permanents :
 - **Suite (2026-11-13, nuit)** : sur décision de l'utilisateur (import d'essai), les 2 614 cartes du
   site 6 inexistant ont été **supprimées en prod** après sauvegarde dans
   `public.bak_cartes_site6_20261113` (2 614 lignes, RLS active, illisible pour anon). Contrôle :
-  0 carte site 6, 222 472 cartes restantes. Restent : rôles principaux absents de `t_user_roles`
-  pour 2 comptes, site 5 sans sync_id.
+  0 carte site 6, 222 472 cartes restantes.
+- **2026-11-14** : rôles principaux ajoutés dans `t_user_roles` en prod pour les 2 comptes concernés
+  (SUPER ADMIN, ADMINISTRATEUR_SITE) ; contrôle : 0 compte sans son rôle principal. Le hook (P1-5)
+  devra quand même lire `t_users.role` en plus de `t_user_roles`. Reste : site 5 sans sync_id (vide).
 - **Fichiers** : requêtes de diagnostic (agent-1), pas de migration si lecture seule.
 - **Agent** : agent-4.
 - **Lien** : bogue connu « site_id local envoyé au cloud » (mémoire 2026-10-27), à mesurer avant
