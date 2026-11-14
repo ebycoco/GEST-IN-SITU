@@ -93,6 +93,10 @@ ce changement (la 2.26.2 n'envoie rien).
    **FAIT le 2026-11-14 (agent-2, non commité)** : page + logique pure dans `src/renderer/src/pages/`,
    route `postes/versions` (SUPER ADMIN) dans `App.tsx`, entrée « Versions des postes » dans les deux
    menus SA de `Sidebar.tsx`, tests `tests/postes-versions-status.test.ts` (18). Rendu réel non vérifié visuellement.
+   **Corrections UX du test terrain faites, non commitées (2026-11-14, agent-2)** : mise en page compacte
+   à un seul défilement (tableau en hauteur de fenêtre), bandeau d'info fermable, colonne « Clé » fusionnée
+   dans « Poste », tri au clic sur 6 colonnes (`sortByColumn`, 26 tests), anciennes lignes conservées
+   (grisées) si l'actualisation échoue, message OFFLINE complété. Rendu non revérifié visuellement.
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9
    (Opus) ; test terrain agent-13.

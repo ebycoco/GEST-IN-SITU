@@ -8,6 +8,7 @@ import {
   computeRowState,
   summarize,
   sortByLateness,
+  sortByColumn,
   formatRelative,
   formatAbsolute,
   SILENT_AFTER_MS,
@@ -125,6 +126,88 @@ describe('sortByLateness', () => {
   it('à état et version égaux : remontée la plus ancienne d\'abord', () => {
     const out = sortByLateness([mk('11111111', '2.26.2', 1000), mk('22222222', '2.26.2', 5000)]).map((i) => i.row.poste_ref);
     expect(out).toEqual(['22222222', '11111111']);
+  });
+});
+
+describe('sortByColumn', () => {
+  const mk = (
+    ref: string,
+    v: string | null,
+    seenAgo: number | null,
+    site: string | null,
+    user: string | null
+  ) => {
+    const row = {
+      poste_ref: ref,
+      app_version: v,
+      last_seen_at: seenAgo === null ? null : msAgo(seenAgo),
+      site_nom: site,
+      last_user_login: user,
+    };
+    return { row, info: computeRowState(row, '2.26.2', NOW) };
+  };
+  const refs = (l: Array<{ row: { poste_ref: string } }>) => l.map((i) => i.row.poste_ref);
+  const base = [
+    mk('c3', '2.26.2', DAY, 'Yopougon', 'zoe'),
+    mk('a1', '2.9.0', 2 * DAY, 'abobo', 'Alain'),
+    mk('b2', '2.10.0', 3 * DAY, null, null),
+    mk('d4', null, null, 'Cocody', 'bob'),
+  ];
+
+  it('poste : asc / desc, insensible à la casse et aux accents', () => {
+    expect(refs(sortByColumn(base, 'poste', 'asc'))).toEqual(['a1', 'b2', 'c3', 'd4']);
+    expect(refs(sortByColumn(base, 'poste', 'desc'))).toEqual(['d4', 'c3', 'b2', 'a1']);
+  });
+
+  it('site : valeurs absentes toujours en fin, dans les deux sens', () => {
+    expect(refs(sortByColumn(base, 'site', 'asc'))).toEqual(['a1', 'd4', 'c3', 'b2']);
+    expect(refs(sortByColumn(base, 'site', 'desc'))).toEqual(['c3', 'd4', 'a1', 'b2']);
+  });
+
+  it('utilisateur : insensible à la casse, absents en fin', () => {
+    expect(refs(sortByColumn(base, 'user', 'asc'))).toEqual(['a1', 'd4', 'c3', 'b2']);
+    expect(refs(sortByColumn(base, 'user', 'desc'))).toEqual(['c3', 'd4', 'a1', 'b2']);
+  });
+
+  it('version : comparaison numérique (2.9.0 < 2.10.0), absente/invalide en fin', () => {
+    expect(refs(sortByColumn(base, 'version', 'asc'))).toEqual(['a1', 'b2', 'c3', 'd4']);
+    expect(refs(sortByColumn(base, 'version', 'desc'))).toEqual(['c3', 'b2', 'a1', 'd4']);
+    const bad = [mk('x1', 'zz', DAY, null, null), mk('x2', '1.0.0', DAY, null, null)];
+    expect(refs(sortByColumn(bad, 'version', 'asc'))).toEqual(['x2', 'x1']);
+    expect(refs(sortByColumn(bad, 'version', 'desc'))).toEqual(['x2', 'x1']);
+  });
+
+  it('dernière remontée : date absente en fin dans les deux sens', () => {
+    // asc = plus ancienne d'abord
+    expect(refs(sortByColumn(base, 'lastSeen', 'asc'))).toEqual(['b2', 'a1', 'c3', 'd4']);
+    expect(refs(sortByColumn(base, 'lastSeen', 'desc'))).toEqual(['c3', 'a1', 'b2', 'd4']);
+  });
+
+  it('état : ordre de gravité (en retard, silencieux, inconnu, à jour)', () => {
+    const l = [
+      mk('ok', '2.26.2', DAY, null, null),
+      mk('late', '2.1.0', DAY, null, null),
+      mk('silent', '2.26.2', 9 * DAY, null, null),
+      mk('unk', 'zz', DAY, null, null),
+    ];
+    expect(refs(sortByColumn(l, 'etat', 'asc'))).toEqual(['late', 'silent', 'unk', 'ok']);
+    expect(refs(sortByColumn(l, 'etat', 'desc'))).toEqual(['ok', 'unk', 'silent', 'late']);
+  });
+
+  it('stable : à clé égale, l\'ordre d\'entrée est conservé (asc comme desc) ; entrée non modifiée', () => {
+    const l = [
+      mk('p3', '2.26.2', DAY, 'Site A', null),
+      mk('p1', '2.26.2', DAY, 'Site A', null),
+      mk('p2', '2.26.2', DAY, 'Site A', null),
+    ];
+    const copy = [...l];
+    expect(refs(sortByColumn(l, 'site', 'asc'))).toEqual(['p3', 'p1', 'p2']);
+    expect(refs(sortByColumn(l, 'site', 'desc'))).toEqual(['p3', 'p1', 'p2']);
+    expect(l).toEqual(copy);
+  });
+
+  it('liste vide', () => {
+    expect(sortByColumn([], 'poste', 'asc')).toEqual([]);
   });
 });
 

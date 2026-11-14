@@ -139,6 +139,71 @@ export function sortByLateness<T extends { row: Pick<PosteVersionRow, 'app_versi
   });
 }
 
+// ----------------------------------------------------------------------------
+// Tri interactif par colonne (clic sur les en-têtes).
+// ----------------------------------------------------------------------------
+
+export type SortKey = 'poste' | 'site' | 'version' | 'etat' | 'lastSeen' | 'user';
+export type SortDir = 'asc' | 'desc';
+
+type SortableItem = {
+  row: Pick<PosteVersionRow, 'app_version' | 'last_seen_at' | 'poste_ref' | 'site_nom' | 'last_user_login'>;
+  info: PosteRowState;
+};
+
+/** Texte comparable : vide/absent → null (toujours placé en fin de liste). */
+function textKey(v: string | null | undefined): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  return t === '' ? null : t;
+}
+
+/** Compare deux clés ; une valeur absente (null) est TOUJOURS après les valeurs présentes, quel que soit le sens. */
+function compareNullable<V>(a: V | null, b: V | null, cmp: (x: V, y: V) => number, dir: SortDir): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  const c = cmp(a, b);
+  return dir === 'asc' ? c : -c;
+}
+
+const cmpText = (x: string, y: string): number => x.localeCompare(y, 'fr', { numeric: true, sensitivity: 'base' });
+
+/**
+ * Tri par colonne. Stable : à clé égale, l'ordre d'entrée est conservé (on passe donc en entrée
+ * la liste déjà triée par défaut avec sortByLateness). Valeurs absentes toujours en fin.
+ * Retourne un NOUVEAU tableau, l'entrée n'est pas modifiée.
+ */
+export function sortByColumn<T extends SortableItem>(items: ReadonlyArray<T>, key: SortKey, dir: SortDir): T[] {
+  const get = (it: T): string | number | null => {
+    switch (key) {
+      case 'poste': return textKey(it.row.poste_ref);
+      case 'site': return textKey(it.row.site_nom);
+      case 'user': return textKey(it.row.last_user_login);
+      case 'etat': return STATE_RANK[it.info.state];
+      case 'lastSeen': return toMs(it.row.last_seen_at);
+      case 'version': return textKey(it.row.app_version);
+    }
+  };
+  return items
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => {
+      let c: number;
+      if (key === 'version') {
+        // Version invalide/absente → en fin ; deux versions valides comparées en semver.
+        const va = parseSemver(a.it.row.app_version) ? (a.it.row.app_version as string) : null;
+        const vb = parseSemver(b.it.row.app_version) ? (b.it.row.app_version as string) : null;
+        c = compareNullable(va, vb, (x, y) => compareVersions(x, y) ?? 0, dir);
+      } else if (key === 'etat' || key === 'lastSeen') {
+        c = compareNullable(get(a.it) as number | null, get(b.it) as number | null, (x, y) => x - y, dir);
+      } else {
+        c = compareNullable(get(a.it) as string | null, get(b.it) as string | null, cmpText, dir);
+      }
+      return c !== 0 ? c : a.i - b.i;
+    })
+    .map((x) => x.it);
+}
+
 /** Date relative en français (« il y a 3 h »). Absente/invalide → « — ». Futur proche → « à l'instant ». */
 export function formatRelative(iso: string | null | undefined, nowMs: number): string {
   const ms = toMs(iso);
