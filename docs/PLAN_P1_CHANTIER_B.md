@@ -259,8 +259,10 @@ Rappels permanents :
   impose une autre voie de création de session.
 
 ### P1-5 — Edge Function `gis-login` + hook d'Auth (dev uniquement)
-- **Fichiers** : `supabase/functions/gis-login/` ; migrations 0010 (hook custom access token,
-  claims site/rôles/is_super_admin) et 0011 (comptage des tentatives) — détail : agent-1.
+- **Fichiers** : `supabase/functions/gis-login/` ; migrations 0011 (hook custom access token,
+  claims site/rôles/is_super_admin) et 0012 (comptage des tentatives) — détail : agent-1.
+  (Numéros décalés de +1 le 2026-11-14 : 0010 est pris par `0010_lecture_versions_postes.sql`,
+  écran « Versions des postes ».)
 - **Agent** : agent-4 (fonction + migrations), agent-9 (audit sécurité avant prod).
 - **Points corrigés** :
   - **Vérification du mot de passe** (C2) : bcrypt dans l'Edge Function (bcryptjs), qui accepte
@@ -279,18 +281,25 @@ Rappels permanents :
   (réglage Auth) **par l'utilisateur**, après P1-6.
 
 ### P1-6 — Politiques RESTRICTIVE TO authenticated (créées, dev puis prod)
-- **Fichiers** : `supabase/migrations/0012_rls_restrictive_authenticated.sql` + test.
+- **Fichiers** : `supabase/migrations/0013_rls_restrictive_authenticated.sql` + test
+  (ex-0012, décalé le 2026-11-14).
 - **Agent** : agent-4.
 - **Contenu** : politiques RESTRICTIVE ciblant **uniquement** `authenticated` (filtre site/centre
   depuis les claims du hook). Aucune politique anon touchée en P1 (fermeture anon = P3).
 - **Tests** : sur le dev aligné : un appel anon (clé publishable) continue de lire/écrire comme
   avant ; un appel `authenticated` d'un site ne voit pas un autre site ; `service_role` non filtré.
 - **Critère de fin** : les trois cas vérifiés par appels réels sur le dev.
-- **Geste utilisateur** : appliquer 0012 en prod (sans effet sur les postes actuels, cf. constat 7).
+- **Geste utilisateur** : appliquer 0013 en prod (sans effet sur les postes actuels, cf. constat 7).
 
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
   « NE PAS APPLIQUER »).
+- **À inscrire dans le brouillon (ajout du 2026-11-14)** : refermer la lecture des versions de
+  postes ouverte par 0010. Dans `fn_list_client_versions()` et `fn_count_client_versions()`,
+  ajouter un contrôle `public.fn_jwt_is_super_admin()` (refus sinon), puis :
+  `REVOKE EXECUTE ON FUNCTION public.fn_list_client_versions() FROM anon;` et
+  `REVOKE EXECUTE ON FUNCTION public.fn_count_client_versions() FROM anon;`
+  (à faire dès que l'écran SUPER ADMIN lit avec une session `authenticated`, P2 au plus tard).
 - **Agent** : agent-4.
 - **Critère de fin** : fichier relu ; condition d'application écrite (D6 : 7 jours sans écriture
   `publishable`/`legacy_suppose` d'après P1-1, tout le parc en version à badge).
@@ -304,7 +313,7 @@ Rappels permanents :
 ## Ordre en production
 1. 0008 (P1-1) + 0009 (P1-2) ensemble, dès validation dev. Puis laisser collecter (P1-1b).
 2. P1-3 lecture seule.
-3. 0010/0011/0012 et la fonction `gis-login` seulement après P1-4, P1-5 (décision S5) et P1-6
+3. 0011/0012/0013 et la fonction `gis-login` seulement après P1-4, P1-5 (décision S5) et P1-6
    validés sur le dev.
 4. Désactivation de l'ancienne clé anon : sur décision de l'utilisateur, d'après P1-1b.
 
@@ -319,7 +328,10 @@ Rappels permanents :
 - Preuve écrite que RESTRICTIVE TO authenticated n'affecte pas anon en prod.
 - Ordre prod : P1-1 + P1-2 d'abord.
 - Numérotation des fichiers 0008-0012 proposée ici ; à réconcilier avec le découpage d'agent-1
-  (annexe B).
+  (annexe B). **Mise à jour 2026-11-14** : 0010 attribué à l'écran « Versions des postes »
+  (`0010_lecture_versions_postes.sql`) ; les fichiers non écrits du chantier B deviennent 0011
+  (hook), 0012 (tentatives), 0013 (RLS restrictives). Les numéros de l'annexe B sont ceux
+  d'origine d'agent-1, non renumérotés.
 
 ---
 

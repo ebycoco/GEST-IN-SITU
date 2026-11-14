@@ -125,7 +125,8 @@ présente mise en place — voir limitation ci-dessous.
   `supabase/tests/0008_mesure_ecritures_cles.test.sql`. **Dev : appliquée le 2026-11-13, puis
   version corrigée (réserves de l'audit agent-9 : `lock_timeout` de protection en tête,
   `classe` dans la clé primaire, `anon` sans claims classé `autre`) réappliquée le même jour
-  après retour arrière. Production : non appliquée** (procédure ci-dessous).
+  après retour arrière. Production : appliquée le 2026-11-13 vers 23 h 40** (contrôle 12/12 OK ;
+  procédure ci-dessous).
 - **`0009_versions_postes.sql`** — table `t_client_versions` (une ligne par poste, illisible
   par anon) + RPC `fn_report_client_version(poste_key, app_version, user_sync_id, site_sync_id)`
   **fermée par défaut** (`REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated` en fin de
@@ -133,7 +134,17 @@ présente mise en place — voir limitation ci-dessous.
   calculée côté serveur. **Dépend de 0008.** Aucun appel côté poste avant P2. Test :
   `supabase/tests/0009_versions_postes.test.sql`. **Dev : appliquée le 2026-11-13, puis
   version corrigée (RPC fermée, `lock_timeout` de protection) réappliquée le même jour.
-  Production : non appliquée.**
+  Production : appliquée le 2026-11-13 vers 23 h 40, juste après 0008 ; RPC fermée.**
+- **`0010_lecture_versions_postes.sql`** — lecture pour l'écran SUPER ADMIN « Versions des postes »
+  (`docs/PLAN_ECRAN_VERSIONS_POSTES.md`) : `fn_list_client_versions()` (au plus 1000 postes,
+  `poste_ref` = 8 premiers caractères de la clé, jamais la clé complète ; écarte `preuve-%` et les
+  lignes sans site ni utilisateur reconnus) et `fn_count_client_versions()` (une ligne :
+  `nb_total`, `nb_preuve`, `nb_ignorees`, `nb_listables`). SECURITY DEFINER, STABLE, search_path
+  figé, EXECUTE ouvert à anon et authenticated (**à refermer en P2**, voir brouillon P3 dans
+  `docs/PLAN_P1_CHANTIER_B.md`). **Dépend de 0009**, ne la modifie pas (la RPC d'écriture reste
+  fermée). Test : `supabase/tests/0010_lecture_versions_postes.test.sql`. **Dev : appliquée le
+  2026-11-14** (test 14/14, appel REST réel avec la clé publishable conforme). **Production : non
+  appliquée** (procédure ci-dessous).
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -334,6 +345,81 @@ Résultat sur le dev le 2026-11-13 (après réapplication) : 12/12 `OK`.
   plus de 200 ms (`lock_timeout` de la fonction), le compteur de la seconde est perdu
   (avertissement Postgres, écriture métier inchangée). Sous-comptage possible, jamais de
   blocage ni d'erreur côté poste.
+
+## 0010 : procédure de production (lecture des versions de postes)
+
+0010 ne crée que deux fonctions en lecture seule : aucun trigger, aucune table, aucun verrou
+sur une table métier. Pas besoin d'attendre la fin de journée, mais même méthode que 0008/0009.
+
+**Étape 0 — vérification préalable, lecture seule.** Toutes les lignes `OK`, sinon ne rien
+appliquer.
+
+```sql
+SELECT 1 AS n, '0009 en place (t_client_versions + fn_report_client_version)' AS verification,
+       CASE WHEN to_regclass('public.t_client_versions') IS NOT NULL
+             AND to_regprocedure('public.fn_report_client_version(text,text,text,text)') IS NOT NULL
+            THEN 'OK' ELSE 'KO - ARRETER' END AS resultat
+UNION ALL
+SELECT 2, 'fonctions 0010 encore absentes (sinon : deja appliquee, rejouer est sans danger)',
+       CASE WHEN to_regprocedure('public.fn_list_client_versions()') IS NULL
+             AND to_regprocedure('public.fn_count_client_versions()') IS NULL
+            THEN 'OK' ELSE 'DEJA PRESENTES' END
+UNION ALL
+SELECT 3, 'colonne sync_id presente dans t_sites et t_users',
+       CASE WHEN (SELECT count(*) FROM information_schema.columns
+                   WHERE table_schema = 'public' AND column_name = 'sync_id'
+                     AND table_name IN ('t_sites', 't_users')) = 2
+            THEN 'OK' ELSE 'KO - ARRETER' END
+ORDER BY 1;
+```
+
+**Étape 1 — appliquer.** Nouvel onglet du SQL Editor : `BEGIN;`, coller **tout**
+`0010_lecture_versions_postes.sql`, `COMMIT;`, exécuter en une fois. Une erreur annule tout
+(rien n'est créé) ; transmettre le message sans réessayer.
+
+**Étape 2 — contrôle, lecture seule.** Toutes les lignes `OK`.
+
+```sql
+WITH f(sig) AS (VALUES ('public.fn_list_client_versions()'), ('public.fn_count_client_versions()')),
+chk(n, verification, ok) AS (
+  SELECT 1, '2 fonctions SECURITY DEFINER, STABLE, search_path fige',
+         (SELECT count(*) FROM f JOIN pg_proc p ON p.oid = to_regprocedure(f.sig)
+           WHERE p.prosecdef AND p.provolatile = 's'
+             AND EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search\_path=%')) = 2
+  UNION ALL
+  SELECT 2, 'EXECUTE anon et authenticated sur les 2 fonctions (ouvert jusqu''a P2)',
+         (SELECT count(*) FROM f, (VALUES ('anon'), ('authenticated')) r(r)
+           WHERE to_regprocedure(f.sig) IS NOT NULL
+             AND has_function_privilege(r.r, to_regprocedure(f.sig), 'EXECUTE')) = 4
+  UNION ALL
+  SELECT 3, 'fn_report_client_version toujours FERMEE a anon/authenticated (avant la Release)',
+         NOT has_function_privilege('anon', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
+           AND NOT has_function_privilege('authenticated', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
+  UNION ALL
+  SELECT 4, 't_client_versions toujours illisible directement par anon/authenticated',
+         NOT has_table_privilege('anon', 'public.t_client_versions', 'SELECT')
+           AND NOT has_table_privilege('authenticated', 'public.t_client_versions', 'SELECT')
+)
+SELECT n, verification, CASE WHEN ok THEN 'OK' ELSE 'KO' END AS resultat FROM chk ORDER BY n;
+```
+
+Lecture de contrôle (SQL Editor) : `SELECT * FROM public.fn_count_client_versions();` puis
+`SELECT * FROM public.fn_list_client_versions();` (tant qu'aucun poste n'envoie sa version, la
+liste est vide ; les lignes `preuve-%` éventuelles sont comptées dans `nb_preuve`).
+
+**Rappel, PAS MAINTENANT — juste avant la Release** qui embarque l'envoi de version
+(`docs/PLAN_ECRAN_VERSIONS_POSTES.md`, étape 6) :
+
+```sql
+GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;
+```
+
+Rejouer 0009 referme cette RPC (REVOKE final) : refaire le GRANT après tout rejeu de 0009.
+
+**Retour arrière** (en tête du fichier 0010) : `BEGIN; SET LOCAL lock_timeout = '3s';
+DROP FUNCTION IF EXISTS public.fn_list_client_versions(); DROP FUNCTION IF EXISTS
+public.fn_count_client_versions(); COMMIT;` — l'écran affichera alors une erreur de lecture,
+sans effet sur la synchronisation.
 
 ## 0007 : procédures manuelles (période transitoire)
 
