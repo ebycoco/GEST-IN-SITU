@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   RefreshCw, Terminal, AlertTriangle, ShieldAlert, 
   Trash2, Download, Search, CheckCircle2, Lock, X, Play, Shield,
@@ -107,13 +107,18 @@ export default function MaintenancePage() {
     setCurrentPage(1);
   }, [filterLevel]);
 
-  // Auto refresh interval every 10 seconds
+  // Auto refresh interval every 10 seconds.
+  // refreshRef pointe toujours vers la derniere version de fetchLogs/fetchCloudCount (page, filtre,
+  // recherche courants) : l'interval, stable, n'embarque plus de fermeture perimee qui rechargeait
+  // l'ancienne vue 10 s apres un changement de page/filtre. Nettoyage de l'interval conserve.
+  const refreshRef = useRef<() => void>(() => {});
+  refreshRef.current = () => {
+    fetchLogs(true);
+    fetchCloudCount();
+  };
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchLogs(true);
-      fetchCloudCount();
-    }, 10000);
+    const interval = setInterval(() => refreshRef.current(), 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, activeSiteId]);
 

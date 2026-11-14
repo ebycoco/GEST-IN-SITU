@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Trash2, AlertCircle, RefreshCw, Filter, ChevronDown, ChevronUp, Info, Save } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../../stores/authStore';
@@ -24,8 +24,13 @@ export default function AnomaliesBrutesView() {
 
   const itemsPerPage = 50;
 
+  // Identifiant de requete : seule la reponse de la requete la plus recente est appliquee
+  // (reponses perimees ignorees ; plus de garde isLoading capturee par fermeture perimee).
+  // Seule la derniere requete remet isLoading / isFetchingQuery a false (store partage).
+  const reqIdRef = useRef(0);
+
   const loadAnomalies = useCallback(async () => {
-    if (isLoading) return;
+    const reqId = ++reqIdRef.current;
     setIsLoading(true);
     setIsFetchingQuery(true);
     try {
@@ -34,14 +39,19 @@ export default function AnomaliesBrutesView() {
       // Idéalement, getAnomalies pourrait prendre un filtre, mais vu que la limite est 50,
       // on affiche les anomalies telles quelles.
       const res = await window.api.import.getAnomalies(siteIdToUse, offset, itemsPerPage);
+      if (reqId !== reqIdRef.current) return; // réponse obsolète
       setRecords(res?.rows || []);
       setTotalItems(res?.total || 0);
     } catch (err) {
-      console.error(err);
-      toast.error('Erreur lors du chargement des anomalies.');
+      if (reqId === reqIdRef.current) {
+        console.error(err);
+        toast.error('Erreur lors du chargement des anomalies.');
+      }
     } finally {
-      setIsLoading(false);
-      setIsFetchingQuery(false);
+      if (reqId === reqIdRef.current) {
+        setIsLoading(false);
+        setIsFetchingQuery(false);
+      }
     }
   }, [siteIdToUse, currentPage, setIsFetchingQuery]);
 

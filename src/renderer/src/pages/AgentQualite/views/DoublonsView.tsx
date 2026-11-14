@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Search, Database, AlertTriangle, GitMerge, Trash2, RefreshCw } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -32,8 +32,15 @@ export default function DoublonsView() {
 
   const itemsPerPage = 10;
 
+  // Identifiant de requete : seule la reponse de la requete la plus recente est appliquee
+  // (reponses perimees ignorees ; plus de garde isLoading capturee par fermeture perimee).
+  // Seule la derniere requete remet isLoading / isFetchingQuery a false (store partage).
+  const reqIdRef = useRef(0);
+
   const loadTabData = useCallback(async () => {
-    if (isLoading) return;
+    const reqId = ++reqIdRef.current;
+    // refreshTrigger (store Qualite) reste une dependance volontaire : il force le rechargement.
+    void refreshTrigger;
     setIsLoading(true);
     setIsFetchingQuery(true);
     try {
@@ -44,7 +51,8 @@ export default function DoublonsView() {
       } else {
         res = await window.api.cartes.getDoublonsProbablesPage(siteIdToUse, offset, itemsPerPage, debouncedFilters.nom || '');
       }
-      
+      if (reqId !== reqIdRef.current) return; // réponse obsolète
+
       const rawRows = res?.rows || [];
       const pairedRecords: any[] = [];
       
@@ -78,11 +86,15 @@ export default function DoublonsView() {
       setRecords(pairedRecords);
       setTotalItems(res?.total || 0);
     } catch (err) {
-      console.error(err);
-      toast.error('Erreur lors du chargement des données.');
+      if (reqId === reqIdRef.current) {
+        console.error(err);
+        toast.error('Erreur lors du chargement des données.');
+      }
     } finally {
-      setIsLoading(false);
-      setIsFetchingQuery(false);
+      if (reqId === reqIdRef.current) {
+        setIsLoading(false);
+        setIsFetchingQuery(false);
+      }
     }
   }, [activeTab, currentPage, debouncedFilters.nom, siteIdToUse, refreshTrigger, setIsFetchingQuery]);
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Search, Calendar, Edit3, Save, RefreshCw, ChevronDown, ChevronUp, Info, Trash2, Phone, MapPin } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../../stores/authStore';
@@ -40,8 +40,15 @@ export default function InvalidFormatView() {
 
   const itemsPerPage = 10;
 
+  // Identifiant de requete : seule la reponse de la requete la plus recente est appliquee
+  // (reponses perimees ignorees ; plus de garde isLoading capturee par fermeture perimee).
+  // Seule la derniere requete remet isLoading / isFetchingQuery a false (store partage).
+  const reqIdRef = useRef(0);
+
   const loadTabData = useCallback(async () => {
-    if (isLoading) return;
+    const reqId = ++reqIdRef.current;
+    // refreshTrigger (store Qualite) reste une dependance volontaire : il force le rechargement.
+    void refreshTrigger;
     setIsLoading(true);
     setIsFetchingQuery(true);
     try {
@@ -50,15 +57,20 @@ export default function InvalidFormatView() {
       // ✔️ Pagination côté serveur via table unifiée
       const res = await window.api.cartes.getInvalidDates(siteIdToUse, offset, itemsPerPage, query);
       const allRows: any[] = res?.rows || [];
+      if (reqId !== reqIdRef.current) return; // réponse obsolète
 
       setRecords(allRows);
       setTotalItems(res?.total || 0);
     } catch (err) {
-      console.error(err);
-      toast.error('Erreur lors du chargement des données.');
+      if (reqId === reqIdRef.current) {
+        console.error(err);
+        toast.error('Erreur lors du chargement des données.');
+      }
     } finally {
-      setIsLoading(false);
-      setIsFetchingQuery(false);
+      if (reqId === reqIdRef.current) {
+        setIsLoading(false);
+        setIsFetchingQuery(false);
+      }
     }
   }, [currentPage, debouncedFilters.nom, siteIdToUse, refreshTrigger, setIsFetchingQuery]);
 
