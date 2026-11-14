@@ -1826,7 +1826,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: cartes:reactiverCarte', e); throw e; }
   });
-  ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number, offset = 0, limit = 50) => {
+  ipcMain.handle('cartes:getInvalidDates', async (_, siteId?: number, offset = 0, limit = 50, query?: string) => {
     // Sécurité (P1) : handler auparavant dépourvu de tout verifyUserRole. Périmètre exclusif
     // au portail Qualité (InvalidFormatView.tsx, route /agent-qualite/*), aligné sur ProtectedRoute.
     const secureUser = getSecureCurrentUser();
@@ -1834,7 +1834,7 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.warn('[SECURITY] Acces refuse a cartes:getInvalidDates : session invalide ou role non autorise.');
       throw new Error("Accès refusé. Privilèges insuffisants pour effectuer cette opération.");
     }
-    try { return queries.getInvalidDateRecords(resolveScopedSiteId(siteId), offset, limit); }
+    try { return queries.getInvalidDateRecords(resolveScopedSiteId(siteId), offset, limit, query); }
     catch (e) { log.error('IPC Error: cartes:getInvalidDates', e); throw e; }
   });
   ipcMain.handle('cartes:getDatesVidesPage', async (_, siteId?: number, offset = 0, limit = 50, query?: string) => {
