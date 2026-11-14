@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { 
   Upload, FileSpreadsheet, CheckCircle, 
   AlertCircle, Loader, Database, 
@@ -12,6 +12,7 @@ import { confirmService } from '../components/confirmService';
 import { successPanel } from '../components/successPanelService';
 import { useNavigate } from 'react-router-dom';
 import { useCacheStore } from '../stores/cacheStore';
+import { computeImportScopeKey, shouldRestoreCache } from '../utils/cacheScope';
 
 const formatDuration = (seconds: number): string => {
   if (seconds < 60) return `${seconds}s`;
@@ -47,32 +48,47 @@ export default function ImportPage() {
   // d'indexation quel que soit le nombre/ordre des suppressions successives.
   const [excludedRowIndices, setExcludedRowIndices] = useState<Set<number>>(new Set());
 
+  // ── Portée du compteur (correctif « site actif périmé », D2) ───────────────────────────
+  // `importScopeKey` = site effectif + rôle actif (cf. utils/cacheScope.ts). Le ref (pas de state :
+  // aucun re-render dédié, CLAUDE.md §2) est mis à jour à chaque rendu et relu APRÈS l'await de
+  // fetchCardCount : une réponse du site précédent ne doit ni s'afficher ni estampiller le cache.
+  const importScopeKey = computeImportScopeKey({ role: user?.role, activeSiteId, userSiteId: user?.site_id });
+  const importScopeKeyRef = useRef<string>(importScopeKey);
+  importScopeKeyRef.current = importScopeKey;
+
   const fetchCardCount = async (silent = false) => {
+    // Portée de CET appel (fermeture du rendu courant, cohérente avec siteIdToUse ci-dessous).
+    const callScopeKey = importScopeKey;
     try {
       // P4 fix : isolation site — même calcul de siteIdToUse que le reste du fichier,
       // pour que le compteur de cartes n'agrège plus tous les sites pour un
       // ADMINISTRATEUR_SITE / SUPER ADMIN avec un site actif sélectionné.
       const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
       const count = await window.api.db.getCardCount(siteIdToUse ? Number(siteIdToUse) : undefined);
+      // Garde de péremption : le site/rôle a changé pendant l'attente => réponse ignorée.
+      if (importScopeKeyRef.current !== callScopeKey) return;
       setCardCount(count);
-      useCacheStore.getState().setImportCache(count);
+      useCacheStore.getState().setImportCache(count, callScopeKey);
     } catch (err) {
       console.error('Failed to fetch card count:', err);
     }
   };
 
+  // Réactif à la portée (et plus seulement au montage) : à chaque changement de site actif / rôle,
+  // on ne réutilise le cache que s'il porte la même clé ; sinon compteur remis à 0 (transitoire,
+  // le bouton « Purger » reste inchangé : désactivé tant que le décompte du site actif n'est pas
+  // revenu) puis rechargement. Pas de listener ni de timer : rien à nettoyer.
   useEffect(() => {
     const cache = useCacheStore.getState().importCache;
-    let hasCache = false;
-    if (cache.cachedAt && cache.cardCount !== null) {
+    if (shouldRestoreCache(cache, importScopeKey) && cache.cardCount !== null) {
       setCardCount(cache.cardCount);
-      hasCache = true;
       useAuthStore.getState().setInitialDataLoading(false);
-    }
-    if (!hasCache) {
+    } else {
+      setCardCount(0);
       fetchCardCount();
     }
-  }, []);
+    // fetchCardCount est recréée à chaque rendu et porte la portée de CE rendu (comme avant).
+  }, [importScopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     window.api.sync.getAutoUpstream()
@@ -265,11 +281,15 @@ export default function ImportPage() {
       return;
     }
 
+    const purgeScopeKey = importScopeKey;
     try {
       const res = await window.api.db.purge(Number(siteIdToUse), user);
       if (res.success) {
         toast.success("Base de données locale purgée avec succès !");
-        setCardCount(0);
+        // Compteur à 0 uniquement si on est toujours sur le site purgé ; le cache est étiqueté de la
+        // portée purgée (jamais restauré pour un autre site).
+        if (importScopeKeyRef.current === purgeScopeKey) setCardCount(0);
+        useCacheStore.getState().setImportCache(0, purgeScopeKey);
         useCacheStore.getState().invalidateDashboardCache();
       }
     } catch (e) {
