@@ -205,7 +205,10 @@ Rappels permanents :
   0 carte site 6, 222 472 cartes restantes.
 - **2026-11-14** : rôles principaux ajoutés dans `t_user_roles` en prod pour les 2 comptes concernés
   (SUPER ADMIN, ADMINISTRATEUR_SITE) ; contrôle : 0 compte sans son rôle principal. Le hook (P1-5)
-  devra quand même lire `t_users.role` en plus de `t_user_roles`. Reste : site 5 sans sync_id (vide).
+  devra quand même lire `t_users.role` en plus de `t_user_roles`.
+- **2026-11-14** : sur demande de l'utilisateur, sites PLATEAU (5) et ADJAMÉ (11) supprimés en prod
+  avec les 3 centres et le compte admin d'ADJAMÉ, après sauvegarde (`bak_*_20261114`). Restent
+  ABOBO (4) et BOCANDA (14) ; 0 compte ni centre orphelin.
 - **Fichiers** : requêtes de diagnostic (agent-1), pas de migration si lecture seule.
 - **Agent** : agent-4.
 - **Lien** : bogue connu « site_id local envoyé au cloud » (mémoire 2026-10-27), à mesurer avant
