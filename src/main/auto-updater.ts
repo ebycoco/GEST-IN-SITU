@@ -38,6 +38,17 @@ export function isUpdateReadyToInstall(): boolean {
   return updateReadyVersion !== null;
 }
 
+// Dernière version publiée connue (UpdateInfo.version reçu dans 'update-available' ou
+// 'update-not-available'). `null` tant qu'aucune recherche n'a abouti dans ce processus
+// (hors ligne, E2E, dev sans config). Lu par le handler `versions:getPostes` (écran
+// SUPER ADMIN « Versions des postes »). Aucune persistance, une seule chaîne en mémoire.
+let lastKnownLatestVersion: string | null = null;
+
+/** Dernière version publiée vue par l'auto-updater dans ce processus, ou null. */
+export function getLastKnownLatestVersion(): string | null {
+  return lastKnownLatestVersion;
+}
+
 /**
  * Déclenche l'installation visible de la mise à jour déjà téléchargée.
  *
@@ -191,6 +202,16 @@ export function setupAutoUpdater(mainWindow: BrowserWindow, syncEngine: any) {
     log.info('[AutoUpdater] Update not available.', info);
     mainWindow.webContents.send('updater:update-not-available', info);
   });
+
+  // Écouteurs ADDITIONNELS (les deux ci-dessus restent inchangés) : mémorisent la dernière
+  // version publiée pour getLastKnownLatestVersion(). Ne lèvent jamais.
+  const rememberLatestVersion = (info: { version?: unknown } | null | undefined): void => {
+    if (typeof info?.version === 'string' && info.version.length > 0 && info.version.length <= 64) {
+      lastKnownLatestVersion = info.version;
+    }
+  };
+  autoUpdater.on('update-available', rememberLatestVersion);
+  autoUpdater.on('update-not-available', rememberLatestVersion);
 
   autoUpdater.on('download-progress', (progressObj) => {
     mainWindow.webContents.send('updater:download-progress', progressObj);

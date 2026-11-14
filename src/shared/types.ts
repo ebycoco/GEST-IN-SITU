@@ -174,3 +174,46 @@ export interface AgentPresenceRow {
   last_action_at: string | null;
   last_action_label: string | null;
 }
+
+/**
+ * Écran SUPER ADMIN « Versions des postes » (docs/PLAN_ECRAN_VERSIONS_POSTES.md).
+ * Une ligne = un poste déclaré (RPC fn_list_client_versions, migration 0010), sync_id traduits
+ * en local côté main (src/main/sync/client-version.service.ts). `poste_ref` = 8 premiers
+ * caractères de la clé de poste (jamais la clé complète). Inconnu localement → null.
+ */
+export interface PosteVersionRow {
+  poste_ref: string;
+  app_version: string | null;
+  site_sync_id: string | null;
+  site_nom: string | null;
+  last_user_login: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  nb_reports: number;
+  key_kind: string | null;
+}
+
+/** Compteurs de fn_count_client_versions (nb_listables > 1000 = liste tronquée). */
+export interface PostesVersionsCounts {
+  nb_total: number;
+  nb_preuve: number;
+  nb_ignorees: number;
+  nb_listables: number;
+}
+
+/** Erreurs structurées du canal `versions:getPostes` (aucune exception vers le renderer). */
+export type PostesVersionsError = 'FORBIDDEN' | 'OFFLINE' | 'NO_CLIENT' | 'TIMEOUT' | 'RPC_ERROR' | 'INTERNAL';
+
+/** Réponse du canal `versions:getPostes` (window.api.versions.getPostes()). */
+export type PostesVersionsResult =
+  | {
+      success: true;
+      rows: PosteVersionRow[];
+      counts: PostesVersionsCounts;
+      truncated: boolean;
+      /** Dernière version publiée connue de l'auto-updater (null si jamais vérifiée). */
+      latestVersion: string | null;
+      /** Version de ce poste (app.getVersion()). */
+      currentVersion: string;
+    }
+  | { success: false; error: PostesVersionsError };

@@ -40,6 +40,7 @@ import { armOfflineBootUserRecovery, type OfflineBootRecoveryHandle } from './au
 import { networkMonitor } from './sync/network-monitor';
 import { getSupabaseClient } from './sync/supabase-client';
 import { recordPresenceLogoutAndWait, isPresenceTrackedRole } from './sync/presence.service';
+import { startClientVersionReporter, stopClientVersionReporter } from './sync/client-version.service';
 
 // ─── ISOLATION DEV/PROD DU DOSSIER userData (SQLite + fichiers annexes) ────────
 // Correctif P0 (QA terrain, août 2026) : en mode développement (`npm run dev`),
@@ -620,6 +621,12 @@ Aucune modification n'a été appliquée à la base locale. Le marqueur RECOVERY
     log.warn("L'auto-updater n'a pas pu être initialisé (non bloquant) :", updaterError?.message || updaterError);
   }
 
+  // Versions des postes (docs/PLAN_ECRAN_VERSIONS_POSTES.md) : planifie un essai de
+  // déclaration ~20 s plus tard (timer unref, ou au premier retour en ligne). Retour
+  // immédiat, aucune attente sur le chemin de démarrage, désactivé en dev (sauf
+  // GIS_REPORT_VERSION_IN_DEV=1) ; toutes erreurs absorbées dans le service.
+  startClientVersionReporter();
+
   if (!is.dev) {
     try {
       initBackupScheduler();
@@ -663,6 +670,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
+  // Versions des postes : timer de démarrage et écouteur réseau éventuels (ne lève jamais).
+  stopClientVersionReporter();
   const db = getDatabase();
   if (db) {
     try {

@@ -7,7 +7,8 @@ import {
   ISiteSummary,
   IGlobalStats,
   ILog,
-  AgentPresenceRow
+  AgentPresenceRow,
+  PostesVersionsResult
 } from '../shared/types';
 
 const api = {
@@ -704,6 +705,11 @@ const api = {
   presence: {
     getAgents: (): Promise<AgentPresenceRow[]> =>
       ipcRenderer.invoke('presence:getAgents'),
+  },
+  // Versions des postes (écran SUPER ADMIN, aucun paramètre transmis au main)
+  versions: {
+    getPostes: (): Promise<PostesVersionsResult> =>
+      ipcRenderer.invoke('versions:getPostes'),
   }
 };
 

@@ -304,11 +304,13 @@ describe('Sauvegarde automatique quotidienne (backup.ts)', () => {
       const f = new Date(Date.now() + k * DAY);
       makeBackupFile(nameFor(f, `_futur${k}`), f);
     }
-    for (let k = 1; k <= 10; k++) makeBackupFile(nameFor(localDay(k), `_passe${k}`), localDay(k));
+    // Historique à partir de J-2 : J-1 à midi peut avoir moins de 24 h (test lancé avant midi),
+    // ce qui rendait la sauvegarde « non due » et le test dépendant de l'heure.
+    for (let k = 2; k <= 11; k++) makeBackupFile(nameFor(localDay(k), `_passe${k}`), localDay(k));
 
     expect(await backup.runBackupIfDue('test')).toBe(true);
     const files = listDir();
-    // 7 futurs intacts + nouvelle + J-1..J-6 (7 jours distincts du présent)
+    // 7 futurs intacts + nouvelle + J-2..J-7 (7 jours distincts du présent)
     expect(files.filter(f => f.includes('_futur'))).toHaveLength(7);
     const fresh = files.filter(f => !f.includes('_futur') && !f.includes('_passe'));
     expect(fresh).toHaveLength(1);

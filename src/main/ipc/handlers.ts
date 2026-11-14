@@ -27,6 +27,8 @@ import { enqueueOutbox, cancelPendingInsert, scheduleOutboxProcessing, processOu
 import { mapCardPayload } from '../sync/payload-mapper';
 import { classifyImportOutcome, isSupportedImportFile, UNSUPPORTED_IMPORT_FILE_MESSAGE } from '../import/import-outcome';
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
+import { listClientVersions, reportClientVersionAfterLogin } from '../sync/client-version.service';
+import type { PostesVersionsResult } from '../../shared/types';
 
 const FAILSAFE_ROOT_ID = 999999;
 
@@ -288,6 +290,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           // db:emergency-purge une fois ces handlers migrés vers getSecureCurrentUser()
           // (ils ne dérivaient plus l'identité que d'un paramètre client falsifiable).
           startSessionHeartbeat(rootUser, rootUser.sessionToken);
+          // Versions des postes : déclaration en tâche de fond (void, jamais await).
+          reportClientVersionAfterLogin();
           return rootUser;
         }
       }
@@ -298,6 +302,10 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       registerVerifyPasswordAttempt(loginAttemptKey, !!(user && user.sessionToken));
       if (user && user.sessionToken) {
         startSessionHeartbeat(user, user.sessionToken);
+        // Versions des postes : déclaration en tâche de fond (void, jamais await). L'identité
+        // (sync_id utilisateur + t_sites.sync_id) est relue dans la session serveur au moment
+        // de l'envoi, jamais les id locaux numériques.
+        reportClientVersionAfterLogin();
         queries.insertAuditLog(user.login, 'CONNEXION', `Connexion réussie de l'utilisateur ${user.login}.`);
 
         // Préférence "Envoi Automatique" des cartes (upstream, t_cartes uniquement) —
@@ -507,6 +515,35 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     } catch (e) {
       log.error('IPC Error: presence:getAgents', e);
       throw e;
+    }
+  });
+
+  // VERSIONS DES POSTES (écran SUPER ADMIN, docs/PLAN_ECRAN_VERSIONS_POSTES.md).
+  // Lecture directe Supabase (RPC 0010) via listClientVersions(), sync_id traduits en local.
+  // Accès : session serveur obligatoire, rôle ACTIF = SUPER ADMIN (getSecureCurrentUser(),
+  // CLAUDE.md §3) ET verifyUserRole (compte actif portant ce rôle). Aucun paramètre accepté
+  // du renderer. Jamais d'exception vers le renderer : réponse structurée { success:false, error }.
+  ipcMain.handle('versions:getPostes', async (): Promise<PostesVersionsResult> => {
+    const secureUser = getSecureCurrentUser();
+    if (!secureUser || secureUser.role !== 'SUPER ADMIN' || !verifyUserRole(secureUser.id_user, ['SUPER ADMIN'])) {
+      log.warn(`[SECURITY] Acces refuse a versions:getPostes : ${secureUser ? `role actif ${secureUser.role} (id ${secureUser.id_user})` : 'aucune session'}.`);
+      return { success: false, error: 'FORBIDDEN' };
+    }
+    try {
+      const result = await listClientVersions();
+      if (!result.success) return result;
+      // Import paresseux (même pattern que exceljs/jspdf plus bas) : auto-updater.ts tire
+      // electron-updater, non chargeable hors Electron (tests Vitest de ce fichier). Le module
+      // est déjà chargé par index.ts en production : aucun coût réel.
+      const { getLastKnownLatestVersion } = await import('../auto-updater');
+      return {
+        ...result,
+        latestVersion: getLastKnownLatestVersion(),
+        currentVersion: app.getVersion()
+      };
+    } catch (e) {
+      log.error('IPC Error: versions:getPostes', e);
+      return { success: false, error: 'INTERNAL' };
     }
   });
 

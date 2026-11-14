@@ -1,4 +1,4 @@
-import { AgentPresenceRow } from '../shared/types';
+import { AgentPresenceRow, PostesVersionsResult } from '../shared/types';
 
 export {};
 
@@ -293,6 +293,9 @@ declare global {
       };
       presence: {
         getAgents: () => Promise<AgentPresenceRow[]>;
+      };
+      versions: {
+        getPostes: () => Promise<PostesVersionsResult>;
       };
       onDatabaseUpdated: (callback: (data: any) => void) => () => void;
       onUsersSynced: (callback: (data: any) => void) => () => void;

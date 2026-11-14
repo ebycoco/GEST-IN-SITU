@@ -67,8 +67,22 @@ ce changement (la 2.26.2 n'envoie rien).
    (POST `/rest/v1/rpc/fn_list_client_versions` et `/rpc/fn_count_client_versions`).
 2. **Envoi** (agent-3) : `client-version.service.ts` ; ajouts dans `src/main/index.ts` et
    `src/main/ipc/handlers.ts` (~l.290 et ~l.300).
+   **FAIT le 2026-11-14 (agent-3, non commité)** : clé UUID dans `userData/gis-poste/poste-id.json`
+   (écriture temporaire + rename, fichier invalide → régénéré), envoi `void` au démarrage + 20 s
+   (timer unref) et après chaque connexion réussie (chemins ROOT et normal, juste après
+   `startSessionHeartbeat`), un seul écouteur réseau armé si hors ligne, 1 envoi/h sauf changement
+   d'utilisateur ou de version, identité relue dans `getSecureCurrentUser()` (sync_id utilisateur +
+   `t_sites.sync_id`), rien si `!app.isPackaged` (= `is.dev`) sauf `GIS_REPORT_VERSION_IN_DEV=1`,
+   erreur « permission denied » journalisée en info ; arrêt dans `will-quit`.
 3. **Lecture + handler** (agent-3) : `listClientVersions()`, canal `versions:getPostes`, getter
    dans `auto-updater.ts`, `preload/index.ts`, `preload/global.d.ts`, type dans `shared/types.ts`.
+   **FAIT le 2026-11-14 (agent-3, non commité)** : `listClientVersions()` (2 RPC, timeout 15 s,
+   traduction locale site/login), handler `versions:getPostes` (session + rôle actif SA +
+   `verifyUserRole`, `[SECURITY]`, réponse `{ success:false, error: 'FORBIDDEN' | 'OFFLINE' |
+   'NO_CLIENT' | 'TIMEOUT' | 'RPC_ERROR' | 'INTERNAL' }`), `getLastKnownLatestVersion()`,
+   `window.api.versions.getPostes()`, types `PosteVersionRow` / `PostesVersionsCounts` /
+   `PostesVersionsResult`. Tests `tests/client-version-service.test.ts` (21) et
+   `tests/versions-getpostes-rbac.test.ts` (4) ; `tsc` 0 erreur.
 4. **Écran** (agent-2) : `PostesVersionsPage.tsx`, `postesVersionsStatus.ts`, route et menu.
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9
