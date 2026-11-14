@@ -32,6 +32,8 @@ import {
 /** Au-delà de ce nombre de lignes, une alerte invite à affiner (plafond serveur 1000). */
 const LARGE_LIST_THRESHOLD = 200;
 const NO_SITE = '__NO_SITE__';
+/** En dessous de cette largeur (px) de la zone du tableau, « Première vue » est masquée (repli en infobulle). */
+const COMPACT_BELOW_PX = 1000;
 
 const STATE_META: Record<PosteState, { label: string; color: string; bg: string; border: string }> = {
   A_JOUR: { label: 'À jour', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.35)' },
@@ -103,6 +105,9 @@ export default function PostesVersionsPage() {
   const [infoOpen, setInfoOpen] = useState(true);
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
+  // Mode compact : largeur de la zone du tableau mesurée par ResizeObserver.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const [compact, setCompact] = useState(false);
 
   const load = useCallback(async () => {
     const reqId = ++requestRef.current;
@@ -146,6 +151,22 @@ export default function PostesVersionsPage() {
       mountedRef.current = false;
     };
   }, [load, isSuperAdmin]);
+
+  useEffect(() => {
+    if (!scrollEl) return;
+    const apply = (w: number) => setCompact((prev) => {
+      const next = w > 0 && w < COMPACT_BELOW_PX;
+      return prev === next ? prev : next;
+    });
+    apply(scrollEl.clientWidth);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const e = entries[0];
+      if (e) apply(e.contentRect.width);
+    });
+    ro.observe(scrollEl);
+    return () => ro.disconnect();
+  }, [scrollEl]);
 
   const ok = isSuperAdmin ? data : null;
   const errorCode: PostesVersionsError | null = !isSuperAdmin ? 'FORBIDDEN' : loadError;
@@ -247,7 +268,7 @@ export default function PostesVersionsPage() {
   return (
     <div className="animate-fade-in pv-root">
       <style dangerouslySetInnerHTML={{ __html: `
-        .pv-root { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 20px 10px; overflow: hidden; }
+        .pv-root { --pv-muted: #a3a8c0; display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; box-sizing: border-box; padding: 12px 20px 10px; overflow: hidden; }
         .pv-card { background: rgba(26, 31, 74, 0.45); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; }
         .pv-btn { background: rgba(255, 215, 0, 0.14); border: 1px solid rgba(255, 215, 0, 0.45); color: #ffd700; padding: 7px 14px; border-radius: 10px; font-weight: 800; font-size: 13px; display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background 0.2s ease; }
         .pv-btn:hover:not(:disabled) { background: rgba(255, 215, 0, 0.26); }
@@ -260,7 +281,7 @@ export default function PostesVersionsPage() {
         .pv-scroll { flex: 1 1 auto; min-height: 160px; overflow: auto; }
         .pv-table { width: 100%; border-collapse: collapse; text-align: left; }
         .pv-table th { position: sticky; top: 0; background: #11163a; z-index: 1; padding: 0; border-bottom: 1px solid rgba(255,255,255,0.08); white-space: nowrap; }
-        .pv-th-btn { display: flex; align-items: center; gap: 5px; width: 100%; background: transparent; border: none; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 8px; text-align: left; }
+        .pv-th-btn { display: flex; align-items: center; gap: 5px; width: 100%; background: transparent; border: none; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--pv-muted); text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 8px; text-align: left; }
         .pv-th-btn:hover { color: #e2e8f0; }
         .pv-th-btn:focus-visible { outline: 2px solid #ffd700; outline-offset: -2px; }
         .pv-th-active { color: #ffd700; }
@@ -269,9 +290,16 @@ export default function PostesVersionsPage() {
         .pv-table td { font-size: 13px; padding: 6px 8px; border-bottom: 1px solid rgba(255,255,255,0.05); color: var(--text-secondary); vertical-align: middle; white-space: nowrap; }
         .pv-table tr:hover td { background: rgba(255,255,255,0.03); }
         .pv-site { min-width: 150px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
-        .pv-user { max-width: 170px; overflow: hidden; text-overflow: ellipsis; }
+        .pv-user { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+        /* Données périmées : voile par désaturation (texte à pleine opacité => contraste préservé) + bordure pointillée. */
+        .pv-stale { filter: grayscale(0.8); }
+        .pv-stale-card { border-style: dashed; border-color: rgba(248, 113, 113, 0.45); }
+        /* Zone étroite (< 1000 px) : « Première vue » masquée, marges et largeurs resserrées. */
+        .pv-compact .pv-table td { padding: 6px 5px; }
+        .pv-compact .pv-th-btn { padding: 8px 5px; }
+        .pv-compact .pv-site { min-width: 100px; max-width: 150px; }
         .pv-chip { flex: 1 1 0; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; padding: 5px 12px; }
-        .pv-chip-label { font-size: 10.5px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .pv-chip-label { font-size: 10.5px; font-weight: 700; color: var(--pv-muted); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .pv-chip-value { font-size: 20px; font-weight: 800; line-height: 1.1; }
         @keyframes pv-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}} />
@@ -283,7 +311,7 @@ export default function PostesVersionsPage() {
             <MonitorSmartphone size={16} color="black" />
           </div>
           <h2 style={{ fontSize: 18, fontWeight: 800, letterSpacing: '-0.02em', margin: 0, whiteSpace: 'nowrap' }}>Versions des postes</h2>
-          <span style={{ fontSize: 12, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ fontSize: 12, color: 'var(--pv-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             Version installée de chaque poste, comparée à la dernière version publiée.
           </span>
         </div>
@@ -344,7 +372,7 @@ export default function PostesVersionsPage() {
           )}
 
           {/* Synthèse (ligne compacte, grisée si les données sont conservées après une erreur) */}
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, opacity: stale ? 0.55 : 1 }}>
+          <div className={stale ? 'pv-stale' : undefined} style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
             {summaryCards.map((c) => (
               <div key={c.key} className="pv-card pv-chip">
                 <span className="pv-chip-label" title={c.label}>{c.label}</span>
@@ -355,7 +383,7 @@ export default function PostesVersionsPage() {
 
           {/* Filtres + référence sur une ligne compacte */}
           <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 14px', flexShrink: 0 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--pv-muted)' }}>
               <MapPin size={14} />
               <span>Site</span>
               <select value={siteFilter} onChange={(e) => setSiteFilter(e.target.value)} style={selectStyle}>
@@ -365,7 +393,7 @@ export default function PostesVersionsPage() {
                 ))}
               </select>
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--pv-muted)' }}>
               <Filter size={14} />
               <span>État</span>
               <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value as StateFilter)} style={selectStyle}>
@@ -380,7 +408,7 @@ export default function PostesVersionsPage() {
               {reference && !ok.latestVersion ? ' (plus haute vue)' : ''}
               {' · '}ce poste : <strong style={{ color: 'var(--text-primary)' }}>{ok.currentVersion}</strong>
             </span>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            <span style={{ fontSize: 12, color: 'var(--pv-muted)' }}>
               {visible.length} poste{visible.length > 1 ? 's' : ''} affiché{visible.length > 1 ? 's' : ''}
               {' · '}données lues le {formatAbsolute(new Date(dataAt).toISOString())}
             </span>
@@ -390,29 +418,31 @@ export default function PostesVersionsPage() {
 
       {/* Corps : chargement / vide / tableau */}
       {loading && !ok ? (
-        <div className="pv-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 180, color: 'var(--text-muted)', fontSize: 13, flexShrink: 0 }}>
+        <div className="pv-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: 180, color: 'var(--pv-muted)', fontSize: 13, flexShrink: 0 }}>
           <RefreshCw size={26} className="pv-spin" color="#ffd700" />
           <span>Chargement des versions des postes...</span>
         </div>
       ) : ok && ok.rows.length === 0 ? (
-        <div className="pv-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 140, color: 'var(--text-muted)', fontSize: 14, fontWeight: 600, textAlign: 'center', padding: 16, flexShrink: 0 }}>
+        <div className="pv-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 140, color: 'var(--pv-muted)', fontSize: 14, fontWeight: 600, textAlign: 'center', padding: 16, flexShrink: 0 }}>
           Aucun poste ne s'est encore déclaré.
         </div>
       ) : ok ? (
-        <div className="pv-card" style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', opacity: stale ? 0.55 : loading ? 0.6 : 1, transition: 'opacity 0.2s ease' }}>
+        <div className={`pv-card${stale ? ' pv-stale pv-stale-card' : ''}`} style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', opacity: loading && !stale ? 0.6 : 1, transition: 'opacity 0.2s ease' }}>
           {visible.length === 0 ? (
-            <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            <div style={{ padding: 24, textAlign: 'center', color: 'var(--pv-muted)', fontSize: 13 }}>
               Aucun poste ne correspond à ces filtres.
             </div>
           ) : (
-            <div className="pv-scroll">
+            <div className={`pv-scroll${compact ? ' pv-compact' : ''}`} ref={setScrollEl}>
               <table className="pv-table">
                 <thead>
                   <tr>
                     {columns.map(renderTh)}
-                    <th>
-                      <span className="pv-th-btn" style={{ cursor: 'default' }}>Première vue</span>
-                    </th>
+                    {!compact && (
+                      <th>
+                        <span className="pv-th-btn" style={{ cursor: 'default' }}>Première vue</span>
+                      </th>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -426,7 +456,7 @@ export default function PostesVersionsPage() {
                           <span style={{ color: 'var(--text-primary)', fontWeight: 700 }}>Poste</span>{' '}
                           <span style={{ fontFamily: 'Consolas, monospace', color: '#ffd700', fontWeight: 700 }}>{row.poste_ref}</span>
                           {row.key_kind && (
-                            <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--text-muted)', opacity: 0.8 }}>{row.key_kind}</span>
+                            <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--pv-muted)', opacity: 0.8 }}>{row.key_kind}</span>
                           )}
                         </td>
                         <td className="pv-site" title={site || undefined}>{site || '—'}</td>
@@ -437,13 +467,15 @@ export default function PostesVersionsPage() {
                             {showVersionBadge && <Badge state={info.versionState as PosteVersionState} small />}
                           </div>
                         </td>
-                        <td title={formatAbsolute(row.last_seen_at)}>
+                        <td title={compact ? `${formatAbsolute(row.last_seen_at)}\nPremière vue : ${formatAbsolute(row.first_seen_at)}` : formatAbsolute(row.last_seen_at)}>
                           {formatRelative(row.last_seen_at, dataAt)}
                         </td>
                         <td className="pv-user" title={login || undefined}>{login || '—'}</td>
-                        <td title={formatAbsolute(row.first_seen_at)}>
-                          {formatAbsolute(row.first_seen_at)}
-                        </td>
+                        {!compact && (
+                          <td title={formatAbsolute(row.first_seen_at)}>
+                            {formatAbsolute(row.first_seen_at)}
+                          </td>
+                        )}
                       </tr>
                     );
                   })}

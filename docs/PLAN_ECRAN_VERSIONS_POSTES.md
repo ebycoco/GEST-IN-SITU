@@ -97,6 +97,7 @@ ce changement (la 2.26.2 n'envoie rien).
    à un seul défilement (tableau en hauteur de fenêtre), bandeau d'info fermable, colonne « Clé » fusionnée
    dans « Poste », tri au clic sur 6 colonnes (`sortByColumn`, 26 tests), anciennes lignes conservées
    (grisées) si l'actualisation échoue, message OFFLINE complété. Rendu non revérifié visuellement.
+   **Re-test terrain (2026-11-14, agent-2, non commité)** : « Première vue » masquée sous 1000 px de zone de tableau (ResizeObserver, valeur en infobulle de « Dernière remontée »), `.pv-user` à 200 px, données périmées grisées par `grayscale(0.8)` au lieu d'une opacité 0,55 (contraste du texte préservé), gris secondaire local `--pv-muted` #a3a8c0. Rendu non vérifié visuellement.
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9
    (Opus) ; test terrain agent-13.
