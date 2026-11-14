@@ -101,7 +101,7 @@ ce changement (la 2.26.2 n'envoie rien).
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9
    (Opus) ; test terrain agent-13.
-6. **Gestes utilisateur** : appliquer 0010 en prod (fonctions `fn_list_client_versions` et
+6. **Gestes utilisateur** (0010 APPLIQUÉE EN PROD le 2026-11-14, contrôle 4/4 OK ; reste le GRANT d'ouverture + la Release) : appliquer 0010 en prod (fonctions `fn_list_client_versions` et
    `fn_count_client_versions`) ; juste avant la Release,
    `GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;`
    (rejouer 0009 la referme) ; release selon CLAUDE.md §8 ; inventaire manuel des postes absents.

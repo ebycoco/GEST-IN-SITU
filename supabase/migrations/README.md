@@ -143,8 +143,9 @@ présente mise en place — voir limitation ci-dessous.
   figé, EXECUTE ouvert à anon et authenticated (**à refermer en P2**, voir brouillon P3 dans
   `docs/PLAN_P1_CHANTIER_B.md`). **Dépend de 0009**, ne la modifie pas (la RPC d'écriture reste
   fermée). Test : `supabase/tests/0010_lecture_versions_postes.test.sql`. **Dev : appliquée le
-  2026-11-14** (test 14/14, appel REST réel avec la clé publishable conforme). **Production : non
-  appliquée** (procédure ci-dessous).
+  2026-11-14** (test 14/14, appel REST réel avec la clé publishable conforme). **Production : appliquée le
+  2026-11-14 (après accord écrit de l'utilisateur) ; étape 0 4/4 OK, contrôle 4/4 OK, comptage 0/0/0/0 ;
+  la RPC d'envoi `fn_report_client_version` reste FERMÉE.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
