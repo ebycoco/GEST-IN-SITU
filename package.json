@@ -21,7 +21,7 @@
     "prebuild:win": "node scripts/check-release-env.mjs",
     "build:win": "electron-vite build && electron-builder --win -c.extraMetadata.main=dist/main/index.js",
     "prerelease": "node scripts/check-release-env.mjs",
-    "release":"electron-vite build && electron-builder --win --publish always -c.extraMetadata.main=dist/main/index.js",
+    "release": "electron-vite build && electron-builder --win --publish always -c.extraMetadata.main=dist/main/index.js",
     "lint": "eslint src/",
     "pretest": "npm rebuild better-sqlite3",
     "test": "vitest run",
@@ -58,6 +58,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/better-sqlite3": "^7.6.12",
@@ -74,9 +75,13 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^2.3.0",
     "esbuild": "^0.21.5",
+    "eslint": "^10.15.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.14.0",
     "patch-package": "^8.0.1",
     "png-to-ico": "^3.0.2",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.72.2",
     "vite": "^5.4.11",
     "vitest": "^2.1.0"
   }
