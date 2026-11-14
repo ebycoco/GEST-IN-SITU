@@ -15,10 +15,18 @@ interface CacheState {
     cloudCartesCount: number;
     detailedSyncStats?: { cleanCount: number, missingCount: number, probableCount: number, strictCount: number, invalidCount: number, modifiedCount: number, ghostCount: number } | null;
     cachedAt: number | null;
+    /**
+     * Clé de portée (site / rôle actif / centre, ou 'GLOBAL' en gouvernance) de l'instantané.
+     * OPTIONNEL : absent/null = cache hérité sans portée connue, jamais restauré par
+     * useDashboardStats (cf. src/renderer/src/utils/cacheScope.ts).
+     */
+    scopeKey?: string | null;
   };
   importCache: {
     cardCount: number | null;
     cachedAt: number | null;
+    /** Clé de portée (site / rôle actif) du compteur. OPTIONNEL, voir dashboardCache.scopeKey. */
+    scopeKey?: string | null;
   };
   centreDashboardCache: {
     stats: any | null;
@@ -47,7 +55,7 @@ interface CacheState {
     cachedAt: number | null;
   };
   setDashboardCache: (data: Partial<CacheState['dashboardCache']>) => void;
-  setImportCache: (cardCount: number) => void;
+  setImportCache: (cardCount: number, scopeKey?: string | null) => void;
   setCentreDashboardCache: (data: Partial<CacheState['centreDashboardCache']>) => void;
   setQualiteCache: (stats: any) => void;
   setAgentsCache: (list: any[]) => void;
@@ -71,11 +79,13 @@ export const useCacheStore = create<CacheState>((set) => ({
     dirtyCartesCount: 0,
     dirtyUsersCount: 0,
     cloudCartesCount: 0,
-    cachedAt: null
+    cachedAt: null,
+    scopeKey: null
   },
   importCache: {
     cardCount: null,
-    cachedAt: null
+    cachedAt: null,
+    scopeKey: null
   },
   centreDashboardCache: {
     stats: null,
@@ -106,8 +116,10 @@ export const useCacheStore = create<CacheState>((set) => ({
   setDashboardCache: (data) => set((state) => ({
     dashboardCache: { ...state.dashboardCache, ...data, cachedAt: Date.now() }
   })),
-  setImportCache: (cardCount) => set({
-    importCache: { cardCount, cachedAt: Date.now() }
+  // 2e paramètre optionnel (rétrocompatible) : sans scopeKey, le cache est enregistré « sans portée »
+  // (scopeKey = null) et ImportPage ne le restaurera pas.
+  setImportCache: (cardCount, scopeKey) => set({
+    importCache: { cardCount, cachedAt: Date.now(), scopeKey: scopeKey ?? null }
   }),
   setCentreDashboardCache: (data) => set((state) => ({
     centreDashboardCache: { ...state.centreDashboardCache, ...data, cachedAt: Date.now() }
@@ -131,8 +143,8 @@ export const useCacheStore = create<CacheState>((set) => ({
     dashboardCache: { ...state.dashboardCache, cachedAt: null }
   })),
   clearCache: () => set({
-    dashboardCache: { stats: null, globalStats: null, sites: [], siteSaisiesStats: [], siteQualiteStats: [], siteLogistiqueStats: [], operatorTodayCount: 0, operatorRecentSaisies: [], dirtyCartesCount: 0, dirtyUsersCount: 0, cloudCartesCount: 0, cachedAt: null },
-    importCache: { cardCount: null, cachedAt: null },
+    dashboardCache: { stats: null, globalStats: null, sites: [], siteSaisiesStats: [], siteQualiteStats: [], siteLogistiqueStats: [], operatorTodayCount: 0, operatorRecentSaisies: [], dirtyCartesCount: 0, dirtyUsersCount: 0, cloudCartesCount: 0, cachedAt: null, scopeKey: null },
+    importCache: { cardCount: null, cachedAt: null, scopeKey: null },
     centreDashboardCache: { stats: null, cadence: [], cachedAt: null },
     qualiteCache: { stats: null, cachedAt: null },
     agentsCache: { list: [], cachedAt: null },

@@ -1,6 +1,33 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useCacheStore } from '../../../stores/cacheStore';
 import { useAuthStore } from '../../../stores/authStore';
+import {
+  GOVERNANCE_SCOPE_KEY,
+  computeDashboardScopeKey,
+  shouldRestoreCache
+} from '../../../utils/cacheScope';
+
+/**
+ * Instantané « vierge » du cache tableau de bord. Utilisé quand une écriture complète change de
+ * portée : sans cela, la fusion `{...ancienCache, ...data}` du store conserverait des champs du
+ * site précédent sous la clé de la nouvelle portée (ex. `stats` du site A étiqueté « GLOBAL »).
+ */
+type DashboardCacheInput = Parameters<ReturnType<typeof useCacheStore.getState>['setDashboardCache']>[0];
+
+const BLANK_DASHBOARD_SNAPSHOT = {
+  stats: null,
+  globalStats: null,
+  sites: [] as unknown[],
+  siteSaisiesStats: [] as unknown[],
+  siteQualiteStats: [] as unknown[],
+  siteLogistiqueStats: [] as unknown[],
+  operatorTodayCount: 0,
+  operatorRecentSaisies: [] as unknown[],
+  dirtyCartesCount: 0,
+  dirtyUsersCount: 0,
+  cloudCartesCount: 0,
+  detailedSyncStats: null
+};
 
 /**
  * Récupère le compteur de cartes cloud avec un retry léger et borné (2-3 tentatives).
@@ -60,7 +87,46 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   // l'audit de non-régression sur le commit b4e917a.
   const isStatsCentreFilteredRef = useRef<boolean>(false);
 
+  // ── Portée du cache (correctif « site actif périmé », D1) ───────────────────────────────
+  // `scopeKey` identifie la portée affichée : vue gouvernance, ou site effectif + rôle actif +
+  // centre (cf. utils/cacheScope.ts). Le cache n'est restauré que si sa clé correspond, et toute
+  // réponse asynchrone arrivée après un changement de portée est ignorée (garde de péremption).
+  // `scopeKeyRef` (ref, pas de state : aucun re-render dédié, CLAUDE.md §2) est mis à jour à chaque
+  // rendu et lu APRÈS chaque `await` / `.then` : si la portée de l'appel diffère de la portée
+  // courante, la réponse est périmée et ne doit ni s'afficher ni toucher au cache.
+  const scopeKey = computeDashboardScopeKey({
+    role: user?.role,
+    activeSiteId,
+    userSiteId: user?.site_id,
+    centreId: user?.centre_id,
+    isGovernanceView
+  });
+  const scopeKeyRef = useRef<string>(scopeKey);
+  scopeKeyRef.current = scopeKey;
+
+  // Écriture COMPLÈTE d'un instantané (fin de chargement) : étiquette la portée ; si le cache
+  // appartenait à une autre portée, repart d'un instantané vierge. Ignorée si la portée a changé.
+  const commitDashboardSnapshot = (key: string, data: DashboardCacheInput) => {
+    if (scopeKeyRef.current !== key) return;
+    const store = useCacheStore.getState();
+    const base = store.dashboardCache.scopeKey === key ? {} : BLANK_DASHBOARD_SNAPSHOT;
+    store.setDashboardCache({ ...base, ...data, scopeKey: key });
+  };
+
+  // Mise à jour PARTIELLE asynchrone (compteur cloud, incrément optimiste) : n'écrit que dans un
+  // instantané déjà posé et daté de la MÊME portée. Sinon elle créerait (et re-daterait via
+  // `cachedAt`) un faux cache « valide » d'une autre portée, ou ressusciterait un cache invalidé.
+  const patchDashboardCache = (key: string, data: DashboardCacheInput) => {
+    if (scopeKeyRef.current !== key) return;
+    const store = useCacheStore.getState();
+    if (!store.dashboardCache.cachedAt || store.dashboardCache.scopeKey !== key) return;
+    store.setDashboardCache(data);
+  };
+
   const loadGlobalData = async (silent = false) => {
+    // Portée de cet appel : toujours la vue gouvernance. Périmé si l'utilisateur a ouvert un site
+    // pendant l'attente (la réponse ne doit pas s'afficher ni estampiller le cache du site).
+    const isStale = () => scopeKeyRef.current !== GOVERNANCE_SCOPE_KEY;
     try {
       if (!silent) {
         setLoading(true);
@@ -70,23 +136,35 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         window.api.stats.getGlobal(),
         window.api.hierarchy.getSitesSummary()
       ]);
+      if (isStale()) return;
       setGlobalStats(gStats);
       setSites(sList);
       if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache des données...');
-      useCacheStore.getState().setDashboardCache({
+      commitDashboardSnapshot(GOVERNANCE_SCOPE_KEY, {
         globalStats: gStats,
         sites: sList
       });
     } catch (e) {
       console.error(e);
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && !isStale()) setLoading(false);
       useAuthStore.getState().setInitialDataProgress(100, 'Interface prête');
       setTimeout(() => useAuthStore.getState().setInitialDataLoading(false), 300);
     }
   };
 
   const loadStats = useCallback(async (silent = false, supervisionFilters?: { centreId?: number; agentId?: number; dateStr?: string }, forceRefresh = false) => {
+    // Portée de CET appel (calculée depuis la fermeture, donc cohérente avec les siteIdToUse /
+    // centreIdToUse utilisés ci-dessous). Si la portée courante (scopeKeyRef) diffère après un
+    // await, la réponse est périmée : elle ne s'affiche pas et n'écrit pas dans le cache.
+    const callScopeKey = computeDashboardScopeKey({
+      role: user?.role,
+      activeSiteId,
+      userSiteId: user?.site_id,
+      centreId: user?.centre_id,
+      isGovernanceView
+    });
+    const isStale = () => scopeKeyRef.current !== callScopeKey;
     try {
       if (!silent) {
         setLoading(true);
@@ -113,6 +191,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           window.api.stats.getUnsyncedCardsCount(siteIdToUse!),
           window.api.stats.getDetailedSyncStats(siteIdToUse!)
         ]);
+        if (isStale()) return;
         const recents = (recentsRes as any).rows || [];
         if (!silent) useAuthStore.getState().setInitialDataProgress(70, 'Calcul des statistiques de synchronisation...');
         setOperatorTodayCount(todayCount);
@@ -121,18 +200,16 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         setDetailedSyncStats(syncStats);
 
         fetchCloudCountWithRetry(siteIdToUse!).then(count => {
+          if (isStale()) return;
           setCloudCartesCount(count);
-          useCacheStore.getState().setDashboardCache({
-            ...useCacheStore.getState().dashboardCache,
-            cloudCartesCount: count
-          });
+          patchDashboardCache(callScopeKey, { cloudCartesCount: count });
         }).catch(err => {
           console.error('Failed to fetch cloud count after retries:', err);
-          setCloudCartesCount(-1);
+          if (!isStale()) setCloudCartesCount(-1);
         });
 
         if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache et rendu final...');
-        useCacheStore.getState().setDashboardCache({
+        commitDashboardSnapshot(callScopeKey, {
           operatorTodayCount: todayCount,
           operatorRecentSaisies: recents,
           dirtyCartesCount: cartesCount
@@ -141,6 +218,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         // Chargement des stats KPI avec bridage centre si ADMIN_CENTRE
         if (!silent) useAuthStore.getState().setInitialDataProgress(40, 'Extraction des KPI globaux...');
         const data = await window.api.stats.get(siteIdToUse || undefined, centreIdToUse, forceRefresh);
+        if (isStale()) return;
         setStats(data);
         
         let saisiesToday: any[] = [];
@@ -159,24 +237,24 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
             window.api.stats.getUnsyncedUsersCount(siteIdToUse),
             window.api.stats.getDetailedSyncStats(siteIdToUse)
           ]);
-          
+          if (isStale()) return;
+
           // Fetch cloud count non-blockingly (avec retry léger et borné, voir fetchCloudCountWithRetry)
           fetchCloudCountWithRetry(siteIdToUse).then(count => {
+            if (isStale()) return;
             setCloudCartesCount(count);
-            useCacheStore.getState().setDashboardCache({
-              ...useCacheStore.getState().dashboardCache,
-              cloudCartesCount: count
-            });
+            patchDashboardCache(callScopeKey, { cloudCartesCount: count });
           }).catch(err => {
             console.error('Failed to fetch cloud count after retries:', err);
-            setCloudCartesCount(-1);
+            if (!isStale()) setCloudCartesCount(-1);
           });
 
           window.api.sync.getTotalCloudCartesCount(siteIdToUse).then(count => {
+            if (isStale()) return;
             setTotalCloudCartesCount(count);
           }).catch(err => {
             console.error('Failed to fetch total cloud count:', err);
-            setTotalCloudCartesCount(-1);
+            if (!isStale()) setTotalCloudCartesCount(-1);
           });
 
           if (!silent) useAuthStore.getState().setInitialDataProgress(70, 'Extraction des indicateurs Qualité & Logistique...');
@@ -184,6 +262,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
             window.api.stats.getSiteQualiteToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr),
             window.api.stats.getSiteLogistiqueToday(siteIdToUse, centreIdToUse, targetAgentId, targetDateStr)
           ]);
+          if (isStale()) return;
           setSiteSaisiesStats(saisiesToday);
           setSiteQualiteStats(qualiteToday);
           setSiteLogistiqueStats(logistiqueToday);
@@ -193,7 +272,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
         }
  
         if (!silent) useAuthStore.getState().setInitialDataProgress(85, 'Mise en cache et préparation du rendu...');
-        useCacheStore.getState().setDashboardCache({
+        commitDashboardSnapshot(callScopeKey, {
           stats: data,
           siteSaisiesStats: saisiesToday,
           siteQualiteStats: qualiteToday,
@@ -207,11 +286,11 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     } catch (e) { 
       console.error(e); 
     } finally { 
-      if (!silent) setLoading(false); 
+      if (!silent && !isStale()) setLoading(false);
       useAuthStore.getState().setInitialDataProgress(100, 'Déverrouillage...');
       setTimeout(() => useAuthStore.getState().setInitialDataLoading(false), 300);
     }
-  }, [user?.role, user?.site_id, user?.centre_id, user?.id_user, activeSiteId]);
+  }, [user?.role, user?.site_id, user?.centre_id, user?.id_user, activeSiteId, isGovernanceView]);
 
   // ── Rafraîchissement périodique léger du compteur cloud ──────────────────────
   // Le compteur "N cartes à télécharger" n'est jusqu'ici recalculé qu'au montage
@@ -236,11 +315,10 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     const CLOUD_COUNT_REFRESH_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
     const interval = setInterval(() => {
       fetchCloudCountWithRetry(siteIdToUse).then(count => {
+        // Garde de péremption : portée changée pendant l'attente => réponse ignorée.
+        if (scopeKeyRef.current !== scopeKey) return;
         setCloudCartesCount(count);
-        useCacheStore.getState().setDashboardCache({
-          ...useCacheStore.getState().dashboardCache,
-          cloudCartesCount: count
-        });
+        patchDashboardCache(scopeKey, { cloudCartesCount: count });
       }).catch(err => {
         // Échec silencieux : on conserve la dernière valeur connue plutôt que de
         // basculer à -1 sur un simple aléa réseau transitoire (le prochain tick
@@ -250,7 +328,7 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }, CLOUD_COUNT_REFRESH_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [user?.role, user?.site_id, activeSiteId]);
+  }, [user?.role, user?.site_id, activeSiteId, scopeKey]);
 
   // ── Badge "cartes du centre" (généralisé depuis AgentVerificationLayout.tsx) ────────────
   // Contexte : le badge `stats.total` reste volontairement scopé au SITE pour la plupart des
@@ -308,12 +386,9 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
           const next = prev ? { ...prev, total: (prev.total ?? 0) + totalIncrement } : prev;
           // Mise à jour simultanée du cache renderer (risque de régression identifié : un
           // démontage/remontage ultérieur du layout ne doit pas resservir une valeur de
-          // cache antérieure au pull).
+          // cache antérieure au pull). Écriture limitée à un cache de la MÊME portée.
           if (next) {
-            useCacheStore.getState().setDashboardCache({
-              ...useCacheStore.getState().dashboardCache,
-              stats: next
-            });
+            patchDashboardCache(scopeKey, { stats: next });
           }
           return next;
         });
@@ -324,12 +399,16 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       }
     });
     return () => unsubscribe();
-  }, [user?.role, user?.site_id, user?.centre_id, activeSiteId]);
+  }, [user?.role, user?.site_id, user?.centre_id, activeSiteId, scopeKey]);
 
   useEffect(() => {
+    // Restauration instantanée UNIQUEMENT si l'instantané appartient à la portée courante
+    // (site effectif + rôle actif + centre, ou vue gouvernance). Un cache sans clé (hérité) ou d'une
+    // autre portée est refusé : on remet à zéro les états affichés (sinon l'ancien site resterait
+    // visible pendant le chargement) puis on recharge.
     const cache = useCacheStore.getState().dashboardCache;
     let hasCache = false;
-    if (cache.cachedAt) {
+    if (shouldRestoreCache(cache, scopeKey)) {
       setStats(cache.stats);
       setGlobalStats(cache.globalStats);
       setSites(cache.sites);
@@ -351,13 +430,29 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
 
     if (!hasCache) {
+      setStats(null);
+      setSiteSaisiesStats(prev => (prev.length ? [] : prev));
+      setSiteQualiteStats(prev => (prev.length ? [] : prev));
+      setSiteLogistiqueStats(prev => (prev.length ? [] : prev));
+      setOperatorTodayCount(0);
+      setOperatorRecentSaisies(prev => (prev.length ? [] : prev));
+      setDirtyCartesCount(0);
+      setDirtyUsersCount(0);
+      setCloudCartesCount(0);
+      setTotalCloudCartesCount(0);
+      setDetailedSyncStats(null);
+      setCentreCardsCount(null);
+      isStatsCentreFilteredRef.current = false;
       if (isGovernanceView) {
         loadGlobalData();
       } else {
         loadStats();
       }
     }
-  }, [activeSiteId, isGovernanceView]);
+    // Rechargement déclenché par le changement de portée (la clé englobe site actif, gouvernance,
+    // rôle actif et centre). loadStats / loadGlobalData restent hors dépendances (comme avant) :
+    // ils sont recréés à chaque rendu et l'appel porte la portée de CE rendu.
+  }, [scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return {
     stats,
