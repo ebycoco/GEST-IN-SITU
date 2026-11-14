@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -38,12 +38,15 @@ vi.mock('../src/main/sync/network-monitor', () => ({
 }));
 
 const rpcCalls: { fn: string; args: unknown }[] = [];
-let rpcResponder: (fn: string) => { data: unknown; error: unknown } = () => ({ data: true, error: null });
+type FakeRpcResult = { data: unknown; error: unknown };
+// Le signal d'annulation est transmis au répondeur (tests de délai dépassé) ; une Promise est permise
+// (tests d'envoi « en vol »).
+let rpcResponder: (fn: string, signal?: AbortSignal) => FakeRpcResult | Promise<FakeRpcResult> = () => ({ data: true, error: null });
 let clientAvailable = true;
 const fakeClient = {
   rpc: (fn: string, args?: unknown) => {
     rpcCalls.push({ fn, args });
-    return { abortSignal: async () => rpcResponder(fn) };
+    return { abortSignal: async (signal?: AbortSignal) => rpcResponder(fn, signal) };
   }
 };
 vi.mock('../src/main/sync/supabase-client', () => ({
@@ -88,6 +91,11 @@ const waitCalls = async (n: number): Promise<void> => {
 };
 const posteFile = (): string => svc.getPosteKeyFilePath();
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 beforeEach(() => {
   svc.__resetClientVersionStateForTests();
@@ -138,6 +146,46 @@ describe('clé de poste', () => {
     fs.writeFileSync(posteFile(), JSON.stringify({ poste_key: 'a b' }), 'utf-8');
     const key = await svc.getPosteKey();
     expect(key).toMatch(UUID_RE);
+  });
+
+  const VALID_KEY = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  const writeValidKeyFile = (): void => {
+    fs.mkdirSync(path.dirname(posteFile()), { recursive: true });
+    fs.writeFileSync(posteFile(), JSON.stringify({ poste_key: VALID_KEY, created_at: '2026-11-01T00:00:00Z' }), 'utf-8');
+  };
+  const ebusy = (): NodeJS.ErrnoException => Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' });
+
+  it('fichier absent (ENOENT) → clé créée et fichier écrit', async () => {
+    expect(fs.existsSync(posteFile())).toBe(false);
+    const key = await svc.getPosteKey();
+    expect(JSON.parse(fs.readFileSync(posteFile(), 'utf-8')).poste_key).toBe(key);
+  });
+
+  it('lecture en échec persistant (EBUSY) → clé en mémoire, fichier existant NON écrasé', async () => {
+    writeValidKeyFile();
+    const before = fs.readFileSync(posteFile(), 'utf-8');
+    const readSpy = vi.spyOn(fs.promises, 'readFile').mockRejectedValue(ebusy());
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile');
+    const key = await svc.getPosteKey();
+    expect(key).toMatch(UUID_RE);
+    expect(key).not.toBe(VALID_KEY);
+    expect(readSpy).toHaveBeenCalledTimes(2); // un essai + un nouvel essai après ~200 ms
+    expect(writeSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    expect(fs.readFileSync(posteFile(), 'utf-8')).toBe(before);
+  });
+
+  it('lecture en échec momentané (EBUSY une fois) → 2e essai réussi, clé existante conservée', async () => {
+    writeValidKeyFile();
+    vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(ebusy());
+    expect(await svc.getPosteKey()).toBe(VALID_KEY);
+  });
+
+  it('écriture de la nouvelle clé impossible → clé gardée en mémoire, aucune exception', async () => {
+    vi.spyOn(fs.promises, 'writeFile').mockRejectedValue(Object.assign(new Error('read-only'), { code: 'EROFS' }));
+    const key = await svc.getPosteKey();
+    expect(key).toMatch(UUID_RE);
+    expect(fs.existsSync(posteFile())).toBe(false);
   });
 });
 
@@ -285,5 +333,152 @@ describe('lecture listClientVersions', () => {
     expect(res.truncated).toBe(false);
     expect(res.rows[0]).toMatchObject({ poste_ref: 'abcdef12', site_nom: 'ABOBO', last_user_login: 'agent.un', nb_reports: 3 });
     expect(res.rows[1]).toMatchObject({ poste_ref: '01234567', site_nom: null, last_user_login: null, nb_reports: 5 });
+  });
+});
+
+describe('lecture listClientVersions — délai dépassé', () => {
+  // Le répondeur ne répond jamais tant que le signal d'annulation n'est pas déclenché (délai de 15 s).
+  const hangUntilAbort = (_fn: string, signal?: AbortSignal): Promise<FakeRpcResult> =>
+    new Promise((resolve) => {
+      signal?.addEventListener('abort', () => resolve({ data: null, error: { message: 'AbortError' } }));
+    });
+
+  it('aucune réponse en 15 s → TIMEOUT (et non RPC_ERROR)', async () => {
+    vi.useFakeTimers();
+    rpcResponder = hangUntilAbort;
+    const pending = svc.listClientVersions();
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(rpcCalls).toHaveLength(2); // les deux RPC sont parties, aucune n'a répondu
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toEqual({ success: false, error: 'TIMEOUT' });
+  });
+
+  it('annulation signalée par exception (rejet de la RPC) → TIMEOUT', async () => {
+    vi.useFakeTimers();
+    rpcResponder = (_fn, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new Error('The operation was aborted')));
+    });
+    const pending = svc.listClientVersions();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(await pending).toEqual({ success: false, error: 'TIMEOUT' });
+  });
+});
+
+describe('startClientVersionReporter — démarrage + 20 s, récurrence 12 h, arrêt', () => {
+  it('envoie à 20 s, puis toutes les 12 h, et plus rien après stopClientVersionReporter', async () => {
+    await svc.getPosteKey(); // clé en cache avant les faux timers (aucune E/S fichier ensuite)
+    vi.useFakeTimers();
+    sessionUser = { sync_id: 'user-sync-1', site_id: 7 };
+    svc.startClientVersionReporter();
+
+    await vi.advanceTimersByTimeAsync(svc.BOOT_REPORT_DELAY_MS - 1);
+    expect(rpcCalls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(rpcCalls).toHaveLength(1);
+
+    // Récurrence : un seul envoi à l'échéance des 12 h (la règle 1/h l'autorise, 12 h > 1 h).
+    await vi.advanceTimersByTimeAsync(svc.PERIODIC_REPORT_INTERVAL_MS - svc.BOOT_REPORT_DELAY_MS);
+    expect(rpcCalls).toHaveLength(2);
+
+    svc.stopClientVersionReporter();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(svc.PERIODIC_REPORT_INTERVAL_MS * 3);
+    expect(rpcCalls).toHaveLength(2);
+  });
+
+  it('un second start ne crée pas de second minuteur', () => {
+    vi.useFakeTimers();
+    svc.startClientVersionReporter();
+    svc.startClientVersionReporter();
+    expect(vi.getTimerCount()).toBe(2); // 1 timer de démarrage + 1 intervalle
+    svc.stopClientVersionReporter();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('envoi récurrent hors ligne : rien envoyé et aucun écouteur réseau armé', async () => {
+    await svc.getPosteKey();
+    vi.useFakeTimers();
+    svc.startClientVersionReporter();
+    await vi.advanceTimersByTimeAsync(svc.BOOT_REPORT_DELAY_MS);
+    expect(rpcCalls).toHaveLength(1);
+    fakeMonitor.state = 'OFFLINE';
+    await vi.advanceTimersByTimeAsync(svc.PERIODIC_REPORT_INTERVAL_MS);
+    expect(rpcCalls).toHaveLength(1);
+    expect(fakeMonitor.listenerCount('change')).toBe(0);
+    svc.stopClientVersionReporter();
+  });
+
+  it('en dev sans GIS_REPORT_VERSION_IN_DEV : aucun minuteur, aucun appel', async () => {
+    isState.dev = true;
+    vi.useFakeTimers();
+    svc.startClientVersionReporter();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(svc.PERIODIC_REPORT_INTERVAL_MS);
+    expect(rpcCalls).toEqual([]);
+  });
+});
+
+describe('connexion pendant un envoi en cours', () => {
+  /** Répondeur dont la première réponse reste en suspens jusqu'à release(). */
+  const makeGate = (): { release: () => void; responder: () => Promise<FakeRpcResult> } => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let first = true;
+    return {
+      release: () => release(),
+      responder: async () => {
+        if (first) { first = false; await gate; }
+        return { data: true, error: null };
+      }
+    };
+  };
+
+  it('utilisateur différent : la connexion arrivée pendant l\'envoi est rejouée UNE fois, avec le nouvel utilisateur', async () => {
+    const gate = makeGate();
+    rpcResponder = gate.responder;
+    sessionUser = { sync_id: 'user-sync-1', site_id: 7 };
+    svc.reportClientVersionAfterLogin();
+    await vi.waitFor(() => expect(rpcCalls).toHaveLength(1), { timeout: 5000, interval: 20 });
+
+    sessionUser = { sync_id: 'user-sync-2', site_id: 7 };
+    svc.reportClientVersionAfterLogin(); // envoi 1 toujours en vol
+    await flush();
+    expect(rpcCalls).toHaveLength(1);
+
+    gate.release();
+    await waitCalls(2);
+    expect((rpcCalls[0].args as Record<string, unknown>).p_user_sync_id).toBe('user-sync-1');
+    expect((rpcCalls[1].args as Record<string, unknown>).p_user_sync_id).toBe('user-sync-2');
+    await flush();
+    expect(rpcCalls).toHaveLength(2); // pas de boucle
+  });
+
+  it('même utilisateur : le rejeu est décidé par la règle anti-répétition → aucun second envoi', async () => {
+    const gate = makeGate();
+    rpcResponder = gate.responder;
+    sessionUser = { sync_id: 'user-sync-1', site_id: 7 };
+    svc.reportClientVersionAfterLogin();
+    await vi.waitFor(() => expect(rpcCalls).toHaveLength(1), { timeout: 5000, interval: 20 });
+    svc.reportClientVersionAfterLogin();
+    await flush();
+    gate.release();
+    await flush();
+    await flush();
+    expect(rpcCalls).toHaveLength(1);
+  });
+});
+
+describe('lecture listClientVersions — erreur SQLite locale', () => {
+  it('erreur dans la traduction locale → LOCAL_ERROR (et non RPC_ERROR)', async () => {
+    rpcResponder = (fn) => (fn === 'fn_list_client_versions'
+      ? { error: null, data: [{ poste_ref: 'abcdef12', app_version: '2.27.0', site_sync_id: 'site-sync-7', last_user_sync_id: null, first_seen_at: null, last_seen_at: null, nb_reports: 1, key_kind: null }] }
+      : { error: null, data: [{ nb_total: 1, nb_preuve: 0, nb_ignorees: 0, nb_listables: 1 }] });
+    // La doublure de base lit fakeSites.filter(...) : on la fait échouer comme un SQLITE_BUSY.
+    const spy = vi.spyOn(fakeSites, 'filter').mockImplementation(() => { throw new Error('SQLITE_BUSY'); });
+    try {
+      expect(await svc.listClientVersions()).toEqual({ success: false, error: 'LOCAL_ERROR' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

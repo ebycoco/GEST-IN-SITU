@@ -57,6 +57,25 @@ vi.mock('../src/main/auth/session-heartbeat', () => ({
   refreshSecureCurrentUser: vi.fn()
 }));
 
+// Chemin de succès : client Supabase factice (deux RPC), version connue de l'auto-updater simulée
+// (le vrai module tire electron-updater, non chargeable hors Electron). Aucun appel réseau.
+const fakeRpcData: Record<string, unknown> = {
+  fn_list_client_versions: [
+    { poste_ref: 'abcdef12', app_version: '2.27.0', site_sync_id: 'site-sync-980', last_user_sync_id: null, first_seen_at: '2026-11-01T00:00:00Z', last_seen_at: '2026-11-14T00:00:00Z', nb_reports: 3, key_kind: 'publishable' }
+  ],
+  fn_count_client_versions: [{ nb_total: 4, nb_preuve: 1, nb_ignorees: 1, nb_listables: 2 }]
+};
+const fakeSupabase = {
+  rpc: (fn: string) => ({ abortSignal: async () => ({ data: fakeRpcData[fn], error: null }) })
+};
+vi.mock('../src/main/sync/supabase-client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/main/sync/supabase-client')>()),
+  getSupabaseClient: () => fakeSupabase
+}));
+vi.mock('../src/main/auto-updater', () => ({
+  getLastKnownLatestVersion: () => '2.28.0'
+}));
+
 describe('versions:getPostes — contrôle d\'accès', () => {
   let connection: typeof import('../src/main/database/connection');
   let db: import('better-sqlite3').Database;
@@ -108,5 +127,24 @@ describe('versions:getPostes — contrôle d\'accès', () => {
   it('ignore tout paramètre du renderer et laisse passer SUPER ADMIN actif (hors ligne → OFFLINE structuré)', async () => {
     mockGetSecureCurrentUser.mockReturnValue({ id_user: USER_SA, role: 'SUPER ADMIN', site_id: null, centre_id: null });
     expect(await handler({}, { siteId: 1, forged: true })).toEqual({ success: false, error: 'OFFLINE' });
+  });
+
+  it('succès (SUPER ADMIN actif, réseau ONLINE) : rows, counts, latestVersion et currentVersion', async () => {
+    const { networkMonitor } = await import('../src/main/sync/network-monitor');
+    const stateSpy = vi.spyOn(networkMonitor, 'getState').mockReturnValue('ONLINE');
+    try {
+      mockGetSecureCurrentUser.mockReturnValue({ id_user: USER_SA, role: 'SUPER ADMIN', site_id: null, centre_id: null });
+      const res = await handler({});
+      expect(res.success).toBe(true);
+      expect(res.counts).toEqual({ nb_total: 4, nb_preuve: 1, nb_ignorees: 1, nb_listables: 2 });
+      expect(res.latestVersion).toBe('2.28.0');
+      expect(res.currentVersion).toBe('2.27.0');
+      expect(res.truncated).toBe(false);
+      expect(res.rows).toHaveLength(1);
+      // site_sync_id 'site-sync-980' traduit en nom via t_sites (ligne de test insérée plus haut).
+      expect(res.rows[0]).toMatchObject({ poste_ref: 'abcdef12', app_version: '2.27.0', site_nom: 'SITE_VERSIONS_TEST', last_user_login: null, nb_reports: 3 });
+    } finally {
+      stateSpy.mockRestore();
+    }
   });
 });

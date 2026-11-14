@@ -74,6 +74,9 @@ ce changement (la 2.26.2 n'envoie rien).
    d'utilisateur ou de version, identité relue dans `getSecureCurrentUser()` (sync_id utilisateur +
    `t_sites.sync_id`), rien si `!app.isPackaged` (= `is.dev`) sauf `GIS_REPORT_VERSION_IN_DEV=1`,
    erreur « permission denied » journalisée en info ; arrêt dans `will-quit`.
+   **Corrections P2 de l'audit faites, non commitées (2026-11-14)** : envoi récurrent toutes les 12 h
+   (1 `setInterval` unref), lecture de clé tolérante (nouvel essai 200 ms, jamais d'écrasement sur
+   erreur non-ENOENT), connexion pendant un envoi rejouée une fois, message dev avec avertissement PROD.
 3. **Lecture + handler** (agent-3) : `listClientVersions()`, canal `versions:getPostes`, getter
    dans `auto-updater.ts`, `preload/index.ts`, `preload/global.d.ts`, type dans `shared/types.ts`.
    **FAIT le 2026-11-14 (agent-3, non commité)** : `listClientVersions()` (2 RPC, timeout 15 s,
@@ -83,6 +86,9 @@ ce changement (la 2.26.2 n'envoie rien).
    `window.api.versions.getPostes()`, types `PosteVersionRow` / `PostesVersionsCounts` /
    `PostesVersionsResult`. Tests `tests/client-version-service.test.ts` (21) et
    `tests/versions-getpostes-rbac.test.ts` (4) ; `tsc` 0 erreur.
+   **Corrections P2 de l'audit faites, non commitées (2026-11-14)** : code `LOCAL_ERROR` (erreur
+   SQLite locale, type `PostesVersionsError`) ; tests portés à 34 + 5 (succès du handler, démarrage/
+   12 h/arrêt, TIMEOUT, clé EBUSY/ENOENT, rejeu de connexion) ; suite complète 1044/1044.
 4. **Écran** (agent-2) : `PostesVersionsPage.tsx`, `postesVersionsStatus.ts`, route et menu.
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9

@@ -202,7 +202,7 @@ export interface PostesVersionsCounts {
 }
 
 /** Erreurs structurées du canal `versions:getPostes` (aucune exception vers le renderer). */
-export type PostesVersionsError = 'FORBIDDEN' | 'OFFLINE' | 'NO_CLIENT' | 'TIMEOUT' | 'RPC_ERROR' | 'INTERNAL';
+export type PostesVersionsError = 'FORBIDDEN' | 'OFFLINE' | 'NO_CLIENT' | 'TIMEOUT' | 'RPC_ERROR' | 'LOCAL_ERROR' | 'INTERNAL';
 
 /** Réponse du canal `versions:getPostes` (window.api.versions.getPostes()). */
 export type PostesVersionsResult =

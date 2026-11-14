@@ -22,11 +22,18 @@ import type { PosteVersionRow, PostesVersionsCounts, PostesVersionsError } from 
  *    chemin de démarrage ni sur celui de la connexion.
  *  - La RPC est FERMÉE en prod tant que l'utilisateur ne l'ouvre pas (REVOKE de 0009) :
  *    l'échec "permission denied" est un cas NORMAL, journalisé en info, jamais en erreur.
- *  - Déclencheurs : démarrage + 20 s (timer unref) ; connexion réussie ; si le réseau
- *    n'est pas ONLINE au moment voulu, UN SEUL écouteur 'change' du networkMonitor est
+ *  - Déclencheurs : démarrage + 20 s (timer unref) ; connexion réussie ; envoi périodique
+ *    toutes les 12 h (UN SEUL setInterval unref, armé au démarrage du déclarant, effacé par
+ *    stopClientVersionReporter ; ne fait rien hors ligne) ; si le réseau n'est pas ONLINE
+ *    au moment voulu (démarrage/connexion), UN SEUL écouteur 'change' du networkMonitor est
  *    armé et se détache au premier passage ONLINE (aucun polling).
- *  - Anti-répétition : au plus 1 envoi/heure/processus, sauf changement d'utilisateur
- *    (sync_id) ou de version (shouldSendReport, fonction pure testée).
+ *  - Anti-répétition : plafond de 1 envoi/heure/processus (ce n'est PAS une fréquence : la
+ *    fréquence réelle est l'envoi périodique de 12 h), sauf changement d'utilisateur
+ *    (sync_id) ou de version (shouldSendReport, fonction pure testée). Tous les
+ *    déclencheurs passent par cette même règle.
+ *  - Connexion pendant un envoi en cours : drapeau rerunRequested, rejeu UNIQUE dans le
+ *    finally de l'envoi en cours (la règle utilisateur/version décide d'envoyer ou non).
+ *    Le rejeu n'est pas une 'connexion' : il ne peut pas se redemander lui-même.
  *  - Identité : sync_id de l'utilisateur de la session serveur et t_sites.sync_id de son
  *    site — JAMAIS les id locaux numériques (bug historique site_id local envoyé au cloud).
  *  - Garde dev : rien en is.dev (= !app.isPackaged ; le .env de dev cible la PROD) sauf
@@ -36,7 +43,9 @@ import type { PosteVersionRow, PostesVersionsCounts, PostesVersionsError } from 
  *  - UUID crypto.randomUUID() créé au premier lancement, stocké dans
  *    userData/gis-poste/poste-id.json (jamais dans t_config : une base restaurée ou copiée
  *    dupliquerait la clé ; jamais le nom du PC). Écriture atomique (fichier temporaire +
- *    rename). Fichier illisible/invalide → régénéré et journalisé.
+ *    rename). Fichier ABSENT (ENOENT) ou contenu invalide → régénéré et réécrit. Erreur de
+ *    lecture momentanée (EBUSY, EPERM, EACCES…) → un 2e essai après ~200 ms ; si elle
+ *    persiste, clé en mémoire pour ce processus SANS toucher au fichier existant.
  *  - Lecture une seule fois par processus (promesse mise en cache), fichier de quelques
  *    dizaines d'octets, E/S asynchrones (fs.promises) : aucun blocage du thread principal.
  *
@@ -55,8 +64,12 @@ const POSTE_FILE_NAME = 'poste-id.json';
 
 /** Délai entre le démarrage et le premier essai d'envoi. */
 export const BOOT_REPORT_DELAY_MS = 20_000;
-/** Fenêtre anti-répétition (1 envoi/heure/processus sauf changement). */
+/** Plafond anti-répétition (1 envoi/heure/processus max, sauf changement) : un PLAFOND, pas une fréquence. */
 export const REPORT_MIN_INTERVAL_MS = 60 * 60 * 1000;
+/** Fréquence réelle de l'envoi récurrent (passe par la règle anti-répétition). */
+export const PERIODIC_REPORT_INTERVAL_MS = 12 * 60 * 60 * 1000;
+/** Délai avant le 2e essai de lecture de la clé après une erreur de lecture non-ENOENT. */
+export const POSTE_KEY_READ_RETRY_MS = 200;
 const REPORT_TIMEOUT_MS = 10_000;
 const LIST_TIMEOUT_MS = 15_000;
 const SQL_IN_CHUNK = 500;
@@ -95,28 +108,52 @@ async function writePosteKeyAtomically(filePath: string, key: string): Promise<v
   }
 }
 
-/**
- * Lit la clé de poste, ou la crée si absente / illisible / invalide.
- * Si l'écriture échoue, la clé générée reste utilisée en mémoire pour ce processus
- * (journalisé) : l'envoi n'est jamais bloqué par un disque en lecture seule.
- */
-async function loadOrCreatePosteKey(): Promise<string> {
-  const filePath = getPosteKeyFilePath();
-  let reason = 'absent';
+type PosteKeyReadOutcome =
+  | { kind: 'ok'; key: string }
+  | { kind: 'absent' }
+  | { kind: 'invalid'; reason: string }
+  | { kind: 'unreadable'; code: string };
+
+/** Une tentative de lecture, classée : seuls 'absent' et 'invalid' autorisent une (ré)écriture. */
+async function readPosteKeyFile(filePath: string): Promise<PosteKeyReadOutcome> {
   try {
     const raw = await fsp.readFile(filePath, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
     const key = (parsed && typeof parsed === 'object') ? (parsed as Partial<PosteKeyFile>).poste_key : undefined;
-    if (isValidPosteKey(key)) return key;
-    reason = 'contenu invalide';
+    if (isValidPosteKey(key)) return { kind: 'ok', key };
+    return { kind: 'invalid', reason: 'contenu invalide' };
   } catch (err) {
+    if (err instanceof SyntaxError) return { kind: 'invalid', reason: 'JSON invalide' };
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (code !== 'ENOENT') reason = `illisible (${code ?? 'JSON invalide'})`;
+    if (code === 'ENOENT') return { kind: 'absent' };
+    return { kind: 'unreadable', code: code ?? 'inconnue' };
+  }
+}
+
+/**
+ * Lit la clé de poste, ou la crée si le fichier est ABSENT (ENOENT) ou son contenu invalide.
+ * Erreur de lecture transitoire (EBUSY, EPERM, EACCES… : antivirus, verrou) : un 2e essai
+ * après ~200 ms (setTimeout non bloquant) ; si elle persiste, clé en mémoire pour ce
+ * processus SANS écraser le fichier existant (sinon la clé du poste serait perdue et le
+ * poste compté deux fois). Si l'écriture échoue, la clé reste en mémoire (journalisé) :
+ * l'envoi n'est jamais bloqué par un disque en lecture seule. Ne lève jamais.
+ */
+async function loadOrCreatePosteKey(): Promise<string> {
+  const filePath = getPosteKeyFilePath();
+  let outcome = await readPosteKeyFile(filePath);
+  if (outcome.kind === 'unreadable') {
+    await new Promise<void>((resolve) => { setTimeout(resolve, POSTE_KEY_READ_RETRY_MS); });
+    outcome = await readPosteKeyFile(filePath);
+  }
+  if (outcome.kind === 'ok') return outcome.key;
+  if (outcome.kind === 'unreadable') {
+    log.warn(`[ClientVersion] Fichier de clé de poste illisible (${outcome.code}) : clé en mémoire pour ce processus, fichier NON modifié.`);
+    return randomUUID();
   }
 
   const key = randomUUID();
-  if (reason !== 'absent') {
-    log.warn(`[ClientVersion] Fichier de clé de poste ${reason} : nouvelle clé générée.`);
+  if (outcome.kind === 'invalid') {
+    log.warn(`[ClientVersion] Fichier de clé de poste invalide (${outcome.reason}) : nouvelle clé générée.`);
   } else {
     log.info('[ClientVersion] Première exécution : clé de poste créée.');
   }
@@ -207,6 +244,9 @@ function resolveSiteSyncId(siteId: unknown): string | null {
 let lastReport: ReportFingerprint | null = null;
 let sendInFlight = false;
 let bootTimer: NodeJS.Timeout | null = null;
+let periodicTimer: NodeJS.Timeout | null = null;
+/** Une connexion est arrivée pendant un envoi : rejeu unique dans le finally de cet envoi. */
+let rerunRequested = false;
 let onlineListener: ((evt: { newState: string }) => void) | null = null;
 
 function disarmOnlineListener(): void {
@@ -240,7 +280,13 @@ async function runReport(trigger: string): Promise<void> {
       armOnlineListener();
       return;
     }
-    if (sendInFlight) return;
+    if (sendInFlight) {
+      // Une connexion (changement d'utilisateur possible) ne doit pas être perdue : rejeu
+      // unique à la fin de l'envoi en cours. Les autres déclencheurs (rejeu, périodique,
+      // démarrage, retour en ligne) sont couverts par l'envoi en vol ou le prochain cycle.
+      if (trigger === 'connexion') rerunRequested = true;
+      return;
+    }
 
     const version = app.getVersion();
     if (!APP_VERSION_PATTERN.test(version) || version.length > 64) {
@@ -291,27 +337,45 @@ async function runReport(trigger: string): Promise<void> {
   } catch (err) {
     log.info(`[ClientVersion] Déclaration de version impossible (${trigger}, non bloquant) :`, (err as Error)?.message ?? err);
   } finally {
-    if (ownsInFlight) sendInFlight = false;
+    if (ownsInFlight) {
+      sendInFlight = false;
+      if (rerunRequested) {
+        // Un seul rejeu : le drapeau est remis à zéro avant, et le libellé 'connexion (rejeu)'
+        // ≠ 'connexion' empêche un nouveau drapeau (pas de boucle possible). La règle
+        // shouldSendReport décide si l'utilisateur/la version ont changé.
+        rerunRequested = false;
+        setImmediate(() => { void runReport('connexion (rejeu)'); });
+      }
+    }
   }
 }
 
 /**
  * Démarrage (src/main/index.ts) : un essai 20 s après le lancement (timer unref) ;
- * si le réseau n'est pas ONLINE à ce moment, un essai au premier retour en ligne.
+ * si le réseau n'est pas ONLINE à ce moment, un essai au premier retour en ligne ;
+ * puis un envoi récurrent toutes les 12 h (setInterval unique, unref) qui ne fait rien
+ * hors ligne et passe par la même règle anti-répétition (1/h max). Les postes restés
+ * ouverts sans reconnexion restent ainsi « vus » côté cloud.
  * Retour immédiat, jamais de Promise.
  */
 export function startClientVersionReporter(): void {
   try {
     if (!isVersionReportingAllowed()) {
-      log.info('[ClientVersion] Déclaration de version désactivée en développement (GIS_REPORT_VERSION_IN_DEV=1 pour l\'activer).');
+      log.info('[ClientVersion] Déclaration de version désactivée en développement (GIS_REPORT_VERSION_IN_DEV=1 pour l\'activer ; ATTENTION : le .env de dev cible la PROD, à n\'utiliser qu\'avec .env.e2e).');
       return;
     }
-    if (bootTimer) return;
+    if (periodicTimer) return;
     bootTimer = setTimeout(() => {
       bootTimer = null;
       void runReport('démarrage');
     }, BOOT_REPORT_DELAY_MS);
     bootTimer.unref?.();
+    periodicTimer = setInterval(() => {
+      // Hors ligne : rien (pas d'écouteur armé par la récurrence ; démarrage/connexion s'en chargent).
+      if (networkMonitor.getState() !== 'ONLINE') return;
+      void runReport('périodique');
+    }, PERIODIC_REPORT_INTERVAL_MS);
+    periodicTimer.unref?.();
   } catch (err) {
     log.info('[ClientVersion] Démarrage du déclarant de version impossible (non bloquant) :', (err as Error)?.message ?? err);
   }
@@ -329,11 +393,15 @@ export function reportClientVersionAfterLogin(): void {
   }
 }
 
-/** Arrêt propre (fermeture de l'application) : timer de démarrage et écouteur réseau. */
+/** Arrêt propre (fermeture de l'application) : timers de démarrage/périodique et écouteur réseau. */
 export function stopClientVersionReporter(): void {
   if (bootTimer) {
     clearTimeout(bootTimer);
     bootTimer = null;
+  }
+  if (periodicTimer) {
+    clearInterval(periodicTimer);
+    periodicTimer = null;
   }
   disarmOnlineListener();
 }
@@ -427,8 +495,16 @@ export async function listClientVersions(): Promise<ListClientVersionsResult> {
       if (s) siteIds.add(s);
       if (u) userIds.add(u);
     }
-    const siteNames = lookupLocalNames('t_sites', 'nom', [...siteIds]);
-    const userLogins = lookupLocalNames('t_users', 'login', [...userIds]);
+    // Erreur SQLite locale : code distinct (LOCAL_ERROR), pas un échec de la RPC.
+    let siteNames: Map<string, string>;
+    let userLogins: Map<string, string>;
+    try {
+      siteNames = lookupLocalNames('t_sites', 'nom', [...siteIds]);
+      userLogins = lookupLocalNames('t_users', 'login', [...userIds]);
+    } catch (err) {
+      log.warn('[ClientVersion] Traduction locale (sites/logins) impossible :', (err as Error)?.message ?? err);
+      return { success: false, error: 'LOCAL_ERROR' };
+    }
 
     const rows: PosteVersionRow[] = [];
     for (const r of rawRows) {
@@ -471,5 +547,6 @@ export function __resetClientVersionStateForTests(): void {
   stopClientVersionReporter();
   lastReport = null;
   sendInFlight = false;
+  rerunRequested = false;
   posteKeyPromise = null;
 }
