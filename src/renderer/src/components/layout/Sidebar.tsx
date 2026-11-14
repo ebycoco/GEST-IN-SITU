@@ -4,7 +4,7 @@ import {
   LayoutDashboard, CreditCard, Upload, Search, Users,
   FileText, UserCircle, LogOut, Shield, Wifi, WifiOff,
   PanelLeftClose, PanelLeftOpen, Clock, MapPin, X, Download, Package, Activity, ShieldCheck, BarChart2, Building2, Database, BookOpenCheck,
-  Fingerprint, Calendar, AlertTriangle, History, PackageSearch, Boxes, MapPinOff
+  Fingerprint, Calendar, AlertTriangle, History, PackageSearch, Boxes, MapPinOff, MonitorSmartphone
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import iconLogo from '../../assets/icon.png';
@@ -118,6 +118,7 @@ export default function Sidebar() {
         return [
           { label: 'Tableau de bord', icon: LayoutDashboard, path: '/dashboard' },
           { label: 'Infrastructures', icon: MapPin, path: '/sites' },
+          { label: 'Versions des postes', icon: MonitorSmartphone, path: '/postes/versions' },
           { label: 'Maintenance System', icon: Shield, path: '/maintenance' },
           ...baseItems.filter(i => i.path === '/profile')
         ];
@@ -146,6 +147,7 @@ export default function Sidebar() {
         { label: 'Audit Anomalies', icon: Database, path: '/agent-qualite/anomalies-brutes' },
         { label: 'Exportation', icon: Download, path: '/export' },
         { label: 'Journaux', icon: FileText, path: '/logs' },
+        ...(user.role === 'SUPER ADMIN' ? [{ label: 'Versions des postes', icon: MonitorSmartphone, path: '/postes/versions' }] : []),
         ...(user.role === 'SUPER ADMIN' ? [{ label: 'Maintenance System', icon: Shield, path: '/maintenance' }] : []),
         
         { isHeader: true, label: 'COMPTE' },

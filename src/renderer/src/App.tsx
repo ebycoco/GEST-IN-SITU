@@ -38,6 +38,7 @@ import { saveResumeContext, clearResumeContext } from './utils/resumeAfterUpdate
 import LicenseExpiryBanner from './components/LicenseExpiryBanner';
 import SyncStatusDashboard from './pages/SyncStatusDashboard';
 import AgentsPresencePage from './pages/AgentsPresencePage';
+import PostesVersionsPage from './pages/PostesVersionsPage';
 import MaintenancePage from './pages/MaintenancePage';
 import RoleSelectorPage from './pages/RoleSelectorPage';
 
@@ -340,6 +341,7 @@ export default function App() {
             <Route path="admin/queue" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><AdminQueuePage /></ProtectedRoute>} />
             <Route path="sync/status" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><SyncStatusDashboard /></ProtectedRoute>} />
             <Route path="agents/presence" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE']}><AgentsPresencePage /></ProtectedRoute>} />
+            <Route path="postes/versions" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><PostesVersionsPage /></ProtectedRoute>} />
             <Route path="maintenance" element={<ProtectedRoute requiredRoles={['SUPER ADMIN']}><MaintenancePage /></ProtectedRoute>} />
             <Route path="logs" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><LogsPage /></ProtectedRoute>} />
             <Route path="retraits" element={<ProtectedRoute requiredRoles={['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE']}><RetraitsPage /></ProtectedRoute>} />

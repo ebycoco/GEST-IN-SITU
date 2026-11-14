@@ -90,6 +90,9 @@ ce changement (la 2.26.2 n'envoie rien).
    SQLite locale, type `PostesVersionsError`) ; tests portés à 34 + 5 (succès du handler, démarrage/
    12 h/arrêt, TIMEOUT, clé EBUSY/ENOENT, rejeu de connexion) ; suite complète 1044/1044.
 4. **Écran** (agent-2) : `PostesVersionsPage.tsx`, `postesVersionsStatus.ts`, route et menu.
+   **FAIT le 2026-11-14 (agent-2, non commité)** : page + logique pure dans `src/renderer/src/pages/`,
+   route `postes/versions` (SUPER ADMIN) dans `App.tsx`, entrée « Versions des postes » dans les deux
+   menus SA de `Sidebar.tsx`, tests `tests/postes-versions-status.test.ts` (18). Rendu réel non vérifié visuellement.
 5. **Tests** : Vitest (comparaison de versions, statuts, clé de poste, refus du handler pour non-SA
    et rôle actif non SA), `tsc`, e2e cloud sur le **dev** uniquement, e2e hors ligne ; audit agent-9
    (Opus) ; test terrain agent-13.
