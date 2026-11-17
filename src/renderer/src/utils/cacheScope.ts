@@ -55,6 +55,35 @@ export function computeImportScopeKey(input: Pick<CacheScopeInput, 'role' | 'act
 }
 
 /**
+ * Clé de portée de la page Retraits : `RETRAITS:<site>:<rôle actif>:<centre>:<période>:<date>`.
+ * Contrairement au tableau de bord, le cache Retraits stocke des données DÉPENDANTES des filtres de
+ * la page (`getRetraits` / `getRetraitsTrend` reçoivent site, centre, période et date) : la période
+ * (jour / semaine / mois / année) et la date choisie font donc partie de la clé, sinon un
+ * changement de période restaurerait les chiffres d'une autre période.
+ * `centreId` = centre effectivement transmis à l'IPC (null pour ADMINISTRATEUR_SITE / SUPER ADMIN) ;
+ * `customDate` = null pour la période glissante « semaine ».
+ */
+export function computeRetraitsScopeKey(
+  input: Pick<CacheScopeInput, 'role' | 'activeSiteId' | 'userSiteId' | 'centreId'> & {
+    period: string;
+    customDate?: string | null;
+  }
+): string {
+  return `RETRAITS:${part(resolveEffectiveSiteId(input))}:${part(input.role)}:${part(input.centreId)}:${input.period}:${part(input.customDate)}`;
+}
+
+/**
+ * Règle « appel périmé » : un appel asynchrone est périmé si la portée COURANTE (ref mis à jour à
+ * chaque rendu) diffère de la portée dans laquelle il a été lancé. Un appel périmé ne doit ni
+ * afficher de données, ni toucher au cache, ni modifier l'indicateur `loading` (un appel tardif né
+ * dans un ancien site laisserait sinon `loading` bloqué à true : l'effet de la nouvelle portée gère
+ * déjà son propre cycle de chargement).
+ */
+export function isStaleScope(currentScopeKey: string, callScopeKey: string): boolean {
+  return currentScopeKey !== callScopeKey;
+}
+
+/**
  * Un instantané n'est restaurable que s'il a été daté (cachedAt, remis à null par
  * invalidateDashboardCache) ET étiqueté de la MÊME portée. Un cache sans clé (hérité d'avant le
  * correctif, ou écrit par un appel sans scopeKey) est refusé : on recharge plutôt que de risquer

@@ -237,7 +237,8 @@ describe('useCacheStore : portée des caches dashboard / import (node, sans DOM)
     expect(a.sitesCache).toEqual({ list: [{ id: 2 }], cachedAt: expect.any(Number) });
     expect(a.centresCache).toEqual({ list: [{ id: 3 }], cachedAt: expect.any(Number) });
     expect(a.qualiteCache).toEqual({ stats: { q: 1 }, cachedAt: expect.any(Number) });
-    expect(a.retraitsCache).toEqual({ data: { r: 1 }, trend: [1], cachedAt: expect.any(Number) });
+    // Lot 3 : retraitsCache porte désormais scopeKey (null pour un appel sans 3e paramètre).
+    expect(a.retraitsCache).toEqual({ data: { r: 1 }, trend: [1], cachedAt: expect.any(Number), scopeKey: null });
     expect(a.centreDashboardCache.stats).toEqual({ c: 1 });
     expect(a.centreDashboardCache.cachedAt).toEqual(expect.any(Number));
   });

@@ -53,6 +53,8 @@ interface CacheState {
     data: any | null;
     trend: any[];
     cachedAt: number | null;
+    /** Clé de portée (site / rôle actif / centre / période / date). OPTIONNEL, voir dashboardCache.scopeKey. */
+    scopeKey?: string | null;
   };
   setDashboardCache: (data: Partial<CacheState['dashboardCache']>) => void;
   setImportCache: (cardCount: number, scopeKey?: string | null) => void;
@@ -61,7 +63,7 @@ interface CacheState {
   setAgentsCache: (list: any[]) => void;
   setSitesCache: (list: any[]) => void;
   setCentresCache: (list: any[]) => void;
-  setRetraitsCache: (data: any, trend: any[]) => void;
+  setRetraitsCache: (data: any, trend: any[], scopeKey?: string | null) => void;
   invalidateDashboardCache: () => void;
   clearCache: () => void;
 }
@@ -111,7 +113,8 @@ export const useCacheStore = create<CacheState>((set) => ({
   retraitsCache: {
     data: null,
     trend: [],
-    cachedAt: null
+    cachedAt: null,
+    scopeKey: null
   },
   setDashboardCache: (data) => set((state) => ({
     dashboardCache: { ...state.dashboardCache, ...data, cachedAt: Date.now() }
@@ -136,8 +139,9 @@ export const useCacheStore = create<CacheState>((set) => ({
   setCentresCache: (list) => set({
     centresCache: { list, cachedAt: Date.now() }
   }),
-  setRetraitsCache: (data, trend) => set({
-    retraitsCache: { data, trend, cachedAt: Date.now() }
+  // 2e paramètre optionnel (rétrocompatible) : sans scopeKey => scopeKey null, jamais restauré par RetraitsPage.
+  setRetraitsCache: (data, trend, scopeKey) => set({
+    retraitsCache: { data, trend, cachedAt: Date.now(), scopeKey: scopeKey ?? null }
   }),
   invalidateDashboardCache: () => set((state) => ({
     dashboardCache: { ...state.dashboardCache, cachedAt: null }
@@ -150,6 +154,6 @@ export const useCacheStore = create<CacheState>((set) => ({
     agentsCache: { list: [], cachedAt: null },
     sitesCache: { list: [], cachedAt: null },
     centresCache: { list: [], cachedAt: null },
-    retraitsCache: { data: null, trend: [], cachedAt: null }
+    retraitsCache: { data: null, trend: [], cachedAt: null, scopeKey: null }
   })
 }));

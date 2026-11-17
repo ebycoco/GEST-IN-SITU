@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { BarChart2, TrendingUp, Calendar, Award, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Bar } from 'react-chartjs-2';
 import {
@@ -7,6 +7,7 @@ import {
 } from 'chart.js';
 import { useAuthStore } from '../stores/authStore';
 import { useCacheStore } from '../stores/cacheStore';
+import { computeRetraitsScopeKey, isStaleScope, shouldRestoreCache } from '../utils/cacheScope';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 
@@ -101,8 +102,41 @@ export default function RetraitsPage() {
     return 'Cette semaine';
   }, [period, selectedDay, selectedMonth, selectedYear]);
 
+  // ── Portée du cache (correctif « site actif périmé », lot 3) ─────────────────────────────
+  // Le cache Retraits contient des données dépendantes du site, du centre, de la période ET de la
+  // date choisie (cf. utils/cacheScope.ts) : tous font partie de la clé. `activeSiteId ?? user.site_id`
+  // reproduit exactement le `siteId` envoyé à l'IPC pour un SUPER ADMIN. Le ref (pas de state : aucun
+  // re-render dédié, CLAUDE.md §2) est mis à jour à chaque rendu et relu APRÈS l'await de `load` :
+  // une réponse d'une autre portée (site/période changés pendant l'attente) ne s'affiche pas et
+  // n'estampille pas le cache.
+  const retraitsScopeKey = computeRetraitsScopeKey({
+    role: user?.role,
+    activeSiteId: activeSiteId ?? user?.site_id,
+    userSiteId: user?.site_id,
+    centreId,
+    period,
+    customDate
+  });
+  const retraitsScopeKeyRef = useRef<string>(retraitsScopeKey);
+  retraitsScopeKeyRef.current = retraitsScopeKey;
+  // Démontage : plus aucune réponse en vol ne doit écrire dans l'état ni dans le cache. Flag remis à
+  // true à chaque (re)montage d'effet : sûr sous React.StrictMode (double montage simulé en dev).
+  // Aucun listener/timer ici : seul ce flag est à nettoyer.
+  const mountedRef = useRef<boolean>(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const isCallStale = (callKey: string): boolean =>
+    !mountedRef.current || isStaleScope(retraitsScopeKeyRef.current, callKey);
+
   const load = useCallback(async (silent?: boolean) => {
     if (!siteId) return;
+    // Portée de CET appel (fermeture du rendu courant, cohérente avec siteId/period/customDate).
+    const callScopeKey = retraitsScopeKey;
+    // Appel déjà périmé dès l'entrée : ne rien faire avant tout setLoading(true) (sinon `loading`
+    // resterait bloqué, le finally ne le remettant à false que pour un appel non périmé).
+    if (isCallStale(callScopeKey)) return;
     const isSilent = !!silent;
     if (!isSilent) setLoading(true);
     try {
@@ -110,35 +144,41 @@ export default function RetraitsPage() {
         window.api.stats.getRetraits(siteId, centreId, period, customDate),
         window.api.stats.getRetraitsTrend(siteId, centreId, period, customDate),
       ]);
+      // Garde de péremption : portée changée pendant l'attente => réponse ignorée.
+      if (isCallStale(callScopeKey)) return;
       setRows(res.rows);
       setTotaux(res.totaux);
       setTrend(trendData);
-      useCacheStore.getState().setRetraitsCache(res, trendData);
+      useCacheStore.getState().setRetraitsCache(res, trendData, callScopeKey);
     } catch (e) {
       console.error('[RetraitsPage] load error', e);
     } finally {
-      if (!isSilent) setLoading(false);
+      // Appel périmé : c'est la nouvelle portée qui gère son propre `loading`.
+      if (!isSilent && !isCallStale(callScopeKey)) setLoading(false);
       useAuthStore.getState().setInitialDataLoading(false);
     }
-  }, [siteId, centreId, period, customDate]);
+  }, [siteId, centreId, period, customDate, retraitsScopeKey]);
 
+  // Réactif à la portée (site, rôle, centre, période, date) : le cache n'est restauré que s'il porte
+  // la MÊME clé ; sinon les données affichées sont vidées (jamais de chiffres d'un autre site/période)
+  // puis rechargées. `load` est recréée à chaque changement de clé et porte la portée de CE rendu.
   useEffect(() => {
     const cache = useCacheStore.getState().retraitsCache;
-    let hasCache = false;
-    if (cache.cachedAt) {
+    if (shouldRestoreCache(cache, retraitsScopeKey)) {
       if (cache.data) {
         setRows(cache.data.rows);
         setTotaux(cache.data.totaux);
       }
       if (cache.trend) setTrend(cache.trend);
       setLoading(false);
-      hasCache = true;
       useAuthStore.getState().setInitialDataLoading(false);
-    }
-    if (!hasCache) {
+    } else {
+      setRows([]);
+      setTotaux(null);
+      setTrend([]);
       load();
     }
-  }, [load]);
+  }, [retraitsScopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const kpis = [
     { label: "Aujourd'hui",  value: totaux?.aujourd_hui   ?? 0, icon: '🌅' },
