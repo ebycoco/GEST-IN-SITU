@@ -20,6 +20,7 @@ declare global {
       stats: {
         get: (siteId?: number, centreId?: number, forceRefresh?: boolean) => Promise<any>;
         getCentre: (centreId: number, siteId: number) => Promise<any>;
+        getCentreCardsCount: (siteId?: number, centreId?: number) => Promise<number>;
         getCentreOperateurs: (centreId: number) => Promise<any[]>;
         getGlobal: () => Promise<any>;
         getVerification: (agentUsername: string, siteId: number) => Promise<any>;

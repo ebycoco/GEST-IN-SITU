@@ -209,7 +209,9 @@ const api = {
       ipcRenderer.invoke('stats:get', siteId, centreId, forceRefresh),
     getCentre: (centreId: number, siteId: number): Promise<Record<string, number>> => 
       ipcRenderer.invoke('stats:getCentre', centreId, siteId),
-    getCentreOperateurs: (centreId: number): Promise<any[]> => 
+    getCentreCardsCount: (siteId?: number, centreId?: number): Promise<number> =>
+      ipcRenderer.invoke('stats:getCentreCardsCount', siteId, centreId),
+    getCentreOperateurs: (centreId: number): Promise<any[]> =>
       ipcRenderer.invoke('stats:getCentreOperateurs', centreId),
     getGlobal: (): Promise<IGlobalStats> => 
       ipcRenderer.invoke('stats:getGlobal'),

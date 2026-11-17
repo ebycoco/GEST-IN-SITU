@@ -37,6 +37,47 @@ export async function getCentreStats(centreId: number, siteId: number) {
   `).get(siteId, centreId) as Record<string, number>;
 }
 
+/**
+ * Portée imposée pour le badge « cartes du centre » (stats:getCentreCardsCount).
+ * Fonction pure (testable sans Electron). Cloisonnement §3 : pour tout rôle non-SUPER ADMIN,
+ * site ET centre viennent EXCLUSIVEMENT de la session serveur (getSecureCurrentUser()), jamais
+ * des paramètres reçus du renderer (falsifiables). SUPER ADMIN garde les paramètres fournis.
+ * Retourne null si la session est absente ou le rôle non autorisé pour ce badge.
+ */
+export function resolveCentreCardsCountScope(
+  secureUser: { role?: string; site_id?: number | null; centre_id?: number | null } | null | undefined,
+  requestedSiteId?: number | null,
+  requestedCentreId?: number | null
+): { siteId: number | null; centreId: number | null } | null {
+  if (!secureUser || !secureUser.role) return null;
+  if (secureUser.role === 'SUPER ADMIN') {
+    return { siteId: requestedSiteId ?? null, centreId: requestedCentreId ?? null };
+  }
+  if (secureUser.role === 'ADMIN_CENTRE' || secureUser.role === 'OPERATEUR_VERIFICATION') {
+    return { siteId: secureUser.site_id ?? null, centreId: secureUser.centre_id ?? null };
+  }
+  return null;
+}
+
+/**
+ * Nombre de cartes actives d'un centre = EXACTEMENT `total` de getStats(siteId, centreId)
+ * (stats-worker.js case 'getStats' : COUNT(*) FROM t_cartes WHERE site_id = @siteId AND
+ * centre_id = @centreId AND is_dirty != -1 AND statut != 'BROUILLON'). DOUBLON inclus (idem).
+ * Un seul COUNT(*) synchrone sur index (site_id, centre_id, ...) : évite le calcul complet des
+ * 8 requêtes du worker de stats (jusqu'à ~7 s) juste pour lire ce chiffre. Site ET centre sont
+ * requis (comme getStats : sans siteId le filtre centre est ignoré) ; sinon 0.
+ */
+export function getCentreCardsCount(siteId: number | null | undefined, centreId: number | null | undefined): number {
+  if (!siteId || !centreId) return 0;
+  const db = getDatabase()!;
+  const row = db.prepare(`
+    SELECT COUNT(*) AS total
+    FROM t_cartes
+    WHERE site_id = ? AND centre_id = ? AND is_dirty != -1 AND statut != 'BROUILLON'
+  `).get(siteId, centreId) as { total: number } | undefined;
+  return row?.total ?? 0;
+}
+
 export function getCentreOperateurCadence(centreId: number) {
   const db = getDatabase()!;
   return db.prepare(`

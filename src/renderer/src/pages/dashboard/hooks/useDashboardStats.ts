@@ -357,8 +357,9 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
     }
     const siteIdToUse = user?.role === 'SUPER ADMIN' ? activeSiteId : user?.site_id;
     if (siteIdToUse && user?.centre_id) {
-      window.api.stats.get(siteIdToUse, user.centre_id)
-        .then((s: any) => { if (!cancelled) setCentreCardsCount(s?.total ?? 0); })
+      // Handler léger (un seul COUNT) au lieu de stats:get complet dont seul `total` était lu.
+      window.api.stats.getCentreCardsCount(siteIdToUse, user.centre_id)
+        .then((n: number) => { if (!cancelled) setCentreCardsCount(n ?? 0); })
         .catch(() => { if (!cancelled) setCentreCardsCount(null); });
     }
     return () => { cancelled = true; };

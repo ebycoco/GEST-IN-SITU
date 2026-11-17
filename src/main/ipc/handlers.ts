@@ -2342,6 +2342,22 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
     catch (e) { log.error('IPC Error: stats:getCentre', e); throw e; }
   });
+  // Badge « cartes du centre » (useDashboardStats) : remplace stats:get(site, centre) dont seul
+  // `total` était lu (calcul complet des 8 requêtes du worker). Un seul COUNT(*) synchrone
+  // identique à `total` (voir getCentreCardsCount). Cloisonnement §3 : site/centre dérivés de
+  // getSecureCurrentUser() pour tout rôle non-SUPER ADMIN ; session absente ou rôle non autorisé
+  // => erreur (le renderer retombe sur null, comportement inchangé du badge).
+  ipcMain.handle('stats:getCentreCardsCount', (_, siteId?: number, centreId?: number) => {
+    try {
+      const scope = queries.resolveCentreCardsCountScope(getSecureCurrentUser(), siteId, centreId);
+      if (!scope) {
+        log.warn('[SECURITY] Acces refuse a stats:getCentreCardsCount : session invalide ou role non autorise.');
+        throw new Error('Accès refusé. Privilèges insuffisants pour effectuer cette opération.');
+      }
+      return queries.getCentreCardsCount(scope.siteId, scope.centreId);
+    }
+    catch (e) { log.error('IPC Error: stats:getCentreCardsCount', e); throw e; }
+  });
   ipcMain.handle('stats:getCentreOperateurs', async (_, centreId) => {
     try {
       // Sécurité (cloisonnement §3, P0-1) : même correctif que stats:getCentre ci-dessus.
