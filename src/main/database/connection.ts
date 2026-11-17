@@ -186,7 +186,53 @@ export function getBackupDir(): string {
   return backupDir;
 }
 
-export async function initDatabase(): Promise<Database.Database> {
+/** Callback optionnel d'annonce d'une migration de schéma imminente (ex. message sur le splash). */
+export type MigrationPendingCallback = (fromVersion: number, toVersion: number) => Promise<void> | void;
+
+export interface InitDatabaseOptions {
+  onMigrationPending?: MigrationPendingCallback;
+}
+
+/** Plafond d'attente du callback d'annonce : ne doit jamais retarder significativement le démarrage. */
+export const MIGRATION_ANNOUNCE_TIMEOUT_MS = 1000;
+
+/**
+ * Décision pure : annoncer uniquement une migration d'une base EXISTANTE (user_version > 0)
+ * dont la version est inférieure au schéma attendu. Rien sur installation neuve (0) ni base à jour.
+ */
+export function shouldAnnounceMigration(versionBefore: number, schemaVersion: number): boolean {
+  return versionBefore > 0 && versionBefore < schemaVersion;
+}
+
+/**
+ * Appelle le callback d'annonce avec un plafond de temps. Ne rejette JAMAIS : toute exception
+ * (synchrone ou asynchrone) est journalisée et avalée ; un callback qui ne se résout pas est abandonné
+ * après timeoutMs. Le timer est toujours libéré (pas de handle résiduel).
+ */
+export async function announceMigrationPending(
+  callback: MigrationPendingCallback | undefined,
+  fromVersion: number,
+  toVersion: number,
+  timeoutMs: number = MIGRATION_ANNOUNCE_TIMEOUT_MS
+): Promise<void> {
+  if (!callback) return;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        log.warn(`[MIGRATION] Annonce non terminée après ${timeoutMs} ms, démarrage poursuivi.`);
+        resolve();
+      }, timeoutMs);
+    });
+    await Promise.race([Promise.resolve().then(() => callback(fromVersion, toVersion)), timeout]);
+  } catch (err) {
+    log.error("[MIGRATION] Échec du callback d'annonce (ignoré) :", err);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function initDatabase(options?: InitDatabaseOptions): Promise<Database.Database> {
   const dbPath = getDbPath();
   log.info(`Database path: ${dbPath}`);
 
@@ -206,6 +252,10 @@ export async function initDatabase(): Promise<Database.Database> {
   // Run schema migrations. En cas d'échec (y compris RECOVERY_REQUIRED), la connexion est libérée
   // et l'erreur remontée : aucune écriture supplémentaire n'est faite sur une base en recovery.
   const versionBefore = db.pragma('user_version', { simple: true }) as number;
+  // Annonce optionnelle AVANT le blocage synchrone de runMigrations (le rendu doit passer d'abord).
+  if (shouldAnnounceMigration(versionBefore, SCHEMA_VERSION)) {
+    await announceMigrationPending(options?.onMigrationPending, versionBefore, SCHEMA_VERSION);
+  }
   try {
     runMigrations(db);
   } catch (migrationErr) {

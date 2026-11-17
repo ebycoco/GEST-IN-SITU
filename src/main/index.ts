@@ -494,7 +494,24 @@ app.whenReady().then(async () => {
 
   // Initialize database
   try {
-    await initDatabase();
+    // Annonce sur le splash AVANT le blocage synchrone d'une migration (message constant, aucune
+    // donnée externe injectée). Les erreurs sont journalisées ici ; connection.ts les avale aussi
+    // et plafonne l'attente à 1 s : le démarrage n'est jamais bloqué par cette annonce.
+    await initDatabase({
+      onMigrationPending: async () => {
+        if (!splashWindow || splashWindow.isDestroyed()) return;
+        const message = "Optimisation de la base de données en cours… Ne fermez pas l'application (cela peut prendre 1 à 2 minutes, une seule fois).";
+        try {
+          await splashWindow.webContents.executeJavaScript(
+            `(function(){var e=document.getElementById('status');if(e){e.textContent=${JSON.stringify(message)};}})();`
+          );
+          // Laisse le temps au rendu de s'afficher avant le blocage synchrone.
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        } catch (err) {
+          log.warn('[STARTUP] Mise à jour du message du splash impossible (ignoré) :', err);
+        }
+      }
+    });
   } catch (dbErr: any) {
     if (dbErr?.code === 'RECOVERY_REQUIRED') {
       // Base existante dont la migration a échoué : aucune réinstallation, aucune écriture automatique.
