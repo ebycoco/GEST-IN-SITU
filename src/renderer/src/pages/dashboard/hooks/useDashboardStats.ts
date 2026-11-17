@@ -4,6 +4,7 @@ import { useAuthStore } from '../../../stores/authStore';
 import {
   GOVERNANCE_SCOPE_KEY,
   computeDashboardScopeKey,
+  isStaleScope,
   shouldRestoreCache
 } from '../../../utils/cacheScope';
 
@@ -126,7 +127,10 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
   const loadGlobalData = async (silent = false) => {
     // Portée de cet appel : toujours la vue gouvernance. Périmé si l'utilisateur a ouvert un site
     // pendant l'attente (la réponse ne doit pas s'afficher ni estampiller le cache du site).
-    const isStale = () => scopeKeyRef.current !== GOVERNANCE_SCOPE_KEY;
+    const isStale = () => isStaleScope(scopeKeyRef.current, GOVERNANCE_SCOPE_KEY);
+    // Appel déjà périmé dès l'entrée : ne rien faire, AVANT tout setLoading(true). Sans ce garde, le
+    // `finally` (qui ne remet loading à false que si l'appel n'est pas périmé) laissait `loading` bloqué.
+    if (isStale()) return;
     try {
       if (!silent) {
         setLoading(true);
@@ -164,7 +168,14 @@ export function useDashboardStats(user: any, activeSiteId: number | null, isGove
       centreId: user?.centre_id,
       isGovernanceView
     });
-    const isStale = () => scopeKeyRef.current !== callScopeKey;
+    const isStale = () => isStaleScope(scopeKeyRef.current, callScopeKey);
+    // Appel né périmé (ex. `loadStats` capturé par useForceSyncActions au clic puis rappelé après un
+    // long await, le SUPER ADMIN ayant changé de site entre-temps) : ne rien faire, AVANT tout
+    // setLoading(true) / écriture. Le `finally` ne remet loading à false que si l'appel n'est pas
+    // périmé : sans ce garde, loading restait à true (bouton « Actualiser » bloqué). Un appel de la
+    // portée courante n'est jamais bloqué : scopeKeyRef.current est affecté pendant le rendu, donc
+    // déjà à jour quand un effet ou un handler de ce rendu appelle loadStats.
+    if (isStale()) return;
     try {
       if (!silent) {
         setLoading(true);
