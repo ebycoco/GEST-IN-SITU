@@ -167,7 +167,7 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(72);
+    expect(userVersion(db)).toBe(73);
     const fks = fkTargets(db, 't_logs');
     expect(fks).toHaveLength(1);
     expect(fks[0].table).toBe('t_users');
@@ -194,7 +194,7 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(72);
+    expect(userVersion(db)).toBe(73);
     expect(tLogsSchema(db)).toEqual(schemaAvant);
     expect(allLogs(db)).toEqual(logsAvant);
     expect(logsSeq(db)).toBe(seqAvant);
@@ -212,7 +212,7 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
 
     db.pragma('user_version = 71');
     expect(() => schema.runMigrations(db)).not.toThrow();
-    expect(userVersion(db)).toBe(72);
+    expect(userVersion(db)).toBe(73);
     expect(tLogsSchema(db)).toEqual(schemaApres);
     expect(allLogs(db)).toEqual(logsApres);
   });
@@ -240,7 +240,7 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(72);
+    expect(userVersion(db)).toBe(73);
     expect(fkTargets(db, 't_logs').map(f => f.table)).toEqual(['t_users']);
     expect(allLogs(db)).toEqual(logsAvant);
     expect(() => db.prepare(`INSERT INTO t_logs (id_user, login_user, action, sync_id) VALUES (?, 'agent_v72', 'TEST', 'e-insert')`).run(userId))
@@ -285,7 +285,7 @@ describe('Migration V72 — FK de t_logs vers une table absente', () => {
 
     expect(() => schema.runMigrations(db)).not.toThrow();
 
-    expect(userVersion(db)).toBe(72);
+    expect(userVersion(db)).toBe(73);
     expect((db.prepare("SELECT sql FROM sqlite_master WHERE name='t_test_fk_cassee'").get() as { sql: string }).sql).toBe(sqlAvant);
     expect(warnSpy.mock.calls.some(c => String(c[0]).includes('[MIGRATION V72]') && String(c[0]).includes('t_test_fk_cassee'))).toBe(true);
     warnSpy.mockRestore();

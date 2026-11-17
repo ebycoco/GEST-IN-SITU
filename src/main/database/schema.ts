@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword } from '../auth/local-auth';
 import { mapCardPayload } from '../sync/payload-mapper';
 import { RecoveryRequiredError, RecoveryInfo, readRecoveryMarker, writeRecoveryMarker, snapshotDatabase, validateDatabase, countCriticalRows, planFtsRepair, repairFtsDrift } from './recovery';
 
-export const SCHEMA_VERSION = 72;
+export const SCHEMA_VERSION = 73;
 
 export function runMigrations(db: Database.Database): void {
   const dbPath = (db as any).name as string;
@@ -41,6 +41,7 @@ export function runMigrations(db: Database.Database): void {
       migrateV1(db);
       migrateV71(db);
       migrateV72(db);
+      migrateV73(db);
     } else {
       runMigrationSequence(db, currentVersion);
     }
@@ -509,6 +510,11 @@ function runMigrationSequence(db: Database.Database, currentVersion: number): vo
     if (currentVersion < 72) {
       log.info('Running migration v72: Repairing t_logs foreign key left pointing to a missing table (t_users_backup_v63, side effect of the V64 RENAME)');
       migrateV72(db);
+    }
+
+    if (currentVersion < 73) {
+      log.info('Running migration v73: Adding index idx_cartes_stats_dp_centre (stats:get filtré par centre — doublons probables/stricts/dates vides)');
+      migrateV73(db);
     }
   } catch (seqError: any) {
     throw seqError;
@@ -3806,8 +3812,12 @@ export function migrateV66_structuralIntegrityNet(db: Database.Database): void {
       log.warn('[MIGRATION V66] Index idx_cartes_site_centre_statut manquant — rejeu de migrateV62.');
       migrateV62(db);
     }
+    if (!existingIndexNames.has('idx_cartes_stats_dp_centre')) {
+      log.warn('[MIGRATION V66] Index idx_cartes_stats_dp_centre manquant — rejeu de migrateV73.');
+      migrateV73(db);
+    }
   } catch (e: any) {
-    log.error('[MIGRATION V66] Échec de la vérification/création des index de performance V61/V62 (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
+    log.error('[MIGRATION V66] Échec de la vérification/création des index de performance V61/V62/V73 (non bloquant, prochaine tentative au démarrage suivant) :', e.message);
   }
 
   // 4) V65 (migration des préférences t_config auto_downstream_*) est déjà
@@ -4037,6 +4047,29 @@ function migrateV71(db: Database.Database): void {
   } catch (e: any) {
     log.error('[MIGRATION V71] Erreur :', e.message);
     throw e;
+  }
+}
+
+// =====================================================
+// MIGRATION V73 — Index (site_id, centre_id, noms, prenoms, date_de_naissance, cle_doublon)
+// =====================================================
+// stats:get filtré par centre : la requête « doublons probables » (stats-worker.js) utilisait
+// idx_cartes_stats_dp_v2 (site_id, noms, ...) qui ne contient pas centre_id : le filtre centre
+// obligeait à lire la table. Mesuré (agent-10, copie de base réelle, 222 472 cartes) : 3,4 s pour
+// le plus gros centre, 2 s pour un centre de 4 000 cartes ; avec cet index : 0,27 s et 11 ms.
+// Index PUREMENT LOCAL (additif, CREATE INDEX IF NOT EXISTS) : aucun changement de colonne, de
+// synchronisation ni de Supabase. idx_cartes_stats_dp_v2 est conservé (vue site sans centre).
+// Coût mesuré : ~16 s de création sur 222 k lignes, +19,5 Mo.
+// Non bloquant : un échec (disque plein...) n'envoie PAS la base en RECOVERY_REQUIRED, car il ne
+// s'agit que d'une optimisation ; le filet V66 (exécuté à chaque démarrage) retente l'index tant
+// qu'il est absent.
+export function migrateV73(db: Database.Database): void {
+  try {
+    log.info('[MIGRATION V73] Création de l\'index idx_cartes_stats_dp_centre...');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_cartes_stats_dp_centre ON t_cartes(site_id, centre_id, noms, prenoms, date_de_naissance, cle_doublon);');
+    log.info('[MIGRATION V73] Index idx_cartes_stats_dp_centre prêt.');
+  } catch (e: any) {
+    log.error('[MIGRATION V73] Échec de création de l\'index (non bloquant, retenté au prochain démarrage par le filet V66) :', e.message);
   }
 }
 
