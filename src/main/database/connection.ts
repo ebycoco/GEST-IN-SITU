@@ -193,8 +193,13 @@ export interface InitDatabaseOptions {
   onMigrationPending?: MigrationPendingCallback;
 }
 
-/** Plafond d'attente du callback d'annonce : ne doit jamais retarder significativement le démarrage. */
-export const MIGRATION_ANNOUNCE_TIMEOUT_MS = 1000;
+/**
+ * Plafond d'attente du callback d'annonce. Le callback n'est appelé QUE si une migration est
+ * réellement en attente (cf. shouldAnnounceMigration) : un démarrage normal n'est donc jamais
+ * concerné. Doit rester supérieur au plafond d'attente du splash côté index.ts
+ * (SPLASH_ANNOUNCE_WAIT_MS = 10 s) + exécution du JS + 250 ms de rendu.
+ */
+export const MIGRATION_ANNOUNCE_TIMEOUT_MS = 15000;
 
 /**
  * Décision pure : annoncer uniquement une migration d'une base EXISTANTE (user_version > 0)

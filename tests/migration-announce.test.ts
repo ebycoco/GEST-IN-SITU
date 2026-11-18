@@ -6,7 +6,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] }
 }));
 
-import { shouldAnnounceMigration, announceMigrationPending } from '../src/main/database/connection';
+import { shouldAnnounceMigration, announceMigrationPending, MIGRATION_ANNOUNCE_TIMEOUT_MS } from '../src/main/database/connection';
 
 describe('Annonce de migration (connection.ts)', () => {
   it('décision : base v72 -> annonce ; neuve (0) et à jour -> non', () => {
@@ -36,5 +36,21 @@ describe('Annonce de migration (connection.ts)', () => {
     const dt = Date.now() - t0;
     expect(dt).toBeGreaterThanOrEqual(90);
     expect(dt).toBeLessThan(1000);
+  });
+
+  it('plafond par défaut : laisse au callback le temps d attendre un splash lent (> 10 s + rendu)', () => {
+    // Le callback de index.ts attend jusqu à 10 s l affichage réel du splash, puis ~250 ms de rendu.
+    expect(MIGRATION_ANNOUNCE_TIMEOUT_MS).toBeGreaterThanOrEqual(10000 + 250 + 1000);
+  });
+
+  it('callback lent mais fini dans le plafond : attendu jusqu au bout (message visible avant la migration)', async () => {
+    let finished = false;
+    await announceMigrationPending(
+      () => new Promise<void>((resolve) => setTimeout(() => { finished = true; resolve(); }, 150)),
+      72,
+      73,
+      1000
+    );
+    expect(finished).toBe(true);
   });
 });

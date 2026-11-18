@@ -118,8 +118,20 @@ if (!gotTheLock) {
 // à usage unique (once) et la fenêtre est fermée comme avant dans createWindow().
 const SPLASH_SHOW_TIMEOUT_MS = 1500;
 const SPLASH_PAINT_DELAY_MS = 100;
+// Plafond d'attente de l'affichage RÉEL du splash, utilisé uniquement quand une migration est
+// en attente (callback onMigrationPending) : le blocage synchrone qui suit peut durer plusieurs
+// minutes, il faut donc que le message soit visible avant. Aucun impact sur un démarrage normal.
+const SPLASH_ANNOUNCE_WAIT_MS = 10000;
+// Promesse résolue quand le splash est réellement affiché (ready-to-show + délai de peinture),
+// ou abandonné (échec de chargement / fermeture). Contrairement à `shown`, elle n'est PAS
+// plafonnée à SPLASH_SHOW_TIMEOUT_MS. Ne rejette jamais.
+let splashActuallyShown: Promise<void> = Promise.resolve();
 
 function createSplashWindow(): Promise<void> {
+  let settleActual: () => void = () => undefined;
+  splashActuallyShown = new Promise<void>((resolve) => {
+    settleActual = resolve;
+  });
   let settle: () => void = () => undefined;
   const shown = new Promise<void>((resolve) => {
     let done = false;
@@ -158,19 +170,30 @@ function createSplashWindow(): Promise<void> {
   splash.once('ready-to-show', () => {
     if (splash.isDestroyed()) {
       settle();
+      settleActual();
       return;
     }
     splash.show();
     log.info(`[PERF] Splash affiché à ${(performance.now() - appStartTime).toFixed(0)} ms`);
-    setTimeout(settle, SPLASH_PAINT_DELAY_MS);
+    setTimeout(() => {
+      settle();
+      settleActual();
+    }, SPLASH_PAINT_DELAY_MS);
   });
-  splash.webContents.once('did-fail-load', () => settle());
-  splash.once('closed', () => settle());
+  splash.webContents.once('did-fail-load', () => {
+    settle();
+    settleActual();
+  });
+  splash.once('closed', () => {
+    settle();
+    settleActual();
+  });
 
   const splashPath = join(__dirname, '../../resources/splash.html');
   splash.loadFile(splashPath).catch((e) => {
     log.error('Erreur chargement splash.html:', e);
     settle();
+    settleActual();
   });
 
   return shown;
@@ -496,12 +519,25 @@ app.whenReady().then(async () => {
   try {
     // Annonce sur le splash AVANT le blocage synchrone d'une migration (message constant, aucune
     // donnée externe injectée). Les erreurs sont journalisées ici ; connection.ts les avale aussi
-    // et plafonne l'attente à 1 s : le démarrage n'est jamais bloqué par cette annonce.
+    // et plafonne l'attente (MIGRATION_ANNOUNCE_TIMEOUT_MS) : le démarrage n'est jamais bloqué
+    // indéfiniment par cette annonce. Le callback n'est appelé que si une migration est en attente.
     await initDatabase({
       onMigrationPending: async () => {
-        if (!splashWindow || splashWindow.isDestroyed()) return;
-        const message = "Optimisation de la base de données en cours… Ne fermez pas l'application (cela peut prendre 1 à 2 minutes, une seule fois).";
         try {
+          // Le plafond de 1,5 s de whenReady() peut avoir laissé passer un splash pas encore
+          // affiché : on attend ici son affichage réel (jusqu'à SPLASH_ANNOUNCE_WAIT_MS) AVANT que
+          // le blocage synchrone de la migration ne démarre. La boucle d'événements est libre
+          // pendant ces await, donc 'ready-to-show' est bien traité.
+          let waitTimer: NodeJS.Timeout | null = null;
+          await Promise.race([
+            splashActuallyShown,
+            new Promise<void>((resolve) => {
+              waitTimer = setTimeout(resolve, SPLASH_ANNOUNCE_WAIT_MS);
+            })
+          ]);
+          if (waitTimer) clearTimeout(waitTimer);
+          if (!splashWindow || splashWindow.isDestroyed()) return;
+          const message = "Optimisation de la base de données en cours… Ne fermez pas l'application (cela peut durer plusieurs minutes, une seule fois).";
           await splashWindow.webContents.executeJavaScript(
             `(function(){var e=document.getElementById('status');if(e){e.textContent=${JSON.stringify(message)};}})();`
           );
