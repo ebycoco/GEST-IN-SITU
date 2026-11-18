@@ -197,6 +197,26 @@ présente mise en place — voir limitation ci-dessous.
   accessibles a anon identique avant et apres (206 elements) ; non-regression rejouee le meme
   jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17, 0010 14/14, 0011 20/20 (+ cas 20 non
   concluant, comme avant), 0012 13/13 ; aucun residu. **Production : NON appliquee.**
+  Depuis 0014, le test 0013 rejoue tel quel donne 15/19 : ecarts **attendus** dus a 0014
+  (voir section « 0014 » plus bas) ; rejoue avec les 9 politiques `r14_*` retirees dans la
+  meme transaction annulee : 19/19.
+- **`0014_filtre_role_hierarchie.sql`** — chantier B, P1-6 (complement de 0013, decision de
+  l'utilisateur du 2026-11-18) : 9 politiques **RESTRICTIVE TO authenticated** (`r14_*`,
+  INSERT / UPDATE / DELETE seulement) qui filtrent **par role** les ecritures sur `t_sites`,
+  `t_centres`, `t_postes`, alignees sur ce que l'application permet aujourd'hui :
+  `t_sites` = SUPER ADMIN seulement ; `t_centres` = SUPER ADMIN ou `ADMINISTRATEUR_SITE` de
+  **son** site ; `t_postes` = SUPER ADMIN ou `ADMINISTRATEUR_SITE` pour un centre de **son**
+  site. `ADMIN_CENTRE` et `OPERATEUR_*` : aucune ecriture sur ces 3 tables. Role lu dans la
+  claim `gis_roles` (role principal + secondaires, comme `verifyUserRole()`). **Lecture
+  inchangee** (regles 0013). Echec ferme conserve. **Aucun droit ni politique anon touche.**
+  **Dependances : 0011 et 0013** (le fichier s'arrete sinon). Test :
+  `supabase/tests/0014_filtre_role_hierarchie.test.sql`. **Dev : appliquee le 2026-11-18**
+  (MCP `apply_migration`, partie executable identique au fichier) ; test 17/17 (cas 16
+  service_role concluant) ; empreinte anon identique avant / apres (206 elements, meme md5) ;
+  non-regression rejouee le meme jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17, 0010
+  14/14, 0011 20/20 (+ cas 20 non concluant, comme avant), 0012 13/13, 0013 15/19 tel quel
+  (ecarts attendus, detail plus bas) et 19/19 sans les politiques `r14_*` ; controles 7/7 OK ;
+  aucun residu. **Production : NON appliquee.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -515,8 +535,12 @@ SELECT 'fonctions de tentatives reservees a service_role',
 ```
 
 **Retour arrière** : d'abord **désactiver le hook** dans le tableau de bord (sinon toute connexion
-Auth échoue), puis les blocs écrits en tête de 0013, 0012 puis 0011 (retirer 0013 et 0012
-avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
+Auth échoue), puis les blocs écrits en tête de 0014, 0013, 0012 puis 0011 (retirer 0014, 0013 et
+0012 avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
+
+**Numérotation (mise à jour du 2026-11-18)** : l'adaptation du garde 0007 (décision Q6) devient
+la migration **0015** (0014 = filtre par rôle). Le commentaire en tête du fichier 0013 (ligne
+« adaptation = 0014, Q6 ») est resté tel quel, 0013 n'étant pas modifiée : il faut lire 0015.
 
 ## 0013 : politiques RESTRICTIVE TO authenticated (P1-6)
 
@@ -578,12 +602,69 @@ SELECT md5(string_agg(x, '|' ORDER BY x)) AS empreinte_anon, count(*) AS n FROM 
 ```
 
 **Retour arrière** : bloc écrit en tête du fichier 0013 (rend à authenticated l'état d'avant).
+**Si 0014 est en place, retirer 0014 d'abord** (bloc en tête de 0014), puis 0013.
 
 **À savoir pour P2 (client avec session authenticated)** : `select=*` et
 `return=representation` sur `t_users` sont refusés (lister les colonnes, `return=minimal`) ;
 un upsert qui réécrit `password_hash` via `EXCLUDED` est refusé (UPDATE simple ou RPC) ; un
 lot qui touche une seule ligne d'un autre site échoue en entier ; les lignes sans site ne sont
 visibles que du SUPER ADMIN.
+
+## 0014 : filtre par rôle des écritures sur t_sites, t_centres, t_postes (P1-6)
+
+**Effet sur les postes actuels : aucun** (anon non visé). Effet sur authenticated (en plus de
+0013, les politiques RESTRICTIVE se cumulent par ET) :
+
+| Table | INSERT / UPDATE / DELETE permis à | Source dans l'application (lecture du 2026-11-18) |
+|---|---|---|
+| `t_sites` | SUPER ADMIN seulement | `src/main/ipc/handlers.ts:4015`, `:4028`, `:4045` (`verifyUserRole(..., ['SUPER ADMIN'])`) |
+| `t_centres` | SUPER ADMIN ; `ADMINISTRATEUR_SITE` pour un centre de son site | `handlers.ts:4160` (création, site forcé), `:4227` (modification), `:4315` (suppression) |
+| `t_postes` | SUPER ADMIN ; `ADMINISTRATEUR_SITE` pour un poste d'un centre de son site | aucun handler de poste ; `createPoste` (`hierarchy.queries.ts:783`) n'est appelé nulle part ; postes supprimés avec leur centre (`:847`) ou leur site (`:372`) |
+
+`ADMIN_CENTRE` et `OPERATEUR_*` : aucune écriture sur ces 3 tables (aucun handler ne le leur
+permet ; route « sites » réservée à SUPER ADMIN / ADMINISTRATEUR_SITE, `App.tsx:339`). Rôle lu
+dans `gis_roles` (principal + secondaires), même règle que `verifyUserRole()`
+(`handlers.ts:76`). Lecture inchangée. Un UPDATE / DELETE non permis touche 0 ligne sans
+erreur ; un INSERT non permis ou un déplacement hors périmètre lève 42501. Les suppressions en
+cascade (site → centres → postes, `ON DELETE CASCADE`) ne passent pas par la RLS.
+
+**Verrou** : `CREATE POLICY` = `AccessExclusiveLock` court sur `t_sites`, `t_centres`,
+`t_postes` (pas `t_cartes`). Prod : un seul bloc `BEGIN; <fichier 0014> COMMIT;`, de
+préférence dans la même fenêtre que 0013 ; prérequis contrôlés en tête (0011 et les 14
+politiques `r13_*`, sinon arrêt).
+
+**Dev** : **fait le 2026-11-18** (voir la liste plus haut).
+
+**Effet sur le test 0013** (attendu, le fichier 0013 et son test ne sont pas modifiés) : son
+« agent A » est un opérateur (`OPERATEUR_RECHERCHE` + `OPERATEUR_VERIFICATION`). Avec 0014,
+il ne crée plus de poste ni de centre (cas 5 : 42501), ne modifie plus la ligne de son site
+(cas 6 : 0 ligne), et son déplacement de poste vers un centre B passe de 42501 à 0 ligne
+(cas 8 : toujours refusé) ; le cas 15 compte alors 2 lignes de référence de moins (seuil 15,
+obtenu 14 ; écritures anon toutes acceptées). Test 0013 rejoué avec les politiques `r14_*`
+retirées dans la même transaction annulée : 19/19.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0014 : 9 politiques r14_* RESTRICTIVE TO authenticated (3 INSERT, 3 UPDATE, 3 DELETE) sur t_sites/t_centres/t_postes' AS verification,
+       CASE WHEN (SELECT count(*) = 9
+                         AND bool_and(permissive = 'RESTRICTIVE' AND roles = ARRAY['authenticated']::name[]
+                                      AND tablename IN ('t_sites','t_centres','t_postes')
+                                      AND cmd IN ('INSERT','UPDATE','DELETE'))
+                         AND count(DISTINCT tablename || cmd) = 9
+                    FROM pg_policies WHERE schemaname = 'public' AND policyname LIKE 'r14\_%')
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Puis l'empreinte anon (requête de la section 0013), avant et après : identique.
+
+**Retour arrière** : bloc écrit en tête du fichier 0014 (rend aux écritures authenticated le
+seul filtre par site de 0013).
+
+**À savoir pour P2** : une écriture de centre mise en file (`t_outbox`) par un administrateur
+puis envoyée sous la session d'un autre agent du même poste serait refusée (à traiter avec
+`actor_sync_id`, Q8) ; `sync:forceCentres` (`handlers.ts:7648`) n'a pas de garde de rôle côté
+poste : sous session authenticated, un non-administrateur qui le déclenche serait refusé.
 
 ## 0007 : procédures manuelles (période transitoire)
 

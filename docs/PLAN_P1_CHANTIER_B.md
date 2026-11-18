@@ -19,7 +19,7 @@ Rappels permanents :
 | Sujet | Décision retenue par défaut |
 |---|---|
 | C1-C10 | Recommandations d'agent-1 retenues par défaut, recopiées en annexe A (fin de fichier). |
-| 0007 | **STOP & WARN maintenu** : le garde 0007 neutralise les gestes SA faits avec la clé anon. Il devra être adapté (laisser passer un appelant `authenticated` légitime) **avant P2**, pas en P1. Ne pas le modifier pendant P1. **Q6 (2026-11-18)** : l'adaptation sera une **nouvelle migration 0014** ; le fichier 0007 n'est jamais modifié. |
+| 0007 | **STOP & WARN maintenu** : le garde 0007 neutralise les gestes SA faits avec la clé anon. Il devra être adapté (laisser passer un appelant `authenticated` légitime) **avant P2**, pas en P1. Ne pas le modifier pendant P1. **Q6 (2026-11-18)** : l'adaptation sera une **nouvelle migration 0015** (renumérotée le 2026-11-18 : 0014 = filtre par rôle) ; le fichier 0007 n'est jamais modifié. |
 | Ordre en prod | **P1-1 (mesure) et P1-2 (versions) d'abord**, seuls, pour commencer à collecter. Le reste suit après validation sur le dev. |
 | Ancienne clé anon prod | **D6 scindée le 2026-11-18 (Q2).** **D6a = couper la clé legacy** (JWT anon de prod qui a fuité) : seulement si (1) la **preuve contrôlée** de P1-1b a donné `legacy_suppose` ; (2) pendant **7 jours consécutifs**, 0 compteur `legacy_suppose` **et** 0 compteur `autre` avec `jwt_role = 'anon'` dans `t_write_audit`, vérifié en lisant aussi `claim_keys` (toute forme de claims inconnue bloque D6a) et pas seulement `classe` ; (3) tous les postes en ≥ 2.26.1 (anciens postes mis à jour, Q7 ; source : P1-1b). Les écritures `publishable` continuent. **D6b = fermer anon (P3)** : seulement quand tout le parc est en version P2 (badge) **et** 7 jours consécutifs sans aucune écriture anon (`publishable`, `legacy_suppose`, `autre` anon). Aucune autre échappatoire. Gestes de l'utilisateur. |
 
@@ -30,11 +30,19 @@ Rappels permanents :
 | Q1 | Preuve P1-1b **maintenant** : un appel avec l'ancienne clé, fait par l'utilisateur (procédure en P1-1b). |
 | Q2 | D6 scindée : **D6a** couper la clé legacy (anciens postes mis à jour) ; **D6b** fermer anon = P3 (tout le parc en version P2 + 7 jours sans écriture anon). |
 | Q3 | `verifyOtp` fait par le **poste** avec le `token_hash` renvoyé par `gis-login` ; limites de débit Auth **inchangées**. |
-| Q4 | Écritures `authenticated` filtrées **par site seulement** en P1-6 (filtre par rôle revu pour la PWA). |
+| Q4 | Écritures `authenticated` filtrées **par site seulement** en P1-6 (filtre par rôle revu pour la PWA). **Complété le 2026-11-18** (décision D-R ci-dessous) : filtre par rôle ajouté pour les écritures sur `t_sites`, `t_centres`, `t_postes` (migration 0014) ; les autres tables restent filtrées par site seulement. |
 | Q5 | Un SUPER ADMIN garde **son propre** hash sur un poste où il s'est connecté en ligne, **jamais** via la liste du site (précise D1). |
-| Q6 | Adaptation du garde 0007 = **nouvelle migration 0014**, sans modifier 0007. |
+| Q6 | Adaptation du garde 0007 = **nouvelle migration 0015** (était 0014, renumérotée le 2026-11-18), sans modifier 0007. Fond inchangé. |
 | Q7 | Relancer la mise à jour des postes ABO restés en ancienne version (geste terrain). |
 | Q8 | Colonne `actor_sync_id` dans `t_outbox` (SQLite V74) en **P2**. |
+
+## Décisions de l'utilisateur du 2026-11-18 (suite, après P1-6)
+
+| # | Décision |
+|---|---|
+| D-EF | **Échec fermé CONFIRMÉ** : un jeton `authenticated` sans claims `gis_*` (ou sans `gis_v`) n'a accès à rien. Déjà le cas dans 0013, rien à changer ; vérifié de nouveau par le test 0014 (cas 10 et 11). |
+| D-R | **Filtre par rôle des écritures** `authenticated` sur `t_sites`, `t_centres`, `t_postes` (migration **0014**), aligné sur l'application : `t_sites` = SUPER ADMIN seulement ; `t_centres` = SUPER ADMIN ou `ADMINISTRATEUR_SITE` de son site ; `t_postes` = SUPER ADMIN ou `ADMINISTRATEUR_SITE` de son site (aucun handler de poste dans l'appli ; aligné sur les centres). `ADMIN_CENTRE` et `OPERATEUR_*` : aucune écriture. Lecture inchangée (0013). Sources : `src/main/ipc/handlers.ts:4015`, `:4028`, `:4045`, `:4160`, `:4227`, `:4315`, `:76` ; `src/main/database/queries/hierarchy.queries.ts:783` ; `src/renderer/src/App.tsx:339`. |
+| Numérotation | 0014 = filtre par rôle ; l'adaptation du garde 0007 (Q6) passe en **0015**. |
 
 À préparer pour la future PWA dès P1/P2 : claims liés à la **personne** (pas au poste, aucun
 `poste_key` obligatoire), identifiants **cloud** uniquement (jamais d'id local), `gis-login`
@@ -479,6 +487,25 @@ relèvent d'un plan payant, non vérifié).
   - Verrou mesuré : `CREATE POLICY` = `AccessExclusiveLock` (t_cartes compris) → prod hors
     heures de travail, bloc `BEGIN; … COMMIT;` (lock_timeout 3 s en tête).
   - Points pour P2 / P3 : voir README des migrations, section « 0013 ».
+- **Complément 2026-11-18 (agent-4) : filtre par rôle, migration 0014. Dev appliqué, prod NON.**
+  Fichiers : `supabase/migrations/0014_filtre_role_hierarchie.sql` + test
+  `supabase/tests/0014_filtre_role_hierarchie.test.sql`.
+  - Contenu : 9 politiques `r14_*` RESTRICTIVE TO authenticated (INSERT / UPDATE / DELETE) sur
+    `t_sites` (SA seulement), `t_centres` et `t_postes` (SA ou `ADMINISTRATEUR_SITE` de son site),
+    rôle lu dans `gis_roles` (principal + secondaires, comme `verifyUserRole()`). Lecture et anon
+    inchangés. Prérequis 0011 et 0013 contrôlés en tête ; retour arrière en tête du fichier.
+  - Tests réels sur le dev (vrais `SET LOCAL ROLE`, claims simulées) : 0014 **17/17** (SA, admin
+    site A, admin site B, opérateur A, ADMIN_CENTRE A, multi-rôles, sans claims, claims forgées,
+    anon publishable et sans claims, cascade, service_role concluant). Empreinte anon identique
+    avant / après (206 éléments, même md5). Non-régression : 0006 19/19, 0007 20/20, 0008 26/26,
+    0009 17/17, 0010 14/14, 0011 20/20 (+ cas 20 non concluant comme avant), 0012 13/13 ; 0013
+    **15/19 tel quel** (écarts attendus dus à 0014 : son « agent A » opérateur ne crée plus de
+    poste ni de centre et ne modifie plus son site ; détail dans le README) et **19/19** rejoué
+    sans les politiques `r14_*` (retirées dans la même transaction annulée). Contrôles README 7/7.
+    Aucun résidu (comptages, empreintes de `t_write_audit` et des politiques `r13_*` identiques
+    avant / après).
+  - **P1-6 complété sur le dev** (0013 + 0014). Restent : appel REST réel authenticated après
+    activation du hook sur le dev (geste utilisateur) ; audit agent-9 ; prod (geste utilisateur).
 
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
@@ -507,7 +534,8 @@ relèvent d'un plan payant, non vérifié).
    validés sur le dev.
 4. D6a (désactivation de l'ancienne clé anon legacy) : sur décision de l'utilisateur, d'après
    P1-1b. D6b (fermeture anon) : P3, après P2.
-5. 0014 (adaptation du garde 0007, Q6) : avant P2.
+5. 0014 (filtre par rôle, D-R) : avec 0013, dans la même fenêtre hors heures de travail (0014 après 0013).
+6. 0015 (adaptation du garde 0007, Q6) : avant P2.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.
