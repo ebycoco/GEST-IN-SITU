@@ -197,7 +197,8 @@ export interface InitDatabaseOptions {
  * Plafond d'attente du callback d'annonce. Le callback n'est appelé QUE si une migration est
  * réellement en attente (cf. shouldAnnounceMigration) : un démarrage normal n'est donc jamais
  * concerné. Doit rester supérieur au plafond d'attente du splash côté index.ts
- * (SPLASH_ANNOUNCE_WAIT_MS = 10 s) + exécution du JS + 250 ms de rendu.
+ * (SPLASH_ANNOUNCE_WAIT_MS = 10 s) + confirmation de frame (1 s max) + délai de peinture final
+ * (700 ms) = 11,7 s max cumulés (marge ~3,3 s).
  */
 export const MIGRATION_ANNOUNCE_TIMEOUT_MS = 15000;
 

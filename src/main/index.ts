@@ -122,6 +122,13 @@ const SPLASH_PAINT_DELAY_MS = 100;
 // en attente (callback onMigrationPending) : le blocage synchrone qui suit peut durer plusieurs
 // minutes, il faut donc que le message soit visible avant. Aucun impact sur un démarrage normal.
 const SPLASH_ANNOUNCE_WAIT_MS = 10000;
+// Plafond d'attente de la confirmation de frame (2 requestAnimationFrame côté renderer) après
+// l'application du nouveau texte : rAF peut ne jamais tirer (fenêtre masquée/occultée).
+const SPLASH_FRAME_CONFIRM_MS = 1000;
+// Délai final après confirmation de frame : laisse le processus GPU/compositeur (séparé du main,
+// donc non bloqué par la migration synchrone) présenter l'image soumise avant le gel du main.
+// Budget cumulé max : SPLASH_ANNOUNCE_WAIT_MS + SPLASH_FRAME_CONFIRM_MS + ce délai (< 15 s de connection.ts).
+const SPLASH_FINAL_PAINT_DELAY_MS = 700;
 // Promesse résolue quand le splash est réellement affiché (ready-to-show + délai de peinture),
 // ou abandonné (échec de chargement / fermeture). Contrairement à `shown`, elle n'est PAS
 // plafonnée à SPLASH_SHOW_TIMEOUT_MS. Ne rejette jamais.
@@ -538,11 +545,22 @@ app.whenReady().then(async () => {
           if (waitTimer) clearTimeout(waitTimer);
           if (!splashWindow || splashWindow.isDestroyed()) return;
           const message = "Optimisation de la base de données en cours… Ne fermez pas l'application (cela peut durer plusieurs minutes, une seule fois).";
-          await splashWindow.webContents.executeJavaScript(
-            `(function(){var e=document.getElementById('status');if(e){e.textContent=${JSON.stringify(message)};}})();`
-          );
-          // Laisse le temps au rendu de s'afficher avant le blocage synchrone.
-          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+          // Le JS applique le texte puis renvoie une Promise résolue après 2 requestAnimationFrame :
+          // la 1re frame suivant la mutation DOM est produite/soumise au compositeur côté renderer.
+          // Côté main, cette attente est plafonnée (SPLASH_FRAME_CONFIRM_MS) : timeout/erreur avalés.
+          let frameTimer: NodeJS.Timeout | null = null;
+          await Promise.race([
+            splashWindow.webContents.executeJavaScript(
+              `(function(){var e=document.getElementById('status');if(e){e.textContent=${JSON.stringify(message)};}` +
+                `return new Promise(function(r){requestAnimationFrame(function(){requestAnimationFrame(function(){r(true);});});});})();`
+            ),
+            new Promise<void>((resolve) => {
+              frameTimer = setTimeout(resolve, SPLASH_FRAME_CONFIRM_MS);
+            })
+          ]);
+          if (frameTimer) clearTimeout(frameTimer);
+          // Laisse le compositeur/GPU présenter l'image avant le blocage synchrone.
+          await new Promise<void>((resolve) => setTimeout(resolve, SPLASH_FINAL_PAINT_DELAY_MS));
         } catch (err) {
           log.warn('[STARTUP] Mise à jour du message du splash impossible (ignoré) :', err);
         }

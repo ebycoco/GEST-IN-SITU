@@ -39,8 +39,8 @@ describe('Annonce de migration (connection.ts)', () => {
   });
 
   it('plafond par défaut : laisse au callback le temps d attendre un splash lent (> 10 s + rendu)', () => {
-    // Le callback de index.ts attend jusqu à 10 s l affichage réel du splash, puis ~250 ms de rendu.
-    expect(MIGRATION_ANNOUNCE_TIMEOUT_MS).toBeGreaterThanOrEqual(10000 + 250 + 1000);
+    // index.ts : jusqu à 10 s d attente du splash + 1 s de confirmation de frame + 700 ms de peinture.
+    expect(MIGRATION_ANNOUNCE_TIMEOUT_MS).toBeGreaterThanOrEqual(10000 + 1000 + 700 + 1000);
   });
 
   it('callback lent mais fini dans le plafond : attendu jusqu au bout (message visible avant la migration)', async () => {
