@@ -172,6 +172,15 @@ présente mise en place — voir limitation ci-dessous.
   **Dev : appliquée le 2026-11-18** (juste après 0011, fichier inchangé) ; test 13/13 ;
   non-régression rejouée le même jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17,
   0010 14/14 (transactions annulées, aucun résidu). **Production : NON appliquée.**
+- **Edge Function `supabase/functions/gis-login/index.ts`** (hors numérotation, chantier B P1-5c) —
+  connexion en ligne : limite de tentatives (0012), bcrypt dans la fonction, compte Auth miroir
+  `lower(sync_id)@users.gest-in-situ.invalid`, `fn_auth_identity_upsert` (0011), renvoie un
+  `token_hash` que le poste échange lui-même par `verifyOtp` (Q3). **Dépend de 0011 et 0012.**
+  **Dev : déployée le 2026-11-18** (outil MCP `deploy_edge_function`, `verify_jwt = false`,
+  version 1), tests réels conformes et nettoyés (détail : `docs/PLAN_P1_CHANTIER_B.md`, P1-5).
+  CORS : variable `GIS_ALLOWED_ORIGINS`, sinon serveurs locaux de développement. Hook toujours
+  **non activé**. **Production : NON déployée** (geste utilisateur après P1-6 et audit agent-9 :
+  tableau de bord Edge Functions ou outil MCP, avec `verify_jwt` désactivé).
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le

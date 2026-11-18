@@ -369,6 +369,51 @@ relèvent d'un plan payant, non vérifié).
   Supabase), **pas encore sur le dev** : l'accès SQL du MCP au projet dev échouait le 2026-11-18
   (`28P01 password authentication failed`). Restent : application et tests sur le dev,
   activation du hook sur le dev (geste utilisateur), Edge Function `gis-login` (passage suivant).
+- **État 2026-11-18, P1-5c (agent-4) : Edge Function `gis-login` écrite, déployée sur le DEV seulement,
+  testée.** Code : `supabase/functions/gis-login/index.ts` (Deno, `npm:@supabase/supabase-js@2.58.0`,
+  `npm:bcryptjs@2.4.3` = même bibliothèque que le poste, C2). Déployée sur `ajadkziqaskadlzboeqo`
+  (outil MCP `deploy_edge_function`, version 1, `verify_jwt = false` : l'appelant n'a pas encore de
+  session, la clé publishable n'est pas un JWT ; l'authentification est le mot de passe + la limite
+  0012). **Production : NON déployée.**
+  - Entrée `POST {login, password}` (4 Ko au plus). Étapes : `fn_login_check_and_record('check')` →
+    lecture `t_users` (clé secrète) → bcrypt dans la fonction (`$2a$`/`$2b$`/`$2y$` normalisés en
+    `$2a$` ; login inconnu comparé à une empreinte factice, même durée) → échec = `'failure'` +
+    **réponse 401 identique** (`invalid_credentials`) pour login inconnu, mauvais mot de passe, compte
+    inactif, empreinte illisible ou `sync_id` inutilisable ; 429 `too_many_attempts` + `retry_after`
+    (et en-tête `Retry-After`) quand le blocage est en cours ou vient d'être déclenché → succès =
+    `'success'`, puis contrôles du site comme le poste (403 `no_site`, `site_suspended`,
+    `licence_expired`, signalés seulement après un mot de passe juste ; SUPER ADMIN dispensé) →
+    compte Auth miroir → `generateLink(magiclink)` → `fn_auth_identity_upsert` → réponse
+    `{ok, token_hash, type: 'magiclink', user: {sync_id, primary_role, roles, is_super_admin}}`.
+    Aucune session créée par la fonction (Q3) ; aucun hash, login ni jeton dans les journaux
+    (codes d'événement seulement, vérifié dans `function_logs`).
+  - **Compte Auth miroir (C7/C8)** : courriel technique `lower(sync_id)@users.gest-in-situ.invalid`
+    (domaine réservé `.invalid`, aucun courriel réel, aucun envoi), confirmé d'office,
+    `app_metadata.sync_id` ; créé à la première connexion, retrouvé ensuite par `t_auth_identity`
+    (une personne = un compte Auth, vérifié en réel). `sync_id` accepté : `^[A-Za-z0-9_-]{1,64}$`.
+  - **Clé** : `SUPABASE_SECRET_KEYS.default` (variable automatique de la fonction), sinon
+    `SUPABASE_SERVICE_ROLE_KEY` ; jamais de fichier.
+  - **CORS** : origines = variable `GIS_ALLOWED_ORIGINS` (liste séparée par des virgules) si définie,
+    sinon `http://localhost:5173` et `http://localhost:4173` (serveurs de développement). Une origine
+    non listée ne reçoit aucun `Access-Control-Allow-Origin`. Le poste Electron (processus principal,
+    sans en-tête `Origin`) n'est pas concerné. **À définir avant la PWA** : l'origine réelle de la PWA
+    dans `GIS_ALLOWED_ORIGINS` (geste utilisateur, Edge Functions > Secrets).
+  - **Tests réels sur le dev (2026-11-18, tous conformes)** : OPTIONS origine autorisée 204 +
+    en-têtes, origine non listée sans en-tête ; succès `$2a$` (opérateur avec site), `$2b$`
+    (SUPER ADMIN sans site), `$2y$` ; `verifyOtp` fait côté client avec la clé publishable → session
+    `authenticated`, 1 h, `app_metadata.sync_id` présent, **aucune claim `gis_*` (hook non activé,
+    attendu)** ; `token_hash` rejoué → `otp_expired` (usage unique) ; 2e connexion → même compte
+    Auth ; mauvais mot de passe / login inconnu / compte inactif → 401 au corps identique (durées
+    433 / 434 / 451 ms) ; 5 échecs → 4 × 401 puis 429 `retry_after = 900` ; bon mot de passe pendant
+    le blocage → 429 ; login inconnu : même séquence ; requête vide → 400 ; GET → 405 ; site suspendu
+    → 403 `site_suspended` ; licence expirée → 403 `licence_expired`. Nettoyage prouvé par requête :
+    0 compte Auth, session, jeton, ligne `t_auth_identity` / `t_login_attempts`, compte ou site de test.
+  - **Non vérifié** : comportement avec le hook activé (claims `gis_*`, refus 403, D3 au
+    `token_refresh`) ; charge réelle (bcrypt environ 0,4 s par appel ; limite CPU des Edge Functions
+    non mesurée).
+  - **Gestes restants (utilisateur)** : activer le hook sur le dev (Authentication > Hooks) puis
+    rejouer les tests pour voir les claims ; fixer `GIS_ALLOWED_ORIGINS` quand l'origine PWA sera
+    connue ; audit agent-9 ; déploiement prod de 0011/0012 + fonction + hook après P1-6.
 - **Claims du hook** (liées à la personne, ids cloud) : `gis_v`, `gis_sync_id`, `gis_site_id`
   (`t_sites.id` cloud), `gis_site_sync_id`, `gis_centre_id`, `gis_centre_sync_id`,
   `gis_primary_role`, `gis_roles[]` (`t_users.role` ∪ `t_user_roles`), `gis_is_super_admin`,
