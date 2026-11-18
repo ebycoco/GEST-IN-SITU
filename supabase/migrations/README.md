@@ -181,6 +181,22 @@ présente mise en place — voir limitation ci-dessous.
   CORS : variable `GIS_ALLOWED_ORIGINS`, sinon serveurs locaux de développement. Hook toujours
   **non activé**. **Production : NON déployée** (geste utilisateur après P1-6 et audit agent-9 :
   tableau de bord Edge Functions ou outil MCP, avec `verify_jwt` désactivé).
+- **`0013_rls_authenticated_par_site.sql`** — chantier B, P1-6 : 14 politiques **RESTRICTIVE TO
+  authenticated** (`r13_*`) filtrees **par site** (Q4) a partir des claims du hook (0011) :
+  `t_cartes.id_site`, `t_logs.site_id`, `t_user_presence.site_id`, `t_users.site_id`,
+  `t_user_roles` (site du compte), `t_postes` (site du centre) en lecture et ecriture ;
+  `t_sites` / `t_centres` lisibles par tout porteur des claims `gis_*`, ecriture par site.
+  SUPER ADMIN (`gis_is_super_admin`) : tous les sites. **Echec ferme** : un jeton authenticated
+  sans claims `gis_*` n'a acces a rien. `password_hash` illisible par authenticated
+  (privileges de colonne ; ecriture toujours permise) ; TRUNCATE / TRIGGER / REFERENCES /
+  MAINTAIN retires a authenticated sur ces 8 tables. **Aucun droit ni politique anon touche**
+  (les postes actuels ecrivent en anon : inchange). **Dependance : 0011.** Test :
+  `supabase/tests/0013_rls_authenticated_par_site.test.sql` (vrais `SET LOCAL ROLE`
+  authenticated / anon / service_role). **Dev : appliquee le 2026-11-18** (MCP
+  `apply_migration`) ; test 19/19 ; empreinte md5 des droits / politiques / colonnes / fonctions
+  accessibles a anon identique avant et apres (206 elements) ; non-regression rejouee le meme
+  jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17, 0010 14/14, 0011 20/20 (+ cas 20 non
+  concluant, comme avant), 0012 13/13 ; aucun residu. **Production : NON appliquee.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -499,7 +515,75 @@ SELECT 'fonctions de tentatives reservees a service_role',
 ```
 
 **Retour arrière** : d'abord **désactiver le hook** dans le tableau de bord (sinon toute connexion
-Auth échoue), puis les blocs écrits en tête de 0012 puis de 0011 (retirer 0012 avant 0011).
+Auth échoue), puis les blocs écrits en tête de 0013, 0012 puis 0011 (retirer 0013 et 0012
+avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
+
+## 0013 : politiques RESTRICTIVE TO authenticated (P1-6)
+
+**Effet sur les postes actuels : aucun** (ils écrivent en anon ; une politique RESTRICTIVE ne
+vise que les rôles qu'elle nomme). Effet sur authenticated : passe de « tout » (politique
+`allow_all_operations_*`) à « son site », et à « rien » sans claims `gis_*`.
+
+**Verrou** : `CREATE POLICY` prend un `AccessExclusiveLock` sur la table (mesuré sur le dev le
+2026-11-18 : bloque aussi les lectures le temps de l'instruction), dont `t_cartes`. Les
+`REVOKE` / `GRANT` ne prennent pas de verrou de table. En prod : hors heures de travail des
+postes, en un seul bloc `BEGIN; <fichier 0013> COMMIT;` (le `SET LOCAL lock_timeout = '3s'`
+en tête annule tout si un verrou n'est pas obtenu en 3 s ; rien n'est changé, réessayer plus
+tard). Prérequis : 0011 appliquée (le fichier s'arrête sinon).
+
+**Dev** : appliquer 0013, rejouer `supabase/tests/0013_*.test.sql` puis 0006 à 0012.
+**Fait le 2026-11-18** (voir la liste plus haut).
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0013 : 14 politiques r13_* RESTRICTIVE TO authenticated seulement' AS verification,
+       CASE WHEN (SELECT count(*) = 14 AND bool_and(permissive = 'RESTRICTIVE' AND roles = ARRAY['authenticated']::name[])
+                    FROM pg_policies WHERE schemaname = 'public' AND policyname LIKE 'r13\_%')
+            THEN 'OK' ELSE 'KO' END AS resultat
+UNION ALL
+SELECT '0013 : password_hash illisible par authenticated, toujours lisible par anon',
+       CASE WHEN NOT has_column_privilege('authenticated', 'public.t_users', 'password_hash', 'SELECT')
+             AND NOT has_table_privilege('authenticated', 'public.t_users', 'SELECT')
+             AND has_column_privilege('anon', 'public.t_users', 'password_hash', 'SELECT')
+            THEN 'OK' ELSE 'KO' END
+UNION ALL
+SELECT '0013 : anon garde SELECT/INSERT/UPDATE/DELETE sur t_cartes et t_users',
+       CASE WHEN has_table_privilege('anon', 'public.t_cartes', 'SELECT,INSERT,UPDATE,DELETE')
+             AND has_table_privilege('anon', 'public.t_users', 'SELECT')
+             AND has_table_privilege('anon', 'public.t_users', 'INSERT')
+             AND has_table_privilege('anon', 'public.t_users', 'UPDATE')
+            THEN 'OK' ELSE 'KO' END;
+```
+
+Preuve « anon inchangé » plus forte (à lancer **avant** puis **après** 0013, les deux
+empreintes doivent être identiques) :
+
+```sql
+SELECT md5(string_agg(x, '|' ORDER BY x)) AS empreinte_anon, count(*) AS n FROM (
+ SELECT 'pol:'||tablename||':'||policyname||':'||permissive||':'||cmd||':'||array_to_string(roles,',')||':'||coalesce(qual,'')||':'||coalesce(with_check,'') x
+   FROM pg_policies WHERE schemaname='public' AND ('anon'=ANY(roles) OR 'public'=ANY(roles))
+ UNION ALL
+ SELECT 'priv:'||c.relname||':'||pr FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER','MAINTAIN']) pr
+  WHERE n.nspname='public' AND c.relkind='r' AND has_table_privilege('anon',c.oid,pr)
+ UNION ALL
+ SELECT 'col:'||attrelid::regclass||':'||attname FROM pg_attribute
+  WHERE attrelid IN (SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind='r')
+    AND attnum>0 AND NOT attisdropped AND has_column_privilege('anon',attrelid,attnum,'SELECT')
+ UNION ALL
+ SELECT 'fn:'||p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+  WHERE n.nspname='public' AND has_function_privilege('anon',p.oid,'EXECUTE')
+) s;
+```
+
+**Retour arrière** : bloc écrit en tête du fichier 0013 (rend à authenticated l'état d'avant).
+
+**À savoir pour P2 (client avec session authenticated)** : `select=*` et
+`return=representation` sur `t_users` sont refusés (lister les colonnes, `return=minimal`) ;
+un upsert qui réécrit `password_hash` via `EXCLUDED` est refusé (UPDATE simple ou RPC) ; un
+lot qui touche une seule ligne d'un autre site échoue en entier ; les lignes sans site ne sont
+visibles que du SUPER ADMIN.
 
 ## 0007 : procédures manuelles (période transitoire)
 

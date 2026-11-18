@@ -446,7 +446,8 @@ relèvent d'un plan payant, non vérifié).
 
 ### P1-6 — Politiques RESTRICTIVE TO authenticated (créées, dev puis prod)
 - **Fichiers** : `supabase/migrations/0013_rls_restrictive_authenticated.sql` + test
-  (ex-0012, décalé le 2026-11-14).
+  (ex-0012, décalé le 2026-11-14) ; nom réel retenu le 2026-11-18 :
+  `0013_rls_authenticated_par_site.sql`.
 - **Agent** : agent-4.
 - **Contenu** : politiques RESTRICTIVE ciblant **uniquement** `authenticated` (filtre site/centre
   depuis les claims du hook). Aucune politique anon touchée en P1 (fermeture anon = P3).
@@ -454,6 +455,30 @@ relèvent d'un plan payant, non vérifié).
   avant ; un appel `authenticated` d'un site ne voit pas un autre site ; `service_role` non filtré.
 - **Critère de fin** : les trois cas vérifiés par appels réels sur le dev.
 - **Geste utilisateur** : appliquer 0013 en prod (sans effet sur les postes actuels, cf. constat 7).
+- **État 2026-11-18 (agent-4) : dev appliqué, prod NON.** Fichier réel :
+  `supabase/migrations/0013_rls_authenticated_par_site.sql` (nom ajusté) + test
+  `supabase/tests/0013_rls_authenticated_par_site.test.sql`.
+  - Contenu : 14 politiques `r13_*` RESTRICTIVE TO authenticated, filtre **par site** (Q4) :
+    `t_cartes`, `t_logs`, `t_user_presence`, `t_users` (colonne site directe), `t_user_roles`
+    (site du compte), `t_postes` (site du centre) ; `t_sites` / `t_centres` lisibles par tout
+    porteur des claims `gis_*` (annexe H), écriture par site. SUPER ADMIN : tous les sites.
+    Échec fermé sans claims `gis_*`. `password_hash` illisible par authenticated (privilèges de
+    colonne), écriture permise. TRUNCATE / TRIGGER / REFERENCES / MAINTAIN retirés à
+    authenticated. Aucun droit ni politique anon touché.
+  - Tests réels sur le dev (vrais `SET LOCAL ROLE`, claims simulées) : 0013 **19/19** (agent
+    site A, agent site B, SA, authenticated sans claims, claims forgées sans `gis_v`, anon
+    publishable et anon sans claims, service_role, garde 0007 toujours actif pour
+    authenticated). Empreinte des droits anon identique avant / après (206 éléments).
+    Non-régression : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17, 0010 14/14, 0011 20/20
+    (+ cas 20 non concluant comme avant), 0012 13/13. Aucun résidu (comptages et empreinte de
+    `t_write_audit` identiques avant / après).
+  - **Écart au critère de fin** : les trois cas sont vérifiés par SQL sous les vrais rôles
+    PostgREST, **pas par appels REST réels** (aucune session authenticated réelle possible
+    tant que le hook n'est pas activé ; activer le hook = geste utilisateur). Appel REST réel
+    authenticated à faire après activation du hook sur le dev (via `gis-login` + `verifyOtp`).
+  - Verrou mesuré : `CREATE POLICY` = `AccessExclusiveLock` (t_cartes compris) → prod hors
+    heures de travail, bloc `BEGIN; … COMMIT;` (lock_timeout 3 s en tête).
+  - Points pour P2 / P3 : voir README des migrations, section « 0013 ».
 
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
