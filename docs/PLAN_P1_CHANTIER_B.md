@@ -506,6 +506,30 @@ relèvent d'un plan payant, non vérifié).
     avant / après).
   - **P1-6 complété sur le dev** (0013 + 0014). Restent : appel REST réel authenticated après
     activation du hook sur le dev (geste utilisateur) ; audit agent-9 ; prod (geste utilisateur).
+  - **Test 0013 adapté (2026-11-18, agent-4)** à l'empilement réel 0013 + 0014 sans retirer les
+    `r14_*` : écritures de hiérarchie testées avec un `ADMINISTRATEUR_SITE` du site A (son site
+    et hors site), tables métier avec l'opérateur, attente `t_sites` ajustée (SA seulement) :
+    **19/19** sur le dev.
+
+### Q6 — Adaptation du garde 0007 : migration 0015 (dev appliqué, prod NON)
+- **Fichiers** : `supabase/migrations/0015_garde_sa_authenticated.sql` + test
+  `supabase/tests/0015_garde_sa_authenticated.test.sql`. Fichier 0007 **non modifié**.
+- **Règle** (alignée sur l'application, `src/` lu le 2026-11-18) : anon et authenticated sans
+  claims `gis_*` : inchangés ; `ADMINISTRATEUR_SITE` / `ADMIN_CENTRE` / `OPERATEUR_*` : inchangés
+  (comptes de leur site par 0013, jamais créer ni promouvoir un SUPER ADMIN) ; SUPER ADMIN
+  **vérifié** (claims + compte encore actif et SA en base) : fiable pour 0007, sauf mot de passe
+  d'un autre SA (ROOT seulement, `users.queries.ts:729-741`, `:1229-1240`), `sync_id` d'un SA,
+  auto-désactivation, auto-suppression (`:636-640`). Détail et sources : en-tête du fichier et
+  README, section « 0015 ».
+- **Tests réels sur le dev (2026-11-18)** : 0015 **16/16** ; 0013 adapté 19/19 ; 0014 17/17 ;
+  0007 20/20 ; 0006 19/19 ; 0008 26/26 ; 0009 17/17 ; 0010 14/14 ; 0011 20/20 (+ cas 20 non
+  concluant comme avant) ; 0012 13/13 ; contrôles README 8/8. Empreinte anon identique avant /
+  après (206 éléments) ; aucun résidu.
+- **Hors périmètre, à décider (STOP & WARN, rapport agent-4 du 2026-11-18)** : 0013 laisse un
+  agent de site écrire `t_users` / `t_user_roles` de son site avec n'importe quel rôle **non**
+  SUPER ADMIN (ex. un opérateur qui s'attribue `ADMINISTRATEUR_SITE`). Q4 / D-R ont gardé ces
+  tables « par site seulement » ; un filtre par rôle sur les comptes demande une décision.
+- **Geste utilisateur** : prod avant P2, après 0011-0014 et l'audit agent-9.
 
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
@@ -535,7 +559,8 @@ relèvent d'un plan payant, non vérifié).
 4. D6a (désactivation de l'ancienne clé anon legacy) : sur décision de l'utilisateur, d'après
    P1-1b. D6b (fermeture anon) : P3, après P2.
 5. 0014 (filtre par rôle, D-R) : avec 0013, dans la même fenêtre hors heures de travail (0014 après 0013).
-6. 0015 (adaptation du garde 0007, Q6) : avant P2.
+6. 0015 (adaptation du garde 0007, Q6) : avant P2, après 0014 (prérequis contrôlé en tête).
+   Écrite et appliquée sur le dev le 2026-11-18 ; prod NON.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.

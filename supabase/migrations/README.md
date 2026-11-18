@@ -197,9 +197,10 @@ présente mise en place — voir limitation ci-dessous.
   accessibles a anon identique avant et apres (206 elements) ; non-regression rejouee le meme
   jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17, 0010 14/14, 0011 20/20 (+ cas 20 non
   concluant, comme avant), 0012 13/13 ; aucun residu. **Production : NON appliquee.**
-  Depuis 0014, le test 0013 rejoue tel quel donne 15/19 : ecarts **attendus** dus a 0014
-  (voir section « 0014 » plus bas) ; rejoue avec les 9 politiques `r14_*` retirees dans la
-  meme transaction annulee : 19/19.
+  Depuis 0014, le test 0013 rejoue tel quel donnait 15/19 (ecarts **attendus** dus a 0014,
+  voir section « 0014 » plus bas). **Test adapte le 2026-11-18** a l'empilement reel
+  0013 + 0014 (+ 0015), sans retirer les `r14_*` : **19/19** sur le dev (detail section
+  « 0015 » plus bas).
 - **`0014_filtre_role_hierarchie.sql`** — chantier B, P1-6 (complement de 0013, decision de
   l'utilisateur du 2026-11-18) : 9 politiques **RESTRICTIVE TO authenticated** (`r14_*`,
   INSERT / UPDATE / DELETE seulement) qui filtrent **par role** les ecritures sur `t_sites`,
@@ -217,6 +218,22 @@ présente mise en place — voir limitation ci-dessous.
   14/14, 0011 20/20 (+ cas 20 non concluant, comme avant), 0012 13/13, 0013 15/19 tel quel
   (ecarts attendus, detail plus bas) et 19/19 sans les politiques `r14_*` ; controles 7/7 OK ;
   aucun residu. **Production : NON appliquee.**
+- **`0015_garde_sa_authenticated.sql`** — chantier B, decision Q6 (adaptation du garde 0007,
+  fichier 0007 non modifie) : un appelant `authenticated` **SUPER ADMIN verifie** (claims
+  `gis_*` valides, `gis_is_super_admin` et `gis_statut_actif` vrais, ET compte `t_users`
+  encore actif et SUPER ADMIN au moment de l'ecriture) devient **fiable** pour 0007 ; trois
+  triggers `trg_t_users_sa_guard_auth_*` lui appliquent les regles de l'application :
+  mot de passe d'un **autre** SUPER ADMIN repris (ROOT seulement), `sync_id` d'un SUPER ADMIN
+  repris, auto-desactivation reprise, auto-suppression ignoree ; creation, elevation, role
+  secondaire SUPER ADMIN, login, retrogradation, desactivation / suppression d'un **autre** SA
+  permis et journalises (`SA_AUTH_*`). **anon, authenticated sans claims, ADMINISTRATEUR_SITE,
+  ADMIN_CENTRE, OPERATEUR_* : comportement 0007 inchange** (jamais creer / promouvoir un SA).
+  `fn_sa_guard_caller_untrusted` remplacee (version 0007 + une ligne en tete). **Dependances :
+  0007, 0011, 0013, 0014** (le fichier s'arrete sinon). Test :
+  `supabase/tests/0015_garde_sa_authenticated.test.sql`. **Dev : appliquee le 2026-11-18**
+  (MCP `apply_migration`, partie executable identique au fichier) ; test **16/16** ;
+  empreinte anon identique avant / apres (206 elements, meme md5) ; non-regression detaillee
+  section « 0015 ». **Production : NON appliquee.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -535,8 +552,8 @@ SELECT 'fonctions de tentatives reservees a service_role',
 ```
 
 **Retour arrière** : d'abord **désactiver le hook** dans le tableau de bord (sinon toute connexion
-Auth échoue), puis les blocs écrits en tête de 0014, 0013, 0012 puis 0011 (retirer 0014, 0013 et
-0012 avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
+Auth échoue), puis les blocs écrits en tête de 0015, 0014, 0013, 0012 puis 0011 (retirer 0015,
+0014, 0013 et 0012 avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
 
 **Numérotation (mise à jour du 2026-11-18)** : l'adaptation du garde 0007 (décision Q6) devient
 la migration **0015** (0014 = filtre par rôle). Le commentaire en tête du fichier 0013 (ligne
@@ -641,7 +658,9 @@ il ne crée plus de poste ni de centre (cas 5 : 42501), ne modifie plus la ligne
 (cas 6 : 0 ligne), et son déplacement de poste vers un centre B passe de 42501 à 0 ligne
 (cas 8 : toujours refusé) ; le cas 15 compte alors 2 lignes de référence de moins (seuil 15,
 obtenu 14 ; écritures anon toutes acceptées). Test 0013 rejoué avec les politiques `r14_*`
-retirées dans la même transaction annulée : 19/19.
+retirées dans la même transaction annulée : 19/19. **Mise à jour du 2026-11-18** : le test
+0013 a depuis été adapté à l'empilement réel (19/19 avec les `r14_*` en place, voir section
+« 0015 ») ; le fichier de migration 0013 reste inchangé.
 
 **Contrôle après application (lecture seule)** :
 
@@ -665,6 +684,81 @@ seul filtre par site de 0013).
 puis envoyée sous la session d'un autre agent du même poste serait refusée (à traiter avec
 `actor_sync_id`, Q8) ; `sync:forceCentres` (`handlers.ts:7648`) n'a pas de garde de rôle côté
 poste : sous session authenticated, un non-administrateur qui le déclenche serait refusé.
+
+## 0015 : garde SUPER ADMIN pour les sessions authenticated (Q6, avant P2)
+
+**Effet sur les postes actuels : aucun** (ils écrivent en anon ; pour anon, le code de
+`fn_sa_guard_caller_untrusted` est le même qu'en 0007 et les nouveaux triggers ne font rien).
+Effet sur authenticated : seul un SUPER ADMIN **vérifié** (claims `gis_*` valides + compte
+encore actif et SUPER ADMIN dans `t_users` / `t_user_roles`) sort de la neutralisation 0007 ;
+un jeton SUPER ADMIN émis avant une désactivation ou une rétrogradation (jusqu'à 1 h) redevient
+non fiable dès l'écriture suivante.
+
+| Appelant | Gestes sur un compte SUPER ADMIN | Source dans l'application (lecture du 2026-11-18) |
+|---|---|---|
+| anon, authenticated sans claims `gis_*` | inchangé (0007) | — |
+| `ADMINISTRATEUR_SITE`, `ADMIN_CENTRE`, `OPERATEUR_*` | inchangé (0007) : création en quarantaine, élévation annulée, rôle SA refusé ; comptes de leur site seulement (RLS 0013) | `users.queries.ts:22-35` (rôles attribuables), `:93-102` (cible SA interdite) |
+| SUPER ADMIN vérifié | création, élévation, rôle secondaire SA, login, rétrogradation, (dés)activation et suppression d'un **autre** SA : permis | `handlers.ts:3588` (`users:create`), `users.queries.ts:23-27`, `:705`, `:1008`, `:1090` |
+| SUPER ADMIN vérifié | mot de passe d'un **autre** SA : repris (ROOT seulement) ; le sien : permis | `users.queries.ts:729-741`, `:1229-1240` |
+| SUPER ADMIN vérifié | `sync_id` d'un SA : repris ; se désactiver : repris ; se supprimer : ignoré | `users.queries.ts:636-640`, `:665-668` |
+
+ROOT (session locale `id 999999`, sans compte cloud) n'a pas de session authenticated : ses
+gestes sur un SUPER ADMIN restent la procédure manuelle ci-dessous (section « 0007 »).
+
+**Verrou** : `CREATE TRIGGER` = `ShareRowExclusiveLock` court sur `t_users` seulement. Prod :
+un seul bloc `BEGIN; <fichier 0015> COMMIT;` (prérequis 0007, 0011, 0013 et 0014 contrôlés en
+tête, `lock_timeout` 3 s).
+
+**Dev : fait le 2026-11-18** (agent-4), résultats sur l'empilement réel 0006-0015 :
+0015 **16/16** ; 0013 adapté **19/19** ; 0014 **17/17** ; 0007 **20/20** ; 0006 **19/19** ;
+0008 **26/26** ; 0009 **17/17** ; 0010 **14/14** ; 0011 **20/20** (+ cas 20 non concluant,
+comme avant) ; 0012 **13/13** ; contrôles du README **8/8** (7 existants + celui de 0015).
+Chaque test exécuté dans une transaction qui se termine par une erreur volontaire (rapport des
+cas) : tout est annulé. Aucun résidu : empreinte anon (`a4212a8a…`, 206 éléments), empreinte
+de toutes les politiques, journal 0007 (16 lignes), empreinte de `t_write_audit` et
+comptages des tables métier identiques avant / après.
+
+**Test 0013 adapté (2026-11-18)** : tables métier (`t_cartes`, `t_logs`, `t_users`,
+`t_user_roles`, `t_user_presence`) toujours testées avec l'opérateur du site A ; écritures de
+hiérarchie (`t_centres`, `t_postes`) sur son site **et** hors site testées avec un
+`ADMINISTRATEUR_SITE` du site A (son rôle l'autorise, donc un refus hors site prouve le filtre
+**par site** de 0013) ; la ligne de son site dans `t_sites` n'est modifiable ni par
+l'opérateur ni par l'admin de site (0 ligne, attente ajustée à 0014) ; l'opérateur ne crée ni
+poste ni centre (42501). 19 cas, même numérotation.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0015 : 3 triggers auth + 5 triggers 0007 actifs, garde actif, fonctions fermees' AS verification,
+       CASE WHEN (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.t_users'::regclass AND NOT tgisinternal AND tgenabled = 'O'
+                   AND tgname IN ('trg_t_users_sa_guard_auth_ins','trg_t_users_sa_guard_auth_upd','trg_t_users_sa_guard_auth_del',
+                                  'trg_t_users_sa_guard_ins','trg_t_users_sa_guard_upd','trg_t_users_sa_guard_del')) = 6
+             AND (SELECT count(*) FROM pg_trigger WHERE tgrelid = 'public.t_user_roles'::regclass AND NOT tgisinternal AND tgenabled = 'O'
+                   AND tgname IN ('trg_t_user_roles_sa_guard_ins','trg_t_user_roles_sa_guard_upd')) = 2
+             AND (SELECT enabled FROM public.t_security_guard_config WHERE id = 1)
+             AND NOT has_function_privilege('anon', 'public.fn_sa_guard_caller_sa_auth()', 'EXECUTE')
+             AND NOT has_function_privilege('authenticated', 'public.fn_sa_guard_caller_sa_auth()', 'EXECUTE')
+             AND NOT has_function_privilege('anon', 'public.fn_t_users_sa_guard_auth()', 'EXECUTE')
+             AND NOT has_function_privilege('authenticated', 'public.fn_t_users_sa_guard_auth()', 'EXECUTE')
+             AND (SELECT prosrc LIKE '%fn_sa_guard_caller_sa_auth%' FROM pg_proc WHERE oid = 'public.fn_sa_guard_caller_untrusted()'::regprocedure)
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Puis l'empreinte anon (requête de la section 0013), avant et après : identique.
+
+**Lire les gestes SUPER ADMIN authentifiés** : même requête que « Lire le journal du garde »
+(section 0007), raisons `SA_AUTH_CREATION`, `SA_AUTH_ELEVATION`, `SA_AUTH_MODIF:<colonnes>`,
+`SA_AUTH_NEUTRALISE:<colonnes>`, `SA_AUTH_SUPPRESSION`, `SA_AUTH_AUTO_SUPPRESSION_IGNOREE`,
+`SA_AUTH_REPLI_FERME:<code>` (jamais de hash).
+
+**Retour arrière** : bloc écrit en tête du fichier 0015 (supprime les 3 triggers et les 2
+fonctions ajoutées, remet `fn_sa_guard_caller_untrusted` dans sa version 0007). Coupure
+immédiate de tout le garde (0007 compris) : interrupteur `t_security_guard_config`.
+
+**À savoir pour P2** : un upsert client d'un compte SA qui réécrit `password_hash` reste refusé
+par 0013 (lecture d'`EXCLUDED`) ; une écriture de compte mise en file par un SUPER ADMIN puis
+envoyée sous la session d'un autre agent du poste serait neutralisée (à traiter avec
+`actor_sync_id`, Q8).
 
 ## 0007 : procédures manuelles (période transitoire)
 

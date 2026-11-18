@@ -9,9 +9,31 @@
 -- Methode : vrais changements de role (SET LOCAL ROLE authenticated / anon /
 -- service_role, comme PostgREST) + claims simulees dans request.jwt.claims.
 -- La RLS et les privileges sont donc reellement appliques.
--- Profils : agent du site A, agent du site B, SUPER ADMIN (sans site),
--- authenticated SANS claims gis_*, authenticated avec claims gis_* mais
--- sans gis_v (forge), anon (cle publishable et sans claims), service_role.
+-- Profils : agent du site A (operateur), ADMINISTRATEUR_SITE du site A,
+-- agent du site B, SUPER ADMIN (sans site), authenticated SANS claims gis_*,
+-- authenticated avec claims gis_* mais sans gis_v (forge), anon (cle
+-- publishable et sans claims), service_role.
+--
+-- Empilement reel (adaptation du 2026-11-18, agent-4) : ce test s'execute
+-- sur l'etat REEL du dev, 0013 + 0014 (+ 0015) en place ; les politiques
+-- r14_* ne sont PAS retirees. 0014 reserve les ecritures de t_sites au SUPER
+-- ADMIN et celles de t_centres / t_postes au SUPER ADMIN ou a
+-- l'ADMINISTRATEUR_SITE de son site. Donc :
+--   - tables metier (t_cartes, t_logs, t_users, t_user_roles,
+--     t_user_presence) : toujours testees avec l'OPERATEUR du site A (filtre
+--     par site seulement, Q4) ;
+--   - ecritures de hierarchie (t_centres, t_postes) sur SON site et HORS de
+--     son site : testees avec l'ADMINISTRATEUR_SITE du site A, pour que le
+--     refus hors site prouve le filtre PAR SITE de 0013 (et non le seul filtre
+--     par role de 0014) ;
+--   - t_sites : la ligne de SON site n'est plus modifiable que par le SUPER
+--     ADMIN (0014) : attente ajustee a 0 ligne pour l'operateur ET
+--     l'administrateur de site (cas 6) ; le refus hors site reste teste
+--     (cas 8) ;
+--   - l'operateur A ne cree plus ni poste ni centre sur son site (0014,
+--     42501) : verifie au cas 6.
+-- Les profils administrateur n'ont pas de ligne t_users (les politiques ne
+-- lisent que les claims) : les comptages des cas 3, 11 et 12 sont inchanges.
 -- Les comptages ne portent que sur les lignes de test (sync_id 't13-%').
 -- Resultat : table _t, puis un bloc qui LEVE UNE ERREUR si un cas vaut false.
 -- NE JAMAIS EXECUTER EN PROD.
@@ -58,7 +80,10 @@ DECLARE
   c_sa  TEXT;  -- claims SUPER ADMIN
   c_nog TEXT := '{"role":"authenticated","aud":"authenticated","sub":"00000000-0000-0000-0000-000000000013"}';
   c_forge TEXT; -- claims gis_* sans gis_v
+  c_adm_a TEXT; -- claims ADMINISTRATEUR_SITE du site A
   r1 TEXT; r2 TEXT; r3 TEXT; r4 TEXT; r5 TEXT; r6 TEXT; r7 TEXT; r8 TEXT; r9 TEXT; r10 TEXT; r11 TEXT; r12 TEXT;
+  r13 TEXT; r14 TEXT; r15 TEXT;
+  a1 TEXT; a2 TEXT; a3 TEXT; a4 TEXT; a5 TEXT; a6 TEXT; a7 TEXT; o1 TEXT; o2 TEXT; o3 TEXT;
   n1 BIGINT; n2 BIGINT; n3 BIGINT; n4 BIGINT; n5 BIGINT; n6 BIGINT; n7 BIGINT; n8 BIGINT;
   b  BOOLEAN;
   t  TEXT;
@@ -142,6 +167,10 @@ BEGIN
            'gis_is_super_admin',true,'gis_statut_actif',true)::text;
   c_forge := jsonb_build_object('role','authenticated','gis_sync_id','t13-u-a','gis_site_id',v_sa,
            'gis_is_super_admin',true)::text;
+  c_adm_a := jsonb_build_object('role','authenticated','aud','authenticated','sub','00000000-0000-0000-0000-0000000013ad',
+           'gis_v',1,'gis_sync_id','t13-u-adm-a','gis_site_id',v_sa,'gis_site_sync_id','t13-site-a',
+           'gis_centre_id',NULL,'gis_roles',jsonb_build_array('ADMINISTRATEUR_SITE'),
+           'gis_is_super_admin',false,'gis_statut_actif',true)::text;
 
   -- =====================================================================
   -- 3-4. Agent du site A : LECTURE
@@ -181,20 +210,29 @@ BEGIN
   r4 := public._t13_try(format('INSERT INTO public.t_logs (action, site_id, centre_id, sync_id) VALUES (%L, %s, %s, %L)', 'T13', v_sa, v_ca, 't13-l-a2'));
   r5 := public._t13_try(format('INSERT INTO public.t_users (login, password_hash, role, statut_actif, site_id, sync_id) VALUES (%L, %L, %L, 1, %s, %L)', 't13_agent_a2', 'x-t13-pas-un-hash', 'OPERATEUR_SAISIE', v_sa, 't13-u-a2'));
   r6 := public._t13_try($q$INSERT INTO public.t_user_roles (user_sync_id, role) VALUES ('t13-u-a2', 'OPERATEUR_VERIFICATION')$q$);
-  r7 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_ca, 'T13 POSTE A2', 't13-poste-a2'));
-  r8 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_sa, 'T13 CENTRE A2', 't13-cen-a2'));
+  -- Empilement 0014 : l'operateur ne cree ni poste ni centre, ne modifie pas son site.
+  r13 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 4, %L)', v_ca, 'T13 POSTE OP', 't13-poste-op'));
+  r14 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 4, %L)', v_sa, 'T13 CENTRE OP', 't13-cen-op'));
   r9 := public._t13_try($q$UPDATE public.t_sites SET nom = 'T13 SITE A MODIF' WHERE sync_id = 't13-site-a'$q$);
   r10 := public._t13_try($q$UPDATE public.t_user_presence SET last_heartbeat_at = now() WHERE user_sync_id = 't13-u-a'$q$);
   r11 := public._t13_try($q$UPDATE public.t_users SET password_hash = 'x-t13-nouveau' WHERE sync_id = 't13-u-a'$q$);
   EXECUTE 'RESET ROLE';
-  INSERT INTO _t VALUES (5, 'Agent A ecrit sur SON site : carte insert/update/delete, log, compte, role du compte, poste, centre, presence (1 ligne chacun)',
+  -- Ecritures de hierarchie sur SON site : ADMINISTRATEUR_SITE du site A.
+  PERFORM set_config('request.jwt.claims', c_adm_a, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
+  r7 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_ca, 'T13 POSTE A2', 't13-poste-a2'));
+  r8 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_sa, 'T13 CENTRE A2', 't13-cen-a2'));
+  r15 := public._t13_try($q$UPDATE public.t_sites SET nom = 'T13 SITE A MODIF' WHERE sync_id = 't13-site-a'$q$);
+  EXECUTE 'RESET ROLE';
+  INSERT INTO _t VALUES (5, 'Sur SON site : operateur A ecrit carte insert/update/delete, log, compte, role du compte, presence ; ADMINISTRATEUR_SITE A cree poste et centre (1 ligne chacun)',
     r1 = 'ok:1' AND r2 = 'ok:1' AND r3 = 'ok:1' AND r4 = 'ok:1' AND r5 = 'ok:1' AND r6 = 'ok:1'
       AND r7 = 'ok:1' AND r8 = 'ok:1' AND r10 = 'ok:1',
     concat_ws(' ', r1, r2, r3, r4, r5, r6, r7, r8, r10));
-  INSERT INTO _t VALUES (6, 'Agent A : modifie la ligne de SON site dans t_sites (Q4, pas de filtre par role) ; ECRIT password_hash d''un compte de son site sans pouvoir le relire',
-    r9 = 'ok:1' AND r11 = 'ok:1'
+  INSERT INTO _t VALUES (6, 'Empilement 0014 : la ligne de SON site dans t_sites n''est modifiable ni par l''operateur ni par l''admin de site (0 ligne, SA seulement) ; operateur : poste / centre de son site refuses (42501) ; operateur ECRIT password_hash d''un compte de son site sans pouvoir le relire',
+    r9 = 'ok:0' AND r15 = 'ok:0' AND r13 = 'err:42501:rls' AND r14 = 'err:42501:rls' AND r11 = 'ok:1'
+      AND (SELECT nom FROM public.t_sites WHERE sync_id = 't13-site-a') = 'T13 SITE A'
       AND (SELECT password_hash FROM public.t_users WHERE sync_id = 't13-u-a') = 'x-t13-nouveau',
-    concat_ws(' ', r9, r11));
+    concat_ws(' ', r9, r15, r13, r14, r11));
 
   -- =====================================================================
   -- 7-8. Agent A : ECRITURES hors de son site (refusees)
@@ -210,26 +248,31 @@ BEGIN
   r7 := public._t13_try(format('INSERT INTO public.t_users (login, password_hash, role, statut_actif, site_id, sync_id) VALUES (%L, %L, %L, 1, %s, %L)', 't13_x', 'x-t13-pas-un-hash', 'OPERATEUR_SAISIE', v_sb, 't13-u-x'));
   r8 := public._t13_try($q$UPDATE public.t_users SET nom_user = 'PIRATE' WHERE sync_id IN ('t13-u-b', 't13-u-sa')$q$);
   r9 := public._t13_try($q$INSERT INTO public.t_user_roles (user_sync_id, role) VALUES ('t13-u-b', 'ADMINISTRATEUR_SITE')$q$);
+  o1 := public._t13_try(format('INSERT INTO public.t_user_presence (user_sync_id, login, site_id) VALUES (%L, %L, %s)', 't13-u-x', 't13_x', v_sb));
+  o2 := public._t13_try($q$UPDATE public.t_user_presence SET role = 'PIRATE' WHERE user_sync_id = 't13-u-b'$q$);
+  o3 := public._t13_try($q$DELETE FROM public.t_user_roles WHERE user_sync_id = 't13-u-b'$q$);
+  EXECUTE 'RESET ROLE';
+  -- Hierarchie hors site : ADMINISTRATEUR_SITE du site A (son role l'autorise
+  -- sur SON site, cas 5) : un refus ici prouve le filtre PAR SITE.
+  PERFORM set_config('request.jwt.claims', c_adm_a, true);
+  EXECUTE 'SET LOCAL ROLE authenticated';
   r10 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 3, %L)', v_cb, 'T13 X', 't13-poste-x'));
   r11 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 3, %L)', v_sb, 'T13 X', 't13-cen-x'));
-  r12 := concat_ws(' ',
-           public._t13_try($q$UPDATE public.t_centres SET nom = 'PIRATE' WHERE sync_id = 't13-cen-b'$q$),
-           public._t13_try($q$DELETE FROM public.t_centres WHERE sync_id = 't13-cen-b'$q$),
-           public._t13_try($q$UPDATE public.t_sites SET nom = 'PIRATE' WHERE sync_id = 't13-site-b'$q$),
-           public._t13_try($q$DELETE FROM public.t_sites WHERE sync_id = 't13-site-b'$q$),
-           public._t13_try($q$INSERT INTO public.t_sites (nom, code, sync_id) VALUES ('T13 X', 'T13X', 't13-site-x')$q$),
-           public._t13_try(format('INSERT INTO public.t_user_presence (user_sync_id, login, site_id) VALUES (%L, %L, %s)', 't13-u-x', 't13_x', v_sb)),
-           public._t13_try($q$UPDATE public.t_user_presence SET role = 'PIRATE' WHERE user_sync_id = 't13-u-b'$q$),
-           public._t13_try($q$DELETE FROM public.t_user_roles WHERE user_sync_id = 't13-u-b'$q$),
-           public._t13_try($q$UPDATE public.t_postes SET nom = 'PIRATE' WHERE sync_id = 't13-poste-b'$q$),
-           public._t13_try(format('UPDATE public.t_postes SET centre_id = %s WHERE sync_id = %L', v_cb, 't13-poste-a')));
+  a1 := public._t13_try($q$UPDATE public.t_centres SET nom = 'PIRATE' WHERE sync_id = 't13-cen-b'$q$);
+  a2 := public._t13_try($q$DELETE FROM public.t_centres WHERE sync_id = 't13-cen-b'$q$);
+  a3 := public._t13_try($q$UPDATE public.t_sites SET nom = 'PIRATE' WHERE sync_id = 't13-site-b'$q$);
+  a4 := public._t13_try($q$DELETE FROM public.t_sites WHERE sync_id = 't13-site-b'$q$);
+  a5 := public._t13_try($q$INSERT INTO public.t_sites (nom, code, sync_id) VALUES ('T13 X', 'T13X', 't13-site-x')$q$);
+  a6 := public._t13_try($q$UPDATE public.t_postes SET nom = 'PIRATE' WHERE sync_id = 't13-poste-b'$q$);
+  a7 := public._t13_try(format('UPDATE public.t_postes SET centre_id = %s WHERE sync_id = %L', v_cb, 't13-poste-a'));
   EXECUTE 'RESET ROLE';
-  INSERT INTO _t VALUES (7, 'Agent A hors site : INSERT carte site B / sans site, log B, compte B, role d''un compte B, poste B, centre B -> refus RLS (42501) ; UPDATE/DELETE cartes B et sans site, comptes B et SA -> 0 ligne ; deplacer une carte A vers B -> refus RLS',
+  r12 := concat_ws(' ', a1, a2, a3, a4, a5, o1, o2, o3, a6, a7);
+  INSERT INTO _t VALUES (7, 'Hors site : operateur A -> INSERT carte site B / sans site, log B, compte B, role d''un compte B refuses (42501), UPDATE/DELETE cartes B et sans site, comptes B et SA -> 0 ligne, deplacer une carte A vers B refuse ; ADMINISTRATEUR_SITE A -> poste B, centre B refuses (42501)',
     r1 = 'err:42501:rls' AND r2 = 'err:42501:rls' AND r3 = 'ok:0' AND r4 = 'ok:0' AND r5 = 'err:42501:rls'
       AND r6 = 'err:42501:rls' AND r7 = 'err:42501:rls' AND r8 = 'ok:0' AND r9 = 'err:42501:rls'
       AND r10 = 'err:42501:rls' AND r11 = 'err:42501:rls',
     concat_ws(' ', r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11));
-  INSERT INTO _t VALUES (8, 'Agent A hors site : centre B et site B non modifiables / supprimables (0 ligne), creation de site refusee, presence B refusee / 0 ligne, roles B 0 ligne, poste B 0 ligne, deplacer un poste vers un centre B refuse',
+  INSERT INTO _t VALUES (8, 'Hors site : ADMINISTRATEUR_SITE A -> centre B et site B non modifiables / supprimables (0 ligne), creation de site refusee, poste B 0 ligne, deplacer un poste A vers un centre B refuse ; operateur A -> presence B refusee / 0 ligne, roles B 0 ligne',
     r12 = 'ok:0 ok:0 ok:0 ok:0 err:42501:rls err:42501:rls ok:0 ok:0 ok:0 err:42501:rls', r12);
   -- Les lignes du site B et sans site sont intactes (verifie en postgres).
   INSERT INTO _t VALUES (9, 'Lignes hors site intactes apres les tentatives de l''agent A',
