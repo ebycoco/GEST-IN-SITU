@@ -148,6 +148,30 @@ présente mise en place — voir limitation ci-dessous.
   la RPC d'envoi `fn_report_client_version` était encore FERMÉE à ce moment. GRANT d'ouverture fait
   le 2026-11-14 après publication de v2.27.0, sur accord écrit : RPC OUVERTE à anon/authenticated,
   `t_client_versions` toujours illisible directement.**
+- **`0011_hook_identite_claims.sql`** — chantier B, P1-5 : table `t_auth_identity` (compte Auth
+  miroir → `t_users.sync_id`, `last_online_login_at` écrit seulement par service_role), fonction
+  `fn_auth_identity_upsert` (service_role), hook `custom_access_token_hook` (SECURITY DEFINER,
+  STABLE, EXECUTE `supabase_auth_admin` seulement ; claims `gis_*` liées à la personne et ids
+  cloud ; refus 403 si compte inconnu, inactif, sans site hors SA, ou dernière connexion en ligne
+  de plus de 30 jours, y compris au `token_refresh`) et fonctions `fn_jwt_sync_id`,
+  `fn_jwt_site_id`, `fn_jwt_site_sync_id`, `fn_jwt_centre_id`, `fn_jwt_roles`,
+  `fn_jwt_is_super_admin` (pour la RLS de P1-6). Aucune table métier ni politique existante
+  touchée. **N'active pas le hook** (geste utilisateur, ci-dessous). Test :
+  `supabase/tests/0011_hook_identite_claims.test.sql`. **Dev : appliquée le 2026-11-18**
+  (`apply_migration` MCP, PostgreSQL 17.11, fichier inchangé : aucun écart de schéma) ; test
+  20/20 concluants + cas 20 non concluant (le rôle `postgres` du MCP ne peut pas faire
+  `SET ROLE supabase_auth_admin`, 42501 ; le droit EXECUTE de `supabase_auth_admin` est vérifié
+  au catalogue, cas 0) ; contrôle 3/3 OK. Hook **non activé** dans Auth. **Production : NON
+  appliquée.**
+- **`0012_tentatives_connexion.sql`** — chantier B, P1-5 (C5) : table `t_login_attempts` (clé =
+  SHA-256 du login normalisé, jamais le login en clair), `fn_login_check_and_record(login,
+  'check'|'failure'|'success')` (5 échecs → 15 min, puis doublement, plafond 24 h ; oubli après
+  24 h sans échec ; EXECUTE service_role seulement) et `fn_login_unblock(login)` (service_role,
+  SQL Editor, ou authenticated porteur de `gis_is_super_admin` ; EXECUTE service_role seulement
+  pour l'instant). **Dépend de 0011.** Test : `supabase/tests/0012_tentatives_connexion.test.sql`.
+  **Dev : appliquée le 2026-11-18** (juste après 0011, fichier inchangé) ; test 13/13 ;
+  non-régression rejouée le même jour : 0006 19/19, 0007 20/20, 0008 26/26, 0009 17/17,
+  0010 14/14 (transactions annulées, aucun résidu). **Production : NON appliquée.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -423,6 +447,50 @@ Rejouer 0009 referme cette RPC (REVOKE final) : refaire le GRANT après tout rej
 DROP FUNCTION IF EXISTS public.fn_list_client_versions(); DROP FUNCTION IF EXISTS
 public.fn_count_client_versions(); COMMIT;` — l'écran affichera alors une erreur de lecture,
 sans effet sur la synchronisation.
+
+## 0011 / 0012 : dev d'abord, activation du hook, retour arrière
+
+Ordre : 0011 puis 0012, chacune en un seul bloc `BEGIN; <fichier> COMMIT;` (contrôle
+`lock_timeout` en tête). Aucun trigger, aucun verrou sur une table métier ; 0011 pose une clé
+étrangère vers `auth.users` (verrou court sur cette table). **Prod : seulement après P1-6 (0013),
+l'Edge Function `gis-login` testée sur le dev et l'audit agent-9.**
+
+**Dev** : appliquer 0011 et 0012, rejouer `supabase/tests/0011_*.test.sql` et `0012_*.test.sql`
+(transactions annulées), puis 0006, 0007, 0008 (non-régression). **Fait le 2026-11-18** (voir
+la liste plus haut) : 0011 et 0012 en place sur le dev, hook non activé.
+
+**Activer le hook (geste utilisateur, tableau de bord, hors SQL)** : Authentication > Hooks
+(chemin confirmé par la doc Supabase, `search_docs` du 2026-11-18 ; une page le nomme encore
+« Hooks (Beta) ») > ajouter le hook « Custom Access Token » > type **Postgres**, schéma `public`,
+fonction `custom_access_token_hook` > Enable. Le libellé exact du bouton n'est pas vérifié. Dev d'abord. Effet : toute émission de jeton Auth du projet
+passe par le hook ; un utilisateur Auth sans ligne `t_auth_identity` est refusé (403). Les postes
+actuels (clé anon / publishable, sans session Auth) ne sont **pas** concernés.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT 'hook : EXECUTE supabase_auth_admin, ferme a anon/authenticated' AS verification,
+       CASE WHEN has_function_privilege('supabase_auth_admin', 'public.custom_access_token_hook(jsonb)', 'EXECUTE')
+             AND NOT has_function_privilege('anon', 'public.custom_access_token_hook(jsonb)', 'EXECUTE')
+             AND NOT has_function_privilege('authenticated', 'public.custom_access_token_hook(jsonb)', 'EXECUTE')
+            THEN 'OK' ELSE 'KO' END AS resultat
+UNION ALL
+SELECT 't_auth_identity et t_login_attempts illisibles par anon/authenticated',
+       CASE WHEN NOT has_table_privilege('anon', 'public.t_auth_identity', 'SELECT')
+             AND NOT has_table_privilege('authenticated', 'public.t_auth_identity', 'SELECT')
+             AND NOT has_table_privilege('anon', 'public.t_login_attempts', 'SELECT')
+             AND NOT has_table_privilege('authenticated', 'public.t_login_attempts', 'SELECT')
+            THEN 'OK' ELSE 'KO' END
+UNION ALL
+SELECT 'fonctions de tentatives reservees a service_role',
+       CASE WHEN has_function_privilege('service_role', 'public.fn_login_check_and_record(text,text)', 'EXECUTE')
+             AND NOT has_function_privilege('anon', 'public.fn_login_check_and_record(text,text)', 'EXECUTE')
+             AND NOT has_function_privilege('authenticated', 'public.fn_login_check_and_record(text,text)', 'EXECUTE')
+            THEN 'OK' ELSE 'KO' END;
+```
+
+**Retour arrière** : d'abord **désactiver le hook** dans le tableau de bord (sinon toute connexion
+Auth échoue), puis les blocs écrits en tête de 0012 puis de 0011 (retirer 0012 avant 0011).
 
 ## 0007 : procédures manuelles (période transitoire)
 

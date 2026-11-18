@@ -1,4 +1,4 @@
-# Plan P1 du chantier B — version corrigée (2026-11-13)
+# Plan P1 du chantier B — version corrigée (2026-11-13, mise à jour 2026-11-18)
 
 Base : plan d'agent-1 du 2026-11-13 (résumé dans `RELAIS.md`, sections « Plan P1 chantier B »,
 « Résultats P1-0 », « Lecture prod des règles d'accès »), corrigé par agent-4 après l'alignement
@@ -19,9 +19,28 @@ Rappels permanents :
 | Sujet | Décision retenue par défaut |
 |---|---|
 | C1-C10 | Recommandations d'agent-1 retenues par défaut, recopiées en annexe A (fin de fichier). |
-| 0007 | **STOP & WARN maintenu** : le garde 0007 neutralise les gestes SA faits avec la clé anon. Il devra être adapté (laisser passer un appelant `authenticated` légitime) **avant P2**, pas en P1. Ne pas le modifier pendant P1. |
+| 0007 | **STOP & WARN maintenu** : le garde 0007 neutralise les gestes SA faits avec la clé anon. Il devra être adapté (laisser passer un appelant `authenticated` légitime) **avant P2**, pas en P1. Ne pas le modifier pendant P1. **Q6 (2026-11-18)** : l'adaptation sera une **nouvelle migration 0014** ; le fichier 0007 n'est jamais modifié. |
 | Ordre en prod | **P1-1 (mesure) et P1-2 (versions) d'abord**, seuls, pour commencer à collecter. Le reste suit après validation sur le dev. |
-| Ancienne clé anon prod | **D6 (corrigée le 2026-11-13, réserve P1-3 de l'audit agent-9)** : désactivation seulement si (1) la **preuve contrôlée** de P1-1b a donné `legacy_suppose` ; (2) pendant **7 jours consécutifs**, 0 compteur `legacy_suppose` **et** 0 compteur `autre` avec `jwt_role = 'anon'` dans `t_write_audit`, vérifié en lisant aussi `claim_keys` (toute forme de claims inconnue bloque D6) et pas seulement `classe` ; (3) tout le parc en ≥ 2.26.1 (voir P1-1b pour la source de cette information). Aucune autre échappatoire. Geste de l'utilisateur. |
+| Ancienne clé anon prod | **D6 scindée le 2026-11-18 (Q2).** **D6a = couper la clé legacy** (JWT anon de prod qui a fuité) : seulement si (1) la **preuve contrôlée** de P1-1b a donné `legacy_suppose` ; (2) pendant **7 jours consécutifs**, 0 compteur `legacy_suppose` **et** 0 compteur `autre` avec `jwt_role = 'anon'` dans `t_write_audit`, vérifié en lisant aussi `claim_keys` (toute forme de claims inconnue bloque D6a) et pas seulement `classe` ; (3) tous les postes en ≥ 2.26.1 (anciens postes mis à jour, Q7 ; source : P1-1b). Les écritures `publishable` continuent. **D6b = fermer anon (P3)** : seulement quand tout le parc est en version P2 (badge) **et** 7 jours consécutifs sans aucune écriture anon (`publishable`, `legacy_suppose`, `autre` anon). Aucune autre échappatoire. Gestes de l'utilisateur. |
+
+## Décisions de l'utilisateur du 2026-11-18 (« Oui, toutes »)
+
+| # | Décision |
+|---|---|
+| Q1 | Preuve P1-1b **maintenant** : un appel avec l'ancienne clé, fait par l'utilisateur (procédure en P1-1b). |
+| Q2 | D6 scindée : **D6a** couper la clé legacy (anciens postes mis à jour) ; **D6b** fermer anon = P3 (tout le parc en version P2 + 7 jours sans écriture anon). |
+| Q3 | `verifyOtp` fait par le **poste** avec le `token_hash` renvoyé par `gis-login` ; limites de débit Auth **inchangées**. |
+| Q4 | Écritures `authenticated` filtrées **par site seulement** en P1-6 (filtre par rôle revu pour la PWA). |
+| Q5 | Un SUPER ADMIN garde **son propre** hash sur un poste où il s'est connecté en ligne, **jamais** via la liste du site (précise D1). |
+| Q6 | Adaptation du garde 0007 = **nouvelle migration 0014**, sans modifier 0007. |
+| Q7 | Relancer la mise à jour des postes ABO restés en ancienne version (geste terrain). |
+| Q8 | Colonne `actor_sync_id` dans `t_outbox` (SQLite V74) en **P2**. |
+
+À préparer pour la future PWA dès P1/P2 : claims liés à la **personne** (pas au poste, aucun
+`poste_key` obligatoire), identifiants **cloud** uniquement (jamais d'id local), `gis-login`
+appelable depuis un navigateur (CORS), aucun hash lisible par `authenticated`, limite des
+30 jours (D3) appliquée par le **hook** au `token_refresh` (les limites de session Supabase
+relèvent d'un plan payant, non vérifié).
 
 ## Constats qui changent le plan initial
 
@@ -107,7 +126,7 @@ Rappels permanents :
   **20/20**. Appel REST réel (clé publishable du dev) : INSERT/UPDATE/DELETE t_cartes et t_sites
   classés `publishable`, `claim_keys = role` (donc claims réelles `{"role":"anon"}`) ; RPC
   refusée (42501). Requête de contrôle du README : 12/12 OK. Dev nettoyé.
-- **Reste** : application en prod (geste utilisateur, procédure du README), puis P1-1b.
+- **Reste** : ~~application en prod~~ faite le 2026-11-13 (voir « Prod » ci-dessus) ; reste P1-1b.
 - **Fichiers** : `supabase/migrations/0008_mesure_ecritures_cles.sql`,
   `supabase/tests/0008_mesure_ecritures_cles.test.sql`.
 - **Agent** : agent-4 (écriture + dev), utilisateur (prod).
@@ -138,46 +157,122 @@ Rappels permanents :
   jugé acceptable, objets de test supprimés.
 - **Geste utilisateur** : appliquer 0008 en prod (SQL Editor) après validation dev.
 
-### P1-1b — Preuve en prod de la forme des claims « legacy » (sous-étape de P1-1)
-- **But** : prouver le discriminant du constat 2 sans lire aucune clé.
-- **Moyen** : une preuve contrôlée (un appel, ci-dessous) puis la collecte de 0008.
-- **Preuve contrôlée (obligatoire avant D6, geste de l'utilisateur)** — ne touche aucune table
-  métier ; la valeur de la clé n'est jamais collée dans un chat ni un fichier suivi :
-  1. SQL Editor prod : ouvrir la RPC
-     `GRANT EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) TO anon, authenticated;`
-  2. depuis le poste de l'utilisateur, **un seul** appel `POST <URL prod>/rest/v1/rpc/fn_report_client_version`
-     avec l'**ancienne** clé anon de prod (en-têtes `apikey` et `Authorization: Bearer`), corps
-     `{"p_poste_key":"preuve-legacy-0001","p_app_version":"0.0.1"}` (réponse attendue : `true`) ;
-  3. refermer aussitôt :
-     `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
-  4. lire `SELECT key_kind, client_info FROM public.t_client_versions WHERE poste_key = 'preuve-legacy-0001';`
-     → attendu `legacy_suppose` ;
-  5. supprimer la ligne : `DELETE FROM public.t_client_versions WHERE poste_key = 'preuve-legacy-0001';`
-  Si `key_kind` n'est pas `legacy_suppose` : **corriger le classement de 0008 avant toute
-  décision** (et refaire la preuve). Faire de même, en contre-épreuve, avec la clé publishable
-  (attendu `publishable`, ligne `preuve-publi-0001` supprimée ensuite).
-- **Collecte** : 0008 enregistre role + noms des claims + x-client-info. Les postes < 2.26.1
-  doivent apparaître en `legacy_suppose`, les postes ≥ 2.26.1 en `publishable`.
+### P1-1b — Preuve en prod de la forme des claims « legacy » (sous-étape de P1-1) — À FAIRE (Q1, 2026-11-18)
+- **But** : prouver, sans lire aucune clé, qu'un appel fait avec l'**ancienne** clé anon de prod
+  est bien classé `legacy_suppose` (et qu'un appel avec la clé publishable est classé
+  `publishable`). C'est la condition (1) de D6a.
+- **Ce qui a changé depuis le plan du 2026-11-13** : la RPC `fn_report_client_version` est
+  **ouverte** à anon/authenticated depuis le 2026-11-14 (README des migrations, entrée 0010).
+  **Il n'y a donc plus de GRANT/REVOKE à faire** autour de la preuve. Et la collecte de 0008 voit
+  déjà, chaque jour depuis le 14/11, des écritures `legacy_suppose` avec les claims
+  `exp, iat, iss, ref, role` (lecture du 2026-11-17) : la preuve contrôlée confirme que c'est
+  bien l'ancienne clé qui produit cette forme.
+- **Vérifié dans les fichiers (2026-11-18)** : signature `fn_report_client_version(p_poste_key TEXT,
+  p_app_version TEXT, p_user_sync_id TEXT DEFAULT NULL, p_site_sync_id TEXT DEFAULT NULL)`
+  renvoie un booléen (`0009_versions_postes.sql:124-130`) ; `p_poste_key` doit respecter
+  `^[A-Za-z0-9_-]{8,64}$` et `p_app_version` le format `x.y.z` (`0009:140-147`) ; la classe est
+  calculée côté serveur par `fn_write_audit_classe()` et rangée dans
+  `t_client_versions.key_kind` (`0009:167`). **Attention** : cet appel n'écrit **que** dans
+  `t_client_versions` ; il ne crée **aucune** ligne dans `t_write_audit` (`t_client_versions`
+  n'est pas une table surveillée par 0008, `0008:54-55`) et `t_client_versions` ne garde pas
+  les noms des claims (`claim_keys`). La preuve se lit donc dans `key_kind` ; les `claim_keys`
+  se lisent dans `t_write_audit` pour les écritures réelles des postes (étape 4).
+- **Procédure (geste de l'utilisateur, ~10 minutes, PowerShell sur son poste + SQL Editor de la
+  PROD)** — la valeur des clés n'est jamais collée dans un chat, un fichier ou une commande
+  enregistrée :
+  1. **Préparer.** Dans le tableau de bord Supabase de la **prod** : Settings > API Keys. Onglet
+     « Legacy API Keys » : repérer la clé `anon` (l'**ancienne**, `<ANCIENNE_CLE>`) ; onglet
+     « API Keys » : repérer la clé **publishable** (`<CLE_PUBLISHABLE>`). Ne rien copier pour
+     l'instant. Si l'onglet Legacy indique que les anciennes clés sont **désactivées**, s'arrêter :
+     la preuve n'a plus d'objet (D6a déjà faite), le noter.
+     Dans le SQL Editor de la prod, contrôle préalable (lecture seule, 3 lignes `OK` attendues) :
+     ```sql
+     SELECT 'RPC ouverte a anon' AS verification,
+            CASE WHEN has_function_privilege('anon', 'public.fn_report_client_version(text,text,text,text)', 'EXECUTE')
+                 THEN 'OK' ELSE 'KO - ARRETER' END AS resultat
+     UNION ALL
+     SELECT 'aucune ligne preuve-% deja presente',
+            CASE WHEN NOT EXISTS (SELECT 1 FROM public.t_client_versions WHERE poste_key LIKE 'preuve-%')
+                 THEN 'OK' ELSE 'A NETTOYER (etape 5) PUIS RECOMMENCER' END
+     UNION ALL
+     SELECT 'mesure 0008 active',
+            CASE WHEN (SELECT enabled FROM public.t_write_audit_config WHERE id = 1)
+                 THEN 'OK' ELSE 'KO - ARRETER' END;
+     ```
+  2. **Appel avec l'ancienne clé.** Ouvrir PowerShell, coller ces lignes **une par une** :
+     ```powershell
+     $url = "https://itvyayakwgzvfqvdrgyv.supabase.co/rest/v1/rpc/fn_report_client_version"
+     $k = Read-Host "Collez l'ANCIENNE cle anon puis Entree"
+     $h = @{ apikey = $k; Authorization = "Bearer $k"; "x-client-info" = "preuve-p1-1b/legacy" }
+     Invoke-RestMethod -Method Post -Uri $url -Headers $h -ContentType "application/json" -Body '{"p_poste_key":"preuve-legacy-0001","p_app_version":"0.0.1"}'
+     Remove-Variable k, h
+     ```
+     Réponse attendue : `True`. (`Read-Host` évite que la clé reste dans l'historique des
+     commandes ; à la place de `<ANCIENNE_CLE>`, on colle la valeur seulement dans cette invite.)
+     Si la réponse est une erreur 401 « Invalid API key » : l'ancienne clé est déjà coupée,
+     noter et passer à l'étape 3. Si `False` : transmettre tel quel, ne pas réessayer en boucle.
+  3. **Contre-épreuve avec la clé publishable.** Même chose avec `<CLE_PUBLISHABLE>` :
+     ```powershell
+     $k = Read-Host "Collez la cle PUBLISHABLE puis Entree"
+     $h = @{ apikey = $k; Authorization = "Bearer $k"; "x-client-info" = "preuve-p1-1b/publishable" }
+     Invoke-RestMethod -Method Post -Uri $url -Headers $h -ContentType "application/json" -Body '{"p_poste_key":"preuve-publishable-0001","p_app_version":"0.0.1"}'
+     Remove-Variable k, h, url
+     ```
+     Réponse attendue : `True`.
+  4. **Lire le résultat** (SQL Editor de la prod, lecture seule) :
+     ```sql
+     -- a) La preuve : classe calculee par le serveur pour chaque appel
+     SELECT poste_key, key_kind, client_info, first_seen_at
+     FROM public.t_client_versions
+     WHERE poste_key IN ('preuve-legacy-0001', 'preuve-publishable-0001')
+     ORDER BY poste_key;
+     -- attendu : preuve-legacy-0001 -> legacy_suppose ; preuve-publishable-0001 -> publishable
+
+     -- b) Formes de claims vues sur les ecritures reelles des postes (7 derniers jours)
+     SELECT jour, classe, jwt_role, claim_keys, client_info,
+            sum(nb_instructions) AS instructions, sum(nb_lignes) AS lignes
+     FROM public.t_write_audit
+     WHERE jour >= current_date - 7
+     GROUP BY 1, 2, 3, 4, 5
+     ORDER BY 1 DESC, 2;
+     -- attendu : legacy_suppose avec claim_keys = exp,iat,iss,ref,role ; publishable avec claim_keys = role ;
+     -- toute autre forme (classe 'autre' avec jwt_role = 'anon', claims inconnues) bloque D6a jusqu'a explication.
+     ```
+  5. **Nettoyer** (SQL Editor de la prod ; résultat attendu `DELETE 2`, ou `DELETE 1` si
+     l'ancienne clé était déjà coupée) :
+     ```sql
+     DELETE FROM public.t_client_versions WHERE poste_key LIKE 'preuve-%';
+     ```
+     Aucun compteur `t_write_audit` à supprimer : l'appel RPC n'en a pas créé (voir plus haut).
+     Les lignes `preuve-%` sont de toute façon écartées de l'écran « Versions des postes »
+     (`0010`, comptées dans `nb_preuve`).
+- **Si `key_kind` de `preuve-legacy-0001` n'est pas `legacy_suppose`** : ne rien décider ;
+  corriger le classement de 0008 (nouvelle migration) et refaire la preuve.
+- **Collecte** : 0008 enregistre rôle + noms des claims + x-client-info. Les postes < 2.26.1
+  apparaissent en `legacy_suppose`, les postes ≥ 2.26.1 en `publishable`.
 - **Agent** : agent-4 (lecture des compteurs agrégés, lecture seule, avec accord).
-- **Critère de fin (= conditions de D6)** : preuve contrôlée = `legacy_suppose` ; puis 7 jours
+- **Critère de fin (= conditions de D6a)** : preuve contrôlée = `legacy_suppose` ; puis 7 jours
   consécutifs avec **0** compteur `legacy_suppose` **et 0** compteur `autre` dont
   `jwt_role = 'anon'`, contrôlé en lisant `classe`, `jwt_role` **et** `claim_keys` (une forme de
-  claims nouvelle ou inattendue bloque la décision jusqu'à explication). Plus d'échappatoire
-  « constat explicite ».
-  Requête de lecture (7 derniers jours) :
-  `SELECT jour, classe, jwt_role, claim_keys, client_info, sum(nb_instructions), sum(nb_lignes) FROM public.t_write_audit WHERE jour >= current_date - 7 GROUP BY 1,2,3,4,5 ORDER BY 1 DESC, 2;`
-- **Condition « tout le parc ≥ 2.26.1 »** : **non mesurable avant P2** (aucun poste n'appelle
-  encore `fn_report_client_version`, et `x-client-info` donne la version de supabase-js, pas
-  celle de l'application). Source à utiliser d'ici là : à défaut d'une autre source fiable,
-  **inventaire manuel** poste par poste (version affichée dans l'application, par site),
-  consigné par l'utilisateur. (`t_user_presence` ne porte pas de colonne de version d'après
-  `0002_t_user_presence.sql` ; d'autres sources éventuelles — journaux de l'auto-updater, etc. —
-  **non vérifiées**.)
-- **Geste utilisateur** : preuve contrôlée ; laisser tourner ; inventaire des versions ;
-  autoriser la lecture des compteurs.
+  claims nouvelle ou inattendue bloque la décision jusqu'à explication).
+  Requête de lecture : requête (b) ci-dessus.
+- **Condition « tout le parc ≥ 2.26.1 »** : **partiellement mesurable depuis 2.27.0** : les
+  postes ≥ 2.27.0 se déclarent dans `t_client_versions` (écran SUPER ADMIN « Versions des
+  postes », ou `SELECT * FROM public.fn_list_client_versions();`). Les postes plus anciens
+  (< 2.27.0) **ne peuvent pas** se déclarer : pour eux, la source reste l'**inventaire manuel**
+  poste par poste et l'absence de `legacy_suppose` dans la collecte. Lecture du 2026-11-17 :
+  12 postes déclarés, tous en 2.27.0 ; probablement 2 postes ABO encore en ancienne version
+  (déduction par présence sans déclaration, **supposition**) → Q7 : relancer leur mise à jour.
+- **Geste utilisateur** : preuve contrôlée (procédure ci-dessus) ; mise à jour des postes ABO
+  restants (Q7) ; laisser tourner ; autoriser la lecture des compteurs.
 
 ### P1-2 — Table des versions de postes (dev puis prod) — FAIT SUR LE DEV ET EN PROD (2026-11-13)
 - **Prod** : appliquée le 2026-11-13 juste après 0008, RPC fermée (contrôle 12/12 OK).
+  **Depuis le 2026-11-14, la RPC `fn_report_client_version` est OUVERTE à anon/authenticated**
+  (GRANT fait en prod après la publication de v2.27.0, sur accord écrit ; README des migrations,
+  entrée 0010). Les postes ≥ 2.27.0 déclarent leur version. Pour la refermer :
+  `REVOKE EXECUTE ON FUNCTION public.fn_report_client_version(TEXT, TEXT, TEXT, TEXT) FROM anon, authenticated;`
+  (rejouer 0009 la referme aussi).
 - **Résultat dev (agent-4)** : 0009 appliquée sur le dev ; test SQL **14/14** (paramètres
   bornés, une ligne par poste, plafond 5000 postes, classe de clé calculée côté serveur, table
   illisible et non modifiable par anon). Appel REST réel `fn_report_client_version` avec la clé
@@ -187,7 +282,8 @@ Rappels permanents :
 - **Correctif après audit agent-9 (2026-11-13)** : la RPC est **fermée par défaut**
   (`REVOKE EXECUTE … FROM PUBLIC, anon, authenticated` en fin de fichier ; les privilèges par
   défaut du schéma public donnent EXECUTE à anon/authenticated, vérifié dans `pg_default_acl`
-  du dev). Ouverte seulement le temps de la preuve contrôlée P1-1b, puis en P2. Test 0009
+  du dev). ~~Ouverte seulement le temps de la preuve contrôlée P1-1b, puis en P2.~~ Ouverte
+  durablement le 2026-11-14 avec v2.27.0 (écran « Versions des postes »). Test 0009
   **17/17** (RPC fermée : appels anon/authenticated réels refusés ; rouverte le temps du test
   dans la transaction annulée ; refermeture). Appel REST réel avec la clé publishable : refusé
   (42501).
@@ -198,7 +294,12 @@ Rappels permanents :
 - **Critère de fin** : test vert ; en prod, lecture possible par l'utilisateur.
 - **Geste utilisateur** : appliquer 0009 en prod avec 0008 (même fenêtre).
 
-### P1-3 — Diagnostic site/centre (dev, lecture seule en prod)
+### P1-3 — Diagnostic site/centre (dev, lecture seule en prod) — FAIT DANS LES FAITS (2026-11-13/14)
+- **État 2026-11-18** : diagnostic fait et anomalies traitées (cartes du site 6 supprimées, rôles
+  principaux ajoutés, sites PLATEAU/ADJAMÉ supprimés). **Clôture formelle à relancer avant P1-6** :
+  rejouer `supabase/diagnostics/p1_coherence_sites.sql` en prod (lecture seule, accord de
+  l'utilisateur) et vérifier 0 anomalie sur les colonnes que 0013 filtrera (`t_cartes.id_site`,
+  `t_logs.site_id`, `t_user_presence.site_id`, `t_users.site_id`).
 - **Suite (2026-11-13, nuit)** : sur décision de l'utilisateur (import d'essai), les 2 614 cartes du
   site 6 inexistant ont été **supprimées en prod** après sauvegarde dans
   `public.bak_cartes_site6_20261113` (2 614 lignes, RLS active, illisible pour anon). Contrôle :
@@ -259,6 +360,23 @@ Rappels permanents :
   impose une autre voie de création de session.
 
 ### P1-5 — Edge Function `gis-login` + hook d'Auth (dev uniquement)
+- **État 2026-11-18 (agent-4)** : migrations **écrites** :
+  `supabase/migrations/0011_hook_identite_claims.sql` (table `t_auth_identity`, hook
+  `custom_access_token_hook`, `fn_auth_identity_upsert`, fonctions `fn_jwt_*`) et
+  `supabase/migrations/0012_tentatives_connexion.sql` (`t_login_attempts`,
+  `fn_login_check_and_record`, `fn_login_unblock`), tests `supabase/tests/0011_*` et `0012_*`.
+  Tests **21/21 et 13/13 sur un Postgres 13 local jetable** (bouchons des rôles et tables
+  Supabase), **pas encore sur le dev** : l'accès SQL du MCP au projet dev échouait le 2026-11-18
+  (`28P01 password authentication failed`). Restent : application et tests sur le dev,
+  activation du hook sur le dev (geste utilisateur), Edge Function `gis-login` (passage suivant).
+- **Claims du hook** (liées à la personne, ids cloud) : `gis_v`, `gis_sync_id`, `gis_site_id`
+  (`t_sites.id` cloud), `gis_site_sync_id`, `gis_centre_id`, `gis_centre_sync_id`,
+  `gis_primary_role`, `gis_roles[]` (`t_users.role` ∪ `t_user_roles`), `gis_is_super_admin`,
+  `gis_statut_actif`, `gis_last_online_login`. Refus 403 : identité inconnue, compte absent ou
+  inactif (`statut_actif` ≠ 1, NULL compris), non-SA sans site cloud, dernière connexion en ligne
+  de plus de 30 jours (D3, aussi au `token_refresh`). La date de connexion en ligne vient de
+  `t_auth_identity.last_online_login_at`, écrite seulement par `gis-login` (service_role) ;
+  `t_users.last_login` n'est pas utilisée (écrivable par la clé anon).
 - **Fichiers** : `supabase/functions/gis-login/` ; migrations 0011 (hook custom access token,
   claims site/rôles/is_super_admin) et 0012 (comptage des tentatives) — détail : agent-1.
   (Numéros décalés de +1 le 2026-11-14 : 0010 est pris par `0010_lecture_versions_postes.sql`,
@@ -269,7 +387,8 @@ Rappels permanents :
     `$2a$`/`$2b$`/`$2y$`. Si une vérification SQL reste nécessaire : normaliser d'abord
     `$2b$`/`$2y$` → `$2a$` (`'$2a$' || substr(hash, 5)`) avant `extensions.crypt`.
   - Le hook refuse avec `{"error":{"http_code":403,…}}` (S3) et s'exécute aussi au `token_refresh`.
-  - **S5, décision requise avant la prod** : soit l'utilisateur relève les limites de débit Auth
+  - **S5 : tranché le 2026-11-18 (Q3)** — `verifyOtp` fait par le poste, limites inchangées.
+    Texte d'origine : soit l'utilisateur relève les limites de débit Auth
     dans le tableau de bord (`/auth/v1/verify`, `/auth/v1/token`), soit la conception évite que
     toutes les vérifications partent de l'IP de l'Edge Function (ex. `verifyOtp` fait par le poste
     lui-même avec le `token_hash` reçu). Vérifier sur le dev quelle IP Auth voit derrière une Edge
@@ -301,8 +420,9 @@ Rappels permanents :
   `REVOKE EXECUTE ON FUNCTION public.fn_count_client_versions() FROM anon;`
   (à faire dès que l'écran SUPER ADMIN lit avec une session `authenticated`, P2 au plus tard).
 - **Agent** : agent-4.
-- **Critère de fin** : fichier relu ; condition d'application écrite (D6 : 7 jours sans écriture
-  `publishable`/`legacy_suppose` d'après P1-1, tout le parc en version à badge).
+- **Critère de fin** : fichier relu ; condition d'application écrite (**D6b** : tout le parc en
+  version P2 à badge **et** 7 jours consécutifs sans aucune écriture anon — `publishable`,
+  `legacy_suppose`, `autre` anon — d'après P1-1).
 
 ### P1-8 — Bilan et décision
 - **Agent** : agent-9 (audit non-régression de l'ensemble P1).
@@ -315,7 +435,9 @@ Rappels permanents :
 2. P1-3 lecture seule.
 3. 0011/0012/0013 et la fonction `gis-login` seulement après P1-4, P1-5 (décision S5) et P1-6
    validés sur le dev.
-4. Désactivation de l'ancienne clé anon : sur décision de l'utilisateur, d'après P1-1b.
+4. D6a (désactivation de l'ancienne clé anon legacy) : sur décision de l'utilisateur, d'après
+   P1-1b. D6b (fermeture anon) : P3, après P2.
+5. 0014 (adaptation du garde 0007, Q6) : avant P2.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.
