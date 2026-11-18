@@ -525,11 +525,39 @@ relèvent d'un plan payant, non vérifié).
   0007 20/20 ; 0006 19/19 ; 0008 26/26 ; 0009 17/17 ; 0010 14/14 ; 0011 20/20 (+ cas 20 non
   concluant comme avant) ; 0012 13/13 ; contrôles README 8/8. Empreinte anon identique avant /
   après (206 éléments) ; aucun résidu.
-- **Hors périmètre, à décider (STOP & WARN, rapport agent-4 du 2026-11-18)** : 0013 laisse un
-  agent de site écrire `t_users` / `t_user_roles` de son site avec n'importe quel rôle **non**
-  SUPER ADMIN (ex. un opérateur qui s'attribue `ADMINISTRATEUR_SITE`). Q4 / D-R ont gardé ces
-  tables « par site seulement » ; un filtre par rôle sur les comptes demande une décision.
+- ~~**Hors périmètre, à décider (STOP & WARN, rapport agent-4 du 2026-11-18)**~~ : 0013 laissait
+  un agent de site écrire `t_users` / `t_user_roles` de son site avec n'importe quel rôle non
+  SUPER ADMIN. **Tranché le 2026-11-18 (option b) : migration 0016**, ci-dessous.
 - **Geste utilisateur** : prod avant P2, après 0011-0014 et l'audit agent-9.
+
+### Option b — Filtre par rôle des comptes : migration 0016 (dev appliqué, prod NON)
+- **Fichiers** : `supabase/migrations/0016_filtre_role_comptes.sql` + test
+  `supabase/tests/0016_filtre_role_comptes.test.sql`. Migrations 0001-0015 non modifiées ;
+  tests 0013 et 0015 adaptés à l'empilement (détail : README, section « 0016 »).
+- **Règle** (alignée sur l'application, `src/` lu le 2026-11-18, non modifié), pour les
+  instructions exécutées sous le rôle `authenticated` seulement :
+  - agent sans rôle d'administration : sa propre ligne `t_users`, colonnes nom, prénom, e-mail,
+    téléphone, mot de passe (+ login si rôle principal `ADMINISTRATEUR_SITE`) ; rien d'autre ;
+    aucune écriture `t_user_roles` (`users.queries.ts:1297-1388`) ;
+  - `ADMIN_CENTRE` : comptes `OPERATEUR_*` de son centre (`users.queries.ts:22-35`, `:296`,
+    `:714-726`) ; aucune suppression ;
+  - `ADMINISTRATEUR_SITE` : comptes `ADMIN_CENTRE` / `OPERATEUR_*` de son site, jamais un compte
+    SUPER ADMIN, jamais lui-même désactivé / supprimé, rôle déjà détenu conservé
+    (`users.queries.ts:22-35`, `:636-640`, `:684-787`, `:999-1197`, `:1209-1240`) ;
+  - SUPER ADMIN vérifié : inchangé (0015) ; anon, service_role, postgres : inchangés ;
+  - échec fermé : sans claims `gis_*` valides ou SA non vérifié, rien.
+  Refus = 42501 ; un rôle non attribuable effacé par le cycle « tout effacer / réinsérer » de
+  l'application est conservé sans erreur.
+- **Choix technique** : triggers `BEFORE ROW` (comparaison OLD / NEW colonne par colonne, rôle
+  « déjà détenu », effacement ignoré d'un rôle non attribuable : impossibles en politique RLS),
+  déclenchés par `current_setting('role') = 'authenticated'` (comme une politique TO
+  authenticated). Aucun droit ni politique ajouté ; empreinte anon identique.
+- **Tests réels sur le dev (2026-11-18)** : 0016 **15/15** ; 0006 19/19 ; 0007 20/20 ; 0008
+  26/26 ; 0009 17/17 ; 0010 14/14 ; 0011 20/20 (+ cas 20 non concluant) ; 0012 13/13 ; 0013
+  adapté 19/19 ; 0014 17/17 ; 0015 adapté 16/16 (11/16 tel quel, écarts attendus) ; contrôles
+  README 25/25 ; aucun résidu (empreintes et comptages identiques avant / après).
+- **Non vérifié** : appel REST réel sous une vraie session authenticated (hook non activé).
+- **Geste utilisateur** : audit agent-9 ; prod avec 0011-0015, après 0015.
 
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
@@ -561,6 +589,8 @@ relèvent d'un plan payant, non vérifié).
 5. 0014 (filtre par rôle, D-R) : avec 0013, dans la même fenêtre hors heures de travail (0014 après 0013).
 6. 0015 (adaptation du garde 0007, Q6) : avant P2, après 0014 (prérequis contrôlé en tête).
    Écrite et appliquée sur le dev le 2026-11-18 ; prod NON.
+7. 0016 (filtre par rôle des comptes, option b) : après 0015 (prérequis contrôlé en tête), même
+   fenêtre. Écrite et appliquée sur le dev le 2026-11-18 ; prod NON.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.

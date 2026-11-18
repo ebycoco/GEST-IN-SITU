@@ -32,6 +32,12 @@
 --     (cas 8) ;
 --   - l'operateur A ne cree plus ni poste ni centre sur son site (0014,
 --     42501) : verifie au cas 6.
+-- Empilement 0016 (adaptation du 2026-11-18, agent-4) : un operateur ne cree
+-- plus de compte ni de role ; au cas 5, le compte 't13-u-a2' et son role sont
+-- crees par l'ADMINISTRATEUR_SITE A ; au cas 7, la creation d'un compte du
+-- site B et d'un role pour un compte B sont refusees (42501) par la RLS ET par
+-- le trigger 0016 (qui passe avant le WITH CHECK : seul le code 42501 est
+-- attendu, plus le texte « rls »).
 -- Les profils administrateur n'ont pas de ligne t_users (les politiques ne
 -- lisent que les claims) : les comptages des cas 3, 11 et 12 sont inchanges.
 -- Les comptages ne portent que sur les lignes de test (sync_id 't13-%').
@@ -208,8 +214,8 @@ BEGIN
   r2 := public._t13_try($q$UPDATE public.t_cartes SET prenoms = 'A1 MODIF' WHERE sync_id = 't13-c-a1'$q$);
   r3 := public._t13_try($q$DELETE FROM public.t_cartes WHERE sync_id = 't13-c-a3'$q$);
   r4 := public._t13_try(format('INSERT INTO public.t_logs (action, site_id, centre_id, sync_id) VALUES (%L, %s, %s, %L)', 'T13', v_sa, v_ca, 't13-l-a2'));
-  r5 := public._t13_try(format('INSERT INTO public.t_users (login, password_hash, role, statut_actif, site_id, sync_id) VALUES (%L, %L, %L, 1, %s, %L)', 't13_agent_a2', 'x-t13-pas-un-hash', 'OPERATEUR_SAISIE', v_sa, 't13-u-a2'));
-  r6 := public._t13_try($q$INSERT INTO public.t_user_roles (user_sync_id, role) VALUES ('t13-u-a2', 'OPERATEUR_VERIFICATION')$q$);
+  -- Empilement 0016 : la creation de compte et de role est faite plus bas par
+  -- l'ADMINISTRATEUR_SITE A (un operateur ne cree plus de compte).
   -- Empilement 0014 : l'operateur ne cree ni poste ni centre, ne modifie pas son site.
   r13 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 4, %L)', v_ca, 'T13 POSTE OP', 't13-poste-op'));
   r14 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 4, %L)', v_sa, 'T13 CENTRE OP', 't13-cen-op'));
@@ -223,8 +229,10 @@ BEGIN
   r7 := public._t13_try(format('INSERT INTO public.t_postes (centre_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_ca, 'T13 POSTE A2', 't13-poste-a2'));
   r8 := public._t13_try(format('INSERT INTO public.t_centres (site_id, nom, numero, sync_id) VALUES (%s, %L, 2, %L)', v_sa, 'T13 CENTRE A2', 't13-cen-a2'));
   r15 := public._t13_try($q$UPDATE public.t_sites SET nom = 'T13 SITE A MODIF' WHERE sync_id = 't13-site-a'$q$);
+  r5 := public._t13_try(format('INSERT INTO public.t_users (login, password_hash, role, statut_actif, site_id, sync_id) VALUES (%L, %L, %L, 1, %s, %L)', 't13_agent_a2', 'x-t13-pas-un-hash', 'OPERATEUR_SAISIE', v_sa, 't13-u-a2'));
+  r6 := public._t13_try($q$INSERT INTO public.t_user_roles (user_sync_id, role) VALUES ('t13-u-a2', 'OPERATEUR_VERIFICATION')$q$);
   EXECUTE 'RESET ROLE';
-  INSERT INTO _t VALUES (5, 'Sur SON site : operateur A ecrit carte insert/update/delete, log, compte, role du compte, presence ; ADMINISTRATEUR_SITE A cree poste et centre (1 ligne chacun)',
+  INSERT INTO _t VALUES (5, 'Sur SON site : operateur A ecrit carte insert/update/delete, log, presence ; ADMINISTRATEUR_SITE A cree poste, centre, compte et role du compte (1 ligne chacun ; empilement 0014 / 0016)',
     r1 = 'ok:1' AND r2 = 'ok:1' AND r3 = 'ok:1' AND r4 = 'ok:1' AND r5 = 'ok:1' AND r6 = 'ok:1'
       AND r7 = 'ok:1' AND r8 = 'ok:1' AND r10 = 'ok:1',
     concat_ws(' ', r1, r2, r3, r4, r5, r6, r7, r8, r10));
@@ -269,7 +277,8 @@ BEGIN
   r12 := concat_ws(' ', a1, a2, a3, a4, a5, o1, o2, o3, a6, a7);
   INSERT INTO _t VALUES (7, 'Hors site : operateur A -> INSERT carte site B / sans site, log B, compte B, role d''un compte B refuses (42501), UPDATE/DELETE cartes B et sans site, comptes B et SA -> 0 ligne, deplacer une carte A vers B refuse ; ADMINISTRATEUR_SITE A -> poste B, centre B refuses (42501)',
     r1 = 'err:42501:rls' AND r2 = 'err:42501:rls' AND r3 = 'ok:0' AND r4 = 'ok:0' AND r5 = 'err:42501:rls'
-      AND r6 = 'err:42501:rls' AND r7 = 'err:42501:rls' AND r8 = 'ok:0' AND r9 = 'err:42501:rls'
+      -- r7 / r9 : refuses aussi par 0016 (trigger BEFORE, avant le WITH CHECK) : 42501, message de 0016
+      AND r6 = 'err:42501:rls' AND r7 LIKE 'err:42501:%' AND r8 = 'ok:0' AND r9 LIKE 'err:42501:%'
       AND r10 = 'err:42501:rls' AND r11 = 'err:42501:rls',
     concat_ws(' ', r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11));
   INSERT INTO _t VALUES (8, 'Hors site : ADMINISTRATEUR_SITE A -> centre B et site B non modifiables / supprimables (0 ligne), creation de site refusee, poste B 0 ligne, deplacer un poste A vers un centre B refuse ; operateur A -> presence B refusee / 0 ligne, roles B 0 ligne',

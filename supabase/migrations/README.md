@@ -234,6 +234,17 @@ présente mise en place — voir limitation ci-dessous.
   (MCP `apply_migration`, partie executable identique au fichier) ; test **16/16** ;
   empreinte anon identique avant / apres (206 elements, meme md5) ; non-regression detaillee
   section « 0015 ». **Production : NON appliquee.**
+- **`0016_filtre_role_comptes.sql`** — chantier B, decision de l'utilisateur du 2026-11-18
+  (option b) : filtre **par role** des ecritures `authenticated` sur `t_users` et
+  `t_user_roles`, aligne sur l'application (`ASSIGNABLE_ROLES_BY_CREATOR`, `createUser`,
+  `updateUser`, `deleteUser` / `hardDeleteUser`, `resetAgentPassword`, `updateSelfProfile`).
+  Deux triggers `BEFORE ... FOR EACH ROW` (`trg_t_users_x16_filtre_role`,
+  `trg_t_user_roles_x16_filtre_role`) actifs **seulement sous le role SQL `authenticated`**
+  (`current_setting('role')`) ; SUPER ADMIN verifie (0015), anon, service_role, postgres :
+  inchanges. Refus = 42501. **Aucun droit ni politique ajoute ; empreinte anon identique.**
+  **Dependances : 0007, 0011, 0013, 0014, 0015** (le fichier s'arrete sinon). Test :
+  `supabase/tests/0016_filtre_role_comptes.test.sql`. **Dev : appliquee le 2026-11-18** ;
+  test **15/15** ; detail section « 0016 ». **Production : NON appliquee.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -552,8 +563,8 @@ SELECT 'fonctions de tentatives reservees a service_role',
 ```
 
 **Retour arrière** : d'abord **désactiver le hook** dans le tableau de bord (sinon toute connexion
-Auth échoue), puis les blocs écrits en tête de 0015, 0014, 0013, 0012 puis 0011 (retirer 0015,
-0014, 0013 et 0012 avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
+Auth échoue), puis les blocs écrits en tête de 0016, 0015, 0014, 0013, 0012 puis 0011 (retirer
+0016, 0015, 0014, 0013 et 0012 avant 0011 : elles utilisent ses fonctions `fn_jwt_*`).
 
 **Numérotation (mise à jour du 2026-11-18)** : l'adaptation du garde 0007 (décision Q6) devient
 la migration **0015** (0014 = filtre par rôle). Le commentaire en tête du fichier 0013 (ligne
@@ -759,6 +770,89 @@ immédiate de tout le garde (0007 compris) : interrupteur `t_security_guard_conf
 par 0013 (lecture d'`EXCLUDED`) ; une écriture de compte mise en file par un SUPER ADMIN puis
 envoyée sous la session d'un autre agent du poste serait neutralisée (à traiter avec
 `actor_sync_id`, Q8).
+
+## 0016 : filtre par rôle des écritures de comptes (t_users, t_user_roles)
+
+**Effet sur les postes actuels : aucun** (ils écrivent en anon ; le filtre ne se déclenche que si
+l'instruction s'exécute sous le rôle SQL `authenticated`, `current_setting('role')`, comme une
+politique « TO authenticated » ; une session postgres / service_role avec des claims simulées
+n'est pas filtrée). SUPER ADMIN vérifié (0015) : non filtré. Refus : erreur 42501 (message
+générique « 0016 : ecriture refusee (...) »), jamais de neutralisation silencieuse, sauf
+l'effacement d'un rôle non attribuable (voir tableau).
+
+| Appelant authenticated | Permis (sinon 42501) | Source dans l'application (lecture du 2026-11-18) |
+|---|---|---|
+| sans claims `gis_*` valides, ou jeton SUPER ADMIN non vérifié en base | rien sur `t_users` / `t_user_roles` | échec fermé (D-EF) |
+| agent sans rôle d'administration | **sa propre ligne** `t_users` seulement : `nom_user`, `prenom_user`, `email`, `telephone`, `password_hash`, `updated_at` (+ `login` si son rôle **principal** est `ADMINISTRATEUR_SITE`) ; rien d'autre, aucune écriture `t_user_roles` | `users.queries.ts:1297-1388` (`updateSelfProfile`, colonnes `:1340`, login `:1323-1326`) ; `handlers.ts:3588`, `:3635` (création / modification réservées aux 3 rôles d'administration) |
+| `ADMIN_CENTRE` (rôle le plus haut des `gis_roles`) | créer un compte de **son** centre avec un rôle `OPERATEUR_*` ; modifier un agent de son centre qui ne détient ni `ADMINISTRATEUR_SITE` ni `ADMIN_CENTRE` (mot de passe, statut 0/1, nom, contact, login, rôle `OPERATEUR_*`) ; rôles `OPERATEUR_*` de ces agents ; jamais supprimer un compte | `users.queries.ts:22-35`, `:296`, `:714-726`, `:744-761`, `:1002-1004`, `:1084-1086` |
+| `ADMINISTRATEUR_SITE` | créer un compte de son site (`ADMIN_CENTRE` ou `OPERATEUR_*`, centre de son site ou aucun) ; modifier / désactiver / supprimer un compte de son site qui ne détient pas SUPER ADMIN ; rôle principal changé seulement vers un rôle attribuable ou déjà détenu en secondaire ; jamais son propre statut à la baisse ni sa propre suppression ; site et `sync_id` figés | `users.queries.ts:22-35`, `:295-303`, `:322`, `:636-640`, `:698-711`, `:744-787`, `:999-1018`, `:1081-1100`, `:1209-1240` |
+| tous (non SA) sur `t_user_roles` | INSERT d'un rôle attribuable, ou déjà détenu (ligne identique existante = upsert sans effet, ou rôle principal du compte) ; DELETE d'un rôle attribuable ; **DELETE d'un rôle non attribuable : ignoré sans erreur (ligne conservée)** ; DELETE d'une ligne dont le compte n'existe plus (cascade) : permis | cycle « tout effacer puis réinsérer » de l'application : `users.queries.ts:888-895`, `:957-973`, `outbox.service.ts:697`, `:750` ; rôle masqué renvoyé tel quel : `AgentsPage.tsx:76-85`, `:563-566`, `users.queries.ts:744-747` |
+
+Niveau d'administration = le plus haut rôle de `gis_roles` (principal + secondaires) : la
+personne peut prendre n'importe lequel de ses rôles comme rôle actif (`auth:setActiveRole`,
+`handlers.ts:405-417`), le JWT ne porte pas de rôle actif ; même lecture que 0014.
+
+**Verrou** : `CREATE TRIGGER` = `ShareRowExclusiveLock` court sur `t_users` et `t_user_roles`.
+Prod : un seul bloc `BEGIN; <fichier 0016> COMMIT;` (prérequis 0007, 0011, 0013, 0014, 0015
+contrôlés en tête, `lock_timeout` 3 s).
+
+**Dev : fait le 2026-11-18** (agent-4). Deux passes `apply_migration` : le fichier, puis un
+correctif de `fn_r16_niveau` seule (`0016_filtre_role_comptes_niveau_role_sql`, déclenchement
+par le rôle SQL au lieu de la seule claim `role`, découvert en rejouant le test 0008 : son cas
+8 écrit `t_users` en postgres avec des claims `authenticated` simulées). Corps des 6 fonctions
+identiques au fichier (md5 de `prosrc`). Résultats sur l'empilement réel 0006-0016 :
+0016 **15/15** ; 0006 **19/19** ; 0007 **20/20** ; 0008 **26/26** ; 0009 **17/17** ; 0010
+**14/14** ; 0011 **20/20** (+ cas 20 non concluant, comme avant) ; 0012 **13/13** ; 0013
+**adapté 19/19** ; 0014 **17/17** ; 0015 **adapté 16/16** (tel quel : 11/16, écarts attendus
+ci-dessous) ; contrôles du README **25/25** (12 de 0008/0009, 4 de 0010, 3 de 0011, 3 de 0013,
+1 de 0014, 1 de 0015, 1 de 0016). Chaque test exécuté dans une transaction terminée par une
+erreur volontaire (rapport des cas) : tout est annulé. Aucun résidu : empreinte anon
+(`a4212a8a…`, 206 éléments), empreinte des politiques (34), empreinte des triggers hors 0016
+(33), journal 0007 (16 lignes, id max 34), empreinte de `t_write_audit` (14 lignes),
+comptages des 12 tables (tous 0), `auth.users` 0, aucune fonction d'aide `_t1x_` restante :
+identiques avant / après.
+
+**Tests 0013 et 0015 adaptés (2026-11-18)** : un opérateur ne crée plus de compte ni de rôle
+(0013 cas 5 : création faite par l'`ADMINISTRATEUR_SITE` A) ; les refus hors site sur
+`t_users` / `t_user_roles` viennent aussi de 0016 (code 42501 attendu, plus le texte « rls »,
+0013 cas 7 et 0015 cas 7) ; créer un SUPER ADMIN, modifier un compte SUPER ADMIN de son site
+ou écrire avec un jeton SUPER ADMIN non vérifié sont refusés en 42501 au lieu d'être
+neutralisés par 0007 (0015 cas 5, 6, 12 ; cas 8 : SA en quarantaine créé par postgres). Les
+fichiers de migration 0013 et 0015 ne sont pas modifiés.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0016 : 2 triggers x16 actifs (BEFORE ROW I/U/D), 6 fonctions fermees, triggers SECURITY DEFINER, aucune politique ajoutee' AS verification,
+       CASE WHEN (SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgenabled = 'O' AND tgtype = 31
+                   AND ((tgrelid = 'public.t_users'::regclass AND tgname = 'trg_t_users_x16_filtre_role')
+                     OR (tgrelid = 'public.t_user_roles'::regclass AND tgname = 'trg_t_user_roles_x16_filtre_role'))) = 2
+             AND (SELECT count(*) FROM (VALUES ('public.fn_r16_niveau()'), ('public.fn_r16_roles_attribuables(text)'),
+                                               ('public.fn_r16_detient(text,text)'), ('public.fn_r16_refus(text)'),
+                                               ('public.fn_t_users_filtre_role()'), ('public.fn_t_user_roles_filtre_role()')) f(sig),
+                                       (VALUES ('anon'), ('authenticated')) r(r)
+                   WHERE to_regprocedure(f.sig) IS NULL OR has_function_privilege(r.r, to_regprocedure(f.sig), 'EXECUTE')) = 0
+             AND (SELECT count(*) FROM pg_proc WHERE prosecdef
+                   AND oid IN ('public.fn_t_users_filtre_role()'::regprocedure, 'public.fn_t_user_roles_filtre_role()'::regprocedure)) = 2
+             AND (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname LIKE 'r16\_%') = 0
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Puis l'empreinte anon (requête de la section 0013), avant et après : identique.
+
+**Coupure immédiate** (réversible) : `ALTER TABLE ... DISABLE TRIGGER` des 2 triggers, dans
+`BEGIN; SET LOCAL lock_timeout = '3s'; ... COMMIT;`. **Retour arrière complet** : bloc écrit en
+tête du fichier 0016 (à retirer avant 0015 / 0014 / 0013).
+
+**À savoir pour P2** : une écriture de compte mise en file par un administrateur puis envoyée
+sous la session d'un autre agent du poste serait refusée (`actor_sync_id`, Q8) ;
+`sync:forceAgents` (`handlers.ts:6327-6341`, sans garde de rôle côté poste) renvoie comptes
+et rôles du site : sous la session d'un non-administrateur, refusé ; la règle « dernier
+administrateur actif du site » (`users.queries.ts:648-663`) n'est pas reprise côté serveur ;
+un administrateur rétrogradé garde ses droits jusqu'à l'expiration de son jeton (1 h), comme
+0013 / 0014 ; un `ADMINISTRATEUR_SITE` ne peut pas retirer à un collègue un rôle qu'il ne peut
+pas attribuer (`ADMINISTRATEUR_SITE`) : l'écran ne le propose pas, seul un appel IPC forgé le
+faisait côté poste.
 
 ## 0007 : procédures manuelles (période transitoire)
 

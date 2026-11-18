@@ -16,6 +16,14 @@
 -- (verifie), jeton SUPER ADMIN perime (compte desactive en base), jeton
 -- SUPER ADMIN d'un compte qui n'est plus SUPER ADMIN en base, claims SA avec
 -- gis_statut_actif = false, postgres sans claims.
+-- Empilement 0016 (adaptation du 2026-11-18, agent-4) : pour un authenticated
+-- NON SUPER ADMIN verifie, 0016 refuse en 42501 ce que 0007 neutralisait en
+-- silence quand l'ecriture n'est pas permise par l'application (creer un SA,
+-- modifier un compte SA de son site, ecrire t_users avec un jeton SA non
+-- verifie). Cas 5, 6, 7 et 12 ajustes ; un SA en quarantaine est cree par
+-- postgres apres le cas 6 pour garder la reactivation du cas 8. Les gestes
+-- encore laisses a 0007 (elevation annulee, role SA ignore, suppression d'un
+-- SA ignoree) gardent leur journal.
 -- Les comptages ne portent que sur les lignes de test (sync_id 't15-%').
 -- Resultat : table _t, puis un bloc qui LEVE UNE ERREUR si un cas vaut false.
 -- NE JAMAIS EXECUTER EN PROD.
@@ -183,14 +191,16 @@ BEGIN
   r4 := public._t15_try($q$UPDATE public.t_users SET password_hash = 'x-t15-pirate', statut_actif = 0 WHERE sync_id IN ('t15-sa1', 't15-sa-site-a')$q$);
   r5 := public._t15_try($q$DELETE FROM public.t_users WHERE sync_id IN ('t15-sa1', 't15-sa-site-a')$q$);
   EXECUTE 'RESET ROLE';
-  INSERT INTO _t VALUES (5, 'Operateur A : s''elever (role principal ou secondaire) annule / refuse, SA cree sur son site en quarantaine, SA de son site : hash repris (baisse de statut permise par 0007 R3), SA sans site invisible et intact, suppression SA ignoree',
+  -- Empilement 0016 : creation de compte (r3) et modification d'un compte SA
+  -- de son site (r4) refusees en 42501 par 0016 (avant : quarantaine / hash repris).
+  INSERT INTO _t VALUES (5, 'Operateur A : s''elever (role principal ou secondaire) annule / refuse ; creer un SA sur son site et toucher un SA de son site : refuses (42501, 0016) ; SA sans site invisible et intact, suppression SA ignoree',
     (SELECT role FROM public.t_users WHERE sync_id = 't15-u-a') = 'OPERATEUR_VERIFICATION'
       AND NOT EXISTS (SELECT 1 FROM public.t_user_roles WHERE user_sync_id = 't15-u-a' AND role = 'SUPER ADMIN')
-      AND (SELECT statut_actif FROM public.t_users WHERE sync_id = 't15-op-sa') = 0
-      AND (SELECT password_hash FROM public.t_users WHERE sync_id = 't15-sa-site-a') = 'x-t15-h-sasa'
+      AND NOT EXISTS (SELECT 1 FROM public.t_users WHERE sync_id = 't15-op-sa')
+      AND (SELECT password_hash || '|' || statut_actif FROM public.t_users WHERE sync_id = 't15-sa-site-a') = 'x-t15-h-sasa|1'
       AND (SELECT password_hash || '|' || statut_actif FROM public.t_users WHERE sync_id = 't15-sa1') = 'x-t15-h-sa1|1'
       AND EXISTS (SELECT 1 FROM public.t_users WHERE sync_id = 't15-sa-site-a')
-      AND r1 = 'ok:1' AND r2 = 'ok:0' AND r3 = 'ok:1' AND r4 = 'ok:1' AND r5 = 'ok:0',
+      AND r1 = 'ok:1' AND r2 = 'ok:0' AND r3 LIKE 'err:42501:%' AND r4 LIKE 'err:42501:%' AND r5 = 'ok:0',
     concat_ws(' ', r1, r2, r3, r4, r5));
   -- Remise en etat du statut de t15-sa-site-a (la baisse de statut est permise par 0007 R3).
   UPDATE public.t_users SET statut_actif = 1 WHERE sync_id = 't15-sa-site-a';
@@ -208,18 +218,24 @@ BEGIN
   r5 := public._t15_try($q$DELETE FROM public.t_users WHERE sync_id = 't15-sa-site-a'$q$);
   r6 := public._t15_try($q$UPDATE public.t_users SET nom_user = 'T15 ADM A' WHERE sync_id IN ('t15-u-c', 't15-u-b', 't15-sa1')$q$);
   EXECUTE 'RESET ROLE';
-  INSERT INTO _t VALUES (6, 'ADMINISTRATEUR_SITE A : SA cree en quarantaine, promotion SA annulee, role SA refuse ; SA de son site : hash et login repris (autres colonnes passent), suppression ignoree ; modifie un compte de son site seulement (1 ligne : ni site B ni SA sans site)',
-    (SELECT statut_actif FROM public.t_users WHERE sync_id = 't15-adm-sa') = 0
+  -- Empilement 0016 : creer un SA (r1) et modifier un compte SA de son site
+  -- (r4) sont refuses en 42501 (avant : quarantaine / hash et login repris) ;
+  -- leurs lignes de journal 0007 sont annulees avec l'instruction refusee.
+  INSERT INTO _t VALUES (6, 'ADMINISTRATEUR_SITE A : creer un SA et modifier un SA de son site refuses (42501, 0016) ; promotion SA annulee, role SA refuse, suppression SA ignoree (0007) ; modifie un compte de son site seulement (1 ligne : ni site B ni SA sans site)',
+    NOT EXISTS (SELECT 1 FROM public.t_users WHERE sync_id = 't15-adm-sa')
       AND (SELECT role FROM public.t_users WHERE sync_id = 't15-u-c') = 'OPERATEUR_SAISIE'
       AND NOT EXISTS (SELECT 1 FROM public.t_user_roles WHERE user_sync_id = 't15-u-c' AND role = 'SUPER ADMIN')
-      AND (SELECT password_hash || '|' || login || '|' || nom_user FROM public.t_users WHERE sync_id = 't15-sa-site-a') = 'x-t15-h-sasa|t15_sa_site_a|T15 MODIF'
+      AND (SELECT password_hash || '|' || login || '|' || COALESCE(nom_user, '-') FROM public.t_users WHERE sync_id = 't15-sa-site-a') = 'x-t15-h-sasa|t15_sa_site_a|-'
       AND EXISTS (SELECT 1 FROM public.t_users WHERE sync_id = 't15-sa-site-a')
-      AND r1 = 'ok:1' AND r2 = 'ok:1' AND r3 = 'ok:0' AND r4 = 'ok:1' AND r5 = 'ok:0' AND r6 = 'ok:1'
-      AND (SELECT count(*) FROM public.t_security_guard_events WHERE id > v_ev0 AND sync_id IN ('t15-adm-sa','t15-u-c','t15-sa-site-a')
+      AND r1 LIKE 'err:42501:%' AND r2 = 'ok:1' AND r3 = 'ok:0' AND r4 LIKE 'err:42501:%' AND r5 = 'ok:0' AND r6 = 'ok:1'
+      AND (SELECT count(*) FROM public.t_security_guard_events WHERE id > v_ev0 AND sync_id IN ('t15-u-c','t15-sa-site-a')
              AND jwt_role = 'authenticated'
-             AND (reason IN ('SA_INSERT_QUARANTAINE','SA_ELEVATION_BLOQUEE','ROLES_SA_REFUSE','SA_DELETE_IGNORE')
-                  OR reason LIKE 'SA\_MODIF\_NEUTRALISEE:%')) >= 5,
+             AND reason IN ('SA_ELEVATION_BLOQUEE','ROLES_SA_REFUSE','SA_DELETE_IGNORE')) >= 3,
     concat_ws(' ', r1, r2, r3, r4, r5, r6));
+  -- SA en quarantaine cree par postgres (appelant fiable) pour le cas 8 (reactivation).
+  PERFORM set_config('request.jwt.claims', '', true);
+  INSERT INTO public.t_users (login, password_hash, role, statut_actif, site_id, sync_id)
+  VALUES ('t15_adm_sa', 'x', 'SUPER ADMIN', 0, v_sa, 't15-adm-sa');
 
   -- =====================================================================
   -- 7. ADMINISTRATEUR_SITE du site B : rien sur les comptes du site A
@@ -232,7 +248,8 @@ BEGIN
   r4 := public._t15_try($q$DELETE FROM public.t_users WHERE sync_id IN ('t15-u-a', 't15-sa-site-a')$q$);
   EXECUTE 'RESET ROLE';
   INSERT INTO _t VALUES (7, 'ADMINISTRATEUR_SITE B : comptes du site A ni modifiables ni supprimables (0 ligne), compte cree sur le site A et role d''un compte A refuses (42501)',
-    r1 = 'ok:0' AND r2 = 'err:42501:rls' AND r3 = 'err:42501:rls' AND r4 = 'ok:0'
+    -- r2 / r3 : refuses par 0016 (trigger BEFORE, avant le WITH CHECK de la RLS) : code 42501
+    r1 = 'ok:0' AND r2 LIKE 'err:42501:%' AND r3 LIKE 'err:42501:%' AND r4 = 'ok:0'
       AND NOT EXISTS (SELECT 1 FROM public.t_users WHERE sync_id LIKE 't15-%' AND nom_user = 'PIRATE'),
     concat_ws(' ', r1, r2, r3, r4));
 
@@ -327,12 +344,15 @@ BEGIN
     EXECUTE 'RESET ROLE';
     r6 := concat_ws(' ', NULLIF(r6, ''), r1, r2, r3);
   END LOOP;
-  INSERT INTO _t VALUES (12, 'Jeton SA d''un compte desactive en base, ou d''un compte non SA en base : elevation annulee, role SA refuse, hash d''un SA repris (garde 0007)',
+  -- Empilement 0016 : un jeton SUPER ADMIN non verifie n'ecrit plus rien dans
+  -- t_users (42501, echec ferme 0016) ; le role SA reste ignore par 0007 (0 ligne).
+  INSERT INTO _t VALUES (12, 'Jeton SA d''un compte desactive en base, ou d''un compte non SA en base : elevation et hash d''un SA refuses (42501, 0016), role SA ignore (0007)',
     (SELECT role FROM public.t_users WHERE sync_id = 't15-adm-b') = 'ADMINISTRATEUR_SITE'
       AND NOT EXISTS (SELECT 1 FROM public.t_user_roles WHERE user_sync_id = 't15-adm-b' AND role = 'SUPER ADMIN')
       AND (SELECT password_hash FROM public.t_users WHERE sync_id = 't15-sa2') = 'x-t15-h-sa2'
+      AND r6 LIKE 'err:42501:%' AND r6 NOT LIKE '%ok:1%'
       AND (SELECT count(*) FROM public.t_security_guard_events WHERE id > v_ev0 AND sync_id = 't15-adm-b'
-             AND reason IN ('SA_ELEVATION_BLOQUEE','ROLES_SA_REFUSE') AND jwt_role = 'authenticated') = 4,
+             AND reason = 'ROLES_SA_REFUSE' AND jwt_role = 'authenticated') = 2,
     r6);
 
   -- =====================================================================
