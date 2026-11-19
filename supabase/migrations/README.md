@@ -181,6 +181,10 @@ présente mise en place — voir limitation ci-dessous.
   CORS : variable `GIS_ALLOWED_ORIGINS`, sinon serveurs locaux de développement. Hook toujours
   **non activé**. **Production : NON déployée** (geste utilisateur après P1-6 et audit agent-9 :
   tableau de bord Edge Functions ou outil MCP, avec `verify_jwt` désactivé).
+  **Version 2 déployée sur le dev le 2026-11-18** (correctifs de l'audit, voir section « 0017 ») :
+  action `reserve` avant bcrypt, rôles sans `trim`, `app_metadata.sync_id` exigé, login
+  normalisé NFC. **Dépend de 0017** (appliquer 0017 avant de déployer la v2 ; retour arrière :
+  redéployer la v1 avant de retirer 0017).
 - **`0013_rls_authenticated_par_site.sql`** — chantier B, P1-6 : 14 politiques **RESTRICTIVE TO
   authenticated** (`r13_*`) filtrees **par site** (Q4) a partir des claims du hook (0011) :
   `t_cartes.id_site`, `t_logs.site_id`, `t_user_presence.site_id`, `t_users.site_id`,
@@ -245,6 +249,21 @@ présente mise en place — voir limitation ci-dessous.
   **Dependances : 0007, 0011, 0013, 0014, 0015** (le fichier s'arrete sinon). Test :
   `supabase/tests/0016_filtre_role_comptes.test.sql`. **Dev : appliquee le 2026-11-18** ;
   test **15/15** ; detail section « 0016 ». **Production : NON appliquee.**
+- **`0017_correctifs_audit_p1.sql`** — correctifs des réserves de l'audit agent-9 du
+  2026-11-18 (NO-GO gis-login + hook) : remplace `custom_access_token_hook` (rôles comparés
+  tels qu'écrits, `gis_is_super_admin` = règle de `fn_sa_guard_caller_sa_auth` ;
+  `authentication_method` limité à `magiclink` / `otp` / `token_refresh`, lien / code accepté
+  seulement dans les 15 min suivant une connexion `gis-login` ; `app_metadata.sync_id` du compte
+  Auth = identité ; site suspendu / licence expirée refusés, SUPER ADMIN dispensé, y compris au
+  rafraîchissement), `fn_auth_identity_upsert` (n'écrase jamais un rattachement, exige
+  `app_metadata.sync_id` exact, refuse les `sync_id` ne différant que par la casse) et
+  `fn_login_check_and_record` (nouvelle action `reserve` atomique avant bcrypt ; table pleine =
+  échec fermé ; `check` / `failure` / `success` inchangées) ; **ajoute la contrainte
+  `t_user_roles_role_check`** (mêmes 9 valeurs que `t_users_role_check`, seule modification de
+  schéma partagé, accord STOP & WARN du 2026-11-18), NOT VALID puis VALIDATE si aucune ligne
+  fautive. **Dépendances : 0007, 0011, 0012, 0015, 0016.** Test :
+  `supabase/tests/0017_correctifs_audit_p1.test.sql`. **Dev : appliquée le 2026-11-18** (détail
+  section « 0017 »). **Production : NON appliquée.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -853,6 +872,122 @@ un administrateur rétrogradé garde ses droits jusqu'à l'expiration de son jet
 0013 / 0014 ; un `ADMINISTRATEUR_SITE` ne peut pas retirer à un collègue un rôle qu'il ne peut
 pas attribuer (`ADMINISTRATEUR_SITE`) : l'écran ne le propose pas, seul un appel IPC forgé le
 faisait côté poste.
+
+## 0017 : correctifs de l'audit P1 (hook, gis-login, tentatives, rôles)
+
+**Effet sur les postes actuels** : un seul, voulu — `t_user_roles.role` n'accepte plus que les
+9 rôles connus (comme `t_users.role` et comme le `CHECK(role)` du `t_user_roles` local des postes,
+`src/main/database/schema.ts:800` ; les postes n'envoient au cloud que des lignes de ce
+`t_user_roles` local, `src/main/database/queries/sync.queries.ts:133-139`). Une valeur hors liste
+(`' SUPER ADMIN'`, `'super admin'`, rôle inventé) écrite par la clé anon est refusée (23514) au
+lieu d'être acceptée. Valeurs légitimes : inchangé (test 0017 cas 3, test 0013 cas 15 / 16).
+Empreinte anon identique avant / après (`a4212a8a…`, 206 éléments). Le hook n'étant pas activé,
+ses nouvelles règles ne s'appliquent à aucune connexion tant que l'utilisateur ne l'active pas.
+
+**À lancer en prod AVANT d'appliquer 0017 (lecture seule)** — lignes de `t_user_roles` qui
+violeraient la contrainte (espaces, casse, rôle inconnu) ; 0 ligne attendue. S'il y en a, 0017
+s'applique quand même mais laisse la contrainte NOT VALID (WARNING) ; transmettre le résultat
+avant toute correction :
+
+```sql
+SELECT r.id, r.user_sync_id, '[' || r.role || ']' AS role_entre_crochets, length(r.role) AS longueur,
+       (r.role <> btrim(r.role)) AS espaces, (upper(r.role) <> r.role) AS minuscules
+FROM public.t_user_roles r
+WHERE r.role IS NULL OR NOT (r.role = ANY (ARRAY['SUPER ADMIN','ADMINISTRATEUR_SITE','ADMIN_CENTRE',
+      'OPERATEUR_VERIFICATION','OPERATEUR_QUALITE','OPERATEUR_SAISIE','OPERATEUR_LOGISTIQUE',
+      'OPERATEUR_INVENTAIRE','OPERATEUR_APUREMENT']::text[]))
+ORDER BY r.user_sync_id;
+```
+
+Contrôles complémentaires avant prod (lecture seule, informatifs) : liste exacte de
+`t_users_role_check` (0017 s'arrête si elle diffère des 9 valeurs) ; `sync_id` ne différant que
+par la casse (ces personnes seraient refusées par `gis-login`, sans partage de compte) ; sites
+qui seraient refusés par le hook / `gis-login` (`is_active` 0 ou NULL, licence expirée) :
+
+```sql
+SELECT pg_get_constraintdef(oid) FROM pg_constraint
+ WHERE conrelid = 'public.t_users'::regclass AND conname = 't_users_role_check';
+SELECT lower(sync_id) AS cle, count(*) FROM public.t_users
+ WHERE sync_id IS NOT NULL GROUP BY 1 HAVING count(*) > 1;
+SELECT s.id, s.nom, s.is_active, s.is_permanent, s.expiry_date,
+       (SELECT count(*) FROM public.t_users u WHERE u.site_id = s.id AND u.statut_actif = 1) AS agents_actifs
+FROM public.t_sites s
+WHERE COALESCE(s.is_active, 0) = 0
+   OR (s.is_permanent IS NOT TRUE AND s.expiry_date IS NOT NULL
+       AND now() >= (((s.expiry_date AT TIME ZONE 'UTC')::date + 1)::timestamp AT TIME ZONE 'UTC'));
+```
+
+**Verrou** : `ADD CONSTRAINT ... NOT VALID` = `AccessExclusiveLock` sur `t_user_roles` (mesuré
+sur le dev le 2026-11-18), `VALIDATE` = `ShareUpdateExclusiveLock`, tenus jusqu'au `COMMIT` ;
+table de quelques centaines de lignes. Aucun verrou sur `t_cartes`. Prod : un seul bloc
+`BEGIN; <fichier 0017> COMMIT;` (prérequis et liste des rôles contrôlés en tête,
+`lock_timeout` 3 s), **puis** déployer `gis-login` v2.
+
+**Dev : fait le 2026-11-18** (agent-4). Première passe `apply_migration` arrêtée par le contrôle
+d'en-tête (tri de la liste en collation par défaut, rien n'a été changé, vérifié) ; correctif
+`COLLATE "C"` dans le fichier, seconde passe appliquée. md5 des 3 fonctions = fichier. Résultats
+sur l'empilement réel 0006-0017 : 0017 **17/17** ; 0006 **19/19** ; 0007 **20/20** ; 0008
+**26/26** ; 0009 **17/17** ; 0010 **14/14** ; 0011 **adapté 20/20** (+ cas 20 non concluant,
+comme avant) ; 0012 **13/13** ; 0013 **adapté 19/19** ; 0014 **17/17** ; 0015 **16/16** ; 0016
+**15/15** ; contrôles du README **26/26** (25 existants + celui de 0017 ci-dessous). Chaque test
+exécuté dans une transaction terminée par une erreur volontaire (rapport des cas) : tout est
+annulé. Aucun résidu : empreinte anon (`a4212a8a…`, 206), politiques (34, même md5), triggers
+(35, même md5), journal 0007 (16 lignes, id max 34), `t_write_audit` (14 lignes, même md5),
+comptages des tables métier, `auth.users` / sessions / jetons / identités, `t_auth_identity`,
+`t_login_attempts` : tous identiques avant / après (0).
+
+**Tests adaptés (2026-11-18, migrations 0011 / 0013 non modifiées)** : 0011 — comptes Auth de
+test avec `app_metadata.sync_id`, événement de base en `token_refresh` (un `magiclink` exige
+désormais une connexion en ligne de moins de 15 min). 0013 — `OPERATEUR_RECHERCHE` (rôle
+inexistant) remplacé par `OPERATEUR_QUALITE` ; l'insertion anon d'un rôle inventé `'R<n>'`
+remplacée par un rôle connu (la contrainte refuse désormais un rôle inventé, voulu).
+
+**Appels réels `gis-login` v2 sur le dev (2026-11-18, jeu de test `t17r_*` supprimé ensuite)** :
+succès 200 puis `verifyOtp` → session `authenticated` d'1 h, `app_metadata.sync_id` correct,
+`amr` = `otp` (valeur que le hook recevra pour ce flux, acceptée), aucune claim `gis_*` (hook non
+activé) ; rejeu du `token_hash` → `otp_expired` ; 2e connexion → même compte Auth ; 5 mauvais
+mots de passe → 4 × 401 puis 429 (900 s), bon mot de passe ensuite → 429 ; login inconnu : même
+séquence, réponses identiques, durées comparables (≈ 0,4 s) ; **10 requêtes parallèles** sur un
+même login → exactement 4 × 401 et 6 × 429 (au plus 5 vérifications de mot de passe) ; compte
+Auth miroir pré-créé sans `app_metadata` → 503 générique (`mirror_mismatch` au journal) ;
+`sync_id` ne différant que par la casse → les deux personnes refusées (503,
+`identity_upsert_refused` puis `mirror_mismatch`), aucun partage ; login saisi en NFD → 200 ;
+SUPER ADMIN par rôle secondaire exact → 200 `is_super_admin: true` ; site suspendu → 403
+`site_suspended` ; licence expirée → 403 `licence_expired`. Journal de la fonction : codes
+d'événement seulement. Limite connue : le premier des deux comptes en collision de casse laisse
+un compte Auth miroir orphelin (bon `app_metadata`, sans identité) — sans accès (le hook exige
+une ligne `t_auth_identity`).
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0017 : contrainte t_user_roles validee (= liste t_users), hook / upsert / tentatives remplaces, droits fermes' AS verification,
+       CASE WHEN EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.t_user_roles'::regclass
+                          AND conname = 't_user_roles_role_check' AND convalidated)
+             AND (SELECT array_agg(m[1] ORDER BY m[1] COLLATE "C") FROM pg_constraint c,
+                    regexp_matches(pg_get_constraintdef(c.oid), '''([^'']*)''', 'g') m
+                   WHERE c.conrelid = 'public.t_user_roles'::regclass AND c.conname = 't_user_roles_role_check')
+               = (SELECT array_agg(m[1] ORDER BY m[1] COLLATE "C") FROM pg_constraint c,
+                    regexp_matches(pg_get_constraintdef(c.oid), '''([^'']*)''', 'g') m
+                   WHERE c.conrelid = 'public.t_users'::regclass AND c.conname = 't_users_role_check')
+             AND (SELECT prosrc LIKE '%authentication_method%' AND prosrc LIKE '%raw_app_meta_data%' AND prosrc NOT LIKE '%btrim%'
+                    FROM pg_proc WHERE oid = 'public.custom_access_token_hook(jsonb)'::regprocedure)
+             AND (SELECT prosrc LIKE '%raw_app_meta_data%' FROM pg_proc WHERE oid = 'public.fn_auth_identity_upsert(uuid,text)'::regprocedure)
+             AND (SELECT prosrc LIKE '%''reserve''%' FROM pg_proc WHERE oid = 'public.fn_login_check_and_record(text,text)'::regprocedure)
+             AND has_function_privilege('supabase_auth_admin', 'public.custom_access_token_hook(jsonb)', 'EXECUTE')
+             AND (SELECT count(*) FROM (VALUES ('anon'), ('authenticated')) r(r),
+                    (VALUES ('public.custom_access_token_hook(jsonb)'), ('public.fn_auth_identity_upsert(uuid,text)'),
+                            ('public.fn_login_check_and_record(text,text)')) f(sig)
+                   WHERE has_function_privilege(r.r, f.sig::regprocedure, 'EXECUTE')) = 0
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Si la contrainte est restée NOT VALID (lignes fautives en prod), la première condition échoue :
+c'est le signal attendu, rien n'est cassé (les écritures futures sont déjà contrôlées).
+
+**Retour arrière** : bloc en tête du fichier 0017 (redéployer `gis-login` v1 d'abord ;
+désactiver le hook s'il a été activé ; `DROP CONSTRAINT` puis rejouer les sections de 0011 /
+0012 qui définissent les 3 fonctions).
 
 ## 0007 : procédures manuelles (période transitoire)
 

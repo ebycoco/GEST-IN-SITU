@@ -8,6 +8,8 @@
 -- pas besoin d'etre active dans les reglages Auth pour ce test).
 -- Resultat : table _t, puis un bloc qui LEVE UNE ERREUR si un cas vaut false.
 -- NE JAMAIS EXECUTER EN PROD.
+-- Adapte le 2026-11-18 a 0017 (comptes Auth avec app_metadata.sync_id,
+-- evenement de base en 'token_refresh') ; la migration 0011 n'est pas modifiee.
 -- ============================================================
 BEGIN;
 
@@ -97,9 +99,14 @@ BEGIN
     ('t11-u-ok', 'OPERATEUR_VERIFICATION'),   -- doublon du role principal
     ('t11-u-ok', 'ADMIN_CENTRE');
 
-  INSERT INTO auth.users (id, aud, role, email, created_at, updated_at)
-  SELECT x, 'authenticated', 'authenticated', 't11-' || x::text || '@users.gest-in-situ.invalid', NOW(), NOW()
-    FROM unnest(ARRAY[u_ok, u_inact, u_sa, u_vieux, u_29j, u_ssite, u_xcen, u_noid, u_orph, u_null]) AS x;
+  -- Adaptation 0017 (2026-11-18) : le hook et fn_auth_identity_upsert exigent
+  -- app_metadata.sync_id = identite (P0-b) ; u_noid n'en a pas.
+  INSERT INTO auth.users (id, aud, role, email, raw_app_meta_data, created_at, updated_at)
+  SELECT x.id, 'authenticated', 'authenticated', 't11-' || x.id::text || '@users.gest-in-situ.invalid',
+         CASE WHEN x.sid IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('sync_id', x.sid) END, NOW(), NOW()
+    FROM (VALUES (u_ok, 't11-u-ok'), (u_inact, 't11-u-inact'), (u_sa, 't11-u-sa'), (u_vieux, 't11-u-vieux'),
+                 (u_29j, 't11-u-29j'), (u_ssite, 't11-u-ssite'), (u_xcen, 't11-u-xcen'), (u_noid, NULL),
+                 (u_orph, 't11-u-absent'), (u_null, 't11-u-null')) AS x(id, sid);
 
   INSERT INTO public.t_auth_identity (auth_user_id, user_sync_id, last_online_login_at) VALUES
     (u_ok,    't11-u-ok',      NOW() - INTERVAL '1 hour'),
@@ -112,10 +119,12 @@ BEGIN
     (u_orph,  't11-u-absent',  NOW()),
     (u_null,  't11-u-null',    NOW());
 
-  -- Evenement simule (forme de la doc Supabase).
+  -- Evenement simule (forme de la doc Supabase). Adaptation 0017 : methode
+  -- 'token_refresh' (un 'magiclink' exige une connexion en ligne de moins de
+  -- 15 min, P1-1, teste dans 0017 ; ici u_ok s'est connecte il y a 1 h).
   ev := jsonb_build_object(
     'user_id', u_ok::text,
-    'authentication_method', 'magiclink',
+    'authentication_method', 'token_refresh',
     'claims', jsonb_build_object(
       'iss', 'https://exemple.invalid/auth/v1', 'aud', 'authenticated',
       'exp', 1900000000, 'iat', 1899996400, 'sub', u_ok::text,

@@ -559,6 +559,40 @@ relèvent d'un plan payant, non vérifié).
 - **Non vérifié** : appel REST réel sous une vraie session authenticated (hook non activé).
 - **Geste utilisateur** : audit agent-9 ; prod avec 0011-0015, après 0015.
 
+### Audit agent-9 du 2026-11-18 (NO-GO gis-login + hook) — correctifs : migration 0017 + gis-login v2 (dev appliqué, prod NON)
+- **Fichiers** : `supabase/migrations/0017_correctifs_audit_p1.sql` + test
+  `supabase/tests/0017_correctifs_audit_p1.test.sql` ; `supabase/functions/gis-login/index.ts`
+  (version 2, déployée sur le dev seulement). Migrations 0011-0016 non modifiées ; tests 0011 et
+  0013 adaptés (détail : README, section « 0017 »).
+- **Réserves, une par une** :
+  - **P0-a rôle « SUPER ADMIN » avec espaces — levée (dev)** : hook et gis-login comparent les
+    rôles tels qu'écrits ; `gis_is_super_admin` = même règle que `fn_sa_guard_caller_sa_auth`
+    (0015) ; contrainte `t_user_roles_role_check` (9 rôles, = `t_users_role_check`), validée sur
+    le dev. Prod : lancer d'abord la requête de contrôle du README (section 0017).
+  - **P0-b compte miroir pré-créé / rattachement réécrit — levée (dev)** : gis-login exige
+    `app_metadata.sync_id` exact (compte créé ou existant) ; `fn_auth_identity_upsert` ne réécrit
+    jamais un rattachement, exige `app_metadata.sync_id`, refuse les variantes de casse ; le hook
+    vérifie aussi `app_metadata.sync_id`. Prouvé en réel (compte pré-créé → 503 ; collision de
+    casse → refus des deux personnes, aucun partage).
+  - **P1-1 méthode d'émission — levée (dev, hook non activé)** : seuls `magiclink`, `otp`,
+    `token_refresh` acceptés (valeurs documentées : Context7 `/supabase/supabase`,
+    `custom-access-token-hook.mdx`, et `search_docs`), et un lien / code seulement dans les 15 min
+    suivant une connexion gis-login. Le flux réel `verifyOtp` produit `amr = otp` (observé sur le
+    dev). Non vérifié tant que le hook n'est pas activé : la valeur exacte reçue par le hook.
+  - **P1-2 limite atomique et non saturable — levée (dev)** : action `reserve` (échec compté
+    avant bcrypt, sous verrou de ligne), `success` l'efface ; 10 requêtes parallèles → 4 × 401 +
+    6 × 429 ; table pleine = échec fermé (503 pour tout login sans ligne ; choix : une ligne pour
+    tout login, connu ou non, pour ne pas créer d'énumération).
+  - **P1-4 site suspendu / licence expirée dans le hook — levée (dev)** : refus 403, SUPER ADMIN
+    dispensé, aussi au `token_refresh` (test 0017 cas 9-10).
+  - **P2-4 login NFC — levée (dev)** : `trim().normalize('NFC')` comme l'application (réel : login
+    saisi en NFD accepté).
+- **Tests (2026-11-18)** : 0017 17/17 ; non-régression 0006-0016 toute verte (0011 et 0013
+  adaptés) ; contrôles README 26/26 ; aucun résidu (empreintes et comptages identiques).
+- **Gestes restants (utilisateur)** : nouvel audit agent-9 ; activer le hook sur le dev puis
+  rejouer les appels réels (claims `gis_*`, refus `password`) ; en prod, requêtes de contrôle du
+  README section 0017, puis 0011-0017 et gis-login v2 (prod jamais touchée à ce jour).
+
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
   « NE PAS APPLIQUER »).
@@ -591,6 +625,9 @@ relèvent d'un plan payant, non vérifié).
    Écrite et appliquée sur le dev le 2026-11-18 ; prod NON.
 7. 0016 (filtre par rôle des comptes, option b) : après 0015 (prérequis contrôlé en tête), même
    fenêtre. Écrite et appliquée sur le dev le 2026-11-18 ; prod NON.
+8. 0017 (correctifs de l'audit agent-9) : après 0016, après la requête de contrôle de
+   `t_user_roles` (README, section 0017) ; **puis** gis-login v2. Dev appliqué le 2026-11-18 ;
+   prod NON.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.

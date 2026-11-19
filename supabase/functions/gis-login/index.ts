@@ -8,15 +8,28 @@
 //           supabase.auth.verifyOtp({ token_hash, type }) avec la cle
 //           publishable (decision Q3) : la fonction ne cree JAMAIS de session.
 //
+// Version 2 (2026-11-18, correctifs de l'audit agent-9, migration 0017) :
+//   - P1-2 : fn_login_check_and_record(login, 'reserve') AVANT bcrypt (l'echec
+//     est compte d'avance, sous verrou de ligne : pas de course entre requetes
+//     paralleles), 'success' l'efface ; plus d'appel 'check' / 'failure' ;
+//   - P0-a : roles compares tels qu'ecrits (aucun trim) : SUPER ADMIN seulement
+//     si un role vaut EXACTEMENT 'SUPER ADMIN' (meme regle que 0007 / 0015) ;
+//   - P0-b : le compte Auth renvoye par generateLink doit porter
+//     app_metadata.sync_id === sync_id de la personne (compte pre-cree, ou
+//     sync_id ne differant que par la casse : refus generique) ;
+//   - P2-4 : login normalise trim() puis NFC, comme l'application
+//     (src/main/database/queries/users.queries.ts:60).
+//   DEPEND DE 0017 (action 'reserve') : appliquer 0017 avant de deployer v2.
+//
 // Etapes :
-//   1. fn_login_check_and_record(login, 'check')  -> 429 si bloque (0012)
+//   1. fn_login_check_and_record(login, 'reserve') -> 429 si bloque (0012/0017)
 //   2. lecture t_users (service_role) + bcrypt DANS la fonction (C2) :
 //      bcryptjs 2.4.3 (meme bibliotheque que le poste), prefixes $2a$/$2b$/$2y$
 //      normalises en $2a$ (algorithme identique pour ces empreintes).
 //      Login inconnu : comparaison contre une empreinte factice (meme duree).
 //   3. echec (login inconnu, mauvais mot de passe, compte inactif, empreinte
-//      illisible, sync_id absent) -> 'failure' -> MEME reponse 401 generique
-//      (ou 429 + retry_after si ce dernier echec declenche le blocage).
+//      illisible, sync_id absent) -> deja compte par 'reserve' -> MEME reponse
+//      401 generique (ou 429 + retry_after si cette tentative a pose le blocage).
 //   4. succes -> 'success' ; controles site (SITE suspendu / licence expiree,
 //      comme le poste : signales seulement apres un mot de passe juste) ;
 //      compte Auth miroir <sync_id>@users.gest-in-situ.invalid (C7, cree a la
@@ -126,7 +139,14 @@ function licenceExpired(expiry: unknown, nowMs: number): boolean {
   return nowMs >= limit;
 }
 
-type Attempt = { allowed: boolean; retry_after_s: number; invalid?: boolean; error?: boolean };
+type Attempt = {
+  allowed: boolean;
+  retry_after_s: number;
+  invalid?: boolean;
+  error?: boolean;
+  lock_on_failure?: boolean;
+  retry_on_failure_s?: number;
+};
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -145,7 +165,8 @@ Deno.serve(async (req: Request) => {
     const text = await req.text();
     if (text.length > MAX_BODY_BYTES) return json(req, 413, { ok: false, error: 'payload_too_large' });
     const body = JSON.parse(text);
-    login = typeof body?.login === 'string' ? body.login.trim() : '';
+    // P2-4 : meme normalisation que l'application (trim puis NFC).
+    login = typeof body?.login === 'string' ? body.login.trim().normalize('NFC') : '';
     password = typeof body?.password === 'string' ? body.password : '';
   } catch {
     return json(req, 400, { ok: false, error: 'bad_request' });
@@ -164,7 +185,7 @@ Deno.serve(async (req: Request) => {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
 
-  const attempt = async (action: 'check' | 'failure' | 'success'): Promise<Attempt | null> => {
+  const attempt = async (action: 'reserve' | 'success'): Promise<Attempt | null> => {
     const { data, error } = await admin.rpc('fn_login_check_and_record', { p_login: login, p_action: action });
     if (error || !data || typeof data !== 'object') return null;
     return data as Attempt;
@@ -178,10 +199,11 @@ Deno.serve(async (req: Request) => {
   };
 
   try {
-    // ---- 1. Limite de tentatives ----
-    const chk = await attempt('check');
+    // ---- 1. Limite de tentatives : l'echec est compte AVANT bcrypt (P1-2) ----
+    const chk = await attempt('reserve');
     if (!chk) { logEvt('attempts_unavailable'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
     if (chk.invalid) return json(req, 400, { ok: false, error: 'bad_request' });
+    // error : erreur interne ou table pleine (echec ferme) ; meme reponse pour tout login.
     if (chk.error) { logEvt('attempts_error'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
     if (!chk.allowed) { logEvt('blocked'); return blocked(chk); }
 
@@ -202,19 +224,25 @@ Deno.serve(async (req: Request) => {
     const actif = !!user && Number(user.statut_actif) === 1;
 
     if (!user || !hash || !pwdOk || !syncOk || !actif) {
-      const f = await attempt('failure');
+      // Echec deja compte par 'reserve' ; si cette tentative a pose le blocage : 429.
       logEvt('failure');
-      if (f && !f.allowed && !f.invalid) return blocked(f);
+      if (chk.lock_on_failure === true) {
+        return blocked({ allowed: false, retry_after_s: Number(chk.retry_on_failure_s) || 900 });
+      }
       return json(req, 401, GENERIC_FAIL);
     }
 
-    // ---- 3. Mot de passe juste ----
-    await attempt('success');
+    // ---- 3. Mot de passe juste : efface la reservation ----
+    const ok = await attempt('success');
+    if (!ok || ok.error) logEvt('attempts_reset_error');
     const syncId: string = user.sync_id;
 
-    const { data: extra } = await admin.from('t_user_roles').select('role').eq('user_sync_id', syncId);
-    const roles = new Set<string>([String(user.role ?? '').trim()].filter((r) => r !== ''));
-    for (const r of extra ?? []) if (typeof r.role === 'string' && r.role.trim() !== '') roles.add(r.role.trim());
+    // P0-a : roles tels qu'ecrits, sans trim ; SUPER ADMIN = valeur exacte.
+    const { data: extra, error: rErr } = await admin.from('t_user_roles').select('role').eq('user_sync_id', syncId);
+    if (rErr) { logEvt('roles_read_error'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
+    const roles = new Set<string>();
+    if (typeof user.role === 'string' && user.role !== '') roles.add(user.role);
+    for (const r of extra ?? []) if (typeof r.role === 'string' && r.role !== '') roles.add(r.role);
     const isSa = roles.has('SUPER ADMIN');
 
     if (!isSa) {
@@ -258,6 +286,15 @@ Deno.serve(async (req: Request) => {
     const tokenHash = link?.properties?.hashed_token;
     if (lErr || !authUserId || !tokenHash) {
       logEvt('generate_link_error');
+      return json(req, 503, { ok: false, error: 'service_unavailable' });
+    }
+    // P0-b : le compte Auth (cree ici, ou deja present : email_exists) doit
+    // porter EXACTEMENT ce sync_id. Compte pre-cree sans app_metadata, compte
+    // d'une autre personne, ou sync_id ne differant que par la casse (meme
+    // courriel en minuscules) : refus generique, aucun token_hash renvoye.
+    const metaSync = (link?.user?.app_metadata as Record<string, unknown> | undefined)?.['sync_id'];
+    if (metaSync !== syncId) {
+      logEvt('mirror_mismatch');
       return json(req, 503, { ok: false, error: 'service_unavailable' });
     }
     if (ident && ident.auth_user_id !== authUserId) {

@@ -148,7 +148,9 @@ BEGIN
     ('t13_agent_b', 'x-t13-pas-un-hash', 'OPERATEUR_VERIFICATION', 1, v_sb, v_cb, 't13-u-b'),
     ('t13_sa',      'x-t13-pas-un-hash', 'SUPER ADMIN',            1, NULL, NULL, 't13-u-sa');
   INSERT INTO public.t_user_roles (user_sync_id, role) VALUES
-    ('t13-u-a', 'OPERATEUR_RECHERCHE'), ('t13-u-b', 'OPERATEUR_RECHERCHE');
+    -- Adaptation 0017 (2026-11-18) : OPERATEUR_RECHERCHE n'est pas un role connu
+    -- (t_user_roles_role_check) ; remplace par OPERATEUR_QUALITE.
+    ('t13-u-a', 'OPERATEUR_QUALITE'), ('t13-u-b', 'OPERATEUR_QUALITE');
   INSERT INTO public.t_cartes (noms, prenoms, id_site, id_centre, sync_id) VALUES
     ('T13', 'A1', v_sa, v_ca, 't13-c-a1'), ('T13', 'A2', v_sa, v_ca, 't13-c-a2'),
     ('T13', 'B1', v_sb, v_cb, 't13-c-b1'), ('T13', 'B2', v_sb, v_cb, 't13-c-b2'),
@@ -161,7 +163,7 @@ BEGIN
 
   c_a := jsonb_build_object('role','authenticated','aud','authenticated','sub','00000000-0000-0000-0000-00000000013a',
            'gis_v',1,'gis_sync_id','t13-u-a','gis_site_id',v_sa,'gis_site_sync_id','t13-site-a',
-           'gis_centre_id',v_ca,'gis_roles',jsonb_build_array('OPERATEUR_RECHERCHE','OPERATEUR_VERIFICATION'),
+           'gis_centre_id',v_ca,'gis_roles',jsonb_build_array('OPERATEUR_QUALITE','OPERATEUR_VERIFICATION'),
            'gis_is_super_admin',false,'gis_statut_actif',true)::text;
   c_b := jsonb_build_object('role','authenticated','aud','authenticated','sub','00000000-0000-0000-0000-00000000013b',
            'gis_v',1,'gis_sync_id','t13-u-b','gis_site_id',v_sb,'gis_site_sync_id','t13-site-b',
@@ -400,7 +402,10 @@ BEGIN
             public._t13_try(format('DELETE FROM public.t_cartes WHERE sync_id = %L', 't13-c-anon-' || length(t))),
             public._t13_try(format('INSERT INTO public.t_users AS u (login, password_hash, role, statut_actif, site_id, sync_id) VALUES (%L, %L, %L, 1, %s, %L) ON CONFLICT (sync_id) DO UPDATE SET password_hash = EXCLUDED.password_hash', 't13_agent_b', 'x-t13-anon', 'OPERATEUR_VERIFICATION', v_sb, 't13-u-b')),
             public._t13_try($q$SELECT * FROM public.t_users WHERE sync_id = 't13-u-a'$q$),
-            public._t13_try(format('INSERT INTO public.t_user_roles (user_sync_id, role) VALUES (%L, %L)', 't13-u-b', 'R' || length(t))),
+            -- Adaptation 0017 : role CONNU (un role arbitraire 'R<n>' est desormais refuse
+            -- a tous par t_user_roles_role_check, voulu) ; un role different par tour.
+            public._t13_try(format('INSERT INTO public.t_user_roles (user_sync_id, role) VALUES (%L, %L)', 't13-u-b',
+                                   CASE WHEN t = '' THEN 'OPERATEUR_SAISIE' ELSE 'OPERATEUR_LOGISTIQUE' END)),
             public._t13_try(format('INSERT INTO public.t_logs (action, site_id, sync_id) VALUES (%L, %s, %L)', 'T13', v_sa, 't13-l-anon-' || length(t))));
     EXECUTE 'RESET ROLE';
     INSERT INTO _t VALUES (CASE WHEN t = '' THEN 16 ELSE 15 END,
