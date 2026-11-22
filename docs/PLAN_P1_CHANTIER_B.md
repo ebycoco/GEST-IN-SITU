@@ -610,7 +610,8 @@ relèvent d'un plan payant, non vérifié).
     `GIS_LOGIN_SATURATION`, échec fermé en dernier recours seulement (test 0018 cas 10-12).
     **Limite par adresse IP non ajoutée : STOP & WARN** (aucune source Supabase ne documente un
     en-tête d'adresse client non falsifiable pour les Edge Functions hébergées ; risque de
-    blocage d'un centre entier par usurpation d'adresse). Décision utilisateur attendue.
+    blocage d'un centre entier par usurpation d'adresse). **Décision utilisateur du 2026-11-22 :
+    rester sans limite par IP** (limite par login + purge 1 h jugées suffisantes, cohérent avec C5).
   - **N-3 (P2) collision de casse — levé (dev)** : contrôle au premier rattachement seulement
     (test 0018 cas 7 ; réel : personne déjà rattachée → 200 après création d'une variante).
   - **N-9 (P2) types de `t_sites` — levé (dev)** : hook robuste au type (lecture JSON), test avec
@@ -619,7 +620,7 @@ relèvent d'un plan payant, non vérifié).
 - **Tests (2026-11-22)** : 0018 14/14 ; non-régression 0006-0017 toute verte (0011 : cas 20 non
   concluant comme avant ; 0017 adapté) ; contrôles README 27/27 ; appels réels conformes ; aucun
   résidu (empreintes et comptages identiques à l'état d'avant).
-- **Gestes restants (utilisateur)** : décider de la limite par IP (STOP & WARN) ; décider du sort
+- **Gestes restants (utilisateur)** : ~~décider de la limite par IP~~ (tranché : sans) ; décider du sort
   des SA secondaires dans l'application ; nouvel audit agent-9 ; activer le hook sur le dev et
   rejouer les appels réels ; en prod : requêtes de contrôle des sections 0017 et 0018, puis
   0011-0018 et gis-login v3 (prod jamais touchée à ce jour).
