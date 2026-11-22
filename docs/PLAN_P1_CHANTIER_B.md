@@ -593,6 +593,37 @@ relèvent d'un plan payant, non vérifié).
   rejouer les appels réels (claims `gis_*`, refus `password`) ; en prod, requêtes de contrôle du
   README section 0017, puis 0011-0017 et gis-login v2 (prod jamais touchée à ce jour).
 
+### Audit de contrôle agent-9 du 2026-11-19 — correctifs : migration 0018 + gis-login v3 (dev appliqué, prod NON)
+- **Fichiers** : `supabase/migrations/0018_correctifs_controle_p1.sql` + test
+  `supabase/tests/0018_correctifs_controle_p1.test.sql` ; `supabase/functions/gis-login/index.ts`
+  (version 3, déployée sur le dev seulement, `verify_jwt` false). Migrations 0001-0017 non
+  modifiées ; test 0017 adapté (cas 5). Détail : README, section « 0018 ».
+- **Points, un par un** :
+  - **N-1 (P0) SUPER ADMIN secondaire — levé (dev)** : hook, gis-login v3 et
+    `fn_sa_guard_caller_sa_auth` (remplace 0015 section 1) ne reconnaissent SUPER ADMIN que si
+    `t_users.role = 'SUPER ADMIN'` ; un SA seulement secondaire n'a ni claim SA, ni dispense
+    site / licence, et 0016 refuse ses écritures de comptes (échec fermé). Prouvé en SQL (test
+    0018 cas 1-5) et en réel (SA secondaire d'un site suspendu → 403). Requête de contrôle prod :
+    README section 0018. L'application crée encore des SA secondaires (`users.queries.ts:22-27`,
+    `:307-322`, `:743-761`) : décision produit à prendre.
+  - **N-2 (P1) table pleine — partiel (dev)** : purge des lignes non bloquées > 1 h, journal
+    `GIS_LOGIN_SATURATION`, échec fermé en dernier recours seulement (test 0018 cas 10-12).
+    **Limite par adresse IP non ajoutée : STOP & WARN** (aucune source Supabase ne documente un
+    en-tête d'adresse client non falsifiable pour les Edge Functions hébergées ; risque de
+    blocage d'un centre entier par usurpation d'adresse). Décision utilisateur attendue.
+  - **N-3 (P2) collision de casse — levé (dev)** : contrôle au premier rattachement seulement
+    (test 0018 cas 7 ; réel : personne déjà rattachée → 200 après création d'une variante).
+  - **N-9 (P2) types de `t_sites` — levé (dev)** : hook robuste au type (lecture JSON), test avec
+    `is_active` BOOLEAN / `is_permanent` INTEGER / `expiry_date` TEXT (cas 9) ; requête
+    `information_schema` de contrôle dans le README.
+- **Tests (2026-11-22)** : 0018 14/14 ; non-régression 0006-0017 toute verte (0011 : cas 20 non
+  concluant comme avant ; 0017 adapté) ; contrôles README 27/27 ; appels réels conformes ; aucun
+  résidu (empreintes et comptages identiques à l'état d'avant).
+- **Gestes restants (utilisateur)** : décider de la limite par IP (STOP & WARN) ; décider du sort
+  des SA secondaires dans l'application ; nouvel audit agent-9 ; activer le hook sur le dev et
+  rejouer les appels réels ; en prod : requêtes de contrôle des sections 0017 et 0018, puis
+  0011-0018 et gis-login v3 (prod jamais touchée à ce jour).
+
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
   « NE PAS APPLIQUER »).
@@ -628,6 +659,9 @@ relèvent d'un plan payant, non vérifié).
 8. 0017 (correctifs de l'audit agent-9) : après 0016, après la requête de contrôle de
    `t_user_roles` (README, section 0017) ; **puis** gis-login v2. Dev appliqué le 2026-11-18 ;
    prod NON.
+9. 0018 (correctifs de l'audit de contrôle) : après 0017, après les requêtes de contrôle N-1 /
+   N-9 (README, section 0018) ; **puis** gis-login v3 (à la place de v2). Dev appliqué le
+   2026-11-22 ; prod NON.
 
 ## Changements par rapport au plan initial d'agent-1
 - Ajout de P1-A (alignement dev, fait) et des écarts de schéma restants.

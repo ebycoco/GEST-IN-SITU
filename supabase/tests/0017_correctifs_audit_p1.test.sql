@@ -220,13 +220,16 @@ BEGIN
         'OPERATEUR_VERIFICATION'::text, 'OPERATEUR_QUALITE'::text, 'OPERATEUR_SAISIE'::text,
         'OPERATEUR_LOGISTIQUE'::text, 'OPERATEUR_INVENTAIRE'::text, 'OPERATEUR_APUREMENT'::text]));
 
-  -- ---------- 5. Hook : SUPER ADMIN par t_user_roles exact = meme regle que 0015 ----------
+  -- ---------- 5. Hook : SUPER ADMIN par t_user_roles exact = meme regle que fn_sa_guard_caller_sa_auth ----------
+  -- Adapte le 2026-11-22 pour 0018 (N-1) : un SUPER ADMIN seulement SECONDAIRE
+  -- n'est plus SUPER ADMIN (ni claim, ni verification en base). Avant 0018 :
+  -- attente inverse (true / true). Migration 0017 non modifiee.
   r := public.custom_access_token_hook(jsonb_set(ev, '{user_id}', to_jsonb(u_sa2::text)));
   c := r -> 'claims';
   PERFORM set_config('request.jwt.claims', c::text, true);
-  INSERT INTO _t VALUES (5, 'Hook : SUPER ADMIN en role secondaire exact -> gis_is_super_admin true, et fn_sa_guard_caller_sa_auth (0015) true avec ces claims',
-    NOT (r ? 'error') AND c -> 'gis_is_super_admin' = 'true'::jsonb
-      AND public.fn_sa_guard_caller_sa_auth() = true,
+  INSERT INTO _t VALUES (5, 'Hook : SUPER ADMIN en role secondaire exact -> gis_is_super_admin false, et fn_sa_guard_caller_sa_auth false avec ces claims (regle 0018 : role principal seulement)',
+    NOT (r ? 'error') AND c -> 'gis_is_super_admin' = 'false'::jsonb
+      AND public.fn_sa_guard_caller_sa_auth() = false,
     NULL);
   PERFORM set_config('request.jwt.claims', '', true);
 

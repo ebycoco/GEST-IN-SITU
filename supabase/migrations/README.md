@@ -185,6 +185,11 @@ présente mise en place — voir limitation ci-dessous.
   action `reserve` avant bcrypt, rôles sans `trim`, `app_metadata.sync_id` exigé, login
   normalisé NFC. **Dépend de 0017** (appliquer 0017 avant de déployer la v2 ; retour arrière :
   redéployer la v1 avant de retirer 0017).
+  **Version 3 déployée sur le dev le 2026-11-22** (audit de contrôle, voir section « 0018 ») :
+  SUPER ADMIN = rôle **principal** seulement (plus de dispense site / licence ni
+  `is_super_admin` pour un SUPER ADMIN seulement secondaire), `is_active` / `is_permanent` lus
+  quel que soit leur type, saturation journalisée. Compatible 0017 et 0018 ; déployer **après**
+  0018. Limite par adresse IP : **non ajoutée** (STOP & WARN, section « 0018 »).
 - **`0013_rls_authenticated_par_site.sql`** — chantier B, P1-6 : 14 politiques **RESTRICTIVE TO
   authenticated** (`r13_*`) filtrees **par site** (Q4) a partir des claims du hook (0011) :
   `t_cartes.id_site`, `t_logs.site_id`, `t_user_presence.site_id`, `t_users.site_id`,
@@ -264,6 +269,16 @@ présente mise en place — voir limitation ci-dessous.
   fautive. **Dépendances : 0007, 0011, 0012, 0015, 0016.** Test :
   `supabase/tests/0017_correctifs_audit_p1.test.sql`. **Dev : appliquée le 2026-11-18** (détail
   section « 0017 »). **Production : NON appliquée.**
+- **`0018_correctifs_controle_p1.sql`** — correctifs de l'audit de contrôle agent-9 du
+  2026-11-19 : remplace `fn_sa_guard_caller_sa_auth` (0015 : SUPER ADMIN vérifié = rôle
+  **principal** `t_users.role`, plus `t_user_roles`), `custom_access_token_hook` (même règle
+  pour `gis_is_super_admin` et la dispense site / licence ; site lu en JSON, robuste au type des
+  colonnes), `fn_auth_identity_upsert` (collision de casse contrôlée au **premier**
+  rattachement seulement) et `fn_login_check_and_record` (saturation : purge des lignes non
+  bloquées > 1 h, journal `GIS_LOGIN_SATURATION`, échec fermé en dernier recours). Aucune
+  table, colonne, contrainte, politique, trigger ni droit anon modifié. **Dépendances : 0007,
+  0011, 0012, 0015, 0016, 0017.** Test : `supabase/tests/0018_correctifs_controle_p1.test.sql`.
+  **Dev : appliquée le 2026-11-22** (détail section « 0018 »). **Production : NON appliquée.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -988,6 +1003,159 @@ c'est le signal attendu, rien n'est cassé (les écritures futures sont déjà c
 **Retour arrière** : bloc en tête du fichier 0017 (redéployer `gis-login` v1 d'abord ;
 désactiver le hook s'il a été activé ; `DROP CONSTRAINT` puis rejouer les sections de 0011 /
 0012 qui définissent les 3 fonctions).
+
+## 0018 : correctifs de l'audit de contrôle P1 (SUPER ADMIN secondaire, saturation, casse, types)
+
+**Effet sur les postes actuels : aucun** (ils écrivent en anon ; 0018 ne remplace que 4
+fonctions utilisées par le hook, `gis-login` et les sessions `authenticated`). Empreinte anon
+identique avant / après (`a4212a8a…`, 206 éléments). Hook toujours **non activé**.
+
+| Point | Correctif | État (dev) |
+|---|---|---|
+| N-1 (P0) SUPER ADMIN « secondaire » | hook, `gis-login` v3 et `fn_sa_guard_caller_sa_auth` : SUPER ADMIN = `t_users.role` exactement `'SUPER ADMIN'` (seul cas protégé par 0007). SA seulement secondaire : `gis_is_super_admin` false, pas de dispense site / licence, `gis_roles` reste la liste réelle → 0016 répond `REFUS` (aucune écriture de comptes), 0013 / 0014 : droits de son site et de ses autres rôles | **levé** |
+| N-2 (P1) table des tentatives pleine | purge des lignes non bloquées dont le dernier échec date de plus d'1 h (avant : 24 h), `RAISE WARNING 'GIS_LOGIN_SATURATION : …'` (journal Postgres) + code `attempts_saturation_purge` (journal de la fonction), échec fermé seulement si la table reste pleine | **partiel** : limite par IP non ajoutée (STOP & WARN ci-dessous) |
+| N-3 (P2) collision de casse | refus « autre compte de même `lower(sync_id)` » seulement au **premier** rattachement | **levé** |
+| N-9 (P2) types de `t_sites` | hook : ligne du site lue en JSON (`to_jsonb`), `is_active` / `is_permanent` interprétés quel que soit le type, date d'échéance `AAAA-MM-JJ` ou horodatage, illisible = pas de blocage (règle A1, comme `gis-login`) ; `gis-login` v3 aligné | **levé** + requête de contrôle ci-dessous |
+
+**Plafond de la table des tentatives** : constante `c_max_rows` (100 000) en tête de
+`fn_login_check_and_record`. Pour la changer : rejouer la section 4 de 0018 avec une autre
+valeur, en un bloc `BEGIN; SET LOCAL lock_timeout = '3s'; … COMMIT;`. **Coût pour un
+attaquant** (sans limite par IP) : tenir la table pleine de lignes non purgeables exige au moins
+100 000 logins distincts en échec dans la dernière heure, soit ≥ 100 000 appels `gis-login`
+par heure (~28/s en continu), chacun payant un bcrypt (coût 10). Effet de bord connu pendant une
+saturation entretenue : la ligne d'un login sans blocage en cours et sans échec depuis 1 h peut
+être purgée (escalade des blocages remise à zéro : au pire ~5 essais par login ciblé par
+période « blocage 15 min + 1 h ») ; un blocage en cours n'est jamais purgé. Lire le journal :
+Logs Explorer du projet, filtre `GIS_LOGIN_SATURATION` (Postgres) ou `attempts_saturation_purge`
+(Edge Function).
+
+**STOP & WARN — limite par adresse IP dans `gis-login` (non ajoutée).** Sources consultées le
+2026-11-22 : Context7 `/supabase/supabase` (exemple officiel `examples/edge-functions/…/location`
+qui lit la **première** valeur de `x-forwarded-for`, sans dire si la plateforme écrase ou
+complète une valeur envoyée par le client ; guide `auth/rate-limits.mdx` : en-tête
+`Sb-Forwarded-For` réservé aux appels **vers Auth** avec une clé secrète) ; `search_docs`
+(« Envoy API Gateway » : `use_remote_address: true`, mais pour l'auto-hébergement seulement ;
+« Edge Functions Architecture » : aucun en-tête d'adresse client documenté). **Aucune source ne
+garantit, pour les Edge Functions hébergées, un en-tête d'adresse client non falsifiable.** Si
+la première valeur de `x-forwarded-for` venait du client, un attaquant pourrait : soit changer
+d'« adresse » à chaque appel (limite inutile), soit **usurper l'adresse publique d'un centre**
+pour bloquer les connexions de tout le centre. Décision laissée à l'utilisateur (options : test
+contrôlé sur le dev d'un `x-forwarded-for` forgé, sans journaliser d'adresse ; question au
+support Supabase ; ou rester sans limite par IP, la limite par login et le plafond restant en
+place).
+
+**À lancer en prod AVANT d'appliquer 0018 (lecture seule).**
+
+1. N-1 — comptes qui **perdront** le statut SUPER ADMIN en session `authenticated` (rôle
+   principal autre que SUPER ADMIN, ligne `t_user_roles` SUPER ADMIN). 0 ligne attendue ; s'il y
+   en a, l'utilisateur décide (passer `SUPER ADMIN` en rôle principal, ou retirer le rôle
+   secondaire) — ce sont aussi les comptes dont la clé anon peut aujourd'hui réécrire le
+   `password_hash` (0007 ne les protège pas) :
+
+```sql
+SELECT u.id_user, u.sync_id, u.login, u.role AS role_principal, u.statut_actif, u.site_id,
+       (SELECT string_agg(r2.role, ', ' ORDER BY r2.role) FROM public.t_user_roles r2
+         WHERE r2.user_sync_id = u.sync_id) AS roles_secondaires
+FROM public.t_users u
+WHERE u.role IS DISTINCT FROM 'SUPER ADMIN'
+  AND EXISTS (SELECT 1 FROM public.t_user_roles r
+               WHERE r.user_sync_id = u.sync_id AND r.role = 'SUPER ADMIN')
+ORDER BY u.login;
+```
+
+2. N-9 — types des colonnes de `t_sites` lues par le hook (attendu : `is_active` integer,
+   `is_permanent` boolean, `expiry_date` timestamp with time zone ; un type différent est
+   toléré par le hook 0018, mais à signaler) :
+
+```sql
+SELECT column_name, data_type,
+       CASE WHEN (column_name, data_type) IN (('is_active', 'integer'), ('is_permanent', 'boolean'),
+                                              ('expiry_date', 'timestamp with time zone'))
+            THEN 'OK' ELSE 'DIFFERENT (signaler)' END AS verification
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 't_sites'
+  AND column_name IN ('is_active', 'is_permanent', 'expiry_date')
+ORDER BY column_name;
+```
+
+Puis les contrôles de la section « 0017 » (toujours valables).
+
+**Application** : un seul bloc `BEGIN; <fichier 0018> COMMIT;` (prérequis 0007, 0011, 0012,
+0015, 0016, 0017 contrôlés en tête, `lock_timeout` 3 s ; aucun verrou de table) ; **puis**
+déployer `gis-login` v3.
+
+**Dev : fait le 2026-11-22** (agent-4). `apply_migration « 0018_correctifs_controle_p1 »`
+(partie exécutable identique au fichier : md5 de `prosrc` des 4 fonctions = fichier).
+Résultats sur l'empilement réel 0006-0018, chaque test dans une transaction terminée par une
+erreur volontaire (tout annulé) : 0018 **14/14** ; 0006 **19/19** ; 0007 **20/20** ; 0008
+**26/26** ; 0009 **17/17** ; 0010 **14/14** ; 0011 **20/20** (+ cas 20 non concluant, comme
+avant) ; 0012 **13/13** ; 0013 **19/19** ; 0014 **17/17** ; 0015 **16/16** ; 0016 **15/15** ;
+0017 **adapté 17/17** ; contrôles du README **27/27** (26 existants + celui de 0018). Requêtes
+de pré-contrôle N-1 / N-9 sur le dev : 0 ligne ; types attendus.
+
+**Test 0017 adapté (2026-11-22, migration 0017 non modifiée)** : cas 5 — un SUPER ADMIN
+seulement secondaire donne désormais `gis_is_super_admin` false et
+`fn_sa_guard_caller_sa_auth` false (attente inverse avant 0018).
+
+**Appels réels `gis-login` v3 sur le dev (2026-11-22, jeu de test `t18r_*` supprimé ensuite)** :
+succès 200 (`is_super_admin` false), 2e connexion 200 ; SUPER ADMIN **principal** d'un site
+suspendu → 200 `is_super_admin: true` (dispense) ; SUPER ADMIN **secondaire** d'un site
+suspendu → **403 `site_suspended`** (plus de dispense) ; SUPER ADMIN secondaire d'un site actif
+→ 200 `is_super_admin: false`, `roles` contient `SUPER ADMIN` ; 5 mauvais mots de passe → 4 ×
+401 puis 429 (900 s), bon mot de passe ensuite → 429 ; login inconnu → même séquence (4 × 401
+puis 429), réponses identiques, durées comparables (≈ 0,2-0,4 s) ; collision de casse : personne
+A rattachée → 200, compte variante B créé ensuite → A toujours **200** (avant 0018 : refus),
+B → 503 générique, aucun rattachement de B. Limite par IP : non testée (non ajoutée). Hook non
+activé : les claims ne sont vérifiées que par le test SQL (appel direct du hook).
+
+**Aucun résidu** (comparé à l'état d'avant) : empreinte anon (`a4212a8a…`, 206), politiques
+(34, même md5), triggers (35, même md5), journal 0007 (16 lignes, id max 34),
+`t_write_audit` (14 lignes, même md5 — les compteurs du jour créés par la mise en place et le
+nettoyage du jeu de test ont été supprimés), tables métier 0, `auth.users` / sessions / jetons
+/ identités / `one_time_tokens` 0, `t_auth_identity` 0, `t_login_attempts` 0, aucune fonction
+d'aide `_t1x_`, types de `t_sites` et contrainte `t_user_roles_role_check` inchangés.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0018 : SA = role principal (hook + 0015), site lu en JSON, rattachement N-3, saturation N-2, droits fermes' AS verification,
+       CASE WHEN (SELECT prosrc LIKE '%COALESCE(v_user.role = ''SUPER ADMIN'', false)%' AND prosrc LIKE '%to_jsonb(s.*)%'
+                         AND prosrc NOT LIKE '%btrim%'
+                    FROM pg_proc WHERE oid = 'public.custom_access_token_hook(jsonb)'::regprocedure)
+             AND (SELECT prosrc NOT LIKE '%t_user_roles%' AND prosrc LIKE '%u.role = ''SUPER ADMIN''%'
+                    FROM pg_proc WHERE oid = 'public.fn_sa_guard_caller_sa_auth()'::regprocedure)
+             AND (SELECT prosrc LIKE '%v_rattach%' AND prosrc LIKE '%raw_app_meta_data%'
+                    FROM pg_proc WHERE oid = 'public.fn_auth_identity_upsert(uuid,text)'::regprocedure)
+             AND (SELECT prosrc LIKE '%c_purge_satur%' AND prosrc LIKE '%GIS_LOGIN_SATURATION%' AND prosrc LIKE '%''reserve''%'
+                    FROM pg_proc WHERE oid = 'public.fn_login_check_and_record(text,text)'::regprocedure)
+             AND has_function_privilege('supabase_auth_admin', 'public.custom_access_token_hook(jsonb)', 'EXECUTE')
+             AND has_function_privilege('service_role', 'public.fn_auth_identity_upsert(uuid,text)', 'EXECUTE')
+             AND has_function_privilege('service_role', 'public.fn_login_check_and_record(text,text)', 'EXECUTE')
+             AND (SELECT count(*) FROM (VALUES ('anon'), ('authenticated')) r(r),
+                    (VALUES ('public.custom_access_token_hook(jsonb)'), ('public.fn_auth_identity_upsert(uuid,text)'),
+                            ('public.fn_login_check_and_record(text,text)'), ('public.fn_sa_guard_caller_sa_auth()')) f(sig)
+                   WHERE has_function_privilege(r.r, f.sig::regprocedure, 'EXECUTE')) = 0
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Puis l'empreinte anon (section 0013), avant et après : identique.
+
+**Retour arrière** : bloc en tête du fichier 0018. **Attention : un retour arrière complet
+restaure des versions vulnérables** (N-1 : SUPER ADMIN secondaire de nouveau privilégié ; N-2 :
+table pleine = refus de toute connexion sans ligne pendant 24 h ; N-3). Retour arrière partiel
+conseillé selon l'incident (section 4 de 0017 seule pour la saturation, section 2 pour le
+rattachement : ni l'un ni l'autre ne rouvre N-1). Redéployer `gis-login` v2 rouvre N-1 côté
+fonction.
+
+**Signalé (src/ non modifié)** : l'application crée encore des SUPER ADMIN **secondaires** —
+un SUPER ADMIN peut attribuer `SUPER ADMIN` parmi les rôles d'un compte dont le rôle principal
+est autre (`ASSIGNABLE_ROLES_BY_CREATOR`, `src/main/database/queries/users.queries.ts:22-27` ;
+`createUser` :307-322 ne force pas `SUPER ADMIN` en rôle principal ; `updateUser` :743-761
+ajoute des rôles). Côté cloud, l'envoi anon d'une telle ligne `t_user_roles` est refusé par
+0007 (`fn_t_user_roles_sa_guard`, 0007:359-370, compte non SUPER ADMIN en principal) : ces
+comptes n'existent dans le cloud que par données anciennes ou écriture `service_role` /
+SQL Editor. Après 0018, un tel compte n'a aucun privilège SUPER ADMIN en `authenticated` (P2) :
+décision produit à prendre (imposer `SUPER ADMIN` comme rôle principal dans l'application).
 
 ## 0007 : procédures manuelles (période transitoire)
 

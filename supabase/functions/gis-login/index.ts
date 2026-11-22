@@ -21,6 +21,18 @@
 //     (src/main/database/queries/users.queries.ts:60).
 //   DEPEND DE 0017 (action 'reserve') : appliquer 0017 avant de deployer v2.
 //
+// Version 3 (2026-11-22, audit de controle agent-9 du 2026-11-19, migration 0018) :
+//   - N-1 : SUPER ADMIN = role PRINCIPAL (t_users.role) exactement 'SUPER ADMIN',
+//     seul cas protege par le garde 0007 ; un SUPER ADMIN seulement secondaire
+//     (t_user_roles) n'a plus is_super_admin ni la dispense site / licence
+//     (meme regle que le hook et fn_sa_guard_caller_sa_auth, 0018) ;
+//   - N-2 : reponse 'saturation' de fn_login_check_and_record journalisee
+//     (code 'attempts_saturation_purge') ; la limite par adresse IP n'est PAS
+//     ajoutee (en-tete d'adresse client non documente de facon sure pour les
+//     Edge Functions hebergees : STOP & WARN, README section 0018) ;
+//   - N-9 : is_active / is_permanent lus quel que soit leur type, comme le hook.
+//   Compatible avec 0017 et 0018 (aucune action nouvelle) ; deployer APRES 0018.
+//
 // Etapes :
 //   1. fn_login_check_and_record(login, 'reserve') -> 429 si bloque (0012/0017)
 //   2. lecture t_users (service_role) + bcrypt DANS la fonction (C2) :
@@ -139,6 +151,15 @@ function licenceExpired(expiry: unknown, nowMs: number): boolean {
   return nowMs >= limit;
 }
 
+// N-9 : meme lecture que le hook (0018), quel que soit le type de la colonne :
+// vrai si true, nombre <> 0, ou texte '1' / 'true' / 't' ; sinon faux (NULL compris).
+function truthyFlag(v: unknown): boolean {
+  if (v === true) return true;
+  if (typeof v === 'number') return v !== 0 && !Number.isNaN(v);
+  if (typeof v === 'string') return ['1', 'true', 't'].includes(v.toLowerCase());
+  return false;
+}
+
 type Attempt = {
   allowed: boolean;
   retry_after_s: number;
@@ -146,6 +167,7 @@ type Attempt = {
   error?: boolean;
   lock_on_failure?: boolean;
   retry_on_failure_s?: number;
+  saturation?: boolean;
 };
 
 Deno.serve(async (req: Request) => {
@@ -206,6 +228,8 @@ Deno.serve(async (req: Request) => {
     // error : erreur interne ou table pleine (echec ferme) ; meme reponse pour tout login.
     if (chk.error) { logEvt('attempts_error'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
     if (!chk.allowed) { logEvt('blocked'); return blocked(chk); }
+    // N-2 : table pleine, place reprise par la purge (> 1 h) ; aucune difference de reponse.
+    if (chk.saturation === true) logEvt('attempts_saturation_purge');
 
     // ---- 2. Compte + mot de passe ----
     const { data: rows, error: uErr } = await admin
@@ -237,13 +261,15 @@ Deno.serve(async (req: Request) => {
     if (!ok || ok.error) logEvt('attempts_reset_error');
     const syncId: string = user.sync_id;
 
-    // P0-a : roles tels qu'ecrits, sans trim ; SUPER ADMIN = valeur exacte.
+    // P0-a : roles tels qu'ecrits, sans trim (liste informative renvoyee au poste).
     const { data: extra, error: rErr } = await admin.from('t_user_roles').select('role').eq('user_sync_id', syncId);
     if (rErr) { logEvt('roles_read_error'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
     const roles = new Set<string>();
     if (typeof user.role === 'string' && user.role !== '') roles.add(user.role);
     for (const r of extra ?? []) if (typeof r.role === 'string' && r.role !== '') roles.add(r.role);
-    const isSa = roles.has('SUPER ADMIN');
+    // N-1 (v3) : SUPER ADMIN = role PRINCIPAL exactement 'SUPER ADMIN' (seul cas
+    // protege par 0007). Secondaire seulement : ni is_super_admin, ni dispense.
+    const isSa = user.role === 'SUPER ADMIN';
 
     if (!isSa) {
       if (user.site_id === null || user.site_id === undefined) {
@@ -254,11 +280,11 @@ Deno.serve(async (req: Request) => {
         .from('t_sites').select('id, is_active, expiry_date, is_permanent').eq('id', user.site_id).maybeSingle();
       if (sErr) { logEvt('site_read_error'); return json(req, 503, { ok: false, error: 'service_unavailable' }); }
       if (!site) { logEvt('no_site'); return json(req, 403, { ok: false, error: 'no_site', message: 'Compte sans site.' }); }
-      if (Number(site.is_active) === 0) {
+      if (!truthyFlag(site.is_active)) {
         logEvt('site_suspended');
         return json(req, 403, { ok: false, error: 'site_suspended', message: 'Site suspendu.' });
       }
-      if (site.is_permanent !== true && licenceExpired(site.expiry_date, Date.now())) {
+      if (!truthyFlag(site.is_permanent) && licenceExpired(site.expiry_date, Date.now())) {
         logEvt('licence_expired');
         return json(req, 403, { ok: false, error: 'licence_expired', message: 'Licence du site expiree.' });
       }
