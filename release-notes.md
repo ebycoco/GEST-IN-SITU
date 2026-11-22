@@ -3,6 +3,9 @@
 ## 🚨 Sécurité
 - **Rôle SUPER ADMIN** : il ne peut plus être donné en rôle secondaire à un compte, à la création comme à la modification (message clair affiché). Un SUPER ADMIN l'est désormais uniquement par son rôle principal, comme le cloud l'exige déjà. La création d'un SUPER ADMIN en rôle principal ne change pas. Les comptes qui avaient déjà ce rôle en secondaire ne sont pas modifiés.
 
+## 🛠️ Corrections & Fiabilité
+- **Rôle principal des agents** : modifier un compte qui a plusieurs rôles (par exemple seulement son nom) pouvait changer son rôle principal sans le vouloir, selon l'ordre interne des rôles. Le rôle principal est maintenant conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace, comme avant.
+
 ## ⚡ Performances
 - **Statistiques par centre (administrateur de centre, opérateur de vérification)** : nouvel index local (migration V73) qui accélère le calcul des doublons et des dates par centre (mesuré sur une copie de base : de ~7 s à ~1,5 s pour le plus gros centre, de 2 s à quelques centièmes pour un petit centre). La création de l'index se fait une seule fois, au premier démarrage de cette version : l'écran de chargement peut rester immobile plus longtemps que d'habitude (durée variable selon le poste et la taille de la base : de quelques secondes à plusieurs minutes, mesuré de 17 s à plus de 4 minutes sur une grosse base de test). **Ne pas fermer l'application pendant ce premier démarrage.** Un message l'indique désormais sur l'écran de chargement (« Optimisation de la base de données en cours… »), affiché uniquement quand une mise à jour de la base est en attente.
 - **Badge « cartes du centre »** : il est maintenant calculé par un simple comptage au lieu du calcul complet des statistiques (jusqu'à plusieurs secondes de moins à l'ouverture de l'écran de vérification, et le tableau de bord n'attend plus derrière ce calcul). Le nombre affiché ne change pas.

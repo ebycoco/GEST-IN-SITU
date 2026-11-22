@@ -56,6 +56,17 @@ function hasSuperAdminAsSecondary(roles: readonly string[], primaryRole: string 
   return roles.includes('SUPER ADMIN') && primaryRole !== 'SUPER ADMIN';
 }
 
+// Rôle principal résultant d'un updateUser avec roles[] (2026-11-22). Le principal ne doit jamais
+// changer par simple effet d'ordre de roles[] (GROUP_CONCAT de getUsers non trié) : un `role`
+// explicite présent dans roles[] est respecté (l'écran des agents envoie toujours le principal
+// actuel, ou le nouveau principal quand l'ancien a été décoché). Sans `role` exploitable : convention
+// historique roles[0] inchangée. Fonction pure, sans accès base.
+function resolvePrimaryFromRoles(roles: readonly string[], requestedRole: unknown): string {
+  return typeof requestedRole === 'string' && requestedRole && roles.includes(requestedRole)
+    ? requestedRole
+    : roles[0];
+}
+
 // ── Helpers LOT 1b (audit agent-9 : logins, cibles SUPER ADMIN) ─────────────────────────
 const LOGIN_TAKEN_MESSAGE = "Ce login est déjà utilisé. Choisissez-en un autre.";
 const FORBIDDEN_TARGET_MESSAGE = "Accès non autorisé aux données de ce site";
@@ -284,6 +295,12 @@ export function getUsers(siteId?: number, centreId?: number, options?: { include
     user.roles = user.roles_concat ? user.roles_concat.split(',') : [];
     if (user.roles.length === 0 && user.role) {
       user.roles = [user.role];
+    }
+    // Rôle principal toujours en tête (GROUP_CONCAT non trié) : l'écran des agents déduit le
+    // principal de roles[0] après une case cochée/décochée. Secondaires : ordre SQL conservé.
+    const primaryIdx = user.role ? user.roles.indexOf(user.role) : -1;
+    if (primaryIdx > 0) {
+      user.roles = [user.role, ...user.roles.filter((_: string, i: number) => i !== primaryIdx)];
     }
     delete user.roles_concat;
     delete user.password_hash;
@@ -807,15 +824,15 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
 
   // Règle 2026-11-22 : 'SUPER ADMIN' ne peut pas DEVENIR un rôle secondaire par modification, quel
   // que soit l'appelant. État final calculé comme l'écriture plus bas : rôles = roles[] envoyés (sinon
-  // lignes t_user_roles actuelles, non touchées) ; principal = roles[0] si roles[] est envoyé (cf.
-  // `data.role = inputRoles[0]`), sinon data.role, sinon le principal actuel.
+  // lignes t_user_roles actuelles, non touchées) ; principal = resolvePrimaryFromRoles (data.role s'il
+  // figure dans roles[], sinon roles[0]) si roles[] est envoyé, sinon data.role, sinon le principal actuel.
   // Compte HISTORIQUE détenant déjà SUPER ADMIN en secondaire : non bloqué (pas de modification ni
   // de suppression automatique de ses données), comportement d'écriture antérieur inchangé.
   // Lectures seules, avant toute écriture.
   {
     const finalRoles = inputRoles ?? getUserRoles(id);
     const finalPrimary = inputRoles
-      ? inputRoles[0]
+      ? resolvePrimaryFromRoles(inputRoles, data.role)
       : (typeof data.role === 'string' && data.role ? data.role : targetRow?.role);
     if (hasSuperAdminAsSecondary(finalRoles, finalPrimary)
         && !hasSuperAdminAsSecondary(getUserRoles(id), targetRow?.role)) {
@@ -876,7 +893,7 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
   }
 
   if (inputRoles) {
-    data.role = inputRoles[0];
+    data.role = resolvePrimaryFromRoles(inputRoles, data.role);
   }
   delete data.roles;
 

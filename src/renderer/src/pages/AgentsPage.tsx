@@ -238,7 +238,8 @@ export default function AgentsPage() {
     } else {
       currentRoles.push(role);
     }
-    setFormData({ ...formData, roles: currentRoles, role: currentRoles[0] });
+    // Principal conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace.
+    setFormData({ ...formData, roles: currentRoles, role: currentRoles.includes(formData.role) ? formData.role : currentRoles[0] });
   };
 
   // M-1 fix : loadData mémoïsé pour éviter les races conditions
