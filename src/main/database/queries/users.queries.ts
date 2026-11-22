@@ -43,6 +43,19 @@ function assertRolesAssignable(creatorRole: string, roles: string[]): void {
   }
 }
 
+// Règle du 2026-11-22 : un SUPER ADMIN l'est par son RÔLE PRINCIPAL (t_users.role) uniquement.
+// Le cloud (garde 0007, règle R6) rejette une ligne t_user_roles 'SUPER ADMIN' envoyée par un poste,
+// et les règles cloud 0018 ne reconnaissent un SUPER ADMIN que par t_users.role : accepter 'SUPER ADMIN'
+// en rôle secondaire ferait diverger le poste et le cloud. Refus quel que soit l'appelant (y compris
+// un SUPER ADMIN). La création d'un SUPER ADMIN en rôle principal (SUPER ADMIN, ROOT via
+// createSuperAdminAccount) n'est pas concernée. Fonction pure, sans accès base.
+const SUPER_ADMIN_SECONDARY_MESSAGE =
+  "Le rôle SUPER ADMIN ne peut pas être un rôle secondaire : il doit être le rôle principal du compte.";
+
+function hasSuperAdminAsSecondary(roles: readonly string[], primaryRole: string | null | undefined): boolean {
+  return roles.includes('SUPER ADMIN') && primaryRole !== 'SUPER ADMIN';
+}
+
 // ── Helpers LOT 1b (audit agent-9 : logins, cibles SUPER ADMIN) ─────────────────────────
 const LOGIN_TAKEN_MESSAGE = "Ce login est déjà utilisé. Choisissez-en un autre.";
 const FORBIDDEN_TARGET_MESSAGE = "Accès non autorisé aux données de ce site";
@@ -320,6 +333,10 @@ export function createUser(data: Record<string, unknown>, caller: { id_user: num
   }
   const primaryRole = (data.role as string) || inputRoles[0];
   assertRolesAssignable(creator.role, [...new Set([...inputRoles, primaryRole])]);
+  // Règle 2026-11-22 : 'SUPER ADMIN' en rôle secondaire refusé (aucune écriture avant ce contrôle).
+  if (hasSuperAdminAsSecondary(inputRoles, primaryRole)) {
+    throw new Error(SUPER_ADMIN_SECONDARY_MESSAGE);
+  }
 
   // Site d'un compte créé par un SUPER ADMIN : un compte dont TOUS les rôles sont SUPER ADMIN n'est
   // rattaché à aucun site (NULL) ; sinon un site existant est obligatoire. L'ancien repli `|| 1`
@@ -785,6 +802,24 @@ export function updateUser(id: number, data: Record<string, unknown>, creator?: 
       } else if (!db.prepare('SELECT 1 FROM t_sites WHERE id = ?').get(Number(data.site_id))) {
         throw new Error("Site cible introuvable.");
       }
+    }
+  }
+
+  // Règle 2026-11-22 : 'SUPER ADMIN' ne peut pas DEVENIR un rôle secondaire par modification, quel
+  // que soit l'appelant. État final calculé comme l'écriture plus bas : rôles = roles[] envoyés (sinon
+  // lignes t_user_roles actuelles, non touchées) ; principal = roles[0] si roles[] est envoyé (cf.
+  // `data.role = inputRoles[0]`), sinon data.role, sinon le principal actuel.
+  // Compte HISTORIQUE détenant déjà SUPER ADMIN en secondaire : non bloqué (pas de modification ni
+  // de suppression automatique de ses données), comportement d'écriture antérieur inchangé.
+  // Lectures seules, avant toute écriture.
+  {
+    const finalRoles = inputRoles ?? getUserRoles(id);
+    const finalPrimary = inputRoles
+      ? inputRoles[0]
+      : (typeof data.role === 'string' && data.role ? data.role : targetRow?.role);
+    if (hasSuperAdminAsSecondary(finalRoles, finalPrimary)
+        && !hasSuperAdminAsSecondary(getUserRoles(id), targetRow?.role)) {
+      throw new Error(SUPER_ADMIN_SECONDARY_MESSAGE);
     }
   }
 
