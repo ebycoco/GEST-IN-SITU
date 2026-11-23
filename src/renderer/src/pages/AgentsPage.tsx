@@ -14,6 +14,7 @@ import { confirmService } from '../components/confirmService';
 import CreateSuperAdminModal from '../components/CreateSuperAdminModal';
 import { normalizeEmail, normalizePhone, validateEmail, validatePhone } from '../../../shared/utils/contact';
 import { resolveLastLogin, formatLastLoginShort, lastLoginOriginBadge } from './agentsLastLogin';
+import { computeRoleToggle } from './agentsRoleToggle';
 
 interface User extends IUser {
   centre_nom?: string;
@@ -226,20 +227,14 @@ export default function AgentsPage() {
   const phoneLegacy = !phoneChanged && !!rawPhoneError;
 
   const toggleRole = (role: string) => {
-    const currentRoles = [...formData.roles];
-    const index = currentRoles.indexOf(role);
-    if (index > -1) {
-      if (currentRoles.length > 1) {
-        currentRoles.splice(index, 1);
-      } else {
-        toast.error("Au moins un rôle est requis.");
-        return;
-      }
-    } else {
-      currentRoles.push(role);
+    // Principal conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant
+    // hors SUPER ADMIN le remplace (règles détaillées dans agentsRoleToggle.ts).
+    const result = computeRoleToggle(formData.roles, formData.role, role);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
     }
-    // Principal conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace.
-    setFormData({ ...formData, roles: currentRoles, role: currentRoles.includes(formData.role) ? formData.role : currentRoles[0] });
+    setFormData({ ...formData, roles: result.roles, role: result.role });
   };
 
   // M-1 fix : loadData mémoïsé pour éviter les races conditions

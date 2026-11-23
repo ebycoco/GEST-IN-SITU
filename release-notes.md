@@ -5,6 +5,8 @@
 
 ## 🛠️ Corrections & Fiabilité
 - **Rôle principal des agents** : modifier un compte qui a plusieurs rôles (par exemple seulement son nom) pouvait changer son rôle principal sans le vouloir, selon l'ordre interne des rôles. Le rôle principal est maintenant conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace, comme avant.
+- **Comptes ayant SUPER ADMIN en rôle secondaire (anciens comptes)** : décocher le rôle principal ne fait plus jamais de SUPER ADMIN le nouveau rôle principal ; s'il ne reste que SUPER ADMIN, l'écran refuse avec un message clair.
+- **Journal des droits** : la modification d'un agent enregistre maintenant les rôles réellement attribués (la liste était toujours vide auparavant).
 
 ## ⚡ Performances
 - **Statistiques par centre (administrateur de centre, opérateur de vérification)** : nouvel index local (migration V73) qui accélère le calcul des doublons et des dates par centre (mesuré sur une copie de base : de ~7 s à ~1,5 s pour le plus gros centre, de 2 s à quelques centièmes pour un petit centre). La création de l'index se fait une seule fois, au premier démarrage de cette version : l'écran de chargement peut rester immobile plus longtemps que d'habitude (durée variable selon le poste et la taille de la base : de quelques secondes à plusieurs minutes, mesuré de 17 s à plus de 4 minutes sur une grosse base de test). **Ne pas fermer l'application pendant ce premier démarrage.** Un message l'indique désormais sur l'écran de chargement (« Optimisation de la base de données en cours… »), affiché uniquement quand une mise à jour de la base est en attente.

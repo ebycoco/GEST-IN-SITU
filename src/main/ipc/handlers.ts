@@ -3642,17 +3642,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       log.warn('[SECURITY] Accès refusé à users:update : session invalide ou rôle non autorisé.');
       throw new Error("Accès refusé. Privilèges administrateur requis pour modifier un agent.");
     }
+    // Copie des rôles envoyés AVANT updateUser : celui-ci reçoit le même objet `data` et en
+    // supprime `roles` (delete data.roles), le journal ci-dessous lisait donc toujours [].
+    const rolesEnvoyes: string[] | undefined = Array.isArray(data.roles) ? [...data.roles] : undefined;
     const res = await queries.updateUser(id, data, secureUser);
     const userLogin = secureUser.login || 'SYSTEM';
 
     setImmediate(() => {
       // Déterminer s'il y a eu un changement de rôle ou attribution de droits
-      const nouveauRole = data.role || (data.roles && data.roles[0]) || '';
-      
+      const nouveauRole = data.role || (rolesEnvoyes && rolesEnvoyes[0]) || '';
+
       logAudit(userLogin, 'SYS_MODIF_DROITS', {
         login_agent: data.login || `ID_${id}`,
         nouveau_role: nouveauRole,
-        droits_ajoutes: data.roles || []
+        droits_ajoutes: rolesEnvoyes || []
       });
 
       // Alerte de sécurité pour élévation de privilège vers un rôle d'administration
