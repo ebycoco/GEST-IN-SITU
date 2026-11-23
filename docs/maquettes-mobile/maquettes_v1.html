@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maquettes mobile v1</title>
+<!--
+  GEST-IN-SITU — Version téléphone v1 (OPERATEUR_VERIFICATION) — Étape E1 de docs/PLAN_MOBILE_V1.md
+  Maquettes statiques : aucun script, aucune ressource externe, données 100 % fictives.
+  Chaque cadre fait 360 px de large (largeur de référence d'un téléphone Android d'entrée de gamme).
+-->
+<style>
+  :root {
+    /* Reprise de l'appli Windows (src/renderer/src/assets/styles/modules/variables.css) */
+    --nuit: #0a0e27;            /* --bg-primary : barre du haut */
+    --nuit-2: #151a3d;          /* --bg-tertiary */
+    /* Plein Soleil (bouton .btn-plein-soleil, VerificationSearchPage/index.tsx:365-367) */
+    --soleil: #FFE600;
+    --encre: #000000;
+    /* Corps clair pour la lecture en plein jour (choix mobile, voir NOTES.md) */
+    --page: #f1f5f9;
+    --carte: #ffffff;
+    --texte: #0f172a;
+    --texte-2: #334155;
+    --texte-3: #475569;
+    --bord: #94a3b8;
+    --bord-fort: #0f172a;
+    /* Badges de statut : aplats foncés + texte blanc (AA large, AAA pour la plupart) */
+    --st-stock: #065f46;
+    --st-delivre: #1e3a8a;
+    --st-doublon: #991b1b;
+    --st-absente: #9a3412;
+    --st-perdue: #111827;
+    /* Bandeaux d'alerte */
+    --err-fond: #fef2f2; --err-texte: #7f1d1d; --err-bord: #b91c1c;
+    --warn-fond: #fef9c3; --warn-texte: #713f12; --warn-bord: #a16207;
+    --ok-fond: #d1fae5; --ok-texte: #065f46; --ok-bord: #047857;
+    --info-fond: #dbeafe; --info-texte: #1e3a8a; --info-bord: #1d4ed8;
+    --off-fond: #e2e8f0; --off-texte: #1e293b;
+    --font: 'Inter', -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  button, input { font-family: inherit; }
+  body {
+    margin: 0; padding: 24px 16px 48px; background: #cbd5e1; color: var(--texte);
+    font-family: var(--font); font-size: 16px; line-height: 1.4;
+  }
+  h1.titre-doc { font-size: 22px; margin: 0 0 4px; }
+  p.sous-titre-doc { margin: 0 0 20px; color: var(--texte-2); max-width: 900px; }
+  h2.groupe { font-size: 18px; margin: 32px 0 12px; padding: 8px 12px; background: var(--nuit); color: #fff; border-left: 8px solid var(--soleil); border-radius: 6px; }
+  .rangee { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
+  .bloc { width: 360px; max-width: 100%; }
+  .etiquette { font-size: 14px; font-weight: 800; margin: 0 0 8px; color: var(--texte); }
+  .note { font-size: 13px; color: var(--texte-2); margin: 10px 2px 0; line-height: 1.45; }
+  .note code { background: #e2e8f0; padding: 1px 4px; border-radius: 4px; font-size: 12px; }
+
+  /* ---------- Cadre téléphone ---------- */
+  .tel {
+    width: 360px; max-width: 100%; height: 740px; background: var(--page);
+    border: 10px solid #1f2937; border-radius: 28px; overflow: hidden;
+    display: flex; flex-direction: column; box-shadow: 0 6px 18px rgba(0,0,0,.25);
+  }
+  .statusbar { height: 22px; flex-shrink: 0; background: var(--nuit); color: #fff; font-size: 12px; display: flex; justify-content: space-between; align-items: center; padding: 0 12px; }
+
+  /* Barre du haut (fixe) */
+  /* Ligne 1 : nom de l'appli + « Se déconnecter » (toujours visible, Q4) ; ligne 2 : retour + titre pleine largeur */
+  .barre { flex-shrink: 0; background: var(--nuit); color: #fff; padding: 6px 12px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; border-bottom: 4px solid var(--soleil); }
+  .barre::before { content: "GEST-IN-SITU"; order: -2; flex: 1 1 calc(100% - 190px); font-size: 14px; font-weight: 900; color: var(--soleil); letter-spacing: .6px; }
+  .barre .deco { order: -1; }
+  .barre .retour { min-width: 48px; height: 48px; border-radius: 10px; border: 2px solid #fff; background: transparent; color: #fff; font-size: 22px; font-weight: 900; }
+  .barre .bt { flex: 1 1 200px; min-width: 0; }
+  .barre .bt b { display: block; font-size: 17px; font-weight: 900; letter-spacing: .2px; }
+  .barre .bt span { display: block; font-size: 13px; color: #e8eaf6; }
+  .deco { min-height: 48px; padding: 0 12px; border-radius: 10px; border: 2px solid var(--soleil); background: transparent; color: var(--soleil); font-size: 16px; font-weight: 800; white-space: nowrap; }
+
+  /* Corps (défilant) */
+  .corps { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+  /* Pied (fixe) */
+  .pied { flex-shrink: 0; background: var(--carte); border-top: 2px solid var(--bord); padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* ---------- Boutons : cible tactile >= 48 px ---------- */
+  .btn { width: 100%; min-height: 56px; border-radius: 12px; font-family: var(--font); font-size: 18px; font-weight: 900; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 0 16px; cursor: pointer; }
+  .btn-soleil { background: var(--soleil); color: var(--encre); border: 2px solid var(--encre); }
+  .btn-second { background: var(--carte); color: var(--texte); border: 2px solid var(--bord-fort); }
+  .btn-off { background: var(--off-fond); color: var(--off-texte); border: 2px dashed #64748b; cursor: not-allowed; }
+  .btn-lien { background: transparent; border: none; color: var(--info-texte); text-decoration: underline; font-size: 16px; font-weight: 700; min-height: 48px; }
+
+  /* ---------- Champs ---------- */
+  .champ { display: flex; flex-direction: column; gap: 6px; }
+  .champ label { font-size: 16px; font-weight: 800; color: var(--texte); }
+  .champ .aide { font-size: 14px; color: var(--texte-3); }
+  .saisie { width: 100%; min-height: 56px; border: 2px solid var(--bord-fort); border-radius: 10px; background: #fff; color: var(--texte); font-family: var(--font); font-size: 19px; font-weight: 700; padding: 0 14px; }
+  .saisie::placeholder { color: var(--texte-3); font-weight: 500; }
+  .saisie.focus { outline: 4px solid var(--soleil); outline-offset: 0; border-color: var(--encre); }
+  .saisie.err { border-color: var(--err-bord); background: var(--err-fond); }
+  .saisie.lecture { background: #e2e8f0; border-style: dashed; }
+  .tel-groupe { display: flex; gap: 0; }
+  .prefixe { min-height: 56px; display: flex; align-items: center; padding: 0 12px; background: var(--nuit); color: #fff; font-weight: 900; font-size: 18px; border-radius: 10px 0 0 10px; border: 2px solid var(--bord-fort); border-right: none; }
+  .tel-groupe .saisie { border-radius: 0 10px 10px 0; letter-spacing: 1px; }
+  .mdp { position: relative; }
+  .mdp .oeil { position: absolute; right: 4px; top: 4px; width: 48px; height: 48px; border: none; background: transparent; font-size: 14px; font-weight: 800; color: var(--texte-2); }
+
+  /* ---------- Onglets ---------- */
+  .onglets { display: flex; border: 2px solid var(--bord-fort); border-radius: 12px; overflow: hidden; background: #fff; }
+  .onglet { flex: 1; min-height: 56px; border: none; background: #fff; color: var(--texte); font-family: var(--font); font-size: 16px; font-weight: 800; padding: 4px 6px; line-height: 1.15; }
+  .onglet + .onglet { border-left: 2px solid var(--bord-fort); }
+  .onglet.actif { background: var(--nuit); color: var(--soleil); box-shadow: inset 0 -5px 0 var(--soleil); }
+
+  /* ---------- Bandeaux ---------- */
+  .bandeau { border-radius: 12px; padding: 12px 14px; border: 2px solid; display: flex; gap: 10px; }
+  .bandeau .ico { font-size: 22px; font-weight: 900; line-height: 1; flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+  .bandeau b { display: block; font-size: 17px; margin-bottom: 2px; }
+  .bandeau p { margin: 0; font-size: 16px; }
+  .b-err { background: var(--err-fond); color: var(--err-texte); border-color: var(--err-bord); }
+  .b-err .ico { background: var(--err-bord); color: #fff; }
+  .b-warn { background: var(--warn-fond); color: var(--warn-texte); border-color: var(--warn-bord); }
+  .b-warn .ico { background: var(--warn-bord); color: #fff; }
+  .b-ok { background: var(--ok-fond); color: var(--ok-texte); border-color: var(--ok-bord); }
+  .b-info { background: var(--info-fond); color: var(--info-texte); border-color: var(--info-bord); }
+  .b-info .ico { background: var(--info-bord); color: #fff; }
+  .b-off { background: var(--off-fond); color: var(--off-texte); border-color: #475569; }
+  .b-off .ico { background: #475569; color: #fff; }
+  .bandeau-rouge { background: var(--st-doublon); color: #fff; border-radius: 12px; padding: 14px; border: 3px solid var(--encre); }
+  .bandeau-rouge b { display: block; font-size: 20px; font-weight: 900; letter-spacing: .3px; }
+  .bandeau-rouge p { margin: 6px 0 0; font-size: 16px; }
+
+  /* ---------- Badges de statut ---------- */
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 8px; font-size: 15px; font-weight: 900; letter-spacing: .4px; color: #fff; border: 2px solid var(--encre); }
+  .s-stock { background: var(--st-stock); }
+  .s-delivre { background: var(--st-delivre); }
+  .s-doublon { background: var(--st-doublon); }
+  .s-absente { background: var(--st-absente); }
+  .s-perdue { background: var(--st-perdue); }
+
+  /* ---------- Carte résultat ---------- */
+  .res { background: var(--carte); border: 2px solid var(--bord); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-height: 48px; position: relative; }
+  .res.bloquee { border-left: 8px solid var(--st-doublon); }
+  .res .nom { font-size: 18px; font-weight: 900; text-transform: uppercase; }
+  .res .ddn { font-size: 16px; color: var(--texte-2); font-weight: 600; }
+  .res .ligne { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .res .rg { font-size: 16px; font-weight: 900; background: var(--soleil); color: var(--encre); padding: 4px 8px; border-radius: 6px; border: 2px solid var(--encre); }
+  .res .rg.vide { background: var(--warn-fond); color: var(--warn-texte); border-color: var(--warn-bord); font-size: 14px; }
+  .res .fleche { position: absolute; right: 12px; top: 12px; font-size: 22px; font-weight: 900; color: var(--texte-2); }
+  .compteur { font-size: 16px; font-weight: 800; color: var(--texte-2); }
+
+  /* ---------- Fiche carte ---------- */
+  .ident { background: var(--carte); border: 2px solid var(--bord); border-radius: 14px; padding: 14px; }
+  .ident .nom { font-size: 22px; font-weight: 900; text-transform: uppercase; line-height: 1.2; }
+  .ident .prenoms { font-size: 20px; font-weight: 800; color: var(--texte-2); text-transform: uppercase; }
+  .grille { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 12px; padding-top: 12px; border-top: 2px solid #e2e8f0; }
+  .grille .k { font-size: 14px; font-weight: 800; text-transform: uppercase; color: var(--texte-3); letter-spacing: .3px; }
+  .grille .v { font-size: 18px; font-weight: 800; color: var(--texte); }
+  .rangement { background: var(--soleil); color: var(--encre); border: 3px solid var(--encre); border-radius: 14px; padding: 12px 14px; text-align: center; }
+  .rangement .k { font-size: 15px; font-weight: 900; text-transform: uppercase; letter-spacing: .6px; }
+  .rangement .v { font-size: 42px; font-weight: 900; line-height: 1.05; letter-spacing: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; margin-top: 4px; }
+  .rangement.vide { background: var(--warn-fond); border-color: var(--warn-bord); color: var(--warn-texte); }
+  .rangement.vide .v { font-size: 20px; letter-spacing: 0; }
+  .rangement.gris { background: #e2e8f0; border-color: #475569; color: var(--texte-2); }
+  .preuve { background: var(--info-fond); border: 2px solid var(--info-bord); border-radius: 14px; padding: 14px; color: var(--info-texte); }
+  .preuve h3 { margin: 0 0 8px; font-size: 17px; font-weight: 900; text-transform: uppercase; }
+  .preuve .grille { border-top-color: #93c5fd; margin-top: 0; padding-top: 0; border-top: none; }
+  .preuve .grille .k { color: var(--info-texte); }
+
+  /* ---------- Choix retirant ---------- */
+  .choix { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .choix .opt { min-height: 64px; border-radius: 12px; border: 2px solid var(--bord-fort); background: #fff; color: var(--texte); font-family: var(--font); font-size: 16px; font-weight: 800; padding: 6px; line-height: 1.2; }
+  .choix .opt.actif { background: var(--nuit); color: var(--soleil); border-color: var(--nuit); box-shadow: 0 0 0 3px var(--soleil); }
+  .choix .opt.actif::before { content: "\2713  "; }
+
+  /* ---------- Récapitulatif ---------- */
+  .recap { background: #fff; border: 3px solid var(--encre); border-radius: 14px; overflow: hidden; }
+  .recap .t { background: var(--nuit); color: var(--soleil); font-weight: 900; font-size: 16px; padding: 10px 14px; text-transform: uppercase; letter-spacing: .4px; }
+  .recap dl { margin: 0; padding: 4px 14px 10px; }
+  .recap dt { font-size: 14px; font-weight: 800; color: var(--texte-3); text-transform: uppercase; margin-top: 10px; }
+  .recap dd { margin: 2px 0 0; font-size: 18px; font-weight: 800; }
+  .recap .rg-big { font-size: 34px; font-weight: 900; background: var(--soleil); display: inline-block; padding: 2px 8px; border: 2px solid var(--encre); border-radius: 8px; }
+
+  /* ---------- Résultat ---------- */
+  .resultat { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 14px; padding: 8px 4px; }
+  .rond { width: 104px; height: 104px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 60px; font-weight: 900; border: 4px solid var(--encre); }
+  .rond.ok { background: var(--st-stock); color: #fff; }
+  .rond.ko { background: var(--st-doublon); color: #fff; }
+  .rond.inc { background: var(--soleil); color: var(--encre); }
+  .resultat h3 { margin: 0; font-size: 24px; font-weight: 900; line-height: 1.2; }
+  .resultat p { margin: 0; font-size: 17px; color: var(--texte-2); }
+  .resultat .cadre { width: 100%; background: #fff; border: 2px solid var(--bord); border-radius: 12px; padding: 12px; text-align: left; font-size: 16px; }
+  .resultat .cadre b { font-size: 17px; }
+
+  /* ---------- Connexion / verrou ---------- */
+  .logo { text-align: center; padding: 12px 0 4px; }
+  .logo .pastille { width: 72px; height: 72px; margin: 0 auto 10px; border-radius: 16px; background: var(--soleil); border: 3px solid var(--encre); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; color: var(--encre); }
+  .logo h1 { margin: 0; font-size: 21px; font-weight: 900; letter-spacing: .3px; }
+  .logo p { margin: 4px 0 0; font-size: 16px; color: var(--texte-2); }
+  .version { text-align: center; font-size: 14px; color: var(--texte-3); }
+  .verrou-fond { background: var(--nuit); color: #fff; }
+  .verrou-fond .corps { color: #fff; }
+  .verrou-fond .champ label { color: #fff; }
+  .verrou-fond .pied { background: var(--nuit-2); border-top-color: var(--soleil); }
+  .cadenas { width: 96px; height: 96px; margin: 8px auto 0; border-radius: 50%; background: var(--soleil); color: var(--encre); border: 4px solid #fff; display: flex; align-items: center; justify-content: center; font-size: 40px; font-weight: 900; }
+
+  .spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #64748b; border-top-color: var(--encre); display: inline-block; }
+  .muted { color: var(--texte-3); font-size: 14px; }
+  .catalogue { display: flex; flex-direction: column; gap: 12px; }
+  .catalogue .code { font-size: 13px; font-weight: 800; color: var(--texte-3); margin-bottom: -6px; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .btn, .onglet, .opt { transition: background-color 120ms ease, box-shadow 120ms ease; }
+  }
+</style>
+</head>
+<body>
+
+<h1 class="titre-doc">GEST-IN-SITU — Version téléphone v1 — Maquettes E1</h1>
+<p class="sous-titre-doc">Rôle : <b>OPERATEUR_VERIFICATION</b>. Largeur des cadres : 360 px. Données fictives. Barre du haut et pied (boutons d'action) fixes, contenu central défilant — même principe que le gabarit des modaux terrain de l'appli Windows. Détails des choix : <code>NOTES.md</code>.</p>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 1 — Connexion</h2>
+<div class="rangee">
+
+  <div class="bloc">
+    <p class="etiquette">1a. Connexion — état normal</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:41</span><span>4G ▮▮▮</span></div>
+      <div class="corps" style="justify-content:center">
+        <div class="logo">
+          <div class="pastille">GIS</div>
+          <h1>GESTION CARTES IN-SITU</h1>
+          <p>Système de Gestion des Cartes CMU</p>
+        </div>
+        <div class="champ">
+          <label for="l1">Identifiant</label>
+          <input id="l1" class="saisie focus" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="Entrez votre identifiant" value="agent.demo01">
+        </div>
+        <div class="champ">
+          <label for="p1">Mot de passe</label>
+          <div class="mdp">
+            <input id="p1" class="saisie" type="password" autocomplete="current-password" placeholder="Entrez votre mot de passe" value="********">
+            <button class="oeil" type="button" aria-label="Afficher le mot de passe">Voir</button>
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Se connecter</button>
+        <div class="version">Connexion Internet requise · v1</div>
+      </div>
+    </div>
+    <p class="note">Identifiant : <code>type="text"</code> <code>autocapitalize="none"</code>. Mot de passe : bouton « Voir » de 48×48 px. Bouton « Se connecter » en jaune Plein Soleil, ancré en bas (accessible au pouce).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">1b. Connexion — envoi en cours</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:41</span><span>4G ▮▮▮</span></div>
+      <div class="corps" style="justify-content:center">
+        <div class="logo">
+          <div class="pastille">GIS</div>
+          <h1>GESTION CARTES IN-SITU</h1>
+          <p>Système de Gestion des Cartes CMU</p>
+        </div>
+        <div class="champ">
+          <label>Identifiant</label>
+          <input class="saisie" type="text" value="agent.demo01" disabled>
+        </div>
+        <div class="champ">
+          <label>Mot de passe</label>
+          <input class="saisie" type="password" value="********" disabled>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-off" type="button" disabled><span class="spin"></span> Connexion...</button>
+        <div class="version">Connexion Internet requise · v1</div>
+      </div>
+    </div>
+    <p class="note">Bouton désactivé (gris, bordure en pointillés, texte lisible 9,9:1) pour empêcher le double appui.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">1c. Connexion — erreur 401</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:41</span><span>4G ▮▮▮</span></div>
+      <div class="corps" style="justify-content:center">
+        <div class="logo">
+          <div class="pastille">GIS</div>
+          <h1>GESTION CARTES IN-SITU</h1>
+        </div>
+        <div class="bandeau b-err" role="alert">
+          <span class="ico">!</span>
+          <div><b>Connexion échouée</b><p>Identifiant ou mot de passe incorrect</p></div>
+        </div>
+        <div class="champ">
+          <label>Identifiant</label>
+          <input class="saisie err" type="text" value="agent.demo01">
+        </div>
+        <div class="champ">
+          <label>Mot de passe</label>
+          <input class="saisie err focus" type="password" placeholder="Entrez votre mot de passe" value="">
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Se connecter</button>
+      </div>
+    </div>
+    <p class="note">Le mot de passe est vidé et reprend le focus (comme <code>setPassword('')</code> sur Windows). Message volontairement non précis (ne dit pas lequel des deux est faux).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">1d. Catalogue des autres erreurs de connexion</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:41</span><span>—</span></div>
+      <div class="corps">
+        <div class="catalogue">
+          <div class="code">429 — trop d'essais</div>
+          <div class="bandeau b-warn" role="alert">
+            <span class="ico">!</span>
+            <div><b>Connexion temporairement bloquée</b><p>Trop de tentatives de connexion échouées. Réessayez dans 5 min.</p></div>
+          </div>
+          <div class="code">403 — site suspendu</div>
+          <div class="bandeau b-err" role="alert">
+            <span class="ico">!</span>
+            <div><b>Accès suspendu</b><p>L'accès de votre site a été suspendu. Veuillez contacter le Super Administrateur.</p></div>
+          </div>
+          <div class="code">403 — licence expirée</div>
+          <div class="bandeau b-err" role="alert">
+            <span class="ico">!</span>
+            <div><b>Licence expirée</b><p>La licence de votre site a expiré. Veuillez contacter le super administrateur.</p></div>
+          </div>
+          <div class="code">Pas de réseau</div>
+          <div class="bandeau b-off" role="alert">
+            <span class="ico">×</span>
+            <div><b>Hors-ligne</b><p>Une connexion Internet est requise. Activez les données mobiles ou le Wi-Fi, puis réessayez.</p></div>
+          </div>
+          <div class="code">403 — rôle non autorisé (v1 = vérification seulement)</div>
+          <div class="bandeau b-info" role="alert">
+            <span class="ico">i</span>
+            <div><b>Accès réservé</b><p>Cette version téléphone est réservée aux opérateurs de vérification.</p></div>
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Se connecter</button>
+      </div>
+    </div>
+    <p class="note">Le bandeau s'affiche au même endroit que 1c (au-dessus des champs). 429 : la durée « N min » vient du serveur. Hors-ligne : le bouton reste actif, l'appui relance un essai. Le bandeau « Accès réservé » est une proposition (non demandée explicitement, à valider).</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 2 — Recherche</h2>
+<div class="rangee">
+
+  <div class="bloc">
+    <p class="etiquette">2a. Recherche — Nom + date de naissance</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:42</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <div class="bt"><b>Recherche de carte</b><span>agent.demo01 · Centre Démo Nord</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="onglets" role="tablist">
+          <button class="onglet actif" role="tab" aria-selected="true">Nom + date de naissance</button>
+          <button class="onglet" role="tab" aria-selected="false">Téléphone</button>
+        </div>
+        <div class="champ">
+          <label for="n2">Nom &amp; Prénoms *</label>
+          <input id="n2" class="saisie" type="text" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="Ex: KOFFI KOFFI KAN" value="KOUASSI AYA">
+        </div>
+        <div class="champ">
+          <label for="d2">Date de Naissance *</label>
+          <input id="d2" class="saisie focus" type="text" inputmode="numeric" pattern="\d{2}/\d{2}/\d{4}" maxlength="10" autocomplete="off" placeholder="JJ/MM/AAAA" value="14/03/19">
+          <span class="aide">Tapez les chiffres, les « / » s'ajoutent seuls.</span>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Rechercher la Carte</button>
+        <button class="btn btn-second" type="button" style="min-height:48px;font-size:16px">Effacer</button>
+      </div>
+    </div>
+    <p class="note">Date : <code>type="text" inputmode="numeric"</code> (clavier chiffres), masque JJ/MM/AAAA, <code>maxlength="10"</code>. Pas de <code>type="date"</code> (sélecteur natif lent pour des dates anciennes). Nom : majuscules automatiques. « Se déconnecter » toujours visible dans la barre du haut (Q4).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">2b. Recherche — Téléphone</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:42</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <div class="bt"><b>Recherche de carte</b><span>agent.demo01 · Centre Démo Nord</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="onglets" role="tablist">
+          <button class="onglet" role="tab" aria-selected="false">Nom + date de naissance</button>
+          <button class="onglet actif" role="tab" aria-selected="true">Téléphone</button>
+        </div>
+        <div class="champ">
+          <label for="t2">Numéro de Téléphone Ivoirien *</label>
+          <div class="tel-groupe">
+            <span class="prefixe">+225</span>
+            <input id="t2" class="saisie focus" type="tel" inputmode="tel" autocomplete="off" maxlength="14" placeholder="01 02 03 04 05" value="07 00 00 00 1">
+          </div>
+          <span class="aide">10 chiffres. 9 / 10 saisis.</span>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-off" type="button" disabled>Rechercher par Téléphone</button>
+        <button class="btn btn-second" type="button" style="min-height:48px;font-size:16px">Effacer</button>
+      </div>
+    </div>
+    <p class="note">Téléphone : <code>type="tel" inputmode="tel"</code>, préfixe « +225 » fixe (non effaçable), groupes de 2 chiffres. Le bouton reste désactivé tant que les 10 chiffres ne sont pas saisis (compteur visible).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">2c. Recherche — aucun résultat / erreur réseau</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:43</span><span>—</span></div>
+      <div class="barre">
+        <div class="bt"><b>Recherche de carte</b><span>agent.demo01 · Centre Démo Nord</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="onglets" role="tablist">
+          <button class="onglet actif" role="tab">Nom + date de naissance</button>
+          <button class="onglet" role="tab">Téléphone</button>
+        </div>
+        <div class="bandeau b-info" role="status">
+          <span class="ico">i</span>
+          <div><b>Aucune carte trouvée</b><p>Vérifiez l'orthographe du nom et la date, ou essayez la recherche par téléphone.</p></div>
+        </div>
+        <div class="bandeau b-off" role="alert">
+          <span class="ico">×</span>
+          <div><b>Hors-ligne</b><p>La recherche n'a pas pu être envoyée. Vérifiez votre connexion puis réessayez.</p></div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Rechercher la Carte</button>
+      </div>
+    </div>
+    <p class="note">Les deux bandeaux sont montrés ensemble pour la maquette ; un seul s'affiche à la fois.</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 3 — Liste de résultats (10 maximum)</h2>
+<div class="rangee">
+  <div class="bloc">
+    <p class="etiquette">3. Résultats</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:43</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour à la recherche">‹</button>
+        <div class="bt"><b>4 résultats</b><span>KOUASSI AYA · 14/03/1992</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps" style="gap:12px">
+        <div class="compteur">Votre centre d'abord · 10 résultats max.</div>
+
+        <div class="res">
+          <span class="fleche">›</span>
+          <div><span class="badge s-stock">✓ EN STOCK</span></div>
+          <div class="nom">KOUASSI AYA MARIE</div>
+          <div class="ddn">Né(e) le 14/03/1992</div>
+          <div class="ligne"><span class="rg">B12-C3-P07</span><span class="muted">Centre Démo Nord</span></div>
+        </div>
+
+        <div class="res">
+          <span class="fleche">›</span>
+          <div><span class="badge s-delivre">● DÉLIVRÉE</span></div>
+          <div class="nom">KOUASSI AYA</div>
+          <div class="ddn">Né(e) le 14/03/1992</div>
+          <div class="ligne"><span class="rg">A04-C1-P02</span><span class="muted">Centre Démo Nord</span></div>
+        </div>
+
+        <div class="res bloquee">
+          <span class="fleche">›</span>
+          <div><span class="badge s-doublon">⛔ DOUBLON</span></div>
+          <div class="nom">KOUASSI AYA EPSE YAO</div>
+          <div class="ddn">Né(e) le 14/03/1992</div>
+          <div class="ligne"><span class="rg">B09-C2-P11</span><span class="muted">Centre Démo Sud</span></div>
+        </div>
+
+        <div class="res bloquee">
+          <span class="fleche">›</span>
+          <div><span class="badge s-absente">⚠ ABSENTE</span></div>
+          <div class="nom">KOUASSI AYA JEANNE</div>
+          <div class="ddn">Né(e) le 14/03/1992</div>
+          <div class="ligne"><span class="rg vide">Aucun rangement</span><span class="muted">Centre Démo Nord</span></div>
+        </div>
+      </div>
+    </div>
+    <p class="note">Toute la carte est cliquable (≥ 48 px). Badge = aplat foncé + texte blanc + symbole (le statut ne repose jamais sur la couleur seule). Rangement en jaune dès la liste. Les cartes bloquées ont un liseré rouge à gauche. Si 10 résultats : bandeau « Affinez la recherche (10 résultats affichés au maximum) ».</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">Légende des badges de statut</p>
+    <div class="tel" style="height:auto">
+      <div class="corps" style="gap:12px">
+        <div><span class="badge s-stock">✓ EN STOCK</span> <span class="muted">blanc / #065f46 — 7,68:1</span></div>
+        <div><span class="badge s-delivre">● DÉLIVRÉE</span> <span class="muted">blanc / #1e3a8a — 10,36:1</span></div>
+        <div><span class="badge s-doublon">⛔ DOUBLON</span> <span class="muted">blanc / #991b1b — 8,31:1</span></div>
+        <div><span class="badge s-absente">⚠ ABSENTE</span> <span class="muted">blanc / #9a3412 — 7,31:1</span></div>
+        <div><span class="badge s-perdue">✕ PERDUE</span> <span class="muted">blanc / #111827 — 17,74:1</span></div>
+        <div><span class="rg" style="font-size:16px;font-weight:900;background:#FFE600;padding:4px 8px;border:2px solid #000;border-radius:6px">B12-C3-P07</span> <span class="muted">noir / #FFE600 — 16,57:1</span></div>
+      </div>
+    </div>
+    <p class="note">Tous ≥ 7:1 (AAA). Statut libellé en toutes lettres, en français accentué (« DÉLIVRÉE ») alors que la valeur en base est <code>DELIVRE</code>.</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 4 — Fiche carte</h2>
+<div class="rangee">
+
+  <div class="bloc">
+    <p class="etiquette">4a. Fiche — EN STOCK (délivrable)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:44</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour aux résultats">‹</button>
+        <div class="bt"><b>Fiche carte</b><span>Vérification Physique</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="rangement">
+          <div class="k">Emplacement de rangement exact</div>
+          <div class="v">B12-C3-P07</div>
+        </div>
+        <div class="ident">
+          <div><span class="badge s-stock">✓ EN STOCK</span></div>
+          <div class="nom" style="margin-top:8px">KOUASSI</div>
+          <div class="prenoms">AYA MARIE</div>
+          <div class="grille">
+            <div><div class="k">Date de Naissance</div><div class="v">14/03/1992</div></div>
+            <div><div class="k">Lieu de Naissance</div><div class="v">BOUAKÉ</div></div>
+            <div><div class="k">Contact</div><div class="v">+225 •• •• •• •• 45</div></div>
+            <div><div class="k">Centre</div><div class="v">Centre Démo Nord</div></div>
+          </div>
+        </div>
+        <p style="margin:0;font-size:17px;font-weight:800;text-align:center">Avez-vous trouvé la carte physiquement dans le rangement ?</p>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">✓ Oui, j'ai la carte</button>
+      </div>
+    </div>
+    <p class="note">Rangement en tête, 42 px gras, noir sur jaune (tient sur une ligne pour un code de 10 caractères). Contact masqué sauf les 2 derniers chiffres ; <b>aucun numéro de sécurité sociale</b> (Q6), contrairement à la fiche Windows. Les actions « Non, absente » / « doublon » de Windows ne sont pas en v1 (non demandées).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">4b. Fiche — DÉLIVRÉE (preuve en lecture seule)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:44</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour aux résultats">‹</button>
+        <div class="bt"><b>Preuve de Retrait</b><span>Carte déjà distribuée</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="ident">
+          <div><span class="badge s-delivre">● DÉLIVRÉE</span></div>
+          <div class="nom" style="margin-top:8px">KOUASSI</div>
+          <div class="prenoms">AYA</div>
+          <div class="grille">
+            <div><div class="k">Date de Naissance</div><div class="v">14/03/1992</div></div>
+          </div>
+        </div>
+        <div class="preuve">
+          <h3>Détails de la transaction</h3>
+          <div class="grille">
+            <div><div class="k">Date &amp; Heure exactes</div><div class="v">12/11/2026 à 10:27</div></div>
+            <div><div class="k">Centre de distribution</div><div class="v">Centre Démo Nord</div></div>
+            <div><div class="k">Agent distributeur</div><div class="v">agent.demo02</div></div>
+          </div>
+        </div>
+        <div class="preuve">
+          <h3>Identité du Retirant</h3>
+          <div class="grille">
+            <div><div class="k">Qualité du Retirant</div><div class="v">TIERS MANDATÉ</div></div>
+            <div><div class="k">Nom &amp; Prénom</div><div class="v">YAO KONAN SERGE</div></div>
+            <div><div class="k">Contact</div><div class="v">+225 •• •• •• •• 18</div></div>
+          </div>
+        </div>
+        <div class="rangement gris">
+          <div class="k">Ancien rangement</div>
+          <div class="v" style="font-size:26px">A04-C1-P02</div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-second" type="button">Fermer</button>
+      </div>
+    </div>
+    <p class="note">Aucun bouton de délivrance. Libellés repris de la « Preuve de Retrait » Windows. Le contact du retirant est lui aussi masqué (à valider, voir NOTES.md). Rangement grisé car la carte n'y est plus.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">4c. Fiche — DOUBLON (bloquée)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:44</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour aux résultats">‹</button>
+        <div class="bt"><b>Fiche carte</b><span>Non délivrable</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="bandeau-rouge" role="alert">
+          <b>⛔ DÉCLARÉE EN DOUBLON</b>
+          <p>Cette carte ne peut plus être délivrée. Contactez un administrateur pour vérifier ou annuler cette déclaration.</p>
+        </div>
+        <div class="ident">
+          <div><span class="badge s-doublon">⛔ DOUBLON</span></div>
+          <div class="nom" style="margin-top:8px">KOUASSI</div>
+          <div class="prenoms">AYA EPSE YAO</div>
+          <div class="grille">
+            <div><div class="k">Date de Naissance</div><div class="v">14/03/1992</div></div>
+            <div><div class="k">Centre</div><div class="v">Centre Démo Sud</div></div>
+            <div><div class="k">Rangement</div><div class="v">B09-C2-P11</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-second" type="button">‹ Retour aux résultats</button>
+      </div>
+    </div>
+    <p class="note">Pas de bouton de délivrance. Texte repris de l'info-bulle Windows (<code>SearchResults.tsx:446</code>).</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">4d. Variantes du bandeau rouge (ABSENTE / PERDUE / hors centre)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:44</span><span>—</span></div>
+      <div class="corps">
+        <div class="bandeau-rouge" style="background:#9a3412" role="alert">
+          <b>⚠ SIGNALÉE ABSENTE</b>
+          <p>En cours de traitement par l'administration. Délivrance impossible pour le moment.</p>
+        </div>
+        <div class="bandeau-rouge" style="background:#111827;border-color:#b91c1c" role="alert">
+          <b>✕ DÉCLARÉE PERDUE</b>
+          <p>Cette carte a été déclarée perdue par l'administration. Contactez votre administrateur.</p>
+        </div>
+        <div class="bandeau-rouge" role="alert">
+          <b>⛔ CARTE HORS DE VOTRE CENTRE</b>
+          <p>Cette carte est rangée au Centre Démo Sud. Orientez l'assuré vers ce centre.</p>
+        </div>
+        <div class="rangement vide">
+          <div class="k">Emplacement de rangement exact</div>
+          <div class="v">⚠ Aucun rangement renseigné pour cette carte</div>
+        </div>
+        <p class="muted" style="margin:0">↑ Cas « carte non classée » (EN STOCK sans rangement) : la carte reste délivrable, un rangement d'urgence sera demandé à l'écran 5.</p>
+      </div>
+    </div>
+    <p class="note">Même emplacement que 4c, même règle : pas de bouton d'action, seulement « Retour ». « Hors centre » = proposition de texte (refus <code>HORS_CENTRE</code> côté serveur).</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 5 — Délivrance</h2>
+<div class="rangee">
+
+  <div class="bloc">
+    <p class="etiquette">5a. Retirant — L'assuré lui-même (carte non classée)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:45</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour à la fiche">‹</button>
+        <div class="bt"><b>Validation du Retrait</b><span>Étape 1 / 2 · KOUASSI AYA MARIE</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="champ">
+          <label>Bénéficiaire du retrait</label>
+          <div class="choix" role="radiogroup">
+            <button class="opt actif" role="radio" aria-checked="true">L'assuré lui-même</button>
+            <button class="opt" role="radio" aria-checked="false">Un tiers (Mandataire)</button>
+          </div>
+        </div>
+        <div class="champ">
+          <label for="nr">Nom complet du retirant *</label>
+          <input id="nr" class="saisie" type="text" autocapitalize="characters" placeholder="NOM ET PRÉNOMS" value="KOUASSI AYA MARIE">
+          <span class="aide">Pré-rempli depuis la fiche. Modifiable.</span>
+        </div>
+        <div class="champ">
+          <label for="tr">Contact téléphonique *</label>
+          <div class="tel-groupe">
+            <span class="prefixe">+225</span>
+            <input id="tr" class="saisie lecture" type="tel" inputmode="tel" value="•• •• •• •• 45" readonly>
+          </div>
+          <span class="aide">Numéro enregistré de l'assuré (masqué). <u>Saisir un autre numéro</u></span>
+        </div>
+        <div class="bandeau b-warn" style="flex-direction:column;gap:8px">
+          <b style="margin:0">⚠ RANGEMENT D'URGENCE OBLIGATOIRE (Carte sans rangement)</b>
+          <input class="saisie" style="border-color:#a16207" type="text" autocapitalize="characters" placeholder="Ex: C1-B4-P3 (Box/Colonne/Parapheur)" value="">
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-off" type="button" disabled>Continuer</button>
+      </div>
+    </div>
+    <p class="note">« Continuer » désactivé tant que le rangement d'urgence est vide. Le champ rangement d'urgence n'apparaît que pour une carte non classée. Libellés repris de <code>DeliveryModal.tsx</code>.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">5b. Retirant — Un tiers (Mandataire)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:45</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Retour à la fiche">‹</button>
+        <div class="bt"><b>Validation du Retrait</b><span>Étape 1 / 2 · KOUASSI AYA MARIE</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="champ">
+          <label>Bénéficiaire du retrait</label>
+          <div class="choix" role="radiogroup">
+            <button class="opt" role="radio" aria-checked="false">L'assuré lui-même</button>
+            <button class="opt actif" role="radio" aria-checked="true">Un tiers (Mandataire)</button>
+          </div>
+        </div>
+        <div class="champ">
+          <label for="nt">Nom complet du retirant *</label>
+          <input id="nt" class="saisie" type="text" autocapitalize="characters" placeholder="NOM ET PRÉNOMS" value="YAO KONAN SERGE">
+        </div>
+        <div class="champ">
+          <label for="tt">Contact téléphonique *</label>
+          <div class="tel-groupe">
+            <span class="prefixe">+225</span>
+            <input id="tt" class="saisie focus" type="tel" inputmode="tel" maxlength="14" placeholder="01 02 03 04 05" value="05 00 00 00 18">
+          </div>
+          <span class="aide">10 chiffres. 10 / 10 ✓</span>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Continuer</button>
+      </div>
+    </div>
+    <p class="note">Passer à « Un tiers » vide les deux champs (même comportement que Windows). Téléphone : <code>type="tel" inputmode="tel"</code>.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">5c. Récapitulatif avant confirmation</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:46</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <button class="retour" type="button" aria-label="Modifier">‹</button>
+        <div class="bt"><b>Récapitulatif</b><span>Étape 2 / 2 · vérifiez avant d'envoyer</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="recap">
+          <div class="t">Carte remise</div>
+          <dl>
+            <dt>Assuré</dt><dd>KOUASSI AYA MARIE</dd>
+            <dt>Date de Naissance</dt><dd>14/03/1992</dd>
+            <dt>Rangement</dt><dd><span class="rg-big">B12-C3-P07</span></dd>
+          </dl>
+        </div>
+        <div class="recap">
+          <div class="t">Retirant</div>
+          <dl>
+            <dt>Qualité</dt><dd>TIERS MANDATÉ</dd>
+            <dt>Nom complet</dt><dd>YAO KONAN SERGE</dd>
+            <dt>Contact</dt><dd>+225 05 00 00 00 18</dd>
+          </dl>
+        </div>
+        <p class="muted" style="margin:0;font-size:15px">Date, heure, agent et centre sont enregistrés automatiquement par le serveur.</p>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button" style="min-height:64px;font-size:20px">✓ Confirmer le retrait</button>
+        <button class="btn btn-second" type="button" style="min-height:48px;font-size:16px">Modifier</button>
+      </div>
+    </div>
+    <p class="note">Bouton principal agrandi (64 px). Le numéro saisi pour un tiers est affiché en clair ici (c'est l'agent qui vient de le taper). Si rangement d'urgence : il remplace le rangement, signalé « (urgence) ».</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">5d. Envoi en cours (bouton désactivé)</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:46</span><span>4G ▮▮▯</span></div>
+      <div class="barre">
+        <button class="retour" type="button" disabled aria-label="Modifier" style="opacity:.4">‹</button>
+        <div class="bt"><b>Récapitulatif</b><span>Envoi au cloud en cours…</span></div>
+        <button class="deco" type="button" disabled style="opacity:.45">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="recap" style="opacity:.85">
+          <div class="t">Carte remise</div>
+          <dl>
+            <dt>Assuré</dt><dd>KOUASSI AYA MARIE</dd>
+            <dt>Rangement</dt><dd><span class="rg-big">B12-C3-P07</span></dd>
+          </dl>
+        </div>
+        <div class="bandeau b-info" role="status">
+          <span class="ico">i</span>
+          <div><b>Envoi en cours</b><p>Ne fermez pas l'application et ne quittez pas cet écran.</p></div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-off" type="button" disabled style="min-height:64px;font-size:20px"><span class="spin"></span> Enregistrement...</button>
+        <button class="btn btn-second" type="button" disabled style="min-height:48px;font-size:16px;opacity:.45">Modifier</button>
+      </div>
+    </div>
+    <p class="note">Tous les boutons sont bloqués pendant l'envoi (y compris Retour et Se déconnecter) : un seul envoi possible par appui. Le même identifiant de requête est conservé pour le bouton « Vérifier » de 6c.</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Écran 6 — Résultat</h2>
+<div class="rangee">
+
+  <div class="bloc">
+    <p class="etiquette">6a. Succès</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:46</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <div class="bt"><b>Retrait enregistré</b><span>agent.demo01 · Centre Démo Nord</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="resultat">
+          <div class="rond ok">✓</div>
+          <h3>Retrait enregistré dans le cloud</h3>
+          <p>Visible sur les postes à leur prochaine synchronisation.</p>
+          <div class="cadre">
+            <b>KOUASSI AYA MARIE</b><br>
+            Remise à : YAO KONAN SERGE (tiers)<br>
+            Le 23/11/2026 à 09:46
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Nouvelle recherche</button>
+      </div>
+    </div>
+    <p class="note">Rond vert 104 px + coche (lisible même sans couleur). Un seul bouton : retour à une recherche vide.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">6b. Refus — déjà délivrée</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:46</span><span>4G ▮▮▮</span></div>
+      <div class="barre">
+        <div class="bt"><b>Retrait refusé</b><span>Aucune modification enregistrée</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="resultat">
+          <div class="rond ko">✕</div>
+          <h3>Carte déjà délivrée</h3>
+          <p>Délivrée par <b>agent.demo02</b> le <b>23/11</b> à <b>09:44</b>.</p>
+          <div class="cadre">
+            Ne remettez pas la carte. Si l'assuré la réclame encore, contactez votre administrateur.
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-second" type="button">Voir la preuve de retrait</button>
+        <button class="btn btn-soleil" type="button">Nouvelle recherche</button>
+      </div>
+    </div>
+    <p class="note">Cas typique de double tentative (deux agents en même temps). Autres refus, même gabarit — voir le cadre suivant.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">6b bis. Textes des autres refus (par code serveur)</p>
+    <div class="tel">
+      <div class="statusbar"><span>—</span><span>—</span></div>
+      <div class="corps">
+        <div class="catalogue">
+          <div class="code">HORS_CENTRE</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Carte d'un autre centre</b><p>Cette carte est rangée dans un autre centre. Orientez l'assuré vers ce centre.</p></div></div>
+          <div class="code">HORS_SITE</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Carte d'un autre site</b><p>Vous ne pouvez pas délivrer une carte d'un autre site.</p></div></div>
+          <div class="code">DOUBLON</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Carte déclarée en doublon</b><p>Elle ne peut plus être délivrée. Contactez un administrateur.</p></div></div>
+          <div class="code">ABSENTE / PERDUE</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Carte signalée absente ou perdue</b><p>Délivrance impossible. Contactez votre administrateur.</p></div></div>
+          <div class="code">RANGEMENT_REQUIS</div>
+          <div class="bandeau b-warn"><span class="ico">!</span><div><b>Rangement d'urgence obligatoire</b><p>Cette carte n'a pas de rangement. Revenez en arrière et saisissez-le.</p></div></div>
+          <div class="code">STATUT_INVALIDE</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Carte non délivrable</b><p>Son statut a changé. Relancez la recherche.</p></div></div>
+          <div class="code">COMPTE_INACTIF</div>
+          <div class="bandeau b-err"><span class="ico">✕</span><div><b>Compte désactivé</b><p>Votre compte n'est plus actif. Vous allez être déconnecté.</p></div></div>
+        </div>
+      </div>
+    </div>
+    <p class="note">Codes de retour de <code>fn_mobile_delivrer_carte</code> (plan, section « Fonctions serveur prévues »). Textes proposés, à valider.</p>
+  </div>
+
+  <div class="bloc">
+    <p class="etiquette">6c. Coupure pendant l'envoi — Résultat inconnu</p>
+    <div class="tel">
+      <div class="statusbar"><span>09:46</span><span>—</span></div>
+      <div class="barre">
+        <div class="bt"><b>Résultat inconnu</b><span>La connexion a été coupée</span></div>
+        <button class="deco" type="button">Se déconnecter</button>
+      </div>
+      <div class="corps">
+        <div class="resultat">
+          <div class="rond inc">?</div>
+          <h3>Résultat inconnu</h3>
+          <p>La connexion a été coupée pendant l'envoi. Le retrait a <b>peut-être</b> été enregistré.</p>
+          <div class="cadre">
+            <b>Ne refaites pas le retrait.</b><br>
+            Gardez la carte en main, rétablissez la connexion, puis appuyez sur « Vérifier ».
+          </div>
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button" style="min-height:64px;font-size:20px">↻ Vérifier</button>
+      </div>
+    </div>
+    <p class="note">Aucun renvoi automatique. « Vérifier » relit l'état de la carte : si DÉLIVRÉE par cet agent → écran 6a ; si EN STOCK → retour au récapitulatif 5c (l'agent reconfirme lui-même) ; si délivrée par un autre → 6b. Pas de bouton « Nouvelle recherche » ici pour forcer la vérification (à valider).</p>
+  </div>
+</div>
+
+<!-- ===================================================================== -->
+<h2 class="groupe">Verrou d'inactivité (15 min, Q4)</h2>
+<div class="rangee">
+  <div class="bloc">
+    <p class="etiquette">7. Session verrouillée</p>
+    <div class="tel verrou-fond">
+      <div class="statusbar"><span>10:03</span><span>4G ▮▮▮</span></div>
+      <div class="corps" style="justify-content:center">
+        <div class="cadenas">🔒</div>
+        <div style="text-align:center">
+          <div style="font-size:24px;font-weight:900;color:#FFE600">Session verrouillée</div>
+          <p style="margin:8px 0 0;font-size:17px;color:#e8eaf6">Aucune activité depuis 15 minutes.<br>Saisissez votre mot de passe pour continuer.</p>
+        </div>
+        <div style="background:#151a3d;border:2px solid #e8eaf6;border-radius:12px;padding:12px;font-size:17px">
+          <span style="color:#e8eaf6;font-size:14px;font-weight:800;text-transform:uppercase">Identifiant</span><br>
+          <b>agent.demo01</b>
+        </div>
+        <div class="champ">
+          <label for="pv">Mot de passe</label>
+          <input id="pv" class="saisie focus" type="password" autocomplete="current-password" placeholder="Entrez votre mot de passe">
+        </div>
+      </div>
+      <div class="pied">
+        <button class="btn btn-soleil" type="button">Déverrouiller</button>
+        <button class="btn" type="button" style="min-height:48px;font-size:16px;background:transparent;color:#FFE600;border:2px solid #FFE600">Se déconnecter</button>
+      </div>
+    </div>
+    <p class="note">Fond nuit (#0a0e27) pour distinguer immédiatement l'écran verrouillé de l'appli active. Aucune donnée d'assuré visible derrière. Texte jaune sur nuit 15:1, blanc cassé sur nuit 15,9:1. Si l'utilisateur préfère une déconnexion complète au bout de 15 min, cet écran devient l'écran 1 avec un bandeau « Session expirée ».</p>
+  </div>
+</div>
+
+</body>
+</html>

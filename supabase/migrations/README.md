@@ -279,6 +279,26 @@ présente mise en place — voir limitation ci-dessous.
   table, colonne, contrainte, politique, trigger ni droit anon modifié. **Dépendances : 0007,
   0011, 0012, 0015, 0016, 0017.** Test : `supabase/tests/0018_correctifs_controle_p1.test.sql`.
   **Dev : appliquée le 2026-11-22** (détail section « 0018 »). **Production : NON appliquée.**
+- **`0019_fermeture_cartes_logs_non_admin.sql`** — version téléphone v1 (`docs/PLAN_MOBILE_V1.md`,
+  E2, décision Q2) : 4 politiques **RESTRICTIVE TO authenticated** (`r19_*`) : lecture **et**
+  écriture directes de `t_cartes`, écriture directe de `t_logs`, réservées aux administrateurs
+  (SUPER ADMIN vérifié par la claim, `ADMINISTRATEUR_SITE`, `ADMIN_CENTRE` dans `gis_roles`) ;
+  le filtre par site de 0013 reste en place. Lecture de `t_logs` inchangée. **Aucun droit ni
+  politique anon touché** (empreinte identique). **Dépendances : 0011, 0013, 0014.** Test :
+  `supabase/tests/0019_fermeture_cartes_logs_non_admin.test.sql`. **Dev : appliquée le
+  2026-11-23** (détail section « 0019 »). **Production : NON appliquée.** **À lire avant P2** :
+  un poste Windows en session `authenticated` d'un opérateur ne pourrait plus synchroniser ses
+  cartes directement.
+- **`0020_fonctions_mobile_verification.sql`** — version téléphone v1 (E3) :
+  `fn_mobile_rechercher_cartes(p_nom, p_ddn, p_tel)` et `fn_mobile_delivrer_carte(p_sync_id,
+  p_type_retirant, p_nom_retirant, p_tel_retirant, p_rangement_urgence, p_request_id)`
+  (SECURITY DEFINER, `search_path = ''`, EXECUTE `authenticated` seulement) + 3 aides internes
+  fermées. Rôle `OPERATEUR_VERIFICATION` exigé (jeton **et** base), compte relu en base, règles
+  de `delivrerCarte` portées, refus ABSENT / PERDUE, jamais `num_secu`, contact masqué, verrou
+  de ligne, réessai par `p_request_id`, journal `t_logs` canal MOBILE. Aucune table, colonne,
+  politique, trigger ni index. **Dépendances : 0006, 0008, 0011, 0019.** Test :
+  `supabase/tests/0020_fonctions_mobile_verification.test.sql`. **Dev : appliquée le
+  2026-11-23** (détail section « 0020 »). **Production : NON appliquée.**
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le
@@ -1172,6 +1192,127 @@ ajoute des rôles). Côté cloud, l'envoi anon d'une telle ligne `t_user_roles` 
 comptes n'existent dans le cloud que par données anciennes ou écriture `service_role` /
 SQL Editor. Après 0018, un tel compte n'a aucun privilège SUPER ADMIN en `authenticated` (P2) :
 décision produit à prendre (imposer `SUPER ADMIN` comme rôle principal dans l'application).
+
+## 0019 : fermeture de t_cartes (lecture / écriture) et de l'écriture t_logs aux non-administrateurs (téléphone v1, E2)
+
+**Effet sur les postes actuels : aucun** (ils écrivent en anon ; les 4 politiques ne visent que
+`authenticated`). Effet sur `authenticated` (en plus de 0013, combinaison par ET) :
+
+| Profil (claims) | `t_cartes` lecture / écriture directe | `t_logs` lecture | `t_logs` écriture |
+|---|---|---|---|
+| SUPER ADMIN vérifié (`gis_is_super_admin`) | oui (tous sites) | oui | oui |
+| `ADMINISTRATEUR_SITE` ou `ADMIN_CENTRE` dans `gis_roles` | oui (son site, 0013) | son site | son site |
+| Opérateurs (`OPERATEUR_*` seuls), SUPER ADMIN seulement secondaire | **non** (0 ligne / 42501) | son site | **non** |
+| Sans claims `gis_*` | non (0013) | non | non |
+
+Pourquoi les administrateurs gardent l'accès direct : décision Q2 (« non-admin ») ; 0013
+documente l'accès `authenticated` aux cartes de son site pour le client P2 ; un administrateur
+voit déjà ces cartes dans l'application. Un REVOKE aurait fermé tout le rôle SQL `authenticated`
+(administrateurs compris) : politique retenue.
+
+**À savoir avant P2** : sous une session `authenticated` d'opérateur, un poste Windows ne lirait
+plus les cartes (ni `fn_downstream_cartes_chunk`, SECURITY INVOKER) et n'enverrait plus ses
+cartes ni ses journaux. Décision à prendre avant P2 (synchronisation des opérateurs en anon
+jusqu'à P3, ou fonctions dédiées).
+
+**Verrou** : `CREATE POLICY` = `AccessExclusiveLock` court sur `t_cartes` et `t_logs` (prod : hors
+heures de travail, un seul bloc `BEGIN; <fichier> COMMIT;`, `lock_timeout` 3 s en tête).
+
+**Dev (fait le 2026-11-23, MCP `apply_migration` « 0019_fermeture_cartes_logs_non_admin »,
+partie exécutable identique au fichier)** :
+- empreinte anon (requête section 0013) **avant et après : `a4212a8aa32b33d3684b999c9ddad75c`,
+  206 éléments** (identique) ;
+- test 0019 : **11/12 au premier passage**, le cas 9 (SUPER ADMIN) avait un attendu mal écrit
+  (`down=1` au lieu de `down=2` : la carte insérée sur le site B s'ajoute à B1) ; valeur
+  observée conforme ; attendu corrigé dans le fichier, **non rejoué après correction** ;
+- non-régression : 0006 **19/19**, 0014 **17/17**, 0016 **15/15** ; 0013 **14/19 tel quel**,
+  écarts **attendus** tous dus à 0019 (opérateur « agent A / B » du test 0013) : cas 3 (0 carte
+  lue au lieu de 2), 4 (`fn_downstream_cartes_chunk` site A : 0 au lieu de 2), 5 (opérateur :
+  INSERT / UPDATE / DELETE carte et INSERT log refusés ; les écritures administrateur du cas
+  restent `ok:1`), 7 (déplacement d'une carte A vers B : `ok:0` au lieu de 42501, toujours
+  refusé), 11 (agent B : 0 carte lue, UPDATE 0 ligne). Fichier de test 0013 **non modifié**
+  (à adapter à l'empilement 0013 + 0019 si on veut le rejouer vert) ;
+- appels REST réels (session `gis-login` + `verifyOtp` d'un `OPERATEUR_VERIFICATION`) : SELECT
+  `t_cartes` 0 ligne, UPDATE / DELETE 0 ligne, INSERT `t_cartes` et `t_logs` 403 / 42501 ; un
+  `ADMIN_CENTRE` lit toujours la carte de son site.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0019 : 4 politiques r19_* RESTRICTIVE TO authenticated (t_cartes ALL, t_logs INSERT/UPDATE/DELETE)' AS verification,
+       CASE WHEN (SELECT count(*) = 4
+                         AND bool_and(permissive = 'RESTRICTIVE' AND roles = ARRAY['authenticated']::name[])
+                         AND string_agg(tablename || '.' || cmd, ',' ORDER BY tablename, cmd)
+                             = 't_cartes.ALL,t_logs.DELETE,t_logs.INSERT,t_logs.UPDATE'
+                    FROM pg_policies WHERE schemaname = 'public' AND policyname LIKE 'r19\_%')
+            THEN 'OK' ELSE 'KO' END AS resultat;
+```
+
+Puis l'empreinte anon (section 0013), avant et après : identique.
+
+**Retour arrière** : bloc écrit en tête du fichier 0019 (4 `DROP POLICY IF EXISTS`).
+
+## 0020 : fonctions serveur du téléphone (recherche, délivrance) (téléphone v1, E3)
+
+**Effet sur les postes actuels : aucun** (fonctions nouvelles, EXECUTE `authenticated` seulement ;
+aucune table ni politique modifiée). Spécification complète : en-tête du fichier 0020.
+
+Codes de retour de `fn_mobile_delivrer_carte` : `OK` (avec `reessai`), `DEJA_DELIVREE`, `DOUBLON`,
+`HORS_CENTRE`, `HORS_SITE`, `STATUT_INVALIDE`, `RANGEMENT_REQUIS`, `ABSENTE`, `COMPTE_INACTIF`, et
+deux codes ajoutés au plan : `INTROUVABLE` (sync_id inconnu) et `PARAMETRES_INVALIDES`. Jeton
+sans claims ou sans rôle `OPERATEUR_VERIFICATION` (jeton ou base) : erreur 42501.
+Recherche : `{"code","mode","inversion","tronque","resultats":[...]}` (10 lignes au plus).
+
+Écarts assumés par rapport à Windows (détail en tête du fichier) : contrôle du rangement d'urgence
+après le statut ; rangement d'urgence « NON CLASSE » refusé ; contact de la fiche remplacé
+seulement si les **chiffres** diffèrent ; `num_retirant` et numéros de `UPDATE_CONTACT` masqués
+dans `t_logs` (Q6, `t_logs` lisible par les agents du site) ; `id_carte` du journal = id cloud ;
+recherche sans repli plein texte.
+
+**Dev (fait le 2026-11-23, MCP `apply_migration` « 0020_fonctions_mobile_verification »)** :
+corps des 5 fonctions identiques au fichier hors commentaires (md5 du corps normalisé comparé) ;
+- test 0020 : **30/30** (transaction annulée) ;
+- appels REST réels (sessions `gis-login` + `verifyOtp`, 2 opérateurs et 1 `ADMIN_CENTRE`
+  fictifs) : recherche nom + date OK (1 carte, homonyme du site B absent, contact
+  `********04`, aucun `num_secu`), recherche par téléphone OK ; délivrance OK, réessai du même
+  `request_id` → `OK` `reessai: true`, seconde délivrance par l'autre opérateur →
+  `DEJA_DELIVREE`, carte d'un autre site → `HORS_SITE` ; **deux délivrances simultanées** de la
+  même carte → une `OK`, une `DEJA_DELIVREE` ; anon → 401 / 42501 sur les 2 fonctions ;
+  `t_sync_conflicts` resté à 0 ;
+- `EXPLAIN (ANALYZE, BUFFERS)` sur 6 000 cartes fictives du site (7 003 au total) : recherche
+  nom + date et recherche téléphone = `Index Scan using idx_cartes_id_site` puis filtre de
+  **toutes** les cartes du site (6 001 lignes écartées, 134 pages, ~2-3 ms). Coût linéaire en
+  taille du site : **index non créé** (STOP & WARN, proposition dans le rapport d'agent-4 du
+  2026-11-23 : `(id_site, date_naissance)` pour la recherche par nom ; la recherche par
+  téléphone « chiffres dans l'ordre » n'est pas indexable par un B-tree) ;
+- jeu d'essai `ZZTEST_` supprimé (cartes, journaux, comptes, comptes Auth miroirs, sites,
+  centres, compteurs 0008 du jour) ; dev revenu à 0 site, 0 agent, 0 compte Auth,
+  `t_write_audit` 14 lignes et `t_security_guard_events` 16 lignes (md5 du contenu identiques à
+  avant) ; empreinte anon finale `a4212a8aa32b33d3684b999c9ddad75c` / 206.
+
+**Contrôle après application (lecture seule)** :
+
+```sql
+SELECT '0020 : 5 fonctions fn_mobile_*, search_path vide' AS verification,
+       CASE WHEN (SELECT count(*) = 5 AND bool_and(proconfig @> ARRAY['search_path=""'])
+                    FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'fn\_mobile\_%')
+            THEN 'OK' ELSE 'KO' END AS resultat
+UNION ALL
+SELECT '0020 : EXECUTE authenticated sur recherche / delivrance, jamais anon ; aides fermees',
+       CASE WHEN has_function_privilege('authenticated', 'public.fn_mobile_rechercher_cartes(text,date,text)', 'EXECUTE')
+             AND has_function_privilege('authenticated', 'public.fn_mobile_delivrer_carte(text,text,text,text,text,uuid)', 'EXECUTE')
+             AND NOT has_function_privilege('anon', 'public.fn_mobile_rechercher_cartes(text,date,text)', 'EXECUTE')
+             AND NOT has_function_privilege('anon', 'public.fn_mobile_delivrer_carte(text,text,text,text,text,uuid)', 'EXECUTE')
+             AND NOT has_function_privilege('authenticated', 'public.fn_mobile_operateur()', 'EXECUTE')
+            THEN 'OK' ELSE 'KO' END;
+```
+
+Puis l'empreinte anon (section 0013) : identique.
+
+**Retour arrière** : bloc écrit en tête du fichier 0020 (5 `DROP FUNCTION IF EXISTS`). 0019 peut
+rester seule (le téléphone n'a alors plus aucun accès aux cartes).
+
+**Production : NON appliquées (0019, 0020).** Prérequis : plan mobile, section « Prérequis prod ».
 
 ## 0007 : procédures manuelles (période transitoire)
 
