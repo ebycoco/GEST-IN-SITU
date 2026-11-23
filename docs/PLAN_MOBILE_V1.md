@@ -35,6 +35,13 @@ principale ; **8 décisions validées par l'utilisateur le 2026-11-23 (« Oui, t
 | Q7 | Web app installable (PWA) Vite + React + TypeScript, hébergement statique gratuit (Cloudflare Pages ou équivalent), service worker sans cache de données ni `backgroundSync` |
 | Q8 | Production : pilote 1 centre, 1-2 opérateurs, après règlement du quota Supabase et réparation des `site_id` / `centre_id` du cloud |
 
+**Décision du 2026-11-23 (conflit 0019 / P2)** : 0019 ferme `t_cartes` (dont
+`fn_downstream_cartes_chunk`, SECURITY INVOKER) et l'écriture de `t_logs` à toute session
+`authenticated` d'opérateur. Choix de l'utilisateur : **la synchronisation des cartes des postes
+reste sur l'accès partagé (anon / publishable) jusqu'à P3** ; le poste à badge de P2 n'utilise la
+session personnelle que pour l'identité, pas pour synchroniser `t_cartes` / `t_logs` d'un
+opérateur. À reprendre au moment de P3 (fermeture anon) : fonctions dédiées de synchronisation.
+
 ## Fonctions serveur prévues (migration 0020)
 - `fn_mobile_rechercher_cartes(p_nom, p_ddn, p_tel)` : critères (nom + date de naissance) ou
   téléphone 10 chiffres ; site du jeton ; 10 lignes max, centre de l'opérateur d'abord ; colonnes
