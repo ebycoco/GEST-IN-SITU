@@ -573,6 +573,14 @@ fonction `custom_access_token_hook` > Enable. Le libellé exact du bouton n'est 
 passe par le hook ; un utilisateur Auth sans ligne `t_auth_identity` est refusé (403). Les postes
 actuels (clé anon / publishable, sans session Auth) ne sont **pas** concernés.
 
+**Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
+Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
+réels du hook sur le dev »). Valeur `authentication_method` reçue pour gis-login + `verifyOtp` :
+`otp`. Prérequis pour la prod : couper « Allow new users to sign up » et la connexion anonyme,
+**laisser le fournisseur Email actif**. Un hook en erreur bloque toute émission de jeton Auth du
+projet (connexion et refresh) ; un `REVOKE EXECUTE ... FROM supabase_auth_admin` n'est pas un
+retour arrière (il bloque tout) : la seule coupure est de désactiver le hook dans le tableau de bord.
+
 **Contrôle après application (lecture seule)** :
 
 ```sql

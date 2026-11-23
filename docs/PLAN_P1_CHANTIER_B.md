@@ -625,6 +625,50 @@ relèvent d'un plan payant, non vérifié).
   rejouer les appels réels ; en prod : requêtes de contrôle des sections 0017 et 0018, puis
   0011-0018 et gis-login v3 (prod jamais touchée à ce jour).
 
+### Essais réels du hook sur le dev (2026-11-23) — FAIT, prod NON
+- **Réglages du dev** : « Allow new users to sign up » coupé (2026-11-23, sur accord de
+  l'utilisateur), connexion anonyme déjà coupée, fournisseur Email laissé actif (requis par
+  `verifyOtp`). Hook « Customize Access Token » actif : type Postgres, `public.custom_access_token_hook`.
+  Contrôle : `/auth/v1/settings` → `disable_signup: true`, `anonymous_users: false`, `email: true`.
+- **Droits après activation** : contrôles README 0011/0017/0018 5/5 OK ; empreinte de la fonction
+  inchangée ; l'activation depuis le tableau de bord n'a modifié aucun droit.
+- **Jeu d'essai fictif** (ZZTEST_, agent-4) : 5 sites (actif, autre site, suspendu, licence
+  expirée, bascule), 6 centres, 13 agents (un par rôle, SA principal, SA seulement secondaire,
+  inactif, multi-rôles, comptes de blocage et de délais), 3 cartes. Mots de passe d'essai jetables,
+  jamais dans le dépôt.
+- **Résultat : 173 cas OK sur 175** (recomptés par la session principale), aucun droit en trop.
+  - Claims : `gis_*` exacts ; `gis_is_super_admin` vrai pour le seul SA principal, faux pour le SA
+    seulement secondaire ; SA sans site ni centre.
+  - Lectures cantonnées au site (cartes, postes, comptes, rôles) ; SA voit tout ; `password_hash`
+    et `select=*` refusés à tous, SA compris ; `t_sites`/`t_centres` lisibles en entier (conception 0013).
+  - Écritures : cartes de son site seulement (SA partout) ; `t_sites` SA seul ; `t_centres` SA et
+    ADMINISTRATEUR_SITE sur son site ; `t_postes` refusé aux non-administrateurs ; comptes selon
+    0016 (opérateur : aucun autre compte, ADMIN_CENTRE : son centre, SA secondaire : refus total) ;
+    auto-promotion refusée.
+  - gis-login : mot de passe faux, login inconnu, compte inactif → même 401 ; 4×401 puis 429
+    (`retry_after` 900) ; site suspendu / licence expirée → 403.
+  - Hook : `authentication_method` observée = `otp` (verifyOtp du token_hash, `amr ["otp"]`) ;
+    refresh accepté (`token_refresh`, déduit) ; lien > 15 min → 403 ; 31 jours sans connexion
+    en ligne → refresh 403 ; site suspendu, licence expirée, compte désactivé entre gis-login et
+    verifyOtp/refresh → 403.
+  - Portes fermées : `signUp` → `signup_disabled` ; anonyme → `anonymous_provider_disabled` ;
+    `signInWithPassword` sur un compte miroir → `invalid_credentials` ; rejeu du token_hash →
+    `otp_expired`. Comptes miroirs créés par gis-login inscriptions coupées : preuve réelle.
+- **Les 2 écarts** :
+  1. SA seulement secondaire qui insère `t_user_roles 'SUPER ADMIN'` pour un autre : **aucune
+     ligne écrite** (journal 0007 `ROLES_SA_REFUSE`), mais sans erreur : le garde 0007
+     (`trg_t_user_roles_sa_guard_ins`, `RETURN NULL`) passe avant le filtre 0016 (ordre
+     alphabétique des triggers). Pas de trou ; un client authenticated croirait avoir réussi.
+     **À traiter en P2** (décision : renvoyer 42501 pour authenticated).
+  2. Attente mal écrite dans le script (carte légitimement visible par l'opérateur du site B).
+- **Nettoyage** : jeu d'essai, comptes Auth miroirs, sessions, tentatives, compteurs du jour et
+  journal 0007 de l'essai supprimés ; dev revenu à l'état d'avant (0 site, 0 agent, 0 compte Auth,
+  `t_write_audit` 14, `t_security_guard_events` 16). Dossier des mots de passe d'essai supprimé.
+- **Reste** : le hook reste **actif sur le dev**. Prod : verdict (c) NO-GO de l'audit du
+  2026-11-22 à relever — hook prouvé en réel (fait ici), puis inscriptions Auth prod, alerte de
+  saturation et coût, réparation site_id/centre_id du cloud ; requêtes de contrôle prod (N-1,
+  N-9, section 0017) avant 0011-0018.
+
 ### P1-7 — Brouillon P3 (fermeture anon), NON appliqué
 - **Fichiers** : `supabase/migrations/brouillon_p3_fermeture_anon.sql` (non numéroté, en-tête
   « NE PAS APPLIQUER »).
