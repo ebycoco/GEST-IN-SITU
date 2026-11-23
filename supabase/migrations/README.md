@@ -573,6 +573,14 @@ fonction `custom_access_token_hook` > Enable. Le libellé exact du bouton n'est 
 passe par le hook ; un utilisateur Auth sans ligne `t_auth_identity` est refusé (403). Les postes
 actuels (clé anon / publishable, sans session Auth) ne sont **pas** concernés.
 
+**Production : 0011 et 0012 appliquées le 2026-11-23 vers 12 h UTC** (session principale, sur
+autorisation écrite de l'utilisateur, MCP `apply_migration`, partie exécutable du fichier sans
+l'en-tête de commentaires). Contrôles préalables (N-1, rôles invalides, doublons de casse, sites
+refusés, `t_users_role_check`, types `t_sites`) : tous conformes. Contrôles 0011 / 0012 OK.
+Empreinte anon prod **identique** avant / après : `b21cf947993a3692b777a3cc162bc507`, 207
+éléments (référence prod ; différente du dev). Hook **non activé** en prod, `gis-login` non
+déployée. 0013 à 0018 : à appliquer hors heures de travail des postes (verrous courts).
+
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
 réels du hook sur le dev »). Valeur `authentication_method` reçue pour gis-login + `verifyOtp` :
