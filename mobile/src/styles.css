@@ -178,7 +178,7 @@ button { -webkit-tap-highlight-color: transparent; }
 
 /* Connexion / verrou */
 .logo { text-align: center; padding: 12px 0 4px; }
-.logo .pastille { width: 72px; height: 72px; margin: 0 auto 10px; border-radius: 16px; background: var(--soleil); border: 3px solid var(--encre); display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 900; color: var(--encre); }
+.logo .logo-img { display: block; width: 88px; height: 88px; margin: 0 auto 10px; }
 .logo h1 { margin: 0; font-size: 21px; font-weight: 900; letter-spacing: .3px; }
 .logo p { margin: 4px 0 0; font-size: 16px; color: var(--texte-2); }
 .version { text-align: center; font-size: 14px; color: var(--texte-3); }

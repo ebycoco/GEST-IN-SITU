@@ -137,7 +137,9 @@ non commitée). Dev nettoyé (vérifié par la session principale).
   recherche et la confirmation ; jeton d'accès valable jusqu'à expiration après déconnexion
   (normal, durée à fixer en prod) ; `num_retirant` au format brut pour l'assuré (hétérogène) ; lieu
   de naissance absent de la liste des homonymes ; message trompeur au déverrouillage par un autre
-  compte ; vrai logo absent (pastille « GIS », icônes générées). Non testés : Chrome Android réel
+  compte. Vrai logo mis en place ensuite (agent-8 : écran de connexion + icônes d'installation
+  tirées de `resources/icon.png`, roue et mire remplies en blanc côté téléphone seulement ; le logo
+  maître garde une roue transparente, non modifié). Non testés : Chrome Android réel
   (enregistrement du mot de passe), poste Windows (déjà fait en E4).
 
 ## Non vérifié

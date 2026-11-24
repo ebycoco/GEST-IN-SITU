@@ -5,8 +5,17 @@
 // les requetes portant un en-tete Authorization ; aucun backgroundSync, aucune file
 // d'attente : une ecriture exige Internet (decision utilisateur).
 // Changer VERSION a chaque modification de ce fichier pour purger l'ancien cache.
-const VERSION = 'gis-mobile-v1';
-const COQUILLE = ['/', '/index.html', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/icon-512.png'];
+const VERSION = 'gis-mobile-v2';
+const COQUILLE = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-512-maskable.png',
+  '/icons/apple-touch-icon-180.png',
+  '/icons/favicon-32.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

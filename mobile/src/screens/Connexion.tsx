@@ -17,6 +17,7 @@ import { useRef, useState, type FormEvent, type RefObject } from 'react';
 import { connecter, type SessionInfo } from '../lib/api';
 import { messageConnexion, type Message } from '../lib/codes';
 import { Bandeau, Pied } from '../ui';
+import logoGis from '../assets/logo-gis.png';
 
 function ChampMotDePasse(props: { id: string; valeur: string; onChange: (v: string) => void; disabled: boolean; err: boolean; inputRef: RefObject<HTMLInputElement | null> }) {
   const [voir, setVoir] = useState(false);
@@ -77,7 +78,7 @@ export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: Se
     <form className="app" onSubmit={soumettre} noValidate>
       <main className="corps centre">
         <div className="logo">
-          <div className="pastille" aria-hidden="true">GIS</div>
+          <img className="logo-img" src={logoGis} alt="" aria-hidden="true" width={88} height={88} decoding="async" />
           <h1>GESTION CARTES IN-SITU</h1>
           <p>Système de Gestion des Cartes CMU</p>
         </div>
