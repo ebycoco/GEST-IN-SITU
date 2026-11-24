@@ -161,6 +161,15 @@ non commitée). Dev nettoyé (vérifié par la session principale).
 - Offre Vercel Hobby = usage non commercial : à revoir avant un pilote réel. Pour la prod : origine
   exacte de prod dans `GIS_ALLOWED_ORIGINS`, `connect-src` du `vercel.json` vers le Supabase de prod.
 
+## Connexion conservée à l'actualisation (2026-11-24, `0d82b60`)
+- Constat réel (Android/Chrome) : actualiser déconnectait (session en mémoire seulement).
+- Correctif agent-3 : session dans `sessionStorage` (onglet seulement, effacée à la fermeture,
+  au verrou et à la déconnexion), claims revalidés à la restauration, verrou 15 min maintenu
+  après rechargement, geste « glisser vers le bas » coupé, service worker `gis-mobile-v3`.
+- Publié sur les deux sites Vercel (dev et prod) ; vérifié en ligne : HTTP 200, `sw.js` v3,
+  CSP `connect-src` vers le bon projet, bon projet Supabase dans le code servi. Essai réel sur
+  téléphone par l'utilisateur à faire.
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de
