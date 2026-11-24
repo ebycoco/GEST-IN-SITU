@@ -91,6 +91,24 @@ non commitée). Dev nettoyé (vérifié par la session principale).
     agent-13 `:1280`, `:1355`) → 0 pour des dates horodatées (déjà noté « KPI figés », reporté).
   - Journaux `CARTE_DELIVREE` du téléphone : reçus seulement au cycle long (toutes les 2 h).
 
+## P1-1 et P1-2 corrigés (2026-11-24)
+- Commits `ef4d0d7` (agent-4) puis `22fe5f8` (correctifs P2-1 à P2-4 de l'audit agent-9, aucun
+  P0/P1) : réception automatique par défaut pour le rôle actif `OPERATEUR_VERIFICATION` (choix
+  explicite respecté, réévaluée au changement de rôle) ; alerte locale « Retrait non retenu »
+  (`t_logs` `ALERTE_DOUBLE_DELIVRANCE`, non synchronisée, bannière + acquittement, rôles qui
+  délivrent, portée site, seulement si la remise est postérieure au `synced_at` local).
+- Test vivant agent-13 (dev, 68/69, l'échec vient de la spec) : carte du téléphone reçue en ~50 s
+  sans action ; préférence `false` respectée ; bascule de rôle démarre/arrête la réception ; vraie
+  double délivrance → une alerte, bannière, acquittement tracé, rien dans le cloud ; pas d'alerte
+  sur un renvoi ordinaire ni pour OPERATEUR_QUALITE. 1366x768 : bannière 95 px (1 alerte) / 142 px
+  (2). ~49 requêtes cloud en 5 min par poste inactif. Dev nettoyé (vérifié par la session
+  principale ; `t_write_audit` 32 conservé, compteur de mesure).
+- Restent (P2) : toast qui masque le bouton de la bannière ~8 s ; bannière à 2 alertes qui pousse
+  « Rechercher la Carte » sous le pli à 1366x768 ; cycle court qui retélécharge les mêmes cartes
+  à chaque passage (cause non établie, curseur ?) ; journaux `CARTE_DELIVREE` du poste écarté
+  gardés dans le cloud. Non testés en vrai : copie périmée avec date différente (P2-1), conflit
+  par le worker d'envoi en masse, émargement rétroactif.
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de
