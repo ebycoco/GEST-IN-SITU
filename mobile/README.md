@@ -38,3 +38,5 @@ Le téléphone peut passer d'un agent à l'autre. L'application demande au navig
 5. Ne jamais répondre « Enregistrer » si Chrome le propose malgré tout.
 
 Fermer la session (« Se déconnecter ») avant de remettre le téléphone à un autre agent. Après 15 minutes sans activité, l'écran se verrouille et le mot de passe est redemandé.
+
+**Actualiser la page** (bouton ou geste « glisser vers le bas ») ne déconnecte plus : la session est gardée dans l'onglet (`sessionStorage`, jamais `localStorage`), effacée à la fermeture de l'onglet ou de l'appli, au verrou et à « Se déconnecter ». Le délai d'inactivité de 15 minutes reste respecté après une actualisation (l'heure de dernière activité est mémorisée avec la session). Contrepartie : tant que l'onglet est ouvert, le jeton de session est lisible dans les outils de développement du navigateur ; les cartes et résultats de recherche ne sont jamais stockés. Le geste « glisser vers le bas pour actualiser » de Chrome Android est désactivé (`overscroll-behavior-y`).

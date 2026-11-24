@@ -27,6 +27,9 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
+/* Coupe le geste « glisser vers le bas pour actualiser » de Chrome Android (qui rechargeait
+   la page). « contain » garde le defilement normal des zones defilantes ; pas de rebond. */
+html, body { overscroll-behavior-y: contain; }
 body { margin: 0; background: var(--page); color: var(--texte); font-family: var(--font); font-size: 16px; line-height: 1.4; -webkit-text-size-adjust: 100%; }
 button, input { font-family: inherit; }
 button { -webkit-tap-highlight-color: transparent; }

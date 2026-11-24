@@ -16,6 +16,16 @@ export class IdleClock {
     this.last = now();
   }
 
+  /** Instant (ms) de la derniere activite, pour le memoriser entre deux rechargements. */
+  lastActivity(): number {
+    return this.last;
+  }
+
+  /** Reprise apres rechargement de la page : repart de l'activite memorisee, pas de zero. */
+  restaurer(derniereActivite: number): void {
+    this.last = derniereActivite;
+  }
+
   /** Activite de l'operateur (toucher, frappe) : repart de zero. */
   touch(): void {
     this.last = this.now();
@@ -38,4 +48,18 @@ export class IdleClock {
   remainingMs(): number {
     return Math.max(0, this.timeoutMs - (this.now() - this.last));
   }
+}
+
+/**
+ * Au redemarrage (page rechargee) : le delai d'inactivite est-il depasse ? Une activite
+ * inconnue (absente, illisible) ou situee dans le futur (horloge reculee) compte comme
+ * « depasse » : le doute profite a la securite, on redemande le mot de passe.
+ */
+export function inactiviteDepassee(
+  derniere: number | null,
+  now: number = Date.now(),
+  timeoutMs: number = IDLE_TIMEOUT_MS,
+): boolean {
+  if (derniere === null || derniere > now) return true;
+  return now - derniere >= timeoutMs;
 }

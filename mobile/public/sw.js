@@ -5,7 +5,7 @@
 // les requetes portant un en-tete Authorization ; aucun backgroundSync, aucune file
 // d'attente : une ecriture exige Internet (decision utilisateur).
 // Changer VERSION a chaque modification de ce fichier pour purger l'ancien cache.
-const VERSION = 'gis-mobile-v2';
+const VERSION = 'gis-mobile-v3';
 const COQUILLE = [
   '/',
   '/index.html',

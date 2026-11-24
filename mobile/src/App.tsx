@@ -10,15 +10,19 @@
 // verrou / connexion pose AVANT de fermer la session (fermerSession() peut attendre
 // jusqu'a 4 s hors ligne) ; fermerSession() met client=null de facon synchrone, donc plus
 // aucun appel ne part avec l'ancienne session pendant ce temps.
+// Rechargement de la page : la session de l'onglet (sessionStorage, lib/stockageSession.ts)
+// est restauree au demarrage (restaurerSession) et le verrou d'inactivite reste effectif :
+// l'heure de derniere activite est memorisee (au plus toutes les 5 s) et relue au demarrage.
 // Reponses tardives (audit E6 P2-2) : compteur de generation (lib/generation.ts).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { delivrer, fermerSession, rechercher, type Appel, type Criteres, type EchecAppel, type ReponseRetrait, type SessionInfo } from './lib/api';
+import { delivrer, fermerSession, rechercher, restaurerSession, type Appel, type Criteres, type EchecAppel, type ReponseRetrait, type SessionInfo } from './lib/api';
 import { etatFiche, type Carte, type ResultatRecherche } from './lib/cards';
 import { messageRetrait, type Message } from './lib/codes';
 import { RequestIdKeeper, SendGuard } from './lib/delivery';
 import { Generation } from './lib/generation';
 import { IdleClock } from './lib/idleLock';
 import { formatPhoneFull } from './lib/masks';
+import { ecrireActivite, sessionPresente } from './lib/stockageSession';
 import { EcranConnexion, EcranVerrou } from './screens/Connexion';
 import { EcranFiche, titreFiche } from './screens/Fiche';
 import { EcranRecherche, EcranResultats, FORM_RECHERCHE_VIDE, type FormRecherche } from './screens/Recherche';
@@ -85,6 +89,8 @@ export function App() {
   const [verrou, setVerrou] = useState<null | 'inactivite' | 'session'>(null);
   const [avisConnexion, setAvisConnexion] = useState<Message | null>(null);
   const [vue, setVue] = useState<Vue>({ v: 'recherche' });
+  // Ecran « Chargement » pendant la restauration d'une session d'onglet (rechargement).
+  const [restauration, setRestauration] = useState<boolean>(() => sessionPresente());
 
   const [formRecherche, setFormRecherche] = useState<FormRecherche>(FORM_RECHERCHE_VIDE);
   const [criteres, setCriteres] = useState<Criteres | null>(null);
@@ -105,6 +111,38 @@ export function App() {
   const requetes = useRef(new RequestIdKeeper());
   const garde = useRef(new SendGuard());
   const generation = useRef(new Generation());
+  const derniereEcriture = useRef(0);
+
+  /** Memorise l'activite pour le verrou apres rechargement ; 1 ecriture / 5 s sauf force. */
+  const memoriserActivite = useCallback((force: boolean) => {
+    const t = Date.now();
+    if (!force && t - derniereEcriture.current < 5_000) return;
+    derniereEcriture.current = t;
+    ecrireActivite(horloge.current.lastActivity());
+  }, []);
+
+  // ---- Restauration de la session au demarrage (page rechargee). Annulable au demontage ;
+  // restaurerSession() ne leve jamais et efface tout si la session n'est pas valide.
+  useEffect(() => {
+    if (!restauration) return;
+    let annule = false;
+    restaurerSession()
+      .then((r) => {
+        if (annule) return;
+        if (r) {
+          horloge.current.restaurer(r.derniereActivite);
+          setSession(r.session);
+          setVue({ v: 'recherche' });
+        }
+        setRestauration(false);
+      })
+      .catch(() => {
+        if (!annule) setRestauration(false);
+      });
+    return () => {
+      annule = true;
+    };
+  }, [restauration]);
 
   /**
    * Efface toutes les donnees de cartes affichables et invalide les reponses en attente
@@ -160,25 +198,33 @@ export function App() {
   useEffect(() => {
     if (!session || verrou) return;
     const clock = horloge.current;
-    clock.touch();
-    const activite = () => clock.touch();
+    // Pas de touch() ici : le depart de l'horloge vient de la connexion / du deverrouillage
+    // (touch dans leurs rappels) ou de la restauration (activite memorisee, jamais remise a zero).
+    const activite = () => {
+      clock.touch();
+      memoriserActivite(false);
+    };
     const controle = () => {
       if (clock.shouldLock()) verrouiller('inactivite', inconnu !== null);
     };
     const visible = () => {
       if (document.visibilityState === 'visible') controle();
+      else memoriserActivite(true);
     };
+    const quitte = () => memoriserActivite(true);
     window.addEventListener('pointerdown', activite, { passive: true });
     window.addEventListener('keydown', activite);
     document.addEventListener('visibilitychange', visible);
+    window.addEventListener('pagehide', quitte);
     const t = window.setInterval(controle, 15_000);
     return () => {
       window.removeEventListener('pointerdown', activite);
       window.removeEventListener('keydown', activite);
       document.removeEventListener('visibilitychange', visible);
+      window.removeEventListener('pagehide', quitte);
       window.clearInterval(t);
     };
-  }, [session, verrou, verrouiller, inconnu]);
+  }, [session, verrou, verrouiller, inconnu, memoriserActivite]);
 
   /** Echec commun (hors reponse metier) ; renvoie le message a afficher, ou null si deja traite. */
   const traiterEchec = useCallback(
@@ -265,6 +311,7 @@ export function App() {
 
   async function envoyer<T>(fn: () => Promise<Appel<T>>) {
     horloge.current.setSuspended(true);
+    memoriserActivite(true); // un rechargement pendant l'envoi ne doit pas passer pour de l'inactivite
     setEnvoi(true);
     try {
       return await garde.current.run(fn);
@@ -394,8 +441,17 @@ export function App() {
   }
 
   // ---- Rendu
+  if (restauration) {
+    return (
+      <div className="app">
+        <main className="corps centre" role="status" aria-live="polite">
+          <p>Chargement…</p>
+        </main>
+      </div>
+    );
+  }
   if (!session) {
-    return <EcranConnexion key={avisConnexion?.titre ?? 'connexion'} avis={avisConnexion} onConnecte={(s) => { setAvisConnexion(null); setSession(s); setVue({ v: 'recherche' }); }} />;
+    return <EcranConnexion key={avisConnexion?.titre ?? 'connexion'} avis={avisConnexion} onConnecte={(s) => { horloge.current.touch(); memoriserActivite(true); setAvisConnexion(null); setSession(s); setVue({ v: 'recherche' }); }} />;
   }
   if (verrou) {
     return (
@@ -407,6 +463,7 @@ export function App() {
           setSession(s);
           setVerrou(null);
           horloge.current.touch();
+          memoriserActivite(true);
         }}
         onDeconnexion={() => deconnecter()}
       />

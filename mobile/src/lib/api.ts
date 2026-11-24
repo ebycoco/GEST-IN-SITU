@@ -1,14 +1,22 @@
 // Acces serveur : connexion (gis-login puis verifyOtp) et les deux fonctions RPC de 0020.
 //
-// SESSION (choix documente) : supabase-js avec persistSession: false -> la session vit
-// UNIQUEMENT en memoire (adaptateur memoire interne de auth-js, verifie dans
-// GoTrueClient : « persistSession false -> memoryLocalStorageAdapter »). Rien n'est ecrit
-// dans localStorage / sessionStorage / IndexedDB :
-//   - telephone vole ou appli fermee : aucun jeton a recuperer sur l'appareil ;
-//   - verrou d'inactivite : la session est fermee (signOut local) et l'instance du client
-//     jetee ; deverrouiller = nouvelle connexion complete par mot de passe (gis-login,
-//     limite de tentatives serveur comprise) ;
-//   - contrepartie : recharger la page ou tuer l'appli impose de se reconnecter.
+// SESSION (choix documente, revise apres essai reel Android/Chrome) : supabase-js avec
+// persistSession: true et auth.storage = window.sessionStorage (lib/stockageSession.ts),
+// cle « gis-mobile-auth ». Jamais localStorage ni IndexedDB :
+//   - actualiser la page (bouton, ou geste « glisser vers le bas ») ne deconnecte plus :
+//     au demarrage, restaurerSession() relit la session de l'onglet et revalide les claims
+//     gis_* comme apres une connexion normale ;
+//   - sessionStorage est propre a l'onglet et efface a sa fermeture (appli fermee, onglet
+//     ferme : plus de jeton sur l'appareil) ;
+//   - verrou d'inactivite (15 min) : l'heure de derniere activite est aussi gardee dans
+//     sessionStorage ; au rechargement, delai depasse -> session fermee et effacee, ecran
+//     de connexion (actualiser ne contourne pas le verrou) ;
+//   - verrou / deconnexion : signOut local + effacement explicite de toutes les cles
+//     « gis-mobile-* » (fermerSession) ;
+//   - CONTREPARTIE : tant que l'onglet est ouvert, un jeton d'acces et un jeton de
+//     renouvellement sont lisibles par du JavaScript de cette origine (XSS) et par une
+//     personne qui ouvre les outils de developpement du navigateur ; non stockes : cartes
+//     et resultats de recherche (memoire React seulement).
 // autoRefreshToken: true : auth-js renouvelle le jeton tant que l'onglet est visible.
 //
 // RESEAU : postgrest-js ne relance JAMAIS automatiquement un POST (RETRYABLE_METHODS =
@@ -28,6 +36,17 @@ import { config } from './config';
 import { isAllowedV1, readGisClaims, type GisClaims } from './claims';
 import { issueGisLogin, type IssueConnexion } from './codes';
 import { parseRecherche, type ResultatRecherche } from './cards';
+import { IDLE_TIMEOUT_MS, inactiviteDepassee } from './idleLock';
+import {
+  CLE_AUTH,
+  adaptateurAuth,
+  ecrireActivite,
+  ecrireLogin,
+  effacerActivite,
+  effacerStockage,
+  lireActivite,
+  lireLogin,
+} from './stockageSession';
 
 export interface SessionInfo {
   login: string;
@@ -53,31 +72,119 @@ export function classerErreur(status: number, code: string | undefined, message 
 export const DELAI_APPEL_MS = 30_000;
 
 let client: SupabaseClient | null = null;
+// Incremente a chaque client installe : un nettoyage tardif (fermeture lente, hors ligne)
+// n'efface pas le stockage si une session plus recente a ete ouverte entre-temps.
+let epoque = 0;
 
 function nouveauClient(): SupabaseClient {
   return createClient(config.supabaseUrl, config.publishableKey, {
-    auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false },
+    // Session dans l'onglet (sessionStorage) : survit a l'actualisation, effacee a la
+    // fermeture de l'onglet. Context7 (supabase-js, GoTrueClient) : storage / storageKey /
+    // persistSession ; auth-js lit la session au demarrage (getSession) via ce storage.
+    auth: {
+      persistSession: true,
+      storage: adaptateurAuth(),
+      storageKey: CLE_AUTH,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
   });
 }
 
-/**
- * Ferme la session et jette le client. signOut({ scope: 'local' }) revoque la session
- * de CE telephone seulement ; s'il echoue (hors ligne), auth-js garde la session : jeter
- * l'instance suffit alors, la session n'existant qu'en memoire.
- */
-export async function fermerSession(): Promise<void> {
-  const c = client;
-  client = null;
-  if (!c) return;
+/** Abandonne une instance : arret du renouvellement, signOut local borne, effacement des cles. */
+async function fermerInstance(c: SupabaseClient, delaiMs: number): Promise<void> {
+  const e = epoque;
   try {
     await c.auth.stopAutoRefresh();
   } catch {
     // sans importance : l'instance est abandonnee
   }
   try {
-    await Promise.race([c.auth.signOut({ scope: 'local' }), new Promise((r) => setTimeout(r, 4000))]);
+    await Promise.race([c.auth.signOut({ scope: 'local' }), new Promise((r) => setTimeout(r, delaiMs))]);
   } catch {
-    // hors ligne : la session en memoire disparait avec l'instance
+    // hors ligne : on efface quand meme le stockage ci-dessous
+  }
+  // Effacement explicite meme si signOut a echoue / expire : aucun jeton ne doit rester
+  // dans l'onglet apres un verrou ou une deconnexion.
+  if (e === epoque) effacerStockage();
+}
+
+/**
+ * Ferme la session et jette le client. signOut({ scope: 'local' }) revoque la session
+ * de CE telephone seulement ; que le serveur reponde ou non, toutes les cles
+ * « gis-mobile-* » sont ensuite supprimees de sessionStorage.
+ * L'activite et l'identifiant sont effaces TOUT DE SUITE (synchrone) : un rechargement
+ * pendant la fermeture (jusqu'a 4 s hors ligne) trouve une activite inconnue -> refuse.
+ */
+export async function fermerSession(): Promise<void> {
+  const c = client;
+  client = null;
+  effacerActivite();
+  if (!c) {
+    effacerStockage();
+    return;
+  }
+  await fermerInstance(c, 4000);
+}
+
+/**
+ * Restauration au demarrage (page rechargee). Rend la session si TOUT est valide :
+ * session presente dans l'onglet, delai d'inactivite non depasse, jeton valide ou
+ * renouvelable, claims gis_* conformes (role OPERATEUR_VERIFICATION, site). Sinon tout est
+ * efface et on rend null (ecran de connexion, sans erreur bloquante). Ne leve jamais.
+ * Appels simultanes (React StrictMode en developpement) : une seule restauration.
+ */
+let restaurationEnCours: Promise<{ session: SessionInfo; derniereActivite: number } | null> | null = null;
+
+export function restaurerSession(): Promise<{ session: SessionInfo; derniereActivite: number } | null> {
+  if (!restaurationEnCours) {
+    restaurationEnCours = restaurer().finally(() => {
+      restaurationEnCours = null;
+    });
+  }
+  return restaurationEnCours;
+}
+
+async function restaurer(): Promise<{ session: SessionInfo; derniereActivite: number } | null> {
+  if (!config.valide) {
+    effacerStockage();
+    return null;
+  }
+  const derniere = lireActivite();
+  const c = nouveauClient();
+  try {
+    if (inactiviteDepassee(derniere, Date.now(), IDLE_TIMEOUT_MS)) throw new Error('inactivite');
+    // getSession : lit le stockage ; jeton expire -> renouvellement par le jeton de
+    // renouvellement (reseau). Echec (hors ligne, jeton refuse) -> pas de session.
+    const { data, error } = await c.auth.getSession();
+    if (error || !data.session || derniere === null) throw new Error('session');
+    const claims = readGisClaims(data.session.access_token);
+    if (!isAllowedV1(claims)) throw new Error('claims');
+    await fermerClientPrecedent();
+    client = c;
+    epoque++;
+    return {
+      session: { login: lireLogin() ?? 'Opérateur', claims, centreNom: await nomCentre(claims.centreId) },
+      derniereActivite: derniere,
+    };
+  } catch {
+    // Les cles de l'onglet sont rendues inutilisables TOUT DE SUITE ; la revocation cote
+    // serveur est tentee ensuite, bornee a 2 s (hors ligne : on passe a l'ecran de connexion).
+    effacerActivite();
+    await fermerInstance(c, 2000);
+    return null;
+  }
+}
+
+/** Evite deux instances actives sur la meme cle de stockage (cas anormal : client deja ouvert). */
+async function fermerClientPrecedent(): Promise<void> {
+  const ancien = client;
+  client = null;
+  if (!ancien) return;
+  try {
+    await ancien.auth.stopAutoRefresh();
+  } catch {
+    // instance abandonnee
   }
 }
 
@@ -143,6 +250,9 @@ export async function connecter(
   const issue = issueGisLogin(rep.status, rep.body, rep.retry);
   if (issue.kind !== 'ok') return { ok: false, issue };
 
+  // Ancienne session fermee AVANT d'ouvrir la nouvelle : les deux instances partagent la
+  // meme cle de stockage, une fermeture tardive effacerait la session neuve.
+  await fermerSession();
   const c = nouveauClient();
   let jeton: string | undefined;
   try {
@@ -165,11 +275,15 @@ export async function connecter(
   if (!isAllowedV1(claims) || (expectedSyncId !== undefined && claims.syncId !== expectedSyncId)) {
     await c.auth.stopAutoRefresh().catch(() => undefined);
     await c.auth.signOut({ scope: 'local' }).catch(() => undefined);
+    effacerStockage();
     return { ok: false, issue: { kind: 'role' } };
   }
 
-  await fermerSession();
   client = c;
+  epoque++;
+  // Activite initiale + identifiant : un rechargement juste apres la connexion restaure la session.
+  ecrireActivite(Date.now());
+  ecrireLogin(login.trim());
   return { ok: true, session: { login: login.trim(), claims, centreNom: await nomCentre(claims.centreId) } };
 }
 
