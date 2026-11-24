@@ -73,6 +73,24 @@ opérateur. À reprendre au moment de P3 (fermeture anon) : fonctions dédiées 
 Auth prod coupées ; réparation `id_site` / `id_centre` du cloud ; alerte saturation et coût ;
 quota Supabase réglé (restriction annoncée au 2026-12-18) ; 0019 et 0020.
 
+## E4 — un poste reçoit le retrait du téléphone (agent-13, dev, 2026-11-24) : FAIT
+Run final 27/27 contrôles, `5 passed` (spec `_agent13_retrait_mobile_20261123.cloud.e2e.spec.ts`,
+non commitée). Dev nettoyé (vérifié par la session principale).
+- Carte sans modification locale : reçue DELIVRE au cycle suivant (14 s), preuve de retrait
+  affichée avec l'agent téléphone. Avec modification locale en attente : statut adopté, contact
+  local gardé, cloud reste DELIVRE. Double délivrance (poste hors ligne + téléphone) : la
+  première arrivée au cloud gagne (0006, motif `STATUT_EVT_PLUS_ANCIEN`), le poste s'aligne.
+- **À régler avant le pilote** :
+  - **P1-1** : la réception automatique est **désactivée par défaut** (`auto_downstream_<id_user>`
+    absent → pas de minuterie, `src/main/ipc/handlers.ts:333-336`) : sans elle, le poste ne
+    reçoit pas le retrait et propose encore « Procéder au Retrait ».
+  - **P1-2** : le conflit de double délivrance est invisible pour l'opérateur du poste (aucune
+    alerte ; deux journaux `CARTE_DELIVREE` pour la même carte dans le cloud).
+  - **P1-3** (antérieur) : compteurs « retraits du jour » à égalité stricte sur
+    `date_delivrance` (`src/main/database/queries/stats.queries.ts:196`, `:1496`, et selon
+    agent-13 `:1280`, `:1355`) → 0 pour des dates horodatées (déjà noté « KPI figés », reporté).
+  - Journaux `CARTE_DELIVREE` du téléphone : reçus seulement au cycle long (toutes les 2 h).
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de
