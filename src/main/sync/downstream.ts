@@ -105,6 +105,56 @@ export interface ReceivedCardLabel {
 }
 
 /**
+ * Recul (anti-décalage d'horloge) appliqué au curseur de pull 'last_downstream_sync' à la fin
+ * de chaque runDownstream() ayant reçu au moins une carte — voir le bloc « Marge de sécurité »
+ * en fin de runDownstream(). Partagé avec resolvePendingCountCursor() ci-dessous.
+ */
+const WATERMARK_SAFETY_BUFFER_MS = 2 * 60 * 1000;
+const ZERO_SYNC_ID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Choisit le point de départ du COMPTAGE LÉGER du cycle court (getPendingCardsCount).
+ *
+ * Bug corrigé (test vivant agent-13, 2026-11-24) : après tout pull ayant reçu des cartes,
+ * runDownstream() recule le curseur de pull de WATERMARK_SAFETY_BUFFER_MS. Le comptage léger
+ * partait de ce curseur reculé : il retrouvait donc à chaque tick (~75 s) les dernières cartes
+ * déjà rapatriées, relançait un pull complet (fn_downstream_cartes_chunk), qui ré-avançait puis
+ * re-reculait le curseur au même point — boucle sans fin tant qu'aucune carte plus récente
+ * n'arrivait.
+ *
+ * Le comptage part désormais du repère EXACT 'last_downstream_sync_true[_id]' (écrit par la même
+ * transaction que le recul), mais UNIQUEMENT si le curseur de pull est encore exactement dans
+ * l'état laissé par ce recul (valeur = vrai repère − tampon, sync_id nul). Tout autre état
+ * (forceFullPull/réinitialisation à 1970, pull interrompu en cours de chunk, poste sans repère)
+ * retombe sur le curseur de pull, comportement historique inchangé.
+ *
+ * Le PULL lui-même (runDownstreamChunk) continue de partir du curseur reculé : dès qu'une
+ * carte réellement nouvelle est détectée, la fenêtre de sécurité de 2 min est réexaminée comme
+ * avant. Le cycle long de 2 h (triggerAutoDownstream) appelle runDownstream() sans comptage
+ * préalable et réexamine donc aussi cette fenêtre.
+ */
+export function resolvePendingCountCursor(
+  pullWatermark: string,
+  pullSyncId: string,
+  trueWatermark: string | null | undefined,
+  trueSyncId: string | null | undefined
+): { watermark: string; lastSyncId: string } {
+  if (trueWatermark) {
+    const trueMs = new Date(trueWatermark).getTime();
+    if (
+      !isNaN(trueMs) &&
+      pullWatermark === new Date(trueMs - WATERMARK_SAFETY_BUFFER_MS).toISOString() &&
+      (pullSyncId || ZERO_SYNC_ID) === ZERO_SYNC_ID
+    ) {
+      // Valeur brute (jamais renormalisée via Date) : une troncature des microsecondes
+      // Postgres ferait retomber la dernière carte reçue au-dessus du repère.
+      return { watermark: trueWatermark, lastSyncId: trueSyncId || ZERO_SYNC_ID };
+    }
+  }
+  return { watermark: pullWatermark, lastSyncId: pullSyncId };
+}
+
+/**
  * Calcule le nombre de cartes en attente de téléchargement depuis Supabase pour ce site,
  * SANS déclencher aucun téléchargement ni écriture SQLite — un simple COUNT(*) exact
  * (head: true, aucune ligne transférée). Requête volontairement dupliquée (et non extraite)
@@ -128,6 +178,9 @@ export async function getPendingCardsCount(siteId: number): Promise<number> {
     if (configRow && configRow.value) watermark = configRow.value;
     const configRowId = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
     if (configRowId && configRowId.value) lastSyncId = configRowId.value;
+    const trueRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_true'").get() as { value: string } | undefined;
+    const trueIdRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_true_id'").get() as { value: string } | undefined;
+    ({ watermark, lastSyncId } = resolvePendingCountCursor(watermark, lastSyncId, trueRow?.value, trueIdRow?.value));
 
     const { count, error } = await supabase.from('t_cartes')
       .select('*', { count: 'exact', head: true })
@@ -385,7 +438,7 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
   // chaque cycle sans nouvelles données ferait dériver le watermark indéfiniment vers
   // le passé (fenêtre de re-fetch grandissant sans borne à chaque cycle inactif).
   if (totalFetched > 0) {
-    const WATERMARK_SAFETY_BUFFER_MS = 2 * 60 * 1000;
+    // WATERMARK_SAFETY_BUFFER_MS : constante de module (partagée avec resolvePendingCountCursor).
     try {
       const finalWatermarkRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync'").get() as { value: string } | undefined;
       const finalSyncIdRow = db.prepare("SELECT value FROM t_config WHERE key = 'last_downstream_sync_id'").get() as { value: string } | undefined;
@@ -400,7 +453,9 @@ export async function runDownstream(siteId: number, force: boolean = false, noti
           // télécharger" qui ne recompte jamais du contenu déjà rapatrié à l'instant.
           // Ne JAMAIS lire ces clés pour piloter un vrai pull (runDownstream/
           // runDownstreamChunk) — seul le curseur de sécurité 'last_downstream_sync'/
-          // '_id' ci-dessous doit servir de base au prochain pull réel.
+          // '_id' ci-dessous doit servir de base au prochain pull réel. Exception : le
+          // COMPTAGE léger du cycle court (getPendingCardsCount) peut partir de ce repère,
+          // via resolvePendingCountCursor() — il décide seulement s'il faut lancer un pull.
           db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_true', ?)`).run(finalWatermarkRow.value);
           db.prepare(`INSERT OR REPLACE INTO t_config (key, value) VALUES ('last_downstream_sync_true_id', ?)`).run(finalSyncIdRow?.value || '00000000-0000-0000-0000-000000000000');
 
