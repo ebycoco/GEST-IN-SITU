@@ -1,4 +1,4 @@
-# GEST-IN-SITU — Prochaine version (non publiée)
+# GEST-IN-SITU — Release v2.28.0 (2026-11-24)
 
 ## 🚨 Sécurité
 - **Rôle SUPER ADMIN** : il ne peut plus être donné en rôle secondaire à un compte, à la création comme à la modification (message clair affiché). Un SUPER ADMIN l'est désormais uniquement par son rôle principal, comme le cloud l'exige déjà. La création d'un SUPER ADMIN en rôle principal ne change pas. Les comptes qui avaient déjà ce rôle en secondaire ne sont pas modifiés.

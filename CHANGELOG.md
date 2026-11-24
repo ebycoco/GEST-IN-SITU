@@ -4,6 +4,33 @@ Toutes les modifications notables de ce projet seront documentées dans ce fichi
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 et ce projet adhère au [Versionnage Sémantique](https://semver.org/spec/v2.0.0.html).
 
+## [2.28.0] - 2026-11-24
+
+### 🚨 Sécurité
+- **Rôle SUPER ADMIN** : il ne peut plus être donné en rôle secondaire à un compte, à la création comme à la modification (message clair affiché). Un SUPER ADMIN l'est désormais uniquement par son rôle principal, comme le cloud l'exige déjà. La création d'un SUPER ADMIN en rôle principal ne change pas. Les comptes qui avaient déjà ce rôle en secondaire ne sont pas modifiés.
+
+### 🚀 Nouveautés & Ergonomie
+- **Alerte « Retrait non retenu »** : quand un retrait fait sur le poste (souvent hors connexion) est écarté parce que la carte avait déjà été remise ailleurs, une bannière rouge persistante indique qui l'a remise et quand, jusqu'à ce que l'opérateur clique « J'ai vérifié ». Elle s'affiche en une bande rouge compacte (44 px, quel que soit le nombre d'alertes) qui s'ouvre au clic sans décaler la page. L'alerte ne concerne que les retraits réellement faits sur ce poste (pas de fausse alerte quand le poste renvoie une carte déjà délivrée ailleurs), elle est visible par les opérateurs de tout le site et seuls les rôles qui délivrent peuvent la voir et l'acquitter. Elle est conservée dans le journal local du poste, n'est pas envoyée au cloud, et un échec d'enregistrement de l'alerte n'empêche jamais la mise à jour de la carte.
+- **Récupération automatique des cartes** : activée par défaut pour le rôle Opérateur de vérification (un choix déjà fait dans le profil reste respecté). Le poste reçoit ainsi en un peu plus d'une minute les retraits enregistrés ailleurs (téléphone, autre poste). La préférence suit aussi le changement de rôle d'un compte multi-rôles.
+- **Écran de chargement** : un message « Optimisation de la base de données en cours… » s'affiche quand une mise à jour de la base est en attente (voir « À savoir » ci-dessous).
+
+### 🛠️ Corrections & Fiabilité
+- **Réception automatique des cartes : fin des téléchargements répétés.** Après avoir reçu des cartes, le poste relançait toutes les ~75 s un téléchargement complet des mêmes cartes (le comptage léger partait du curseur reculé de 2 min par sécurité). Le comptage part désormais du point exact atteint ; la marge de sécurité reste appliquée au vrai téléchargement. Environ 190 appels cloud par heure et par poste en moins, et plus d'écriture locale inutile.
+- **Rôle principal des agents** : modifier un compte qui a plusieurs rôles (par exemple seulement son nom) pouvait changer son rôle principal sans le vouloir, selon l'ordre interne des rôles. Le rôle principal est maintenant conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace, comme avant.
+- **Comptes ayant SUPER ADMIN en rôle secondaire (anciens comptes)** : décocher le rôle principal ne fait plus jamais de SUPER ADMIN le nouveau rôle principal ; s'il ne reste que SUPER ADMIN, l'écran refuse avec un message clair.
+- **Journal des droits** : la modification d'un agent enregistre maintenant les rôles réellement attribués (la liste était toujours vide auparavant).
+
+### ⚡ Performances & Optimisations
+- **Rattrapage des cartes manquantes limité à environ une fois par jour et par poste** (22 h minimum entre deux passages réussis) : la date du dernier passage réussi est mémorisée par site ; une reconnexion, un changement de rôle ou une bascule de la récupération automatique ne le relance plus ; une date enregistrée avec une horloge en avance est ignorée. En cas d'échec, nouvel essai espacé (1 h, 2 h, 4 h, puis 8 h maximum), sans répétition immédiate de la requête en échec (auparavant jusqu'à 4 envois par page pendant une panne Supabase). Réduit fortement le trafic Supabase (offre gratuite) ; indispensable avec la récupération automatique désormais active par défaut pour les opérateurs de vérification.
+- **Statistiques par centre (administrateur de centre, opérateur de vérification)** : nouvel index local (migration V73) qui accélère le calcul des doublons et des dates par centre (mesuré sur une copie de base : de ~7 s à ~1,5 s pour le plus gros centre, de 2 s à quelques centièmes pour un petit centre).
+- **Badge « cartes du centre »** : il est maintenant calculé par un simple comptage au lieu du calcul complet des statistiques (jusqu'à plusieurs secondes de moins à l'ouverture de l'écran de vérification, et le tableau de bord n'attend plus derrière ce calcul). Le nombre affiché ne change pas.
+
+### ℹ️ À savoir (administrateurs)
+- **Migration de base locale V73** : `SCHEMA_VERSION` passe de 72 à 73. Migration purement additive (création d'un index, aucune colonne ni donnée modifiée, rien d'envoyé au cloud) ; un échec éventuel ne bloque pas l'application et l'index est retenté au démarrage suivant.
+- **Premier démarrage plus long** : la création de l'index se fait une seule fois, au premier démarrage de cette version. L'écran de chargement peut rester immobile plus longtemps que d'habitude (de quelques secondes à plusieurs minutes selon le poste et la taille de la base ; mesuré de 17 s à plus de 4 minutes sur une grosse base de test). **Ne pas fermer l'application pendant ce premier démarrage.**
+- **Côté serveur** : les migrations Supabase `0019`, `0020` et `0021` (ainsi que `0011` à `0018` du chantier B) sont déjà appliquées en production. Cette version du poste n'exige aucune autre migration Supabase.
+- **Site téléphone** : le client téléphone de l'opérateur de vérification (dossier `mobile/`) est hébergé à part ; il n'est pas inclus dans le paquet Windows.
+
 ## [2.27.1] - 2026-11-17
 
 ### 🛠️ Corrections & Fiabilité
