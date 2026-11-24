@@ -119,6 +119,27 @@ non commitée). Dev nettoyé (vérifié par la session principale).
   en haut à droite qui couvrent « Voir » quelques secondes ; toast d'alerte pouvant chevaucher
   « Rechercher la Carte » si une ligne « Synchroniser mes actions » s'affiche en plus.
 
+## E5 à E7 — client téléphone (2026-11-24)
+- **E5** (agent-3, `e757aa2`) : dossier `mobile/` (Vite 5, React 19, supabase-js 2), session en
+  mémoire seulement, verrou 15 min = reconnexion, service worker sans cache de données.
+- **E6** (agent-9) : aucun P0 ; GO avec réserves pour le dev, NO-GO pilote prod en l'état
+  (0019/0020 non appliquées en prod, hébergement : `GIS_ALLOWED_ORIGINS` exact + CSP + en-têtes,
+  prérequis Q8). Six correctifs faits (agent-3, `99e0784`) : autocomplete off/new-password +
+  consigne `mobile/README.md`, réponses tardives ignorées, écran effacé avant fermeture, bon
+  retirant sur le succès, délai 30 s, COMPTE_INACTIF déconnecte.
+- **E7** (agent-13, dev, 360 px, 78/81 contrôles, aucun P0/P1) : connexion réelle, refus de rôle,
+  compte désactivé, aucun stockage navigateur hors coquille ; recherches, masquage, délivrances
+  assuré/tiers vérifiées en base ; tous les refus (fiche et course) ; triple clic = 1 écriture ;
+  coupure réseau → « Vérifier » → même `request_id`, 1 écriture ; deux opérateurs = 1 OK + 1
+  DEJA_DELIVREE ; verrou (horloge simulée), autre identifiant refusé, réponses tardives ignorées.
+  Dev nettoyé (vérifié par la session principale).
+- **Restent (P2)** : boucle « Rangement d'urgence obligatoire » si une carte est déclassée entre la
+  recherche et la confirmation ; jeton d'accès valable jusqu'à expiration après déconnexion
+  (normal, durée à fixer en prod) ; `num_retirant` au format brut pour l'assuré (hétérogène) ; lieu
+  de naissance absent de la liste des homonymes ; message trompeur au déverrouillage par un autre
+  compte ; vrai logo absent (pastille « GIS », icônes générées). Non testés : Chrome Android réel
+  (enregistrement du mot de passe), poste Windows (déjà fait en E4).
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de
