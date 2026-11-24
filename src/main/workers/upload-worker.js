@@ -82,6 +82,73 @@ function applyCloudStatusBlock(db, { sent, cloud, diff }) {
   );
 }
 
+// ─── Alerte « double délivrance » (P1-2, 2026-11-24) ─────────────────────────────
+// DUPLICATION VOLONTAIRE de src/main/sync/double-delivery-alert.ts (detectDoubleDelivery,
+// recordDoubleDeliveryAlert, buildDoubleDeliveryMessage) : même raison que le bloc statut
+// ci-dessus (worker copié sans bundler). Tenir les deux copies alignées.
+const DOUBLE_DELIVERY_ALERT_ACTION = 'ALERTE_DOUBLE_DELIVRANCE';
+const PROOF_COLUMNS = ['date_delivrance', 'agent_distributeur', 'centre_retrait', 'nom_retirant', 'num_retirant'];
+
+function proofOf(row) {
+  const out = {};
+  for (const c of PROOF_COLUMNS) {
+    const v = row[c];
+    out[c] = v === undefined || v === null || v === '' ? null : String(v);
+  }
+  return out;
+}
+
+function detectDoubleDelivery(sent, cloud, diff) {
+  if (sent.statut !== 'DELIVRE' || cloud.statut !== 'DELIVRE') return null;
+  if (!diff.includes('date_delivrance') && !diff.includes('agent_distributeur')) return null;
+  const carteSyncId = sent.sync_id ? String(sent.sync_id) : '';
+  if (!carteSyncId) return null;
+  return {
+    carteSyncId,
+    noms: sent.noms ? String(sent.noms) : '',
+    prenoms: sent.prenoms ? String(sent.prenoms) : '',
+    garde: proofOf(cloud),
+    ecarte: proofOf(sent)
+  };
+}
+
+function formatProofDate(value) {
+  if (!value) return 'date inconnue';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function buildDoubleDeliveryMessage(info) {
+  const nom = [info.prenoms, info.noms].filter(Boolean).join(' ').trim() || 'sans nom';
+  const agent = info.garde.agent_distributeur || 'un autre agent';
+  return `Carte ${nom} déjà remise par ${agent} le ${formatProofDate(info.garde.date_delivrance)} — ` +
+    `votre retrait sur ce poste n'a pas été retenu, vérifiez auprès du retirant.`;
+}
+
+/** Alerte locale (is_dirty 0, jamais mise en file), une seule par carte et par site. true si créée. */
+function recordDoubleDeliveryAlert(db, info, siteId, centreId) {
+  const exists = db.prepare(`
+    SELECT 1 FROM t_logs
+    WHERE action = ? AND site_id IS ? AND json_extract(valeur_apres, '$.carte_sync_id') = ?
+    LIMIT 1
+  `).get(DOUBLE_DELIVERY_ALERT_ACTION, siteId, info.carteSyncId);
+  if (exists) return false;
+  db.prepare(`
+    INSERT INTO t_logs (id_user, login_user, action, detail, valeur_avant, valeur_apres, sync_id, is_dirty, is_read, site_id, centre_id)
+    VALUES (NULL, 'SYSTEM', ?, ?, ?, ?, ?, 0, 0, ?, ?)
+  `).run(
+    DOUBLE_DELIVERY_ALERT_ACTION,
+    buildDoubleDeliveryMessage(info),
+    JSON.stringify({ carte_sync_id: info.carteSyncId, ecarte: info.ecarte }),
+    JSON.stringify({ carte_sync_id: info.carteSyncId, noms: info.noms, prenoms: info.prenoms, garde: info.garde }),
+    randomUUID(),
+    siteId,
+    centreId
+  );
+  return true;
+}
 
 // ─── Délai maximal par requête et arrêt sur réseau défaillant (audit agent-13 2026-10-31, P1-3) ───
 // Sans délai, une requête vers un réseau qui se bloque après la garde d'alignement restait pendante
@@ -419,6 +486,7 @@ async function run() {
             // Sans trigger (prod actuelle), la réponse = l'envoi → aucune carte en conflit.
             const conflicts = findStatusConflicts(mappedCards, cloudRows);
             const syncIds = validCards.map(c => c.sync_id).filter(id => !conflicts.has(id));
+            let newDoubleDeliveryAlerts = 0;
             db.transaction(() => {
               if (syncIds.length > 0) {
                 const placeholders = syncIds.map(() => '?').join(',');
@@ -427,10 +495,18 @@ async function run() {
               }
               for (const conflict of conflicts.values()) {
                 applyCloudStatusBlock(db, conflict);
+                // P1-2 : délivrance de ce poste écartée au profit d'une autre -> alerte locale.
+                const info = detectDoubleDelivery(conflict.sent, conflict.cloud, conflict.diff);
+                if (info && recordDoubleDeliveryAlert(db, info, conflict.sent.id_site ?? null, conflict.sent.id_centre ?? null)) {
+                  newDoubleDeliveryAlerts++;
+                }
               }
             })();
             if (conflicts.size > 0) {
               parentPort.postMessage({ type: 'log', level: 'warn', message: `Bloc ${blockIndex} : ${conflicts.size} carte(s) en conflit de statut, bloc statut du cloud appliqué localement (CONFLIT_SYNC_STATUT).` });
+            }
+            if (newDoubleDeliveryAlerts > 0) {
+              parentPort.postMessage({ type: 'double-delivery', count: newDoubleDeliveryAlerts });
             }
           } catch (txErr) {
             parentPort.postMessage({ type: 'log', level: 'error', message: `Erreur SQLite locale bloc ${blockIndex} : ${txErr.message}` });

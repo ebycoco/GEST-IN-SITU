@@ -37,6 +37,9 @@ export const AUTO_DOWNSTREAM_CHANGED_EVENT = 'app:auto-downstream-changed';
  */
 export function useAutoDownstreamPreference(): boolean {
   const userId = useAuthStore((state) => state.user?.id_user);
+  // P1-1 (2026-11-24) : sans choix explicite, la valeur par défaut dépend du rôle ACTIF côté main
+  // (activée pour OPERATEUR_VERIFICATION) -> relecture au changement de rôle (compte multi-rôles).
+  const activeRole = useAuthStore((state) => state.user?.role);
   const [autoDownstream, setAutoDownstream] = useState(false);
 
   const fetchPreference = useCallback(() => {
@@ -53,7 +56,7 @@ export function useAutoDownstreamPreference(): boolean {
 
   useEffect(() => {
     fetchPreference();
-  }, [fetchPreference]);
+  }, [fetchPreference, activeRole]);
 
   useEffect(() => {
     window.addEventListener(AUTO_DOWNSTREAM_CHANGED_EVENT, fetchPreference);

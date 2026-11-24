@@ -1,11 +1,12 @@
 import log from 'electron-log';
 import { Worker } from 'worker_threads';
 import { join } from 'path';
-import { app } from 'electron';
+import { app, BrowserWindow } from 'electron';
 import { getDbPath, getDatabase } from '../database/connection';
 import { networkMonitor } from './network-monitor';
 import { logAudit } from '../utils/audit';
 import { checkHierarchyAlignmentForUpload } from './outbox.service';
+import { DOUBLE_DELIVERY_ALERT_CHANNEL } from './double-delivery-alert';
 
 // ─── SIGNAL D'ANNULATION GLOBAL ─────────────────────────────────────────────
 let _currentWorker: Worker | null = null;
@@ -209,6 +210,14 @@ function startUploadWorker(
           progressCallback(msg.progress);
           // Optionnel : on peut logger discrètement si nécessaire, 
           // mais le Worker a déjà un log minimal.
+          break;
+        case 'double-delivery':
+          // P1-2 : le worker a créé une ou plusieurs alertes double délivrance (t_logs local) :
+          // simple signal au renderer, qui relit la liste filtrée par la session serveur.
+          log.warn(`[BulkUpload] ${msg.count} alerte(s) double délivrance créée(s).`);
+          BrowserWindow.getAllWindows().forEach(w => {
+            if (!w.isDestroyed()) w.webContents.send(DOUBLE_DELIVERY_ALERT_CHANNEL, { count: msg.count });
+          });
           break;
         case 'log':
           if (msg.level === 'error') log.error(`[UploadWorker] ${msg.message}`);

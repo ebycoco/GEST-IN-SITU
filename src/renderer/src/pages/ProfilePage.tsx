@@ -117,7 +117,8 @@ export default function ProfilePage() {
         setIsLoadingSyncPref(false);
       });
     }
-  }, [user?.id_user]);
+    // user?.role : sans choix explicite, le défaut suit le rôle actif côté main (P1-1).
+  }, [user?.id_user, user?.role]);
 
   const handleToggleAutoDownstream = async () => {
     if (!user?.id_user) return;

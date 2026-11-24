@@ -7,6 +7,7 @@ import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
 import { insertAuditLog } from '../database/queries/audit.queries';
 import { realignLocalId, sameIdentity, LOCAL_COLS, type HierarchyLevel, type LocalHierarchyRow } from './hierarchy-realign';
+import { detectDoubleDelivery, recordDoubleDeliveryAlert, DOUBLE_DELIVERY_ALERT_CHANNEL } from './double-delivery-alert';
 
 // ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
 /**
@@ -485,6 +486,8 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
   // d'envoi" côté UI) — sert uniquement à notifier le Renderer via 'sync:users-synced'
   // pour rafraîchir le badge pendingPushUsersCount de AgentsPage sans polling.
   let usersSyncedCount = 0;
+  // Alertes double délivrance créées pendant ce passage (P1-2, double-delivery-alert.ts).
+  let doubleDeliveryAlerts = 0;
 
   try {
     const db = getDatabase();
@@ -879,6 +882,17 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
             // Même transaction que le passage SYNCED : bloc cloud + updated_at cloud + is_dirty 0
             // + t_logs. Pas de nouvelle mise en file : le cloud porte déjà la version juste.
             _applyCloudStatusBlock(db, sentCardPayload, cloudCardRow, statusConflict);
+            // P1-2 : délivrance de ce poste écartée au profit d'une autre délivrance -> alerte
+            // locale persistante (même transaction, une seule par carte). Voir double-delivery-alert.ts.
+            const doubleDelivery = detectDoubleDelivery(sentCardPayload, cloudCardRow, statusConflict);
+            if (doubleDelivery && recordDoubleDeliveryAlert(
+              db,
+              doubleDelivery,
+              (sentCardPayload.id_site ?? null) as number | null,
+              (sentCardPayload.id_centre ?? null) as number | null
+            )) {
+              doubleDeliveryAlerts++;
+            }
           } else if (entry.operation !== 'DELETE') {
             const syncIdValue = (payload['sync_id'] || payload['user_sync_id']) as string | undefined;
             _clearLocalDirtyFlag(db, entry.table_name, syncIdValue);
@@ -931,6 +945,14 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
     if (usersSyncedCount > 0) {
       BrowserWindow.getAllWindows().forEach(w => {
         if (!w.isDestroyed()) w.webContents.send('sync:users-synced', { count: usersSyncedCount });
+      });
+    }
+
+    // P1-2 : nouvelle(s) alerte(s) double délivrance -> le renderer relit la liste (canal dédié,
+    // simple signal sans donnée : la liste est relue via IPC, filtrée par la session serveur).
+    if (doubleDeliveryAlerts > 0) {
+      BrowserWindow.getAllWindows().forEach(w => {
+        if (!w.isDestroyed()) w.webContents.send(DOUBLE_DELIVERY_ALERT_CHANNEL, { count: doubleDeliveryAlerts });
       });
     }
 

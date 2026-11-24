@@ -29,6 +29,8 @@ import { classifyImportOutcome, isSupportedImportFile, UNSUPPORTED_IMPORT_FILE_M
 import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.service';
 import { listClientVersions, reportClientVersionAfterLogin } from '../sync/client-version.service';
 import type { PostesVersionsResult } from '../../shared/types';
+import { readAutoDownstreamPreference, readStoredAutoDownstream, resolveAutoDownstreamPreference } from '../sync/auto-downstream-preference';
+import { listPendingDoubleDeliveryAlerts, acknowledgeDoubleDeliveryAlert, resolveDoubleDeliveryScope } from '../sync/double-delivery-alert';
 
 const FAILSAFE_ROOT_ID = 999999;
 
@@ -330,8 +332,12 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
           try {
             const db = getDatabase();
             if (db) {
-              const pref = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${user.id_user}`) as { value: string } | undefined;
-              if (pref && pref.value === 'true') {
+              // P1-1 (2026-11-24) : résolution partagée (auto-downstream-preference.ts). Valeur
+              // explicite respectée ; clé absente -> défaut par rôle ACTIF de la session serveur
+              // (activé pour OPERATEUR_VERIFICATION). Rôle lu sur getSecureCurrentUser() (posé
+              // par startSessionHeartbeat ci-dessus), jamais sur t_users (CLAUDE.md §3).
+              const activeRole = getSecureCurrentUser()?.role ?? user.role;
+              if (readAutoDownstreamPreference(db, user.id_user, activeRole)) {
                 syncEngine.startAutoDownstreamTimer(user.site_id);
               }
             }
@@ -445,6 +451,25 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
         }
       } catch (upstreamPrefErr) {
         log.warn('Failed to read auto_upstream preference on role switch:', upstreamPrefErr);
+      }
+
+      // P1-1 (2026-11-24) : même réévaluation pour la "Récupération automatique des cartes",
+      // UNIQUEMENT quand le compte n'a jamais fait de choix explicite (clé absente) — un choix
+      // explicite a déjà été appliqué au login et ne dépend pas du rôle. Cas visé : compte
+      // multi-rôles connecté avec un autre rôle principal, qui choisit OPERATEUR_VERIFICATION
+      // (le timer doit démarrer) ou qui le quitte (le timer doit s'arrêter, comme l'affiche
+      // sync:getAutoDownstream). start/stop sont idempotents (sync-engine.ts).
+      try {
+        const db = getDatabase();
+        if (db && readStoredAutoDownstream(db, secureUser.id_user) === undefined) {
+          if (resolveAutoDownstreamPreference(undefined, requestedRole)) {
+            if (secureUser.site_id) syncEngine.startAutoDownstreamTimer(secureUser.site_id);
+          } else {
+            syncEngine.stopAutoDownstreamTimer();
+          }
+        }
+      } catch (downstreamPrefErr) {
+        log.warn('Failed to re-evaluate auto_downstream preference on role switch:', downstreamPrefErr);
       }
 
       return { success: true, activeRole: requestedRole };
@@ -5031,11 +5056,43 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
       if (!secureUser) return false;
       const db = getDatabase();
       if (!db) return false;
-      const row = db.prepare("SELECT value FROM t_config WHERE key = ?").get(`auto_downstream_${secureUser.id_user}`) as { value: string } | undefined;
-      return row ? row.value === 'true' : false;
+      // Même résolution que le login (auto-downstream-preference.ts) : défaut par rôle ACTIF
+      // si la clé est absente, valeur explicite respectée sinon.
+      return readAutoDownstreamPreference(db, secureUser.id_user, secureUser.role);
     } catch (e) {
       log.warn('Erreur getAutoDownstream:', e);
       return false;
+    }
+  });
+
+  // P1-2 (2026-11-24) : alertes « double délivrance » non acquittées de ce poste (t_logs local
+  // ALERTE_DOUBLE_DELIVRANCE, cf. src/main/sync/double-delivery-alert.ts). Portée dérivée de la
+  // session serveur (rôle actif, site, centre — CLAUDE.md §3), aucun paramètre d'identité client.
+  ipcMain.handle('sync:getDoubleDeliveryAlerts', async () => {
+    try {
+      const scope = resolveDoubleDeliveryScope(getSecureCurrentUser());
+      const db = getDatabase();
+      if (!scope || !db) return [];
+      return listPendingDoubleDeliveryAlerts(db, scope);
+    } catch (e) {
+      log.warn('Erreur getDoubleDeliveryAlerts:', e);
+      return [];
+    }
+  });
+
+  ipcMain.handle('sync:acknowledgeDoubleDeliveryAlert', async (_, idLog: number) => {
+    try {
+      const secureUser = getSecureCurrentUser();
+      const scope = resolveDoubleDeliveryScope(secureUser);
+      const db = getDatabase();
+      if (!secureUser || !scope || !db) return { success: false };
+      // ROOT Failsafe (id 999999) absent de t_users : id_user neutralisé (FK t_logs.id_user).
+      const actorId = secureUser.id_user === FAILSAFE_ROOT_ID ? null : (secureUser.id_user ?? null);
+      const ok = acknowledgeDoubleDeliveryAlert(db, Number(idLog), scope, { id_user: actorId, login: secureUser.login });
+      return { success: ok };
+    } catch (e) {
+      log.warn('Erreur acknowledgeDoubleDeliveryAlert:', e);
+      return { success: false };
     }
   });
 

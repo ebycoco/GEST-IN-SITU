@@ -4,9 +4,13 @@
 - **Rôle SUPER ADMIN** : il ne peut plus être donné en rôle secondaire à un compte, à la création comme à la modification (message clair affiché). Un SUPER ADMIN l'est désormais uniquement par son rôle principal, comme le cloud l'exige déjà. La création d'un SUPER ADMIN en rôle principal ne change pas. Les comptes qui avaient déjà ce rôle en secondaire ne sont pas modifiés.
 
 ## 🛠️ Corrections & Fiabilité
+- **Récupération automatique des cartes** : activée par défaut pour le rôle Opérateur de vérification (un choix déjà fait dans le profil reste respecté). Le poste reçoit ainsi en un peu plus d'une minute les retraits enregistrés ailleurs (téléphone, autre poste). La préférence suit aussi le changement de rôle d'un compte multi-rôles.
 - **Rôle principal des agents** : modifier un compte qui a plusieurs rôles (par exemple seulement son nom) pouvait changer son rôle principal sans le vouloir, selon l'ordre interne des rôles. Le rôle principal est maintenant conservé tant qu'il reste coché ; s'il est décoché, le premier rôle restant le remplace, comme avant.
 - **Comptes ayant SUPER ADMIN en rôle secondaire (anciens comptes)** : décocher le rôle principal ne fait plus jamais de SUPER ADMIN le nouveau rôle principal ; s'il ne reste que SUPER ADMIN, l'écran refuse avec un message clair.
 - **Journal des droits** : la modification d'un agent enregistre maintenant les rôles réellement attribués (la liste était toujours vide auparavant).
+
+## 🚀 Nouveautés & Ergonomie
+- **Alerte « Retrait non retenu »** : quand un retrait fait sur le poste (souvent hors connexion) est écarté parce que la carte avait déjà été remise ailleurs, une bannière rouge persistante indique qui l'a remise et quand, jusqu'à ce que l'opérateur clique « J'ai vérifié ». L'alerte est conservée dans le journal local du poste et n'est pas envoyée au cloud.
 
 ## ⚡ Performances
 - **Statistiques par centre (administrateur de centre, opérateur de vérification)** : nouvel index local (migration V73) qui accélère le calcul des doublons et des dates par centre (mesuré sur une copie de base : de ~7 s à ~1,5 s pour le plus gros centre, de 2 s à quelques centièmes pour un petit centre). La création de l'index se fait une seule fois, au premier démarrage de cette version : l'écran de chargement peut rester immobile plus longtemps que d'habitude (durée variable selon le poste et la taille de la base : de quelques secondes à plusieurs minutes, mesuré de 17 s à plus de 4 minutes sur une grosse base de test). **Ne pas fermer l'application pendant ce premier démarrage.** Un message l'indique désormais sur l'écran de chargement (« Optimisation de la base de données en cours… »), affiché uniquement quand une mise à jour de la base est en attente.

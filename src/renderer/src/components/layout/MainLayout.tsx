@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
+import DoubleDeliveryAlertBanner from './DoubleDeliveryAlertBanner';
 import { useSyncDownstreamStore } from '../../stores/syncDownstreamStore';
 import { useAuthStore } from '../../stores/authStore';
 import { Globe } from 'lucide-react';
@@ -118,6 +119,8 @@ export default function MainLayout() {
       <Sidebar />
       <div className="main-content">
         <TopBar />
+        {/* Alertes « double délivrance » (P1-2) : persistantes, sur toutes les pages, jusqu'à acquittement */}
+        <DoubleDeliveryAlertBanner />
         <div className="page-content" style={{ position: 'relative' }}>
           {/* Overlay de chargement global */}
           {initialDataLoading && (

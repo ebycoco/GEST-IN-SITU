@@ -234,6 +234,19 @@ declare global {
 
         getAutoDownstream: () => Promise<boolean>;
         setAutoDownstream: (enabled: boolean) => Promise<{ success: boolean }>;
+        // P1-2 : alertes « double délivrance » non acquittées (portée = session serveur).
+        getDoubleDeliveryAlerts: () => Promise<Array<{
+          id_log: number;
+          date_heure: string | null;
+          carte_sync_id: string;
+          noms: string;
+          prenoms: string;
+          garde: { date_delivrance: string | null; agent_distributeur: string | null; centre_retrait: string | null; nom_retirant: string | null; num_retirant: string | null };
+          ecarte: { date_delivrance: string | null; agent_distributeur: string | null; centre_retrait: string | null; nom_retirant: string | null; num_retirant: string | null } | null;
+          message: string;
+        }>>;
+        acknowledgeDoubleDeliveryAlert: (idLog: number) => Promise<{ success: boolean }>;
+        onDoubleDeliveryAlert: (callback: (data: { count: number }) => void) => () => void;
         getAutoUpstream: () => Promise<boolean>;
         setAutoUpstream: (enabled: boolean) => Promise<{ success: boolean }>;
         getCardsOutboxPendingCount: () => Promise<number>;

@@ -511,6 +511,17 @@ const api = {
       ipcRenderer.invoke('sync:getAutoDownstream'),
     setAutoDownstream: (enabled: boolean): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('sync:setAutoDownstream', enabled),
+    // P1-2 : alertes « double délivrance » (t_logs local ALERTE_DOUBLE_DELIVRANCE). Portée dérivée
+    // côté main de la session serveur ; aucun paramètre d'identité transmis.
+    getDoubleDeliveryAlerts: (): Promise<any[]> =>
+      ipcRenderer.invoke('sync:getDoubleDeliveryAlerts'),
+    acknowledgeDoubleDeliveryAlert: (idLog: number): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:acknowledgeDoubleDeliveryAlert', idLog),
+    onDoubleDeliveryAlert: (callback: (data: { count: number }) => void) => {
+      const listener = (_: any, data: { count: number }) => callback(data);
+      ipcRenderer.on('sync:double-delivery-alert', listener);
+      return () => ipcRenderer.removeListener('sync:double-delivery-alert', listener);
+    },
     // Contrôle l'envoi automatique des CARTES (t_cartes) uniquement vers Supabase — même
     // pattern de sécurité que getAutoDownstream/setAutoDownstream (identité dérivée côté
     // main de la session serveur réelle, aucun paramètre d'identité transmis ici).
