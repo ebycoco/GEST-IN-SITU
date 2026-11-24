@@ -634,6 +634,17 @@ réussie le même jour** (site téléphone construit pour la prod, servi sur loc
 identité créée (`t_auth_identity`, 13:30 UTC), recherche `VERIFICATION_RECHERCHE` canal MOBILE
 journalisée avec site 4 / centre 4 (13:41 UTC), aucun retrait.
 
+**0021 (allègement des index de `t_cartes`, 2026-11-24, accord utilisateur, plan
+`docs/PLAN_QUOTA_SUPABASE_GRATUIT.md`)** : une instruction par exécution (`DROP` / `REINDEX ...
+CONCURRENTLY`, hors transaction, via `execute_sql`). Dev d'abord (répétition, 0 index invalide),
+puis prod ~16:00 UTC : 7 index supprimés (`idx_cartes_sync_id`, `_cle_flex`, `_prenoms`,
+`_contact`, `_statut`, `_statut_phys`, `_rangement`), `idx_cartes_site_updated_syncid`
+(46 → 16 Mo) et `t_cartes_sync_id_key` (21 → 13 Mo) reconstruits. Base prod **368 → 253 Mo**,
+index de `t_cartes` 221 → 106 Mo, 222 510 cartes inchangées, 0 index invalide. Groupe 2 non
+traité : compteurs de référence relevés le 2026-11-24 16:03 UTC (`idx_cartes_cle_doublon`=5233,
+`idx_cartes_num_secu`=3, `idx_cartes_site_statut`=65, `idx_cartes_sync`=5) — à comparer après
+7 jours. Retour arrière : bloc en fin de `0021_allegement_index_t_cartes.sql`.
+
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
 réels du hook sur le dev »). Valeur `authentication_method` reçue pour gis-login + `verifyOtp` :
