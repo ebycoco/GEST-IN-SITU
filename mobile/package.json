@@ -1,0 +1,28 @@
+{
+  "name": "gest-in-situ-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GEST-IN-SITU - client telephone (PWA) pour OPERATEUR_VERIFICATION (docs/PLAN_MOBILE_V1.md, E5)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "icons": "node scripts/gen-icons.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.0",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.0"
+  }
+}

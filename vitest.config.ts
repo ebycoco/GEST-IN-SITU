@@ -20,7 +20,8 @@ export default defineConfig({
       '**/dist/**',
       '**/out/**',
       '**/build/**',
-      'e2e/**'
+      'e2e/**',
+      'mobile/**'
     ]
   }
 });

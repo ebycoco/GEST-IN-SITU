@@ -1,0 +1,7 @@
+# Client telephone : rien de local ni de genere n'est suivi.
+node_modules/
+dist/
+# Variables : seules les valeurs vides d'exemple sont suivies.
+.env
+.env.*
+!.env.example
