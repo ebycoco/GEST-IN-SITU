@@ -109,6 +109,16 @@ non commitée). Dev nettoyé (vérifié par la session principale).
   gardés dans le cloud. Non testés en vrai : copie périmée avec date différente (P2-1), conflit
   par le worker d'envoi en masse, émargement rétroactif.
 
+- Commit `d6487fe` (agent-4 + agent-2) : fin du retéléchargement en boucle du cycle court
+  (comptage léger depuis `last_downstream_sync_true`, défaut présent depuis `12dea6f`) et bande
+  d'alerte compacte (44 px, panneau superposé, toast en bas au centre). Test vivant agent-13
+  (dev, 49/49) : 0 pull ciblé et 0 `fn_downstream_cartes_chunk` sur 390 s d'inactivité ; carte
+  du téléphone reçue en 44 s ; requêtes du processus principal sur 5 min 39 → 20 ; « Rechercher
+  la Carte » au-dessus du pli avec 1 ou 2 alertes ; panneau clic/clavier/Échap OK ; acquittement
+  OK ; rien pour OPERATEUR_QUALITE. Dev nettoyé (vérifié). Restent (P2) : toasts d'autres écrans
+  en haut à droite qui couvrent « Voir » quelques secondes ; toast d'alerte pouvant chevaucher
+  « Rechercher la Carte » si une ligne « Synchroniser mes actions » s'affiche en plus.
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de
