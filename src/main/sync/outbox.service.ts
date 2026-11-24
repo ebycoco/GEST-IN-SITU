@@ -7,7 +7,7 @@ import { networkMonitor } from './network-monitor';
 import { mapCardPayload } from './payload-mapper';
 import { insertAuditLog } from '../database/queries/audit.queries';
 import { realignLocalId, sameIdentity, LOCAL_COLS, type HierarchyLevel, type LocalHierarchyRow } from './hierarchy-realign';
-import { detectDoubleDelivery, recordDoubleDeliveryAlert, DOUBLE_DELIVERY_ALERT_CHANNEL } from './double-delivery-alert';
+import { detectDoubleDelivery, readLocalSyncedAt, recordDoubleDeliveryAlertSafely, DOUBLE_DELIVERY_ALERT_CHANNEL } from './double-delivery-alert';
 
 // ─── État en mémoire : gating "Envoi Automatique" des cartes (upstream) ─────
 /**
@@ -881,15 +881,20 @@ export async function processOutboxPending(fromPeriodicCycle: boolean = false, f
           if (statusConflict.length > 0 && sentCardPayload && cloudCardRow) {
             // Même transaction que le passage SYNCED : bloc cloud + updated_at cloud + is_dirty 0
             // + t_logs. Pas de nouvelle mise en file : le cloud porte déjà la version juste.
+            // P2-1 : synced_at local lu AVANT l'alignement (qui le remet à maintenant) pour savoir
+            // si la remise envoyée a réellement été faite sur ce poste. Voir double-delivery-alert.ts.
+            const localSyncedAt = readLocalSyncedAt(db, sentCardPayload.sync_id, sentCardPayload.id_site);
             _applyCloudStatusBlock(db, sentCardPayload, cloudCardRow, statusConflict);
             // P1-2 : délivrance de ce poste écartée au profit d'une autre délivrance -> alerte
-            // locale persistante (même transaction, une seule par carte). Voir double-delivery-alert.ts.
-            const doubleDelivery = detectDoubleDelivery(sentCardPayload, cloudCardRow, statusConflict);
-            if (doubleDelivery && recordDoubleDeliveryAlert(
+            // locale persistante (une seule par carte), sous point de sauvegarde : un échec de
+            // l'alerte est journalisé et n'annule pas l'alignement ci-dessus (P2-4).
+            const doubleDelivery = detectDoubleDelivery(sentCardPayload, cloudCardRow, statusConflict, localSyncedAt);
+            if (doubleDelivery && recordDoubleDeliveryAlertSafely(
               db,
               doubleDelivery,
               (sentCardPayload.id_site ?? null) as number | null,
-              (sentCardPayload.id_centre ?? null) as number | null
+              (sentCardPayload.id_centre ?? null) as number | null,
+              (err) => log.error(`[OutboxService] Alerte double délivrance non enregistrée (carte ${String(sentCardPayload?.sync_id)}), alignement conservé :`, err)
             )) {
               doubleDeliveryAlerts++;
             }

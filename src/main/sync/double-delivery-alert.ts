@@ -21,13 +21,15 @@ import { v4 as uuidv4 } from 'uuid';
  * t_outbox, hors CRUD_SYNC_WHITELIST) : le cloud trace déjà l'arbitrage dans t_sync_conflicts ;
  * l'alerte concerne l'opérateur de CE poste, la remonter consommerait du quota pour rien et la
  * ferait apparaître sur les autres postes. Écrite dans la MÊME transaction que l'alignement de la
- * carte. is_read = 0 tant que l'alerte n'est pas acquittée ; l'acquittement passe is_read à 1 et
+ * carte, sous un point de sauvegarde : un échec de l'alerte n'annule jamais l'alignement (P2-4).
+ * is_read = 0 tant que l'alerte n'est pas acquittée ; l'acquittement passe is_read à 1 et
  * ajoute une ligne ALERTE_DOUBLE_DELIVRANCE_ACQUITTEE (qui, quand), elle aussi locale.
  *
  * Anti-doublon : une seule alerte par carte (sync_id de la carte, même site), même si les deux
  * chemins d'envoi (outbox et envoi en masse) voient le conflit.
  *
- * DUPLICATION VOLONTAIRE de detectDoubleDelivery/recordDoubleDeliveryAlert dans
+ * DUPLICATION VOLONTAIRE de parseTimestampMs/isUnacknowledgedLocalDelivery/readLocalSyncedAt/
+ * detectDoubleDelivery/recordDoubleDeliveryAlert/recordDoubleDeliveryAlertSafely dans
  * src/main/workers/upload-worker.js (worker copié sans bundler, ne peut pas importer ce module).
  * Tenir les deux copies alignées.
  */
@@ -60,21 +62,81 @@ function proofOf(row: Record<string, unknown>): DeliveryProof {
 }
 
 /**
+ * Horodatage -> ms epoch. Accepte l'ISO (date_delivrance, avec Z ou +00:00) et le format SQLite
+ * datetime('now') « YYYY-MM-DD HH:MM:SS » (synced_at local), lu en UTC comme SQLite l'écrit.
+ * NaN si vide ou illisible.
+ */
+export function parseTimestampMs(value: unknown): number {
+  if (value === null || value === undefined || value === '') return NaN;
+  const s = String(value).trim();
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s) ? s.replace(' ', 'T') + 'Z' : s;
+  return Date.parse(iso);
+}
+
+/**
+ * P2-1 (audit 2026-11-24) : la délivrance envoyée est-elle une remise faite sur CE poste et pas
+ * encore acceptée par le cloud ?
+ *
+ * Critère : synced_at LOCAL de la carte, lu AVANT l'alignement sur le bloc cloud, comparé à la
+ * date_delivrance envoyée, à la seconde (synced_at est tronqué à la seconde).
+ *  - synced_at vide : carte jamais synchronisée -> la délivrance est forcément locale -> true.
+ *  - date_delivrance dans une seconde strictement postérieure au dernier synced_at : la remise a
+ *    eu lieu sur ce poste depuis son dernier échange avec le cloud -> true.
+ *  - sinon (date_delivrance <= synced_at) : le poste a déjà échangé la carte avec le cloud APRÈS
+ *    cette remise (sa propre remise déjà acceptée, ou copie DELIVRE reçue d'un autre poste) : le
+ *    renvoi n'est qu'une copie périmée du bloc statut (ex. date corrigée ailleurs par
+ *    corrigerApurementRetirant, puis carte modifiée ici pour une autre raison) -> false.
+ * Horloges : remise locale -> date_delivrance et synced_at viennent toutes deux de l'horloge de ce
+ * poste (delivrerCarte / datetime('now')) ; copie téléchargée -> synced_at = updated_at cloud
+ * (download-worker.js), posé par le même poste que la date_delivrance reçue.
+ * Date illisible : true (prudence : une alerte à vérifier plutôt qu'une double remise passée sous
+ * silence). Limite assumée : un émargement rétroactif (updateApurementHistorique, date saisie
+ * dans le passé) n'est pas reconnu comme remise locale ; le conflit reste tracé par
+ * CONFLIT_SYNC_STATUT.
+ */
+export function isUnacknowledgedLocalDelivery(sentDateDelivrance: unknown, localSyncedAt: unknown): boolean {
+  if (localSyncedAt === null || localSyncedAt === undefined || localSyncedAt === '') return true;
+  const synced = parseTimestampMs(localSyncedAt);
+  const delivered = parseTimestampMs(sentDateDelivrance);
+  if (Number.isNaN(synced) || Number.isNaN(delivered)) return true;
+  return Math.floor(delivered / 1000) > Math.floor(synced / 1000);
+}
+
+/**
+ * synced_at local de la carte (filtre sync_id + site_id, comme l'alignement). À lire AVANT
+ * d'appliquer le bloc cloud (qui le remet à maintenant). undefined si la carte est introuvable
+ * ou si la lecture échoue (jamais bloquant pour l'alignement).
+ */
+export function readLocalSyncedAt(db: Database.Database, syncId: unknown, siteId: unknown): string | null | undefined {
+  try {
+    const row = db.prepare('SELECT synced_at FROM t_cartes WHERE sync_id = ? AND site_id = ?')
+      .get(String(syncId), siteId as number) as { synced_at: string | null } | undefined;
+    return row ? row.synced_at : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Fonction pure. Double délivrance = la carte a été envoyée DELIVRE, le cloud a gardé une
- * délivrance DELIVRE, et la preuve diffère sur la date ou l'agent (diffColumns = colonnes du bloc
- * statut qui diffèrent, déjà normalisées par l'appelant). Une simple correction de retirant
- * (apurement, même date et même agent) ou un statut cloud autre que DELIVRE ne déclenche rien ici
- * (reste tracé par CONFLIT_SYNC_STATUT).
+ * délivrance DELIVRE, la preuve diffère sur la date ou l'agent (diffColumns = colonnes du bloc
+ * statut qui diffèrent, déjà normalisées par l'appelant) ET la remise envoyée a réellement été
+ * faite sur ce poste sans avoir encore été acceptée (isUnacknowledgedLocalDelivery, P2-1 ;
+ * localSyncedAt = synced_at local lu avant l'alignement). Une simple correction de retirant
+ * (même date et même agent), un statut cloud autre que DELIVRE ou une copie périmée ne
+ * déclenchent rien ici (reste tracé par CONFLIT_SYNC_STATUT).
  */
 export function detectDoubleDelivery(
   sent: Record<string, unknown>,
   cloud: Record<string, unknown>,
-  diffColumns: readonly string[]
+  diffColumns: readonly string[],
+  localSyncedAt: string | null | undefined
 ): DoubleDeliveryInfo | null {
   if (sent.statut !== 'DELIVRE' || cloud.statut !== 'DELIVRE') return null;
   if (!diffColumns.includes('date_delivrance') && !diffColumns.includes('agent_distributeur')) return null;
   const carteSyncId = sent.sync_id ? String(sent.sync_id) : '';
   if (!carteSyncId) return null;
+  if (!isUnacknowledgedLocalDelivery(sent.date_delivrance, localSyncedAt)) return null;
   return {
     carteSyncId,
     noms: sent.noms ? String(sent.noms) : '',
@@ -101,8 +163,9 @@ export function buildDoubleDeliveryMessage(info: Pick<DoubleDeliveryInfo, 'noms'
 }
 
 /**
- * Écrit l'alerte (une seule par carte et par site). À appeler DANS la transaction qui aligne la
- * carte sur le bloc cloud. Retourne true si une nouvelle alerte a été créée.
+ * Écrit l'alerte (une seule par carte et par site). Les chemins d'envoi l'appellent via
+ * recordDoubleDeliveryAlertSafely (point de sauvegarde, P2-4). Retourne true si une nouvelle
+ * alerte a été créée.
  */
 export function recordDoubleDeliveryAlert(
   db: Database.Database,
@@ -132,41 +195,65 @@ export function recordDoubleDeliveryAlert(
   return true;
 }
 
+/**
+ * P2-4 (audit 2026-11-24) : écriture « au mieux ». À appeler DANS la transaction d'alignement :
+ * l'écriture passe par une transaction imbriquée better-sqlite3, c'est-à-dire un SAVEPOINT. En cas
+ * d'échec, seul ce point de sauvegarde est annulé, l'erreur est remise à onError (journal) et
+ * l'alignement de la carte se poursuit. Retourne true si une nouvelle alerte a été créée.
+ */
+export function recordDoubleDeliveryAlertSafely(
+  db: Database.Database,
+  info: DoubleDeliveryInfo,
+  siteId: number | null,
+  centreId: number | null,
+  onError: (err: unknown) => void
+): boolean {
+  try {
+    return db.transaction(() => recordDoubleDeliveryAlert(db, info, siteId, centreId))();
+  } catch (err) {
+    try { onError(err); } catch { /* journal indisponible : ignoré */ }
+    return false;
+  }
+}
+
 // ─── Lecture / acquittement (handlers IPC) ──────────────────────────────────
 
 export interface DoubleDeliveryScope {
   /** null uniquement si allSites (SUPER ADMIN sans site). */
   siteId: number | null;
-  /** Filtre centre (rôles de centre) ; null = tout le site. */
-  centreId: number | null;
   allSites: boolean;
 }
 
-/** Rôles qui voient tout leur site (ADMINISTRATEUR_SITE reçoit un centre_id « principal » au login). */
-const SITE_WIDE_ROLES: ReadonlySet<string> = new Set(['SUPER ADMIN', 'ADMINISTRATEUR_SITE']);
+/**
+ * P2-3 (audit 2026-11-24) : rôles qui délivrent (même liste que le contrôle de cartes:delivrer,
+ * handlers.ts). Eux seuls voient et acquittent les alertes.
+ */
+export const DOUBLE_DELIVERY_ROLES: readonly string[] = ['SUPER ADMIN', 'ADMINISTRATEUR_SITE', 'ADMIN_CENTRE', 'OPERATEUR_VERIFICATION'];
 
 /**
  * Portée dérivée de la session serveur (getSecureCurrentUser(), rôle ACTIF — CLAUDE.md §3).
- * null = aucune alerte visible (pas de session, ou compte sans site hors SUPER ADMIN).
+ * null = aucune alerte visible (pas de session, rôle actif qui ne délivre pas, ou compte sans
+ * site hors SUPER ADMIN).
+ *
+ * P2-2 (audit 2026-11-24) : filtre sur le SITE seul, rôles de centre compris. L'alerte est propre
+ * au poste et porte le centre de la carte, qui peut être un autre centre du même site (carte non
+ * classée remise avec un rangement d'urgence : centre déduit du préfixe, delivrerCarte dans
+ * cartes.queries.ts). Le cloisonnement par site (CLAUDE.md §3) est conservé.
  */
 export function resolveDoubleDeliveryScope(
   user: { role?: string | null; site_id?: number | null; centre_id?: number | null } | null | undefined
 ): DoubleDeliveryScope | null {
   if (!user) return null;
   const role = user.role ?? '';
+  if (!DOUBLE_DELIVERY_ROLES.includes(role)) return null;
   if (!user.site_id) {
-    return role === 'SUPER ADMIN' ? { siteId: null, centreId: null, allSites: true } : null;
+    return role === 'SUPER ADMIN' ? { siteId: null, allSites: true } : null;
   }
-  const centreId = !SITE_WIDE_ROLES.has(role) && user.centre_id != null ? Number(user.centre_id) : null;
-  return { siteId: Number(user.site_id), centreId, allSites: false };
+  return { siteId: Number(user.site_id), allSites: false };
 }
 
 function scopeClause(scope: DoubleDeliveryScope): { sql: string; params: number[] } {
   if (scope.allSites) return { sql: '', params: [] };
-  if (scope.centreId != null) {
-    // Carte sans centre (non classée) délivrée depuis ce site : visible aussi par les rôles de centre.
-    return { sql: ' AND site_id = ? AND (centre_id = ? OR centre_id IS NULL)', params: [scope.siteId as number, scope.centreId] };
-  }
   return { sql: ' AND site_id = ?', params: [scope.siteId as number] };
 }
 

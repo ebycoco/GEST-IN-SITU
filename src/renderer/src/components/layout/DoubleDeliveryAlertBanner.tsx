@@ -32,14 +32,21 @@ export default function DoubleDeliveryAlertBanner() {
   const [alerts, setAlerts] = useState<DoubleDeliveryAlert[]>([]);
   const [pendingAck, setPendingAck] = useState<number | null>(null);
 
-  const refresh = useCallback(() => {
+  /** Relit la liste ; renvoie la liste affichée (vide si rôle non délivreur, erreur, etc.). */
+  const refresh = useCallback(async (): Promise<DoubleDeliveryAlert[]> => {
     if (!userId || !window.api?.sync?.getDoubleDeliveryAlerts) {
       setAlerts([]);
-      return;
+      return [];
     }
-    window.api.sync.getDoubleDeliveryAlerts()
-      .then((list) => setAlerts(Array.isArray(list) ? list : []))
-      .catch((err) => console.error('Failed to fetch double delivery alerts', err));
+    try {
+      const list = await window.api.sync.getDoubleDeliveryAlerts();
+      const safe = Array.isArray(list) ? list : [];
+      setAlerts(safe);
+      return safe;
+    } catch (err) {
+      console.error('Failed to fetch double delivery alerts', err);
+      return [];
+    }
   }, [userId]);
 
   // activeRole : la portée (centre / site) suit le rôle actif côté main -> relecture au changement.
@@ -50,10 +57,13 @@ export default function DoubleDeliveryAlertBanner() {
   useEffect(() => {
     if (!window.api?.sync?.onDoubleDeliveryAlert) return;
     const unsubscribe = window.api.sync.onDoubleDeliveryAlert((data) => {
-      if ((data?.count ?? 0) > 0) {
-        toast.error('Retrait non retenu : une carte avait déjà été remise ailleurs. Voir l\'alerte en haut de l\'écran.', { duration: 8000 });
-      }
-      refresh();
+      // P2-3 (audit 2026-11-24) : toast seulement si la bannière s'affiche réellement (liste
+      // relue non vide) — jamais « voir l'alerte en haut » pour un rôle qui ne la voit pas.
+      void refresh().then((list) => {
+        if ((data?.count ?? 0) > 0 && list.length > 0) {
+          toast.error('Retrait non retenu : une carte avait déjà été remise ailleurs. Voir l\'alerte en haut de l\'écran.', { duration: 8000 });
+        }
+      });
     });
     return () => unsubscribe();
   }, [refresh]);

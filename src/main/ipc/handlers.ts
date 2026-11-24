@@ -30,7 +30,7 @@ import { getAgentsPresence, recordPresenceLogout } from '../sync/presence.servic
 import { listClientVersions, reportClientVersionAfterLogin } from '../sync/client-version.service';
 import type { PostesVersionsResult } from '../../shared/types';
 import { readAutoDownstreamPreference, readStoredAutoDownstream, resolveAutoDownstreamPreference } from '../sync/auto-downstream-preference';
-import { listPendingDoubleDeliveryAlerts, acknowledgeDoubleDeliveryAlert, resolveDoubleDeliveryScope } from '../sync/double-delivery-alert';
+import { listPendingDoubleDeliveryAlerts, acknowledgeDoubleDeliveryAlert, resolveDoubleDeliveryScope, DOUBLE_DELIVERY_ROLES } from '../sync/double-delivery-alert';
 
 const FAILSAFE_ROOT_ID = 999999;
 
@@ -5067,7 +5067,8 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
 
   // P1-2 (2026-11-24) : alertes « double délivrance » non acquittées de ce poste (t_logs local
   // ALERTE_DOUBLE_DELIVRANCE, cf. src/main/sync/double-delivery-alert.ts). Portée dérivée de la
-  // session serveur (rôle actif, site, centre — CLAUDE.md §3), aucun paramètre d'identité client.
+  // session serveur (rôle actif, site — CLAUDE.md §3), aucun paramètre d'identité client. Rôle
+  // actif hors DOUBLE_DELIVERY_ROLES -> liste vide (P2-3, audit 2026-11-24).
   ipcMain.handle('sync:getDoubleDeliveryAlerts', async () => {
     try {
       const scope = resolveDoubleDeliveryScope(getSecureCurrentUser());
@@ -5080,12 +5081,20 @@ export function registerIpcHandlers(mainWindow: BrowserWindow): void {
     }
   });
 
+  // P2-3 (audit 2026-11-24) : acquittement = écriture -> double contrôle. (1) Rôle ACTIF de la
+  // session parmi les rôles qui délivrent (resolveDoubleDeliveryScope -> null sinon). (2) Même
+  // garde que cartes:delivrer : verifyUserRole (compte actif en base, rôle réellement accordé,
+  // ROOT Failsafe couvert) — un compte désactivé depuis l'ouverture de session ne peut plus acquitter.
   ipcMain.handle('sync:acknowledgeDoubleDeliveryAlert', async (_, idLog: number) => {
     try {
       const secureUser = getSecureCurrentUser();
       const scope = resolveDoubleDeliveryScope(secureUser);
       const db = getDatabase();
       if (!secureUser || !scope || !db) return { success: false };
+      if (!verifyUserRole(secureUser.id_user, [...DOUBLE_DELIVERY_ROLES])) {
+        log.warn('[SECURITY] Acces refuse a sync:acknowledgeDoubleDeliveryAlert : role non autorise.');
+        return { success: false };
+      }
       // ROOT Failsafe (id 999999) absent de t_users : id_user neutralisé (FK t_logs.id_user).
       const actorId = secureUser.id_user === FAILSAFE_ROOT_ID ? null : (secureUser.id_user ?? null);
       const ok = acknowledgeDoubleDeliveryAlert(db, Number(idLog), scope, { id_user: actorId, login: secureUser.login });

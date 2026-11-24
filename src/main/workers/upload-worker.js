@@ -83,8 +83,9 @@ function applyCloudStatusBlock(db, { sent, cloud, diff }) {
 }
 
 // ─── Alerte « double délivrance » (P1-2, 2026-11-24) ─────────────────────────────
-// DUPLICATION VOLONTAIRE de src/main/sync/double-delivery-alert.ts (detectDoubleDelivery,
-// recordDoubleDeliveryAlert, buildDoubleDeliveryMessage) : même raison que le bloc statut
+// DUPLICATION VOLONTAIRE de src/main/sync/double-delivery-alert.ts (parseTimestampMs,
+// isUnacknowledgedLocalDelivery, readLocalSyncedAt, detectDoubleDelivery,
+// recordDoubleDeliveryAlert, recordDoubleDeliveryAlertSafely, buildDoubleDeliveryMessage) : même raison que le bloc statut
 // ci-dessus (worker copié sans bundler). Tenir les deux copies alignées.
 const DOUBLE_DELIVERY_ALERT_ACTION = 'ALERTE_DOUBLE_DELIVRANCE';
 const PROOF_COLUMNS = ['date_delivrance', 'agent_distributeur', 'centre_retrait', 'nom_retirant', 'num_retirant'];
@@ -98,11 +99,43 @@ function proofOf(row) {
   return out;
 }
 
-function detectDoubleDelivery(sent, cloud, diff) {
+/** ISO ou « YYYY-MM-DD HH:MM:SS » (datetime('now'), UTC) -> ms epoch ; NaN si vide/illisible. */
+function parseTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return NaN;
+  const s = String(value).trim();
+  const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(s) ? s.replace(' ', 'T') + 'Z' : s;
+  return Date.parse(iso);
+}
+
+/**
+ * P2-1 : remise faite sur CE poste et pas encore acceptée par le cloud ? synced_at local (lu
+ * avant l'alignement) vide, ou date_delivrance envoyée dans une seconde strictement postérieure.
+ * Sinon copie périmée (déjà échangée avec le cloud après la remise) -> false. Date illisible -> true.
+ */
+function isUnacknowledgedLocalDelivery(sentDateDelivrance, localSyncedAt) {
+  if (localSyncedAt === null || localSyncedAt === undefined || localSyncedAt === '') return true;
+  const synced = parseTimestampMs(localSyncedAt);
+  const delivered = parseTimestampMs(sentDateDelivrance);
+  if (Number.isNaN(synced) || Number.isNaN(delivered)) return true;
+  return Math.floor(delivered / 1000) > Math.floor(synced / 1000);
+}
+
+/** synced_at local (sync_id + site_id) à lire AVANT l'alignement ; undefined si absent/échec. */
+function readLocalSyncedAt(db, syncId, siteId) {
+  try {
+    const row = db.prepare('SELECT synced_at FROM t_cartes WHERE sync_id = ? AND site_id = ?').get(String(syncId), siteId);
+    return row ? row.synced_at : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function detectDoubleDelivery(sent, cloud, diff, localSyncedAt) {
   if (sent.statut !== 'DELIVRE' || cloud.statut !== 'DELIVRE') return null;
   if (!diff.includes('date_delivrance') && !diff.includes('agent_distributeur')) return null;
   const carteSyncId = sent.sync_id ? String(sent.sync_id) : '';
   if (!carteSyncId) return null;
+  if (!isUnacknowledgedLocalDelivery(sent.date_delivrance, localSyncedAt)) return null;
   return {
     carteSyncId,
     noms: sent.noms ? String(sent.noms) : '',
@@ -148,6 +181,19 @@ function recordDoubleDeliveryAlert(db, info, siteId, centreId) {
     centreId
   );
   return true;
+}
+
+/**
+ * P2-4 : écriture « au mieux » sous point de sauvegarde (transaction imbriquée better-sqlite3).
+ * Un échec n'annule que l'alerte : il est journalisé via onError et l'alignement continue.
+ */
+function recordDoubleDeliveryAlertSafely(db, info, siteId, centreId, onError) {
+  try {
+    return db.transaction(() => recordDoubleDeliveryAlert(db, info, siteId, centreId))();
+  } catch (err) {
+    try { onError(err); } catch { /* ignoré */ }
+    return false;
+  }
 }
 
 // ─── Délai maximal par requête et arrêt sur réseau défaillant (audit agent-13 2026-10-31, P1-3) ───
@@ -494,10 +540,16 @@ async function run() {
                   .run(pushedAt, ...syncIds);
               }
               for (const conflict of conflicts.values()) {
+                // P2-1 : synced_at local lu AVANT l'alignement (qui le remet à maintenant).
+                const localSyncedAt = readLocalSyncedAt(db, conflict.sent.sync_id, conflict.sent.id_site);
                 applyCloudStatusBlock(db, conflict);
-                // P1-2 : délivrance de ce poste écartée au profit d'une autre -> alerte locale.
-                const info = detectDoubleDelivery(conflict.sent, conflict.cloud, conflict.diff);
-                if (info && recordDoubleDeliveryAlert(db, info, conflict.sent.id_site ?? null, conflict.sent.id_centre ?? null)) {
+                // P1-2 : délivrance de ce poste écartée au profit d'une autre -> alerte locale,
+                // sous point de sauvegarde (P2-4 : un échec n'annule pas l'alignement du bloc).
+                const info = detectDoubleDelivery(conflict.sent, conflict.cloud, conflict.diff, localSyncedAt);
+                if (info && recordDoubleDeliveryAlertSafely(
+                  db, info, conflict.sent.id_site ?? null, conflict.sent.id_centre ?? null,
+                  (err) => parentPort.postMessage({ type: 'log', level: 'error', message: `Alerte double délivrance non enregistrée (carte ${conflict.sent.sync_id}), alignement conservé : ${err && err.message ? err.message : String(err)}` })
+                )) {
                   newDoubleDeliveryAlerts++;
                 }
               }
