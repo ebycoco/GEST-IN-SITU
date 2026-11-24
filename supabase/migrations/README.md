@@ -601,6 +601,19 @@ Empreinte anon prod **identique** avant / après : `b21cf947993a3692b777a3cc162b
 éléments (référence prod ; différente du dev). Hook **non activé** en prod, `gis-login` non
 déployée. 0013 à 0018 : à appliquer hors heures de travail des postes (verrous courts).
 
+**Production : 0013 à 0018 appliquées le 2026-11-24 entre 00 h 14 et 00 h 21 UTC** (session
+principale, autorisation écrite « vas-y pour 0013 à 0018 », aucune requête active au départ,
+un bloc par fichier). 0017 : premier envoi coupé par le connecteur, vérifié non appliqué
+(rien changé), relancé avec succès. Contrôles : 0013 (14 politiques, `password_hash`
+illisible par authenticated, anon inchangé) OK ; 0014 (9 politiques) OK ; 0015/0016
+(5 triggers, fonctions fermées à anon/authenticated) OK ; 0017 OK (contrainte validée) ;
+0018 OK. Empreinte anon prod **identique** après chaque fichier (`b21cf947…`, 207).
+Fonctions et politiques comparées au dev : identiques (md5) ; `fn_sa_guard_caller_untrusted`
+et `fn_t_users_sa_guard_auth` ne diffèrent que par les commentaires (code normalisé
+identique). Hook **toujours non activé** en prod, `gis-login` non déployée, 0019/0020 non
+appliquées. À noter avant d'activer le hook : la prod compte déjà **1 compte Auth** (hors
+compte miroir) ; une fois le hook actif il sera refusé (aucune ligne `t_auth_identity`).
+
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
 réels du hook sur le dev »). Valeur `authentication_method` reçue pour gis-login + `verifyOtp` :
