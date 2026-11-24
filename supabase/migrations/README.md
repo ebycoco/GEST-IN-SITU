@@ -629,7 +629,10 @@ refusé une fois le hook actif.
 Hooks > « Customize Access Token (JWT) Claims hook », Postgres, `public.custom_access_token_hook`,
 ENABLED (seul hook configuré). Droits vérifiés : EXECUTE `supabase_auth_admin` oui,
 authenticated / anon non ; empreinte anon identique (`b21cf947…`, 207). Coupure d'urgence :
-désactiver ce hook dans la même page. Connexion réelle d'un opérateur pas encore essayée.
+désactiver ce hook dans la même page. **Connexion réelle d'un opérateur de vérification
+réussie le même jour** (site téléphone construit pour la prod, servi sur localhost:4173) :
+identité créée (`t_auth_identity`, 13:30 UTC), recherche `VERIFICATION_RECHERCHE` canal MOBILE
+journalisée avec site 4 / centre 4 (13:41 UTC), aucun retrait.
 
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
