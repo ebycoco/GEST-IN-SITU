@@ -3,7 +3,7 @@ import Database from 'better-sqlite3';
 
 /**
  * R1 (plan quota Supabase gratuit, 2026-11-24) : le rattrapage par liste de sync_id
- * (cards-reconcile.ts) tourne au plus une fois par 24 h, par poste et par site.
+ * (cards-reconcile.ts) tourne au plus une fois par 22 h (~1x/jour), par poste et par site.
  *
  * Avant : echeance en memoire (1 h), re-armee a 2 min a chaque demarrage du cycle auto
  * (connexion, changement de role, bascule de la preference) -> ~42 passages/jour/poste mesures.
@@ -60,7 +60,8 @@ import {
   CARDS_RECONCILE_INITIAL_DELAY_MS,
   CARDS_RECONCILE_MIN_INTERVAL_MS,
   CARDS_RECONCILE_RETRY_BASE_MS,
-  CARDS_RECONCILE_RETRY_MAX_MS
+  CARDS_RECONCILE_RETRY_MAX_MS,
+  CARDS_RECONCILE_FUTURE_TOLERANCE_MS
 } from '../src/main/sync/cards-reconcile';
 
 const MIN = 60 * 1000;
@@ -129,7 +130,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)', () => {
+describe('R1 — rattrapage au plus une fois par 22 h et par poste (sync-engine)', () => {
   it('poste neuf : premier passage apres le delai initial (2 min), pas avant', async () => {
     startCycle();
     setNow(T0 + 1 * MIN);
@@ -144,7 +145,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     expect(configValue(reconcileConfigKeys(SITE).lastOk)).toBe(new Date(T0 + CARDS_RECONCILE_INITIAL_DELAY_MS).toISOString());
   });
 
-  it('pas de second passage avant 24 h malgre reconnexions, changements de role et bascules', async () => {
+  it('pas de second passage avant 22 h malgre reconnexions, changements de role et bascules', async () => {
     startCycle();
     setNow(T0 + 2 * MIN);
     await tick();
@@ -152,7 +153,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     const okAt = T0 + 2 * MIN;
 
     // Reconnexion, changement de role, bascule off/on de la preference : chaque fois stop + start.
-    for (const t of [5 * MIN, 30 * MIN, 1 * HOUR, 3 * HOUR, 12 * HOUR, 23 * HOUR]) {
+    for (const t of [5 * MIN, 30 * MIN, 1 * HOUR, 3 * HOUR, 12 * HOUR, 21 * HOUR]) {
       setNow(okAt + t);
       stopCycle();
       startCycle();
@@ -165,7 +166,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     expect(mocks.reconcile).toHaveBeenCalledTimes(1);
   });
 
-  it('passage du apres 24 h (et nouvelle date de succes enregistree)', async () => {
+  it('passage du apres 22 h (et nouvelle date de succes enregistree)', async () => {
     startCycle();
     setNow(T0 + 2 * MIN);
     await tick();
@@ -177,7 +178,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     expect(configValue(reconcileConfigKeys(SITE).lastOk)).toBe(new Date(okAt + CARDS_RECONCILE_MIN_INTERVAL_MS).toISOString());
   });
 
-  it('poste redemarre plus de 24 h apres le dernier succes : passage apres le delai initial', async () => {
+  it('poste redemarre plus de 22 h apres le dernier succes : passage apres le delai initial', async () => {
     mocks.db!.prepare('INSERT INTO t_config (key, value) VALUES (?, ?)')
       .run(reconcileConfigKeys(SITE).lastOk, new Date(T0 - 30 * HOUR).toISOString());
     startCycle();
@@ -218,7 +219,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     await tick();
     expect(mocks.reconcile).toHaveBeenCalledTimes(2);
 
-    // Succes : compteur remis a zero, prochain passage a +24 h.
+    // Succes : compteur remis a zero, prochain passage a +22 h.
     mocks.reconcile.mockResolvedValue({ status: 'ok', missingFound: 0, recovered: 0 });
     setNow(fail2At + 2 * HOUR);
     await tick();
@@ -268,7 +269,7 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     expect(mocks.reconcile).toHaveBeenCalledTimes(2);
     expect(mocks.reconcile).toHaveBeenLastCalledWith(OTHER_SITE, 2);
 
-    // Retour sur le site 4 : son echeance de 24 h est conservee.
+    // Retour sur le site 4 : son echeance de 22 h est conservee.
     stopCycle();
     startCycle(SITE);
     expect(engine.cardsReconcileNextAt).toBe(T0 + 2 * MIN + CARDS_RECONCILE_MIN_INTERVAL_MS);
@@ -285,6 +286,37 @@ describe('R1 — rattrapage au plus une fois par 24 h et par poste (sync-engine)
     await tick();
     expect(mocks.reconcile).toHaveBeenCalledTimes(1);
   });
+
+  /** 3 jours, un demarrage par jour a 8 h et une session de 8 h (ticks toutes les 5 min). */
+  async function threeWorkingDays(): Promise<void> {
+    for (let day = 0; day < 3; day++) {
+      const dayStart = T0 + day * 24 * HOUR;
+      setNow(dayStart);
+      startCycle();
+      for (let t = 0; t <= 8 * HOUR; t += 5 * MIN) {
+        setNow(dayStart + t);
+        await tick();
+      }
+      stopCycle(); // poste eteint le soir
+    }
+  }
+
+  it('P1-1 : succes enregistre dans le futur (horloge corrigee depuis) -> au moins un passage en 3 jours', async () => {
+    mocks.db!.prepare('INSERT INTO t_config (key, value) VALUES (?, ?)')
+      .run(reconcileConfigKeys(SITE).lastOk, new Date(T0 + 30 * 24 * HOUR).toISOString());
+    await threeWorkingDays();
+    expect(mocks.reconcile.mock.calls.length).toBeGreaterThanOrEqual(1);
+    // La date future est remplacee par une date reelle apres le premier succes.
+    expect(configValue(reconcileConfigKeys(SITE).lastOk)).not.toBe(new Date(T0 + 30 * 24 * HOUR).toISOString());
+  });
+
+  it('P1-1 : tentative enregistree dans le futur (compteur d\'echecs eleve) -> au moins un passage en 3 jours', async () => {
+    const k = reconcileConfigKeys(SITE);
+    mocks.db!.prepare('INSERT INTO t_config (key, value) VALUES (?, ?), (?, ?)')
+      .run(k.lastTry, new Date(T0 + 30 * 24 * HOUR).toISOString(), k.failCount, '5');
+    await threeWorkingDays();
+    expect(mocks.reconcile.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe('R1 — calcul de l\'echeance (fonctions pures)', () => {
@@ -294,7 +326,7 @@ describe('R1 — calcul de l\'echeance (fonctions pures)', () => {
     expect(computeReconcileNextAt({ lastOkMs: null, lastTryMs: null, failCount: 0 }, NOW)).toBe(NOW + CARDS_RECONCILE_INITIAL_DELAY_MS);
   });
 
-  it('succes recent : +24 h ; succes ancien : delai initial', () => {
+  it('succes recent : +22 h ; succes ancien : delai initial', () => {
     expect(computeReconcileNextAt({ lastOkMs: NOW - HOUR, lastTryMs: NOW - HOUR - MIN, failCount: 0 }, NOW))
       .toBe(NOW - HOUR + CARDS_RECONCILE_MIN_INTERVAL_MS);
     expect(computeReconcileNextAt({ lastOkMs: NOW - 48 * HOUR, lastTryMs: null, failCount: 0 }, NOW))
@@ -306,9 +338,31 @@ describe('R1 — calcul de l\'echeance (fonctions pures)', () => {
       .toBe(NOW - 10 * MIN + CARDS_RECONCILE_RETRY_BASE_MS);
   });
 
-  it('horloge du poste reculee (dates dans le futur) : attente bornee a 24 h', () => {
+  it('P1-1 : dates au-dela de la tolerance dans le futur -> traitees comme absentes', () => {
+    const far = NOW + CARDS_RECONCILE_FUTURE_TOLERANCE_MS + 1;
     expect(computeReconcileNextAt({ lastOkMs: NOW + 10 * 24 * HOUR, lastTryMs: null, failCount: 0 }, NOW))
+      .toBe(NOW + CARDS_RECONCILE_INITIAL_DELAY_MS);
+    expect(computeReconcileNextAt({ lastOkMs: far, lastTryMs: null, failCount: 0 }, NOW))
+      .toBe(NOW + CARDS_RECONCILE_INITIAL_DELAY_MS);
+    expect(computeReconcileNextAt({ lastOkMs: null, lastTryMs: far, failCount: 4 }, NOW))
+      .toBe(NOW + CARDS_RECONCILE_INITIAL_DELAY_MS);
+    // Succes valide + tentative future ignoree : seule la borne du succes compte.
+    expect(computeReconcileNextAt({ lastOkMs: NOW - 30 * HOUR, lastTryMs: far, failCount: 4 }, NOW))
+      .toBe(NOW + CARDS_RECONCILE_INITIAL_DELAY_MS);
+    // Succes futur ignore + tentative recente valide : delai d'essai applique.
+    expect(computeReconcileNextAt({ lastOkMs: far, lastTryMs: NOW - 10 * MIN, failCount: 1 }, NOW))
+      .toBe(NOW - 10 * MIN + CARDS_RECONCILE_RETRY_BASE_MS);
+  });
+
+  it('P1-1 : petit decalage dans la tolerance (5 min) -> date ramenee a maintenant', () => {
+    expect(computeReconcileNextAt({ lastOkMs: NOW + 4 * MIN, lastTryMs: null, failCount: 0 }, NOW))
       .toBe(NOW + CARDS_RECONCILE_MIN_INTERVAL_MS);
+    expect(computeReconcileNextAt({ lastOkMs: NOW + CARDS_RECONCILE_FUTURE_TOLERANCE_MS, lastTryMs: null, failCount: 0 }, NOW))
+      .toBe(NOW + CARDS_RECONCILE_MIN_INTERVAL_MS);
+  });
+
+  it('P2-2 : intervalle minimal de 22 h', () => {
+    expect(CARDS_RECONCILE_MIN_INTERVAL_MS).toBe(22 * HOUR);
   });
 
   it('delai de nouvel essai : 1 h, 2 h, 4 h, 8 h puis plafond 8 h', () => {

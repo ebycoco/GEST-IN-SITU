@@ -64,7 +64,7 @@ const CARDS_SHORT_SYNC_INTERVAL_MS = 75 * 1000; // 75 secondes
 const CARDS_SHORT_SYNC_INITIAL_DELAY_MS = 15 * 1000; // 15 secondes
 
 // Rattrapage des cartes manquantes par liste de sync_id (cards-reconcile.ts) : au plus une fois
-// par 24 h, par poste et par site (R1, plan quota Supabase gratuit). L'echeance est recalculee
+// par 22 h, par poste et par site (R1, plan quota Supabase gratuit). L'echeance est recalculee
 // depuis t_config (dernier succes / derniere tentative) a chaque demarrage du cycle auto : une
 // reconnexion, un changement de role ou une bascule de la preference ne la re-arme plus.
 // Constantes et regles de calcul : cards-reconcile.ts (CARDS_RECONCILE_*, computeReconcileNextAt).
@@ -1113,7 +1113,7 @@ class SyncEngine extends EventEmitter {
       return;
     }
 
-    // Rattrapage periodique (<= 1x/24 h par poste et par site) des cartes absentes en local mais presentes dans le
+    // Rattrapage periodique (<= 1x/22 h par poste et par site) des cartes absentes en local mais presentes dans le
     // cloud (invisibles au curseur). Remplace le comptage de ce tick ; le suivant (~75s) reprend.
     if (this.cardsReconcileNextAt > 0 && Date.now() >= this.cardsReconcileNextAt) {
       await this.runCardsReconcile(siteId);
@@ -1157,7 +1157,7 @@ class SyncEngine extends EventEmitter {
    * Ne leve jamais ; ne touche pas au curseur downstream.
    *
    * R1 : la tentative est horodatee dans t_config AVANT la premiere requete cloud ; seul un
-   * passage complet (status 'ok') enregistre la date de succes (prochain passage a +24 h). Un
+   * passage complet (status 'ok') enregistre la date de succes (prochain passage a +22 h). Un
    * echec ou un passage interrompu laisse cette date inchangee et espace le nouvel essai
    * (1 h, 2 h, 4 h, 8 h max). Les cles t_config sont celles du siteId de la session.
    */

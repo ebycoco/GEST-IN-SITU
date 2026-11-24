@@ -14,7 +14,7 @@ import { writeCardsChunkWithoutCursor } from './downstream';
  * manquants (INSERT uniquement : une carte absente localement n'a pas de conflit possible).
  * Aucune condition de declenchement par comptage : un poste peut avoir autant (ou plus) de cartes
  * locales que le cloud (cartes non encore poussees, doublons) tout en manquant des cartes cloud.
- * Cout : ~1 requete cloud par 1000 cartes du site a chaque passage (<= 1x/24 h et par poste depuis
+ * Cout : ~1 requete cloud par 1000 cartes du site a chaque passage (<= 1x/22 h et par poste depuis
  * R1, cf. planification en fin de fichier et sync-engine).
  *
  * Garanties :
@@ -203,7 +203,8 @@ export async function reconcileMissingCards(
 // la preference), il tournait ~42 fois par jour et par poste. Desormais :
 //  - la date du dernier passage REUSSI (status 'ok') est stockee dans t_config, par site
 //    (cle locale au poste : t_config n'est jamais synchronisee vers le cloud) ;
-//  - le passage suivant est du a last_ok + 24 h, quel que soit le nombre de reconnexions ;
+//  - le passage suivant est du a last_ok + 22 h (~1x/jour), quel que soit le nombre de
+//    reconnexions ; une date enregistree dans le futur (horloge corrigee) est ignoree ;
 //  - chaque tentative est horodatee (last_try) AVANT la premiere requete cloud : un passage
 //    interrompu (erreur, fermeture de l'application) ne compte pas comme reussi mais ne peut pas
 //    etre rejoue immediatement a la connexion suivante ;
@@ -211,8 +212,18 @@ export async function reconcileMissingCards(
 //    persistant, remis a zero par un succes).
 // Aucune table creee : uniquement des cles t_config (table existante, INSERT OR REPLACE).
 
-/** Intervalle minimal entre deux passages reussis, par poste et par site. */
-export const CARDS_RECONCILE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Intervalle minimal entre deux passages reussis, par poste et par site : 22 h plutot que 24 h,
+ * pour qu'un poste allume chaque jour a des heures variables (ex. 8 h puis 7 h 30) ne saute pas
+ * un jour de travail. Reste au plus ~1 passage par jour.
+ */
+export const CARDS_RECONCILE_MIN_INTERVAL_MS = 22 * 60 * 60 * 1000;
+/**
+ * Tolerance sur les dates enregistrees "dans le futur" : couvre les petits recalages d'horloge
+ * (synchronisation NTP, quelques secondes a minutes) sans fausser le calcul ; au-dela, la date
+ * vient d'une horloge en avance corrigee depuis et est ignoree (voir computeReconcileNextAt).
+ */
+export const CARDS_RECONCILE_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 /**
  * Delai minimal apres le demarrage du cycle auto : laisse passer le premier pull (10 s) et le
  * premier tick du cycle court (15 s). S'applique aussi au tout premier passage d'un poste.
@@ -277,18 +288,24 @@ export function reconcileRetryDelayMs(failCount: number): number {
  * Prochaine echeance (epoch ms) du rattrapage, calculee au demarrage du cycle auto. Fonction pure.
  * Le maximum de trois bornes :
  *  - nowMs + delai initial (laisser l'interface et le premier pull s'installer) ;
- *  - dernier succes + 24 h ;
+ *  - dernier succes + 22 h ;
  *  - derniere tentative (si posterieure au dernier succes) + delai d'essai selon le nombre d'echecs.
- * Une date dans le futur (horloge du poste reculee depuis) est ramenee a nowMs : l'attente ne peut
- * jamais depasser l'intervalle concerne.
+ *
+ * Horloge du poste : une date enregistree plus de CARDS_RECONCILE_FUTURE_TOLERANCE_MS apres nowMs
+ * (horloge en avance lors de l'ecriture, corrigee depuis) est traitee comme ABSENTE. La ramener a
+ * nowMs repousserait l'echeance a chaque demarrage : un poste eteint chaque soir ne ferait plus
+ * jamais le rattrapage. Une date future dans la tolerance est ramenee a nowMs.
  */
 export function computeReconcileNextAt(state: ReconcileScheduleState, nowMs: number): number {
+  const limit = nowMs + CARDS_RECONCILE_FUTURE_TOLERANCE_MS;
+  const lastOk = state.lastOkMs !== null && state.lastOkMs <= limit ? Math.min(state.lastOkMs, nowMs) : null;
+  const lastTry = state.lastTryMs !== null && state.lastTryMs <= limit ? Math.min(state.lastTryMs, nowMs) : null;
   let next = nowMs + CARDS_RECONCILE_INITIAL_DELAY_MS;
-  if (state.lastOkMs !== null) {
-    next = Math.max(next, Math.min(state.lastOkMs, nowMs) + CARDS_RECONCILE_MIN_INTERVAL_MS);
+  if (lastOk !== null) {
+    next = Math.max(next, lastOk + CARDS_RECONCILE_MIN_INTERVAL_MS);
   }
-  if (state.lastTryMs !== null && (state.lastOkMs === null || state.lastTryMs > state.lastOkMs)) {
-    next = Math.max(next, Math.min(state.lastTryMs, nowMs) + reconcileRetryDelayMs(state.failCount));
+  if (lastTry !== null && (lastOk === null || lastTry > lastOk)) {
+    next = Math.max(next, lastTry + reconcileRetryDelayMs(state.failCount));
   }
   return next;
 }
