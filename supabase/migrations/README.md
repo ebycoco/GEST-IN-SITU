@@ -625,6 +625,11 @@ seulement sur recherche / délivrance) ; empreinte anon **identique** après cha
 Le compte Auth existant est celui du propriétaire (fournisseur email, non utilisé par
 l'application Windows : aucun appel Supabase Auth dans `src/`) : laissé tel quel, il sera
 refusé une fois le hook actif.
+**Hook activé en prod le 2026-11-24 (~13:30 UTC, accord utilisateur)** : Authentication > Auth
+Hooks > « Customize Access Token (JWT) Claims hook », Postgres, `public.custom_access_token_hook`,
+ENABLED (seul hook configuré). Droits vérifiés : EXECUTE `supabase_auth_admin` oui,
+authenticated / anon non ; empreinte anon identique (`b21cf947…`, 207). Coupure d'urgence :
+désactiver ce hook dans la même page. Connexion réelle d'un opérateur pas encore essayée.
 
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
