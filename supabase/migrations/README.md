@@ -614,6 +614,18 @@ identique). Hook **toujours non activé** en prod, `gis-login` non déployée, 0
 appliquées. À noter avant d'activer le hook : la prod compte déjà **1 compte Auth** (hors
 compte miroir) ; une fois le hook actif il sera refusé (aucune ligne `t_auth_identity`).
 
+**Production, 2026-11-24 (~13:10-13:20 UTC, accord utilisateur « les 4 d'affilée »)** :
+inscriptions Auth coupées (`disable_signup: true`, Email gardé, anonyme coupé : vérifié par
+`/auth/v1/settings`) ; **0019 appliquée** (4 politiques `r19_*`) ; **0020 appliquée** (5
+fonctions `fn_mobile_*`, md5 du code et droits identiques au dev ; EXECUTE authenticated
+seulement sur recherche / délivrance) ; empreinte anon **identique** après chaque fichier
+(`b21cf947…`, 207) ; **`gis-login` déployée** (v1 en prod, code identique au dev v3,
+`ezbr_sha256` égal, `verify_jwt` false) — `GIS_ALLOWED_ORIGINS` **non défini** en prod
+(seules les origines localhost 4173 / 5173 acceptées, vérifié). Hook **toujours non activé**.
+Le compte Auth existant est celui du propriétaire (fournisseur email, non utilisé par
+l'application Windows : aucun appel Supabase Auth dans `src/`) : laissé tel quel, il sera
+refusé une fois le hook actif.
+
 **Dev : hook activé et prouvé en réel le 2026-11-23** (inscriptions publiques coupées, fournisseur
 Email laissé actif, 173/175 cas OK, détail dans `docs/PLAN_P1_CHANTIER_B.md`, section « Essais
 réels du hook sur le dev »). Valeur `authentication_method` reçue pour gis-login + `verifyOtp` :
