@@ -1,4 +1,18 @@
 // Ecran 1 (maquettes 1a-1d) et ecran 7 (verrou d'inactivite).
+//
+// TELEPHONE PARTAGE (audit E6 P1-1) : le mot de passe ne doit pas etre enregistre ni
+// pre-rempli par le navigateur.
+//  - identifiant : autoComplete="off" (pas de liste d'identifiants proposee) ;
+//  - mot de passe : autoComplete="new-password" : valeur recommandee (MDN « How to turn off
+//    form autocompletion ») pour empecher le PRE-REMPLISSAGE d'un mot de passe enregistre,
+//    les navigateurs ignorant autocomplete="off" sur un champ de mot de passe.
+//  - Limite connue : aucun attribut standard n'interdit a Chrome de PROPOSER l'enregistrement
+//    apres une connexion reussie (sa detection marche aussi sans balise <form>). Les
+//    contournements (champ type="text" masque par CSS, nom de champ aleatoire) feraient
+//    apprendre le mot de passe au clavier du telephone ou casseraient l'accessibilite :
+//    ecartes. La parade fiable est une consigne d'exploitation (mobile/README.md) :
+//    desactiver « Proposer d'enregistrer les mots de passe » dans Chrome Android.
+//  - La balise <form> est gardee : touche Entree du clavier = « Se connecter ».
 import { useRef, useState, type FormEvent, type RefObject } from 'react';
 import { connecter, type SessionInfo } from '../lib/api';
 import { messageConnexion, type Message } from '../lib/codes';
@@ -15,7 +29,10 @@ function ChampMotDePasse(props: { id: string; valeur: string; onChange: (v: stri
           id={props.id}
           className={`saisie${props.err ? ' err' : ''}`}
           type={voir ? 'text' : 'password'}
-          autoComplete="current-password"
+          autoComplete="new-password"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
           placeholder="Entrez votre mot de passe"
           value={props.valeur}
           onChange={(e) => props.onChange(e.target.value)}
@@ -71,7 +88,7 @@ export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: Se
             id="login"
             className={`saisie${errChamps ? ' err' : ''}`}
             type="text"
-            autoComplete="username"
+            autoComplete="off"
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}

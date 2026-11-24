@@ -5,11 +5,18 @@
 // Verrou (15 min, ou session expiree) = session fermee + donnees de cartes effacees ;
 // seule exception : le contexte d'un « resultat inconnu » (carte, retirant, criteres,
 // request_id) est garde en memoire, non affiche, pour imposer « Verifier » au retour.
+//
+// Ordre au verrou / a la deconnexion (audit E6 P2-3) : l'etat est efface et l'ecran de
+// verrou / connexion pose AVANT de fermer la session (fermerSession() peut attendre
+// jusqu'a 4 s hors ligne) ; fermerSession() met client=null de facon synchrone, donc plus
+// aucun appel ne part avec l'ancienne session pendant ce temps.
+// Reponses tardives (audit E6 P2-2) : compteur de generation (lib/generation.ts).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { delivrer, fermerSession, rechercher, type Appel, type Criteres, type EchecAppel, type ReponseRetrait, type SessionInfo } from './lib/api';
 import { etatFiche, type Carte, type ResultatRecherche } from './lib/cards';
 import { messageRetrait, type Message } from './lib/codes';
 import { RequestIdKeeper, SendGuard } from './lib/delivery';
+import { Generation } from './lib/generation';
 import { IdleClock } from './lib/idleLock';
 import { formatPhoneFull } from './lib/masks';
 import { EcranConnexion, EcranVerrou } from './screens/Connexion';
@@ -33,7 +40,8 @@ type Vue =
   | { v: 'fiche'; carte: Carte }
   | { v: 'form'; carte: Carte }
   | { v: 'recap'; carte: Carte }
-  | { v: 'succes'; carte: Carte; date: string | null }
+  // form = formulaire REELLEMENT envoye (audit E6 P2-1) : jamais reconstruit au rendu.
+  | { v: 'succes'; carte: Carte; date: string | null; form: FormRetrait }
   | { v: 'refus'; carte: Carte | null; code: string; date: string | null }
   | { v: 'inconnu' };
 
@@ -63,6 +71,13 @@ const MSG_PARAM_RECHERCHE: Message = {
   texte: 'Saisissez le nom et une date de naissance valide, ou un numéro de 10 chiffres.',
   variante: 'warn',
 };
+// COMPTE_INACTIF (audit E6 P2-9) : la deconnexion est faite tout de suite ; ce message
+// s'affiche sur l'ecran de connexion.
+const MSG_COMPTE_INACTIF: Message = {
+  titre: 'Compte désactivé',
+  texte: 'Votre compte n\'est plus actif : vous avez été déconnecté. Contactez votre administrateur.',
+  variante: 'err',
+};
 
 export function App() {
   const enLigne = useEnLigne();
@@ -89,9 +104,18 @@ export function App() {
   const horloge = useRef(new IdleClock());
   const requetes = useRef(new RequestIdKeeper());
   const garde = useRef(new SendGuard());
+  const generation = useRef(new Generation());
 
-  /** Efface toutes les donnees de cartes affichables. */
+  /**
+   * Efface toutes les donnees de cartes affichables et invalide les reponses en attente
+   * (generation). Les indicateurs « en cours » sont remis a zero ici, car la reponse
+   * ignoree ne le fera plus (sinon bouton bloque au retour). envoi (retrait) n'est pas
+   * touche : il suit la garde anti double envoi, toujours liberee par envoyer().
+   */
   const effacerCartes = useCallback((garderInconnu: boolean) => {
+    generation.current.bump();
+    setEnvoiRecherche(false);
+    setVerif(false);
     setFormRecherche(FORM_RECHERCHE_VIDE);
     setResultats(null);
     setMsgRecherche(null);
@@ -107,24 +131,26 @@ export function App() {
   }, []);
 
   const deconnecter = useCallback(
-    async (avis: Message | null = null) => {
+    (avis: Message | null = null) => {
       if (garde.current.inFlight) return; // jamais pendant un envoi (bouton grise aussi)
-      await fermerSession();
+      // Etat efface et ecran de connexion pose d'abord ; fermeture de session ensuite,
+      // sans l'attendre (client=null immediat dans api.ts, signOut borne a 4 s).
       effacerCartes(false);
       setVue({ v: 'recherche' });
       setVerrou(null);
       setSession(null);
       setAvisConnexion(avis);
+      void fermerSession();
     },
     [effacerCartes],
   );
 
   const verrouiller = useCallback(
-    async (raison: 'inactivite' | 'session', garderInconnu: boolean) => {
-      await fermerSession();
+    (raison: 'inactivite' | 'session', garderInconnu: boolean) => {
       effacerCartes(garderInconnu);
       setVue(garderInconnu ? { v: 'inconnu' } : { v: 'recherche' });
       setVerrou(raison);
+      void fermerSession();
     },
     [effacerCartes],
   );
@@ -137,7 +163,7 @@ export function App() {
     clock.touch();
     const activite = () => clock.touch();
     const controle = () => {
-      if (clock.shouldLock()) void verrouiller('inactivite', inconnu !== null);
+      if (clock.shouldLock()) verrouiller('inactivite', inconnu !== null);
     };
     const visible = () => {
       if (document.visibilityState === 'visible') controle();
@@ -158,11 +184,11 @@ export function App() {
   const traiterEchec = useCallback(
     (e: EchecAppel, garderInconnu: boolean): Message | null => {
       if (e === 'session') {
-        void verrouiller('session', garderInconnu);
+        verrouiller('session', garderInconnu);
         return null;
       }
       if (e === 'role') {
-        void deconnecter(messageRetrait('ROLE_NON_AUTORISE'));
+        deconnecter(messageRetrait('ROLE_NON_AUTORISE'));
         return null;
       }
       if (e === 'reseau') return MSG_HORS_LIGNE_RECHERCHE;
@@ -176,17 +202,16 @@ export function App() {
     if (envoiRecherche) return;
     setEnvoiRecherche(true);
     setMsgRecherche(null);
+    const aJour = generation.current.ticket();
     const r = await rechercher(cr);
+    if (!aJour()) return; // deconnexion / verrou / effacement pendant l'appel : ignoree
     setEnvoiRecherche(false);
     if (!r.ok) {
       setMsgRecherche(traiterEchec(r.echec, false));
       return;
     }
     const d = r.data;
-    if (d.code === 'COMPTE_INACTIF') {
-      setVue({ v: 'refus', carte: null, code: 'COMPTE_INACTIF', date: null });
-      return;
-    }
+    if (d.code === 'COMPTE_INACTIF') return deconnecter(MSG_COMPTE_INACTIF);
     if (d.code === 'PARAMETRES_INVALIDES') return setMsgRecherche(MSG_PARAM_RECHERCHE);
     if (d.code !== 'OK') return setMsgRecherche(MSG_SERVEUR);
     if (d.resultats.length === 0) return setMsgRecherche(MSG_AUCUN);
@@ -205,7 +230,15 @@ export function App() {
     if (rep.code === 'OK') {
       requetes.current.clear();
       setInconnu(null);
-      setVue({ v: 'succes', carte, date: rep.dateDelivrance });
+      // Formulaire envoye remis en etat (le verrou a pu vider formRetrait) et porte par la vue.
+      setFormRetrait(form);
+      setVue({ v: 'succes', carte, date: rep.dateDelivrance, form });
+      return;
+    }
+    if (rep.code === 'COMPTE_INACTIF') {
+      // Reponse definitive levee avant toute ecriture : deconnexion immediate.
+      requetes.current.clear();
+      deconnecter(MSG_COMPTE_INACTIF);
       return;
     }
     if (rep.code === 'REPONSE_ILLISIBLE') {
@@ -245,14 +278,19 @@ export function App() {
     if (garde.current.inFlight || !navigator.onLine) return;
     setAvisRecap(null);
     const cr = criteres;
+    const aJour = generation.current.ticket();
     const res = await envoyer(() => delivrer(demande(carte, form)));
     if (res.skipped) return;
+    // En pratique la generation ne bouge pas pendant un retrait (deconnexion refusee tant
+    // que la garde est prise, horloge d'inactivite suspendue) ; si elle a bouge, rien
+    // n'est affiche : le request_id serveur rend la reprise sure (« Verifier » / DEJA_DELIVREE).
+    if (!aJour()) return;
     const r = res.value;
     if (r.ok) return appliquerReponse(carte, form, r.data, cr);
     if (r.echec === 'role') {
       // 42501 leve avant toute ecriture
       requetes.current.clear();
-      void deconnecter(messageRetrait('ROLE_NON_AUTORISE'));
+      deconnecter(messageRetrait('ROLE_NON_AUTORISE'));
       return;
     }
     if (r.echec === 'occupee') {
@@ -265,7 +303,7 @@ export function App() {
     setInconnuRepondu(false);
     setAvisInconnu(null);
     setVue({ v: 'inconnu' });
-    if (r.echec === 'session') void verrouiller('session', true);
+    if (r.echec === 'session') verrouiller('session', true);
   }
 
   /**
@@ -281,16 +319,15 @@ export function App() {
     if (!ctx || verif) return;
     setVerif(true);
     setAvisInconnu(null);
+    const aJour = generation.current.ticket();
     try {
       const r = await rechercher(ctx.criteres);
+      if (!aJour()) return;
       if (!r.ok) {
         setAvisInconnu(traiterEchec(r.echec, true));
         return;
       }
-      if (r.data.code === 'COMPTE_INACTIF') {
-        setVue({ v: 'refus', carte: null, code: 'COMPTE_INACTIF', date: null });
-        return;
-      }
+      if (r.data.code === 'COMPTE_INACTIF') return deconnecter(MSG_COMPTE_INACTIF);
       const c = r.data.code === 'OK' ? r.data.resultats.find((x) => x.sync_id === ctx.carte.sync_id) : undefined;
       if (!c) {
         setAvisInconnu({
@@ -303,13 +340,13 @@ export function App() {
       }
       if (c.statut === 'DELIVRE') {
         const d = await envoyer(() => delivrer(demande(c, ctx.form)));
-        if (d.skipped) return;
+        if (d.skipped || !aJour()) return;
         if (!d.value.ok) {
           setAvisInconnu(traiterEchec(d.value.echec, true));
           return;
         }
         const code = d.value.data.code;
-        if (code === 'OK' || code === 'DEJA_DELIVREE') {
+        if (code === 'OK' || code === 'DEJA_DELIVREE' || code === 'COMPTE_INACTIF') {
           appliquerReponse(c, ctx.form, d.value.data, ctx.criteres);
         } else {
           // Ex. HORS_CENTRE : carte non classee dont le centre a ete recalcule par CE
@@ -334,13 +371,17 @@ export function App() {
         setVue({ v: 'fiche', carte: c });
       }
     } finally {
-      setVerif(false);
+      // Generation changee : effacerCartes a deja remis verif a false.
+      if (aJour()) setVerif(false);
     }
   }
 
   async function voirPreuve(carte: Carte) {
     if (!criteres) return nouvelleRecherche();
+    const aJour = generation.current.ticket();
     const r = await rechercher(criteres);
+    if (!aJour()) return;
+    if (r.ok && r.data.code === 'COMPTE_INACTIF') return deconnecter(MSG_COMPTE_INACTIF);
     if (r.ok && r.data.code === 'OK') {
       const c = r.data.resultats.find((x) => x.sync_id === carte.sync_id);
       if (c) {
@@ -367,13 +408,13 @@ export function App() {
           setVerrou(null);
           horloge.current.touch();
         }}
-        onDeconnexion={() => void deconnecter()}
+        onDeconnexion={() => deconnecter()}
       />
     );
   }
 
   const qui = `${session.login} · ${session.centreNom ?? (session.claims.centreId !== null ? `Centre n° ${session.claims.centreId}` : 'Sans centre')}`;
-  const deco = () => void deconnecter();
+  const deco = () => deconnecter();
   const retourResultats = () => setVue(resultats ? { v: 'resultats' } : { v: 'recherche' });
 
   let barre: { titre: string; sous?: string; retour?: () => void; retourLabel?: string };
@@ -461,7 +502,7 @@ export function App() {
     }
     case 'succes':
       barre = { titre: 'Retrait enregistré', sous: qui };
-      contenu = <EcranSucces carte={vue.carte} form={formRetrait ?? formRetraitInitial(vue.carte)} date={vue.date} onNouvelle={nouvelleRecherche} />;
+      contenu = <EcranSucces carte={vue.carte} form={vue.form} date={vue.date} onNouvelle={nouvelleRecherche} />;
       break;
     case 'refus': {
       const carte = vue.carte;

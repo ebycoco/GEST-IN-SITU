@@ -14,6 +14,14 @@
 // RESEAU : postgrest-js ne relance JAMAIS automatiquement un POST (RETRYABLE_METHODS =
 // GET/HEAD/OPTIONS) ; .rpc() envoie un POST : aucun double retrait cache. Un echec reseau
 // est rendu sous la forme { data: null, status: 0 } (verifie dans postgrest-js/dist/index.mjs).
+//
+// DELAI MAXIMAL (audit E6 P2-4) : chaque appel reseau est abandonne apres DELAI_APPEL_MS.
+// - RPC : .abortSignal(AbortSignal.timeout(...)) (postgrest-js 2.x, PostgrestTransformBuilder).
+//   L'abandon (AbortError / TimeoutError) est rendu { error, status: 0 } (postgrest-js
+//   index.mjs, branche catch de then()) -> classerErreur -> 'reseau'. Pendant un retrait,
+//   App.tsx mene alors a « Resultat inconnu » (l'ecriture a peut-etre eu lieu cote serveur).
+// - gis-login (fetch) : AbortController + setTimeout couvrant envoi ET lecture du corps ;
+//   l'abandon leve une exception -> connecter() rend { kind: 'offline' }.
 
 import { createClient, type EmailOtpType, type SupabaseClient } from '@supabase/supabase-js';
 import { config } from './config';
@@ -40,6 +48,9 @@ export function classerErreur(status: number, code: string | undefined, message 
   if (code === '55P03') return 'occupee';
   return 'serveur';
 }
+
+/** Delai maximal d'un appel reseau (ms). */
+export const DELAI_APPEL_MS = 30_000;
 
 let client: SupabaseClient | null = null;
 
@@ -71,10 +82,16 @@ export async function fermerSession(): Promise<void> {
 }
 
 async function appelGisLogin(login: string, password: string): Promise<{ status: number; body: unknown; retry: string | null }> {
+  // Un seul delai pour l'ensemble (envoi(s) + lecture des corps) : au-dela, fetch ou
+  // r.json() rejette (AbortError) et l'appelant rend « hors-ligne ». La minuterie est
+  // toujours liberee (finally) pour ne rien laisser tourner en memoire.
+  const ctrl = new AbortController();
+  const minuterie = setTimeout(() => ctrl.abort(), DELAI_APPEL_MS);
   const envoyer = (bearer: boolean) =>
     fetch(config.gisLoginUrl, {
       method: 'POST',
       cache: 'no-store',
+      signal: ctrl.signal,
       headers: {
         'Content-Type': 'application/json',
         apikey: config.publishableKey,
@@ -82,17 +99,28 @@ async function appelGisLogin(login: string, password: string): Promise<{ status:
       },
       body: JSON.stringify({ login, password }),
     });
-  let r = await envoyer(false);
-  // Meme repli que le test vivant E4 : un 401 de la passerelle (corps sans "ok")
-  // n'est pas une reponse de gis-login ; on renvoie alors avec l'en-tete Authorization.
-  let body: unknown = await r.json().catch(() => null);
-  if (r.status === 401 && !(body !== null && typeof body === 'object' && 'ok' in body)) {
-    const r2 = await envoyer(true);
-    const body2: unknown = await r2.json().catch(() => null);
-    r = r2;
-    body = body2;
+  // Corps illisible -> null ; mais un abandon (delai depasse) pendant la lecture doit
+  // remonter comme une erreur reseau, pas comme une reponse vide.
+  const lireCorps = (r: Response): Promise<unknown> =>
+    r.json().catch((e: unknown) => {
+      if (ctrl.signal.aborted) throw e;
+      return null;
+    });
+  try {
+    let r = await envoyer(false);
+    // Meme repli que le test vivant E4 : un 401 de la passerelle (corps sans "ok")
+    // n'est pas une reponse de gis-login ; on renvoie alors avec l'en-tete Authorization.
+    let body: unknown = await lireCorps(r);
+    if (r.status === 401 && !(body !== null && typeof body === 'object' && 'ok' in body)) {
+      const r2 = await envoyer(true);
+      const body2: unknown = await lireCorps(r2);
+      r = r2;
+      body = body2;
+    }
+    return { status: r.status, body, retry: r.headers.get('Retry-After') };
+  } finally {
+    clearTimeout(minuterie);
   }
-  return { status: r.status, body, retry: r.headers.get('Retry-After') };
 }
 
 /**
@@ -149,7 +177,12 @@ export async function connecter(
 async function nomCentre(id: number | null): Promise<string | null> {
   if (id === null || !client) return null;
   try {
-    const { data, error } = await client.from('t_centres').select('nom').eq('id', id).maybeSingle();
+    const { data, error } = await client
+      .from('t_centres')
+      .select('nom')
+      .eq('id', id)
+      .abortSignal(AbortSignal.timeout(DELAI_APPEL_MS))
+      .maybeSingle();
     if (error || !data) return null;
     const nom: unknown = (data as Record<string, unknown>)['nom'];
     return typeof nom === 'string' ? nom : null;
@@ -184,7 +217,9 @@ export async function rechercher(cr: Criteres): Promise<Appel<ResultatRecherche>
     cr.mode === 'NOM'
       ? { p_nom: cr.nom, p_ddn: cr.ddnIso, p_tel: null }
       : { p_nom: null, p_ddn: null, p_tel: cr.tel };
-  const { data, error, status } = await client.rpc('fn_mobile_rechercher_cartes', args);
+  const { data, error, status } = await client
+    .rpc('fn_mobile_rechercher_cartes', args)
+    .abortSignal(AbortSignal.timeout(DELAI_APPEL_MS));
   if (error) return { ok: false, echec: classerErreur(status, error.code, error.message) };
   return { ok: true, data: parseRecherche(data) };
 }
@@ -216,14 +251,18 @@ export function parseRetrait(data: unknown): ReponseRetrait {
 export async function delivrer(d: DemandeRetrait): Promise<Appel<ReponseRetrait>> {
   const client = await clientActif();
   if (!client) return { ok: false, echec: 'session' };
-  const { data, error, status } = await client.rpc('fn_mobile_delivrer_carte', {
-    p_sync_id: d.syncId,
-    p_type_retirant: d.type,
-    p_nom_retirant: d.nomRetirant,
-    p_tel_retirant: d.telRetirant === '' ? null : d.telRetirant,
-    p_rangement_urgence: d.rangementUrgence === '' ? null : d.rangementUrgence,
-    p_request_id: d.requestId,
-  });
+  // Delai depasse -> status 0 -> 'reseau' -> « Resultat inconnu » (App.tsx confirmer) :
+  // le POST n'est jamais relance automatiquement, le MEME request_id sert a « Verifier ».
+  const { data, error, status } = await client
+    .rpc('fn_mobile_delivrer_carte', {
+      p_sync_id: d.syncId,
+      p_type_retirant: d.type,
+      p_nom_retirant: d.nomRetirant,
+      p_tel_retirant: d.telRetirant === '' ? null : d.telRetirant,
+      p_rangement_urgence: d.rangementUrgence === '' ? null : d.rangementUrgence,
+      p_request_id: d.requestId,
+    })
+    .abortSignal(AbortSignal.timeout(DELAI_APPEL_MS));
   if (error) return { ok: false, echec: classerErreur(status, error.code, error.message) };
   return { ok: true, data: parseRetrait(data) };
 }
