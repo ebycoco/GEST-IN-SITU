@@ -3,7 +3,18 @@ import { EventEmitter } from 'events';
 import { networkMonitor, NetworkState } from './network-monitor';
 
 import { runUpstream } from './upstream';
-import { reconcileMissingCards } from './cards-reconcile';
+import {
+  reconcileMissingCards,
+  readReconcileScheduleState,
+  computeReconcileNextAt,
+  markReconcileAttempt,
+  markReconcileSuccess,
+  markReconcileFailure,
+  reconcileRetryDelayMs,
+  CARDS_RECONCILE_INITIAL_DELAY_MS,
+  CARDS_RECONCILE_MIN_INTERVAL_MS,
+  CARDS_RECONCILE_RETRY_BASE_MS
+} from './cards-reconcile';
 import { runDownstream, syncUsersFromCloud, runSyncInitiale, runLogsDownstream, syncCurrentUserActiveStatus, getPendingCardsCount } from './downstream';
 import { getDatabase } from '../database/connection';
 import { processOutboxPending, getOutboxPendingCount, getOutboxActionableCount, setCardsAutoUpstreamEnabled as setOutboxCardsAutoUpstreamEnabled } from './outbox.service';
@@ -52,11 +63,11 @@ const CARDS_SHORT_SYNC_INTERVAL_MS = 75 * 1000; // 75 secondes
 // login (même esprit que USER_SYNC_INITIAL_DELAY_MS vs AUTO_DOWNSTREAM_INITIAL_DELAY_MS).
 const CARDS_SHORT_SYNC_INITIAL_DELAY_MS = 15 * 1000; // 15 secondes
 
-// Rattrapage des cartes manquantes par liste de sync_id (cards-reconcile.ts) : premier passage
-// ~2 min apres le demarrage du cycle auto, puis au plus 1x/heure (15 min apres un echec).
-const CARDS_RECONCILE_INITIAL_DELAY_MS = 2 * 60 * 1000;
-const CARDS_RECONCILE_INTERVAL_MS = 60 * 60 * 1000;
-const CARDS_RECONCILE_RETRY_MS = 15 * 60 * 1000;
+// Rattrapage des cartes manquantes par liste de sync_id (cards-reconcile.ts) : au plus une fois
+// par 24 h, par poste et par site (R1, plan quota Supabase gratuit). L'echeance est recalculee
+// depuis t_config (dernier succes / derniere tentative) a chaque demarrage du cycle auto : une
+// reconnexion, un changement de role ou une bascule de la preference ne la re-arme plus.
+// Constantes et regles de calcul : cards-reconcile.ts (CARDS_RECONCILE_*, computeReconcileNextAt).
 
 // ─── TYPES EXPORTÉS ─────────────────────────────────────────────────────────
 export type AutoDownstreamEvent =
@@ -280,7 +291,7 @@ class SyncEngine extends EventEmitter {
     // exactement du même gating par la préférence `auto_downstream_<id_user>`
     // (résolue par l'appelant avant d'invoquer startAutoDownstreamTimer — voir
     // handlers.ts, login et sync:setAutoDownstream) sans nouveau point d'appel.
-    this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_INITIAL_DELAY_MS;
+    this.cardsReconcileNextAt = this.computeCardsReconcileNextAt(siteId);
     this.cardsShortInitialDelay = setTimeout(() => {
       this.cardsShortInitialDelay = null;
       setImmediate(() => this.triggerCardsShortSync(siteId));
@@ -1102,7 +1113,7 @@ class SyncEngine extends EventEmitter {
       return;
     }
 
-    // Rattrapage periodique (<= 1x/heure) des cartes absentes en local mais presentes dans le
+    // Rattrapage periodique (<= 1x/24 h par poste et par site) des cartes absentes en local mais presentes dans le
     // cloud (invisibles au curseur). Remplace le comptage de ce tick ; le suivant (~75s) reprend.
     if (this.cardsReconcileNextAt > 0 && Date.now() >= this.cardsReconcileNextAt) {
       await this.runCardsReconcile(siteId);
@@ -1144,27 +1155,75 @@ class SyncEngine extends EventEmitter {
    * Passage de rattrapage par liste de sync_id. Appele uniquement depuis triggerCardsShortSync
    * apres ses gardes (verrous, reseau). Reutilise isDownstreamRunning (aucun nouveau verrou).
    * Ne leve jamais ; ne touche pas au curseur downstream.
+   *
+   * R1 : la tentative est horodatee dans t_config AVANT la premiere requete cloud ; seul un
+   * passage complet (status 'ok') enregistre la date de succes (prochain passage a +24 h). Un
+   * echec ou un passage interrompu laisse cette date inchangee et espace le nouvel essai
+   * (1 h, 2 h, 4 h, 8 h max). Les cles t_config sont celles du siteId de la session.
    */
   private async runCardsReconcile(siteId: number): Promise<void> {
-    // Echeance repoussee d'emblee : pas de rejeu en boucle meme en cas d'erreur.
-    this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_INTERVAL_MS;
     if (this.isDownstreamRunning || this.globalSyncLocked || this.isSyncing || this.isBulkUploading) return;
+    const startedAt = Date.now();
+    // Echeance repoussee d'emblee (en memoire) : pas de rejeu en boucle, meme si t_config echoue.
+    this.cardsReconcileNextAt = startedAt + CARDS_RECONCILE_RETRY_BASE_MS;
+    const db = getDatabase();
+    try {
+      if (db) markReconcileAttempt(db, siteId, startedAt);
+    } catch (err) {
+      log.warn('[SyncEngine][CardsReconcile] Horodatage de la tentative impossible (t_config) :', err);
+    }
+
+    let status: 'ok' | 'error' | 'skipped';
     this.isDownstreamRunning = true;
     try {
       const secureUser = getSecureCurrentUser();
       const myCentreId = secureUser?.centre_id != null ? Number(secureUser.centre_id) : null;
       const res = await reconcileMissingCards(siteId, myCentreId);
-      if (res.status === 'error') {
-        this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_RETRY_MS;
-      }
+      status = res.status === 'ok' ? 'ok' : res.status === 'error' ? 'error' : 'skipped';
       if (res.recovered > 0) {
         this.notifyRenderer('sync:updated-data', { count: res.recovered });
       }
     } catch (err) {
-      this.cardsReconcileNextAt = Date.now() + CARDS_RECONCILE_RETRY_MS;
+      status = 'error';
       log.warn('[SyncEngine][CardsReconcile] Erreur inattendue :', err);
     } finally {
       this.isDownstreamRunning = false;
+    }
+
+    const endedAt = Date.now();
+    let nextAt = endedAt + CARDS_RECONCILE_RETRY_BASE_MS;
+    try {
+      if (status === 'ok') {
+        if (db) markReconcileSuccess(db, siteId, endedAt);
+        nextAt = endedAt + CARDS_RECONCILE_MIN_INTERVAL_MS;
+      } else if (status === 'error') {
+        const failCount = db ? markReconcileFailure(db, siteId, endedAt) : 1;
+        nextAt = endedAt + reconcileRetryDelayMs(failCount);
+      }
+      // 'skipped' / 'skipped-empty-local' : aucune requete cloud, ni succes ni echec -> 1 h.
+    } catch (err) {
+      log.warn('[SyncEngine][CardsReconcile] Enregistrement du resultat impossible (t_config) :', err);
+    }
+    // Ne pas ecraser l'echeance d'un autre site demarre pendant le passage (changement de session).
+    if (this.activeSiteId === siteId) {
+      this.cardsReconcileNextAt = nextAt;
+    }
+    log.info(`[SyncEngine][CardsReconcile] Site ${siteId} : passage ${status}, prochain passage au plus tot le ${new Date(nextAt).toISOString()}.`);
+  }
+
+  /**
+   * Echeance du rattrapage au demarrage du cycle auto (R1), depuis t_config pour ce site.
+   * Erreur de lecture : delai initial seul (comportement d'un poste neuf).
+   */
+  private computeCardsReconcileNextAt(siteId: number): number {
+    const now = Date.now();
+    try {
+      const db = getDatabase();
+      if (!db) return now + CARDS_RECONCILE_INITIAL_DELAY_MS;
+      return computeReconcileNextAt(readReconcileScheduleState(db, siteId), now);
+    } catch (err) {
+      log.warn('[SyncEngine][CardsReconcile] Lecture de la planification impossible (t_config) :', err);
+      return now + CARDS_RECONCILE_INITIAL_DELAY_MS;
     }
   }
 

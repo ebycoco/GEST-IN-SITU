@@ -14,7 +14,8 @@ import { writeCardsChunkWithoutCursor } from './downstream';
  * manquants (INSERT uniquement : une carte absente localement n'a pas de conflit possible).
  * Aucune condition de declenchement par comptage : un poste peut avoir autant (ou plus) de cartes
  * locales que le cloud (cartes non encore poussees, doublons) tout en manquant des cartes cloud.
- * Cout : ~1 requete cloud par 1000 cartes du site a chaque passage (<= 1x/heure, cf. sync-engine).
+ * Cout : ~1 requete cloud par 1000 cartes du site a chaque passage (<= 1x/24 h et par poste depuis
+ * R1, cf. planification en fin de fichier et sync-engine).
  *
  * Garanties :
  *  - Ne touche JAMAIS au curseur last_downstream_sync / last_downstream_sync_id (le worker est
@@ -193,4 +194,129 @@ export async function reconcileMissingCards(
     log.warn(`[SYNC][Reconcile] Passage interrompu (site ${siteId}) apres ${result.recovered} carte(s) recuperee(s) : ${result.error}`);
     return result;
   }
+}
+
+// ─── PLANIFICATION PERSISTANTE (R1, plan quota Supabase gratuit du 2026-11-24) ──────────────────
+//
+// Un passage complet liste tous les sync_id du site (~4,3 Mo compresses pour ~223 000 cartes).
+// Planifie en memoire (1 h, re-arme a 2 min a chaque connexion / changement de role / bascule de
+// la preference), il tournait ~42 fois par jour et par poste. Desormais :
+//  - la date du dernier passage REUSSI (status 'ok') est stockee dans t_config, par site
+//    (cle locale au poste : t_config n'est jamais synchronisee vers le cloud) ;
+//  - le passage suivant est du a last_ok + 24 h, quel que soit le nombre de reconnexions ;
+//  - chaque tentative est horodatee (last_try) AVANT la premiere requete cloud : un passage
+//    interrompu (erreur, fermeture de l'application) ne compte pas comme reussi mais ne peut pas
+//    etre rejoue immediatement a la connexion suivante ;
+//  - apres un echec, nouvel essai espace : 1 h, 2 h, 4 h puis 8 h maximum (compteur d'echecs
+//    persistant, remis a zero par un succes).
+// Aucune table creee : uniquement des cles t_config (table existante, INSERT OR REPLACE).
+
+/** Intervalle minimal entre deux passages reussis, par poste et par site. */
+export const CARDS_RECONCILE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Delai minimal apres le demarrage du cycle auto : laisse passer le premier pull (10 s) et le
+ * premier tick du cycle court (15 s). S'applique aussi au tout premier passage d'un poste.
+ */
+export const CARDS_RECONCILE_INITIAL_DELAY_MS = 2 * 60 * 1000;
+/** Premier delai de nouvel essai apres un echec / passage non abouti. */
+export const CARDS_RECONCILE_RETRY_BASE_MS = 60 * 60 * 1000;
+/** Plafond du delai de nouvel essai (echecs repetes). */
+export const CARDS_RECONCILE_RETRY_MAX_MS = 8 * 60 * 60 * 1000;
+
+export interface ReconcileScheduleState {
+  /** Fin du dernier passage reussi (epoch ms), null si jamais. */
+  lastOkMs: number | null;
+  /** Debut (ou fin d'echec) de la derniere tentative (epoch ms), null si jamais. */
+  lastTryMs: number | null;
+  /** Nombre d'echecs consecutifs depuis le dernier succes. */
+  failCount: number;
+}
+
+export function reconcileConfigKeys(siteId: number): { lastOk: string; lastTry: string; failCount: string } {
+  const s = Number(siteId);
+  return {
+    lastOk: `cards_reconcile_last_ok_${s}`,
+    lastTry: `cards_reconcile_last_try_${s}`,
+    failCount: `cards_reconcile_fail_count_${s}`
+  };
+}
+
+function readConfigValue(db: Database, key: string): string | null {
+  const row = db.prepare('SELECT value FROM t_config WHERE key = ?').get(key) as { value: string | null } | undefined;
+  return row?.value ?? null;
+}
+
+function writeConfigValue(db: Database, key: string, value: string): void {
+  db.prepare("INSERT OR REPLACE INTO t_config (key, value, updated_at) VALUES (?, ?, datetime('now'))").run(key, value);
+}
+
+function parseTimeMs(value: string | null): number | null {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : null;
+}
+
+export function readReconcileScheduleState(db: Database, siteId: number): ReconcileScheduleState {
+  const k = reconcileConfigKeys(siteId);
+  const fc = parseInt(readConfigValue(db, k.failCount) ?? '0', 10);
+  return {
+    lastOkMs: parseTimeMs(readConfigValue(db, k.lastOk)),
+    lastTryMs: parseTimeMs(readConfigValue(db, k.lastTry)),
+    failCount: Number.isFinite(fc) && fc > 0 ? fc : 0
+  };
+}
+
+/** 1 h, 2 h, 4 h, 8 h, 8 h... (failCount <= 1 -> 1 h). */
+export function reconcileRetryDelayMs(failCount: number): number {
+  const n = Math.max(1, Math.floor(failCount || 0));
+  const delay = CARDS_RECONCILE_RETRY_BASE_MS * Math.pow(2, Math.min(n - 1, 10));
+  return Math.min(delay, CARDS_RECONCILE_RETRY_MAX_MS);
+}
+
+/**
+ * Prochaine echeance (epoch ms) du rattrapage, calculee au demarrage du cycle auto. Fonction pure.
+ * Le maximum de trois bornes :
+ *  - nowMs + delai initial (laisser l'interface et le premier pull s'installer) ;
+ *  - dernier succes + 24 h ;
+ *  - derniere tentative (si posterieure au dernier succes) + delai d'essai selon le nombre d'echecs.
+ * Une date dans le futur (horloge du poste reculee depuis) est ramenee a nowMs : l'attente ne peut
+ * jamais depasser l'intervalle concerne.
+ */
+export function computeReconcileNextAt(state: ReconcileScheduleState, nowMs: number): number {
+  let next = nowMs + CARDS_RECONCILE_INITIAL_DELAY_MS;
+  if (state.lastOkMs !== null) {
+    next = Math.max(next, Math.min(state.lastOkMs, nowMs) + CARDS_RECONCILE_MIN_INTERVAL_MS);
+  }
+  if (state.lastTryMs !== null && (state.lastOkMs === null || state.lastTryMs > state.lastOkMs)) {
+    next = Math.max(next, Math.min(state.lastTryMs, nowMs) + reconcileRetryDelayMs(state.failCount));
+  }
+  return next;
+}
+
+/** A appeler juste avant la premiere requete cloud d'un passage. */
+export function markReconcileAttempt(db: Database, siteId: number, nowMs: number): void {
+  writeConfigValue(db, reconcileConfigKeys(siteId).lastTry, new Date(nowMs).toISOString());
+}
+
+/** Passage complet reussi (status 'ok') : date enregistree, compteur d'echecs remis a zero. */
+export function markReconcileSuccess(db: Database, siteId: number, nowMs: number): void {
+  const k = reconcileConfigKeys(siteId);
+  const tx = db.transaction(() => {
+    writeConfigValue(db, k.lastOk, new Date(nowMs).toISOString());
+    writeConfigValue(db, k.failCount, '0');
+  });
+  tx();
+}
+
+/** Echec : last_ok inchange, compteur incremente. Retourne le nouveau nombre d'echecs. */
+export function markReconcileFailure(db: Database, siteId: number, nowMs: number): number {
+  const k = reconcileConfigKeys(siteId);
+  let count = 0;
+  const tx = db.transaction(() => {
+    count = readReconcileScheduleState(db, siteId).failCount + 1;
+    writeConfigValue(db, k.failCount, String(count));
+    writeConfigValue(db, k.lastTry, new Date(nowMs).toISOString());
+  });
+  tx();
+  return count;
 }
