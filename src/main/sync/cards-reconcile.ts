@@ -93,12 +93,17 @@ function getPendingDeleteSyncIds(db: Database): Set<string> {
  * Execute une requete cloud avec un delai maximal. Un timeout annule la requete (AbortError) ;
  * le client supabase-js renvoie alors { error } que l'appelant transforme en exception, geree par
  * le catch global (status 'error').
+ * Nouvelle tentative integree a postgrest-js desactivee (.retry(false)) : par defaut, une requete GET
+ * en echec reseau (ou 503/520) est rejouee jusqu'a 3 fois, soit 4 requetes par page pendant une panne
+ * Supabase. Le rattrapage a deja ses propres essais espaces (1 h a 8 h, sync-engine.ts) : un echec
+ * remonte donc tout de suite et le passage est reporte.
  */
 async function withTimeout<T>(builder: any, timeoutMs: number): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await builder.abortSignal(controller.signal);
+    const noRetry = typeof builder.retry === 'function' ? builder.retry(false) : builder;
+    return await noRetry.abortSignal(controller.signal);
   } finally {
     clearTimeout(timeoutId);
   }

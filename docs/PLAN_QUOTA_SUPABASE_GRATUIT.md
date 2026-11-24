@@ -51,8 +51,9 @@ principale (version publiée v2.27.1, constantes `sync-engine.ts:57-59`).
   (dev) : premier passage ~2,5 min après connexion, aucun nouveau passage après déconnexion,
   changement de rôle, bascule de la préférence ou coupure réseau ; carte supprimée localement
   récupérée ; date future ignorée ; échec → +1 h ; retrait téléphone reçu en ~50 s, sans boucle.
-  Restent (P2) : nouvelle tentative intégrée à postgrest-js (jusqu'à 4 requêtes par page en
-  échec réseau, `.retry(false)` possible) ; une page vide en fin de parcours.
+  Nouvelle tentative intégrée à postgrest-js désactivée pour le rattrapage (`.retry(false)`,
+  une seule requête par page en échec réseau). Reste (P2, laissé tel quel) : une page vide en
+  fin de parcours.
 - À publier dans la prochaine version Windows (avec `ef4d0d7`, `d6487fe`).
 
 ## Non vérifié

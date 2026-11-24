@@ -31,7 +31,7 @@ function makeDb(localIds: string[], siteId = SITE): Database.Database {
   return db;
 }
 
-interface Call { kind: 'page' | 'cards'; eq: Record<string, unknown>; gt?: string; inList?: string[]; limit?: number; signal?: AbortSignal }
+interface Call { kind: 'page' | 'cards'; eq: Record<string, unknown>; gt?: string; inList?: string[]; limit?: number; signal?: AbortSignal; retry?: boolean }
 
 /** Faux client Supabase : cloudIds trie, filtre id_site reellement applique. */
 function makeSupabase(cloud: { sync_id: string; id_site: number }[], opts: { failOn?: 'page' | 'cards'; failAtCall?: number; failAfterPages?: number; hangOn?: 'page' | 'cards'; nullLastOnPage?: number } = {}) {
@@ -75,6 +75,7 @@ function makeSupabase(cloud: { sync_id: string; id_site: number }[], opts: { fai
         order: () => b,
         limit: (l: number) => { call.limit = l; return b; },
         abortSignal: (sig: AbortSignal) => { call.signal = sig; return b; },
+        retry: (enabled: boolean) => { call.retry = enabled; return b; },
         then: (res: any, rej: any) => Promise.resolve(run()).then(res, rej)
       };
       return b;
@@ -290,6 +291,25 @@ describe('reconcileMissingCards', () => {
     await reconcileMissingCards(SITE, null, { supabase: client, db, writeChunk: writer.writeChunk, yieldFn });
     expect(calls.length).toBeGreaterThan(1);
     expect(calls.every(c => c.signal instanceof AbortSignal && !c.signal.aborted)).toBe(true);
+  });
+
+  it('nouvelle tentative postgrest-js desactivee sur chaque requete (liste et cartes)', async () => {
+    const db = makeDb(['seed-local']);
+    const { client, calls } = makeSupabase(cloudOf(0, 5));
+    writer = makeWriter(db);
+    await reconcileMissingCards(SITE, null, { supabase: client, db, writeChunk: writer.writeChunk, yieldFn });
+    expect(calls.some(c => c.kind === 'page') && calls.some(c => c.kind === 'cards')).toBe(true);
+    expect(calls.every(c => c.retry === false)).toBe(true);
+  });
+
+  it('echec reseau d\'une page : une seule requete, pas de nouvelle tentative interne', async () => {
+    const db = makeDb(['seed-local']);
+    const { client, calls } = makeSupabase(cloudOf(0, 5), { failOn: 'page' });
+    writer = makeWriter(db);
+    const r = await reconcileMissingCards(SITE, null, { supabase: client, db, writeChunk: writer.writeChunk, yieldFn });
+    expect(r.status).toBe('error');
+    expect(calls.length).toBe(1);
+    expect(calls[0].retry).toBe(false);
   });
 
   it('sync_id nul en fin de page : boucle arretee (pas de repartie du debut), log.warn', async () => {
