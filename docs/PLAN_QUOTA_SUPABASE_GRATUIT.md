@@ -44,6 +44,17 @@ principale (version publiée v2.27.1, constantes `sync-engine.ts:57-59`).
    facultatifs (ping 60 s, cycle comptes) ; étaler les réinstallations de postes (≈ 60-110 Mo
    chacune).
 
+## Réalisé (2026-11-24)
+- **0021 en prod** (`406616c`) : base 368 → 253 Mo, aucune donnée touchée.
+- **R1** (`8ea51a3`) puis correctifs d'audit agent-9 (`1bfd3f9`) : rattrapage au plus 1×/22 h
+  par poste et par site, date future (> +5 min) ignorée, essais 1 h → 8 h. Test vivant agent-13
+  (dev) : premier passage ~2,5 min après connexion, aucun nouveau passage après déconnexion,
+  changement de rôle, bascule de la préférence ou coupure réseau ; carte supprimée localement
+  récupérée ; date future ignorée ; échec → +1 h ; retrait téléphone reçu en ~50 s, sans boucle.
+  Restent (P2) : nouvelle tentative intégrée à postgrest-js (jusqu'à 4 requêtes par page en
+  échec réseau, `.retry(false)` possible) ; une page vide en fin de parcours.
+- À publier dans la prochaine version Windows (avec `ef4d0d7`, `d6487fe`).
+
 ## Non vérifié
 Comptage exact de l'egress par Supabase (compressé, en-têtes) ; correspondance IP ↔ poste ;
 taux de compression des lignes de cartes ; `fetch` intégré à Electron ; date de remise à zéro
