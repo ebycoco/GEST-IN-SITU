@@ -153,6 +153,11 @@ non commitée). Dev nettoyé (vérifié par la session principale).
 - Essai réel par l'utilisateur sur son téléphone Android avec un compte et 5 cartes fictifs : 3
   retraits (assuré, tiers, carte non classée avec rangement d'urgence → centre recalculé) et 7
   recherches, contrôlés en base. Données d'essai supprimées ensuite (comptages à 0 vérifiés).
+- **Constaté sur le vrai téléphone : Chrome Android propose d'enregistrer le mot de passe**
+  malgré `autocomplete="off"` / `"new-password"`. Avant tout pilote sur téléphone partagé :
+  appliquer la consigne de `mobile/README.md` sur chaque appareil (désactiver l'enregistrement
+  et la connexion automatique dans Chrome), ou, si les téléphones sont gérés, la règle Chrome
+  `PasswordManagerEnabled = false` (gestion de flotte). Prérequis du pilote (Q8).
 - Offre Vercel Hobby = usage non commercial : à revoir avant un pilote réel. Pour la prod : origine
   exacte de prod dans `GIS_ALLOWED_ORIGINS`, `connect-src` du `vercel.json` vers le Supabase de prod.
 
