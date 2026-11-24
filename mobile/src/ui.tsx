@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import type { Message } from './lib/codes';
 import { badgeFor, type Carte } from './lib/cards';
 import { formatPhoneInput, phoneDigits } from './lib/masks';
+import logoGis from './assets/logo-gis.png';
 
 /** Etat reseau du navigateur ; ecouteurs retires au demontage. */
 export function useEnLigne(): boolean {
@@ -30,7 +31,10 @@ export function Barre(props: {
 }) {
   return (
     <header className="barre">
-      <span className="appnom">GEST-IN-SITU</span>
+      <div className="marque">
+        <img src={logoGis} alt="" aria-hidden="true" width={36} height={36} decoding="async" />
+        <span className="appnom">GEST-IN-SITU</span>
+      </div>
       <button className="deco" type="button" onClick={props.onDeconnexion} disabled={props.bloque}>
         Se déconnecter
       </button>

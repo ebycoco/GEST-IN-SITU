@@ -75,13 +75,14 @@ export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: Se
   }
 
   return (
-    <form className="app" onSubmit={soumettre} noValidate>
-      <main className="corps centre">
-        <div className="logo">
-          <img className="logo-img" src={logoGis} alt="" aria-hidden="true" width={88} height={88} decoding="async" />
-          <h1>GESTION CARTES IN-SITU</h1>
-          <p>Système de Gestion des Cartes CMU</p>
-        </div>
+    <form className="app connexion" onSubmit={soumettre} noValidate>
+      <div className="hero">
+        <img className="logo-img" src={logoGis} alt="" aria-hidden="true" width={96} height={96} decoding="async" />
+        <h1>GESTION CARTES IN-SITU</h1>
+        <p>Système de Gestion des Cartes CMU</p>
+      </div>
+      <main className="corps">
+        <div className="carte-form">
         {erreur && <Bandeau m={erreur} />}
         <div className="champ">
           <label htmlFor="login">Identifiant</label>
@@ -100,6 +101,7 @@ export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: Se
           />
         </div>
         <ChampMotDePasse id="mdp" valeur={mdp} onChange={setMdp} disabled={envoi} err={errChamps} inputRef={mdpRef} />
+        </div>
       </main>
       <Pied>
         <button className="btn btn-soleil" type="submit" disabled={envoi || login.trim() === '' || mdp === ''}>
