@@ -142,6 +142,20 @@ non commitée). Dev nettoyé (vérifié par la session principale).
   maître garde une roue transparente, non modifié). Non testés : Chrome Android réel
   (enregistrement du mot de passe), poste Windows (déjà fait en E4).
 
+## E8 — hébergement et essai sur un vrai téléphone (2026-11-24)
+- Hébergement **Vercel** (choix utilisateur), projet `gis-verification`, publication du dossier
+  `mobile/dist` construit en local pour le DEV par `npx vercel@66.6.0 deploy --prod` (connexion
+  faite par l'utilisateur) : https://gis-verification.vercel.app. En-têtes `mobile/public/vercel.json`
+  (CSP stricte, HSTS, nosniff, no-referrer, permissions coupées, pas de cadre, `sw.js` jamais en
+  cache) vérifiés en ligne.
+- `GIS_ALLOWED_ORIGINS` (DEV) = `https://gis-verification.vercel.app,http://localhost:4173,http://localhost:5173`
+  (vérifié : l'adresse Vercel et localhost acceptées, autre origine refusée).
+- Essai réel par l'utilisateur sur son téléphone Android avec un compte et 5 cartes fictifs : 3
+  retraits (assuré, tiers, carte non classée avec rangement d'urgence → centre recalculé) et 7
+  recherches, contrôlés en base. Données d'essai supprimées ensuite (comptages à 0 vérifiés).
+- Offre Vercel Hobby = usage non commercial : à revoir avant un pilote réel. Pour la prod : origine
+  exacte de prod dans `GIS_ALLOWED_ORIGINS`, `connect-src` du `vercel.json` vers le Supabase de prod.
+
 ## Non vérifié
 Vitesse de la recherche ; offres gratuites des hébergeurs ; coût en quota ; stockage de session
 par défaut de supabase-js ; usage actuel de `retrait:validerRetrait` ; type `magiclink` de

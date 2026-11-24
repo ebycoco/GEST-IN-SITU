@@ -5,3 +5,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Identifiants d'essai locaux
+.essai-*.txt
