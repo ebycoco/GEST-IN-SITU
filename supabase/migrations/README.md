@@ -634,6 +634,14 @@ réussie le même jour** (site téléphone construit pour la prod, servi sur loc
 identité créée (`t_auth_identity`, 13:30 UTC), recherche `VERIFICATION_RECHERCHE` canal MOBILE
 journalisée avec site 4 / centre 4 (13:41 UTC), aucun retrait.
 
+**Site téléphone de production (2026-11-24, ~17:35 UTC)** : build prod publié sur Vercel, projet
+séparé `gis-verification-prod` (https://gis-verification-prod.vercel.app, `connect-src` du
+`vercel.json` ramené à la prod) ; `GIS_ALLOWED_ORIGINS` (PROD) =
+`https://gis-verification-prod.vercel.app,http://localhost:4173,http://localhost:5173` saisi par
+l'utilisateur dans le tableau de bord (vérifié : adresse prod et localhost acceptées, site du dev
+refusé). Usage limité aux essais de l'utilisateur (recherche seulement) tant que la nouvelle
+version Windows n'est pas installée sur les postes.
+
 **0021 (allègement des index de `t_cartes`, 2026-11-24, accord utilisateur, plan
 `docs/PLAN_QUOTA_SUPABASE_GRATUIT.md`)** : une instruction par exécution (`DROP` / `REINDEX ...
 CONCURRENTLY`, hors transaction, via `execute_sql`). Dev d'abord (répétition, 0 index invalide),
