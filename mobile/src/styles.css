@@ -228,6 +228,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .nav-ecrans { flex-shrink: 0; padding: 12px 16px 0; }
 .avis-haut { flex-shrink: 0; padding: 12px 16px 0; }
 
+/* Nouvelle version : le bouton passe sous le texte si la place manque (320 px). */
+.maj { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 10px; background: var(--info-fond); color: var(--info-texte); border: 2px solid var(--info-bord); border-radius: 14px; padding: 10px 12px; box-shadow: var(--ombre); }
+.maj b { flex: 1 1 150px; min-width: 0; font-size: 16px; }
+.maj button { flex: 1 0 auto; min-height: 48px; padding: 0 14px; border-radius: 12px; background: var(--soleil); color: var(--encre); border: 2px solid var(--encre); font-size: 16px; font-weight: 900; white-space: nowrap; cursor: pointer; }
+
 /* Vue d'ensemble */
 .tuiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tuile { background: var(--carte); border: 1px solid var(--bord-doux); border-radius: var(--rayon); box-shadow: var(--ombre); padding: 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }

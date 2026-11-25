@@ -81,6 +81,16 @@ export function NavEcrans(props: { actif: 'recherche' | 'apercu'; onChoisir: (e:
   );
 }
 
+/** Bandeau « nouvelle version » ; l'affichage est decide par lib/version.ts. */
+export function BandeauMiseAJour({ onMettreAJour }: { onMettreAJour: () => void }) {
+  return (
+    <div className="maj" role="status">
+      <b>Nouvelle version disponible</b>
+      <button type="button" onClick={onMettreAJour}>Mettre à jour</button>
+    </div>
+  );
+}
+
 export function BandeHorsLigne({ enLigne }: { enLigne: boolean }) {
   if (enLigne) return null;
   return (

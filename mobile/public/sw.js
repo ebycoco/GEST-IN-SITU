@@ -5,7 +5,7 @@
 // les requetes portant un en-tete Authorization ; aucun backgroundSync, aucune file
 // d'attente : une ecriture exige Internet (decision utilisateur).
 // Changer VERSION a chaque modification de ce fichier pour purger l'ancien cache.
-const VERSION = 'gis-mobile-v3';
+const VERSION = 'gis-mobile-v4';
 const COQUILLE = [
   '/',
   '/index.html',
@@ -41,6 +41,8 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // Supabase et tout tiers : reseau direct
   if (req.headers.has('Authorization')) return;
+  // Verification de version (src/lib/version.ts) : toujours le reseau, jamais le cache.
+  if (url.searchParams.has('verif-version')) return;
 
   // Navigation : reseau d'abord (version a jour), coquille en secours hors ligne.
   if (req.mode === 'navigate') {

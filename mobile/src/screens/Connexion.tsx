@@ -13,7 +13,7 @@
 //    ecartes. La parade fiable est une consigne d'exploitation (mobile/README.md) :
 //    desactiver « Proposer d'enregistrer les mots de passe » dans Chrome Android.
 //  - La balise <form> est gardee : touche Entree du clavier = « Se connecter ».
-import { useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { connecter, type SessionInfo } from '../lib/api';
 import { messageConnexion, type Message } from '../lib/codes';
 import { Bandeau, Pied } from '../ui';
@@ -47,13 +47,25 @@ function ChampMotDePasse(props: { id: string; valeur: string; onChange: (v: stri
   );
 }
 
-export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: SessionInfo) => void }) {
+/** Etat signale a App pour la mise a jour : ne jamais recharger pendant 'envoi'. */
+export type EtatFormulaire = 'vide' | 'saisie' | 'envoi';
+
+export function EcranConnexion(props: {
+  avis: Message | null;
+  onConnecte: (s: SessionInfo) => void;
+  onEtat: (e: EtatFormulaire) => void;
+  miseAJour?: ReactNode;
+}) {
   const [login, setLogin] = useState('');
   const [mdp, setMdp] = useState('');
   const [envoi, setEnvoi] = useState(false);
   const [erreur, setErreur] = useState<Message | null>(props.avis);
   const [errChamps, setErrChamps] = useState(false);
   const mdpRef = useRef<HTMLInputElement>(null);
+  const { onEtat } = props;
+  // Un message affiche (avis de deconnexion, erreur) compte comme contenu a preserver.
+  const etat: EtatFormulaire = envoi ? 'envoi' : login !== '' || mdp !== '' || erreur !== null ? 'saisie' : 'vide';
+  useEffect(() => onEtat(etat), [etat, onEtat]);
 
   async function soumettre(e: FormEvent) {
     e.preventDefault();
@@ -82,6 +94,7 @@ export function EcranConnexion(props: { avis: Message | null; onConnecte: (s: Se
         <p>Système de Gestion des Cartes CMU</p>
       </div>
       <main className="corps">
+        {props.miseAJour}
         <div className="carte-form">
         {erreur && <Bandeau m={erreur} />}
         <div className="champ">
@@ -123,11 +136,16 @@ export function EcranVerrou(props: {
   raison: 'inactivite' | 'session';
   onDeverrouille: (s: SessionInfo) => void;
   onDeconnexion: () => void;
+  onEtat: (e: EtatFormulaire) => void;
+  miseAJour?: ReactNode;
 }) {
   const [mdp, setMdp] = useState('');
   const [envoi, setEnvoi] = useState(false);
   const [erreur, setErreur] = useState<Message | null>(null);
   const mdpRef = useRef<HTMLInputElement>(null);
+  const { onEtat } = props;
+  const etat: EtatFormulaire = envoi ? 'envoi' : mdp !== '' ? 'saisie' : 'vide';
+  useEffect(() => onEtat(etat), [etat, onEtat]);
 
   async function soumettre(e: FormEvent) {
     e.preventDefault();
@@ -148,6 +166,7 @@ export function EcranVerrou(props: {
   return (
     <form className="app verrou" onSubmit={soumettre} noValidate>
       <main className="corps centre">
+        {props.miseAJour}
         <div className="cadenas" aria-hidden="true">🔒</div>
         <div>
           <h1>Session verrouillée</h1>

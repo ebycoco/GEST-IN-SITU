@@ -14,6 +14,9 @@
 // est restauree au demarrage (restaurerSession) et le verrou d'inactivite reste effectif :
 // l'heure de derniere activite est memorisee (au plus toutes les 5 s) et relue au demarrage.
 // Reponses tardives (audit E6 P2-2) : compteur de generation (lib/generation.ts).
+// Nouvelle version publiee (lib/useNouvelleVersion.ts) : deciderMiseAJour (lib/version.ts)
+// choisit rechargement automatique (connexion vierge, 1 fois par version), bandeau « Mettre
+// a jour » ou rien (envoi, saisie de retrait, resultat affiche, « resultat inconnu »).
 // « Vue d'ensemble » (fn_mobile_mes_stats) : chargee en silence a l'ouverture / au
 // deverrouillage (nom du site dans l'en-tete), puis a l'entree dans l'ecran et sur
 // « Actualiser ». Generation propre (genStats), avancee seulement au verrou et a la
@@ -30,9 +33,11 @@ import { Generation } from './lib/generation';
 import { IdleClock } from './lib/idleLock';
 import { formatPhoneFull } from './lib/masks';
 import type { StatsOperateur } from './lib/stats';
-import { ecrireActivite, sessionPresente } from './lib/stockageSession';
+import { ecrireActivite, magasinOnglet, sessionPresente } from './lib/stockageSession';
+import { useNouvelleVersion } from './lib/useNouvelleVersion';
+import { autoDejaTente, deciderMiseAJour, reserverRechargement } from './lib/version';
 import { EcranApercu } from './screens/Apercu';
-import { EcranConnexion, EcranVerrou } from './screens/Connexion';
+import { EcranConnexion, EcranVerrou, type EtatFormulaire } from './screens/Connexion';
 import { EcranFiche, titreFiche } from './screens/Fiche';
 import { EcranRecherche, EcranResultats, FORM_RECHERCHE_VIDE, type FormRecherche } from './screens/Recherche';
 import {
@@ -45,7 +50,7 @@ import {
   utiliseNumeroFiche,
   type FormRetrait,
 } from './screens/Retrait';
-import { BandeHorsLigne, Bandeau, Barre, NavEcrans, useEnLigne } from './ui';
+import { BandeHorsLigne, Bandeau, BandeauMiseAJour, Barre, NavEcrans, useEnLigne } from './ui';
 
 type Vue =
   | { v: 'recherche' }
@@ -149,6 +154,18 @@ export function App() {
   const generation = useRef(new Generation());
   const derniereEcriture = useRef(0);
 
+  // ---- Nouvelle version
+  const nouvelleVersion = useNouvelleVersion();
+  const [etatFormulaire, setEtatFormulaire] = useState<EtatFormulaire>('vide');
+  // Fermetures de session en cours (jusqu'a 4 s) : ne pas couper la revocation serveur.
+  const [fermetures, setFermetures] = useState(0);
+  // Rechargement automatique impossible (memoire anti-boucle non inscriptible).
+  const [autoRefuse, setAutoRefuse] = useState<string | null>(null);
+  const fermerEnSuivant = useCallback(() => {
+    setFermetures((n) => n + 1);
+    void fermerSession().finally(() => setFermetures((n) => n - 1));
+  }, []);
+
   /** Memorise l'activite pour le verrou apres rechargement ; 1 ecriture / 5 s sauf force. */
   const memoriserActivite = useCallback((force: boolean) => {
     const t = Date.now();
@@ -225,9 +242,9 @@ export function App() {
       setVerrou(null);
       setSession(null);
       setAvisConnexion(avis);
-      void fermerSession();
+      fermerEnSuivant();
     },
-    [effacerCartes, effacerStats],
+    [effacerCartes, effacerStats, fermerEnSuivant],
   );
 
   const verrouiller = useCallback(
@@ -236,9 +253,9 @@ export function App() {
       effacerStats();
       setVue(garderInconnu ? { v: 'inconnu' } : { v: 'recherche' });
       setVerrou(raison);
-      void fermerSession();
+      fermerEnSuivant();
     },
-    [effacerCartes, effacerStats],
+    [effacerCartes, effacerStats, fermerEnSuivant],
   );
 
   // ---- Verrou d'inactivite (Q4) : activite = toucher / clavier ; controle toutes les
@@ -582,6 +599,36 @@ export function App() {
     if (!r.ok) traiterEchec(r.echec, false);
   }
 
+  // ---- Mise a jour de l'application
+  const actionMaj = deciderMiseAJour(
+    nouvelleVersion !== null,
+    {
+      ecran: restauration ? 'restauration' : !session ? 'connexion' : verrou ? 'verrou' : vue.v,
+      enLigne,
+      envoiRetrait: envoi || garde.current.inFlight,
+      // etatFormulaire ne vaut que sur les ecrans de connexion et de verrou.
+      occupe: envoiRecherche || verif || fermetures > 0 || ((!session || verrou !== null) && etatFormulaire === 'envoi'),
+      contexteInconnu: inconnu !== null || vue.v === 'inconnu',
+      saisie: etatFormulaire !== 'vide' || avisConnexion !== null,
+    },
+    nouvelleVersion !== null && (autoRefuse === nouvelleVersion || autoDejaTente(nouvelleVersion, magasinOnglet())),
+  );
+
+  // La version est inscrite AVANT le rechargement : si la page revient inchangee, la
+  // decision suivante est « bandeau » et aucune boucle n'est possible.
+  useEffect(() => {
+    if (actionMaj !== 'auto' || nouvelleVersion === null) return;
+    if (reserverRechargement(nouvelleVersion, magasinOnglet())) window.location.reload();
+    else setAutoRefuse(nouvelleVersion);
+  }, [actionMaj, nouvelleVersion]);
+
+  /** Bouton « Mettre a jour » : session de l'onglet restauree ensuite (verrou 15 min inclus). */
+  function mettreAJour() {
+    if (garde.current.inFlight || !navigator.onLine) return;
+    window.location.reload();
+  }
+  const bandeauMaj = actionMaj === 'bandeau' ? <BandeauMiseAJour onMettreAJour={mettreAJour} /> : null;
+
   // ---- Rendu
   if (restauration) {
     return (
@@ -593,7 +640,7 @@ export function App() {
     );
   }
   if (!session) {
-    return <EcranConnexion key={avisConnexion?.titre ?? 'connexion'} avis={avisConnexion} onConnecte={(s) => { horloge.current.touch(); memoriserActivite(true); setAvisConnexion(null); setSession(s); setVue({ v: 'recherche' }); }} />;
+    return <EcranConnexion key={avisConnexion?.titre ?? 'connexion'} avis={avisConnexion} onEtat={setEtatFormulaire} miseAJour={bandeauMaj} onConnecte={(s) => { horloge.current.touch(); memoriserActivite(true); setAvisConnexion(null); setSession(s); setVue({ v: 'recherche' }); }} />;
   }
   if (verrou) {
     return (
@@ -608,6 +655,8 @@ export function App() {
           memoriserActivite(true);
         }}
         onDeconnexion={() => deconnecter()}
+        onEtat={setEtatFormulaire}
+        miseAJour={bandeauMaj}
       />
     );
   }
@@ -749,6 +798,7 @@ export function App() {
         actualisationEnCours={vue.v === 'apercu' ? statsEnCours : actuEnCours}
       />
       <BandeHorsLigne enLigne={enLigne} />
+      {bandeauMaj && <div className="avis-haut">{bandeauMaj}</div>}
       {(vue.v === 'recherche' || vue.v === 'apercu') && (
         // Desactive pendant une recherche : son resultat ramenerait sur la liste.
         <NavEcrans actif={vue.v} onChoisir={choisirEcran} desactive={envoiRecherche} />
