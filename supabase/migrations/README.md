@@ -307,8 +307,10 @@ présente mise en place — voir limitation ci-dessous.
   jour (200 au plus, `num_secu` et `num_retirant` masqués), noms du site et du centre. Aucune
   table, politique ni index. **Dépend de 0020.** Test :
   `supabase/tests/0022_fonction_mobile_mes_stats.test.sql` (dates fixes, joué le 2026-11-25).
-  **Dev : appliquée le 2026-11-25**, test 11/11 (annulé, aucun résidu). **Production : NON
-  appliquée** : un seul bloc `BEGIN; <fichier> COMMIT;`, retour arrière
+  **Dev : appliquée le 2026-11-25**, test 11/11 (annulé, aucun résidu). **Production :
+  appliquée le 2026-11-25** (corps identique au dev, EXECUTE `authenticated` seulement, appel
+  anonyme refusé, 27 à 39 ms mesurés pour 3 opérateurs) ; site téléphone de production publié
+  ensuite. Retour arrière :
   `DROP FUNCTION IF EXISTS public.fn_mobile_mes_stats();`. Après 0022 il y a 6 fonctions
   `fn_mobile_*` : le contrôle « 5 fonctions » de 0020 (cas 0 de son test et requête de la
   section « 0020 ») ne vaut que sans 0022.
