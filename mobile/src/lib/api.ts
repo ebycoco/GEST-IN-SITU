@@ -36,6 +36,7 @@ import { config } from './config';
 import { isAllowedV1, readGisClaims, type GisClaims } from './claims';
 import { issueGisLogin, type IssueConnexion } from './codes';
 import { parseRecherche, type ResultatRecherche } from './cards';
+import { parseStats, type StatsOperateur } from './stats';
 import { IDLE_TIMEOUT_MS, inactiviteDepassee } from './idleLock';
 import {
   CLE_AUTH,
@@ -336,6 +337,26 @@ export async function rechercher(cr: Criteres): Promise<Appel<ResultatRecherche>
     .abortSignal(AbortSignal.timeout(DELAI_APPEL_MS));
   if (error) return { ok: false, echec: classerErreur(status, error.code, error.message) };
   return { ok: true, data: parseRecherche(data) };
+}
+
+/**
+ * « Vue d'ensemble » : compteurs + travail du jour de l'operateur connecte (RPC sans
+ * parametre, lecture seule). Meme delai maximal et meme classement d'erreurs que les autres
+ * appels ; ne leve jamais (une exception inattendue est rendue comme un echec reseau, pour
+ * ne jamais laisser un indicateur « en cours » bloque cote App).
+ */
+export async function mesStats(): Promise<Appel<StatsOperateur>> {
+  const client = await clientActif();
+  if (!client) return { ok: false, echec: 'session' };
+  try {
+    const { data, error, status } = await client
+      .rpc('fn_mobile_mes_stats')
+      .abortSignal(AbortSignal.timeout(DELAI_APPEL_MS));
+    if (error) return { ok: false, echec: classerErreur(status, error.code, error.message) };
+    return { ok: true, data: parseStats(data) };
+  } catch {
+    return { ok: false, echec: 'reseau' };
+  }
 }
 
 export interface DemandeRetrait {

@@ -299,6 +299,19 @@ présente mise en place — voir limitation ci-dessous.
   politique, trigger ni index. **Dépendances : 0006, 0008, 0011, 0019.** Test :
   `supabase/tests/0020_fonctions_mobile_verification.test.sql`. **Dev : appliquée le
   2026-11-23** (détail section « 0020 »). **Production : NON appliquée.**
+- **`0022_fonction_mobile_mes_stats.sql`** — version téléphone, « Vue d'ensemble » de
+  l'opérateur : `fn_mobile_mes_stats()` (aucun paramètre, SECURITY DEFINER, STABLE,
+  `search_path = ''`, EXECUTE `authenticated` seulement), contrôles d'identité de
+  `fn_mobile_operateur()`, cartes `DELIVRE` du site du jeton et du login du compte (casse
+  ignorée), périodes UTC jour / semaine lundi-dimanche / mois / année sans date future, liste du
+  jour (200 au plus, `num_secu` et `num_retirant` masqués), noms du site et du centre. Aucune
+  table, politique ni index. **Dépend de 0020.** Test :
+  `supabase/tests/0022_fonction_mobile_mes_stats.test.sql` (dates fixes, joué le 2026-11-25).
+  **Dev : appliquée le 2026-11-25**, test 11/11 (annulé, aucun résidu). **Production : NON
+  appliquée** : un seul bloc `BEGIN; <fichier> COMMIT;`, retour arrière
+  `DROP FUNCTION IF EXISTS public.fn_mobile_mes_stats();`. Après 0022 il y a 6 fonctions
+  `fn_mobile_*` : le contrôle « 5 fonctions » de 0020 (cas 0 de son test et requête de la
+  section « 0020 ») ne vaut que sans 0022.
 - **`dev_align_rls_prod.sql`** — **DEV UNIQUEMENT, NE PAS APPLIQUER EN PROD**, hors
   numérotation : aligne la RLS du dev sur l'état réel de la prod (politiques
   `allow_all_operations_*`), pour des essais représentatifs. Déjà appliqué sur le dev le

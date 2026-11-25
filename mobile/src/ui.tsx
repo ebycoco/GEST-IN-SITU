@@ -28,6 +28,9 @@ export function Barre(props: {
   retourLabel?: string;
   onDeconnexion: () => void;
   bloque?: boolean;
+  /** Bouton « Actualiser » (absent si non fourni) ; actualisationEnCours le grise et l'anime. */
+  onActualiser?: () => void;
+  actualisationEnCours?: boolean;
 }) {
   return (
     <header className="barre">
@@ -47,7 +50,34 @@ export function Barre(props: {
         <b>{props.titre}</b>
         {props.sousTitre && <span>{props.sousTitre}</span>}
       </div>
+      {props.onActualiser && (
+        <button
+          className="actu"
+          type="button"
+          onClick={props.onActualiser}
+          disabled={props.bloque || props.actualisationEnCours}
+          aria-busy={props.actualisationEnCours ? true : undefined}
+        >
+          <span className={`actu-ico${props.actualisationEnCours ? ' tourne' : ''}`} aria-hidden="true">↻</span> Actualiser
+        </button>
+      )}
     </header>
+  );
+}
+
+/** Navigation entre les deux ecrans principaux (Recherche / Vue d'ensemble). */
+export function NavEcrans(props: { actif: 'recherche' | 'apercu'; onChoisir: (e: 'recherche' | 'apercu') => void; desactive?: boolean }) {
+  return (
+    <nav className="nav-ecrans" aria-label="Écrans principaux">
+      <div className="onglets" role="tablist">
+        <button type="button" className="onglet" role="tab" aria-selected={props.actif === 'recherche'} disabled={props.desactive} onClick={() => props.onChoisir('recherche')}>
+          Recherche
+        </button>
+        <button type="button" className="onglet" role="tab" aria-selected={props.actif === 'apercu'} disabled={props.desactive} onClick={() => props.onChoisir('apercu')}>
+          Vue d'ensemble
+        </button>
+      </div>
+    </nav>
   );
 }
 

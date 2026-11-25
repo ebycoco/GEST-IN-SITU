@@ -14,15 +14,24 @@
 // est restauree au demarrage (restaurerSession) et le verrou d'inactivite reste effectif :
 // l'heure de derniere activite est memorisee (au plus toutes les 5 s) et relue au demarrage.
 // Reponses tardives (audit E6 P2-2) : compteur de generation (lib/generation.ts).
+// « Vue d'ensemble » (fn_mobile_mes_stats) : chargee en silence a l'ouverture / au
+// deverrouillage (nom du site dans l'en-tete), puis a l'entree dans l'ecran et sur
+// « Actualiser ». Generation propre (genStats), avancee seulement au verrou et a la
+// deconnexion, qui effacent aussi les donnees : « Nouvelle recherche » ne la perime pas.
+// « Actualiser » ne recharge que l'ecran affiche ; le toucher compte comme activite via les
+// ecouteurs pointerdown / keydown du verrou.
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { delivrer, fermerSession, rechercher, restaurerSession, type Appel, type Criteres, type EchecAppel, type ReponseRetrait, type SessionInfo } from './lib/api';
+import { attendreSiAJour, PERIME } from './lib/actualiser';
+import { delivrer, fermerSession, mesStats, rechercher, restaurerSession, type Appel, type Criteres, type EchecAppel, type ReponseRetrait, type SessionInfo } from './lib/api';
 import { etatFiche, type Carte, type ResultatRecherche } from './lib/cards';
 import { messageRetrait, type Message } from './lib/codes';
 import { RequestIdKeeper, SendGuard } from './lib/delivery';
 import { Generation } from './lib/generation';
 import { IdleClock } from './lib/idleLock';
 import { formatPhoneFull } from './lib/masks';
+import type { StatsOperateur } from './lib/stats';
 import { ecrireActivite, sessionPresente } from './lib/stockageSession';
+import { EcranApercu } from './screens/Apercu';
 import { EcranConnexion, EcranVerrou } from './screens/Connexion';
 import { EcranFiche, titreFiche } from './screens/Fiche';
 import { EcranRecherche, EcranResultats, FORM_RECHERCHE_VIDE, type FormRecherche } from './screens/Recherche';
@@ -36,10 +45,11 @@ import {
   utiliseNumeroFiche,
   type FormRetrait,
 } from './screens/Retrait';
-import { BandeHorsLigne, Barre, useEnLigne } from './ui';
+import { BandeHorsLigne, Bandeau, Barre, NavEcrans, useEnLigne } from './ui';
 
 type Vue =
   | { v: 'recherche' }
+  | { v: 'apercu' }
   | { v: 'resultats' }
   | { v: 'fiche'; carte: Carte }
   | { v: 'form'; carte: Carte }
@@ -75,6 +85,16 @@ const MSG_PARAM_RECHERCHE: Message = {
   texte: 'Saisissez le nom et une date de naissance valide, ou un numéro de 10 chiffres.',
   variante: 'warn',
 };
+const MSG_HORS_LIGNE_ACTUALISER: Message = {
+  titre: 'Hors-ligne',
+  texte: 'Actualisation impossible. Vérifiez votre connexion puis réessayez.',
+  variante: 'off',
+};
+const MSG_CARTE_ABSENTE: Message = {
+  titre: 'Carte non retrouvée',
+  texte: 'La recherche ne renvoie plus cette carte. Les informations affichées n\'ont pas été actualisées.',
+  variante: 'warn',
+};
 // COMPTE_INACTIF (audit E6 P2-9) : la deconnexion est faite tout de suite ; ce message
 // s'affiche sur l'ecran de connexion.
 const MSG_COMPTE_INACTIF: Message = {
@@ -106,6 +126,22 @@ export function App() {
   const [verif, setVerif] = useState(false);
   const [avisInconnu, setAvisInconnu] = useState<Message | null>(null);
   const [inconnuRepondu, setInconnuRepondu] = useState(false);
+
+  // Vue d'ensemble (memoire seulement) et actualisation de l'ecran affiche.
+  const [stats, setStats] = useState<StatsOperateur | null>(null);
+  const [statsEnCours, setStatsEnCours] = useState(false);
+  const [actuEnCours, setActuEnCours] = useState(false);
+  const [avisActu, setAvisActu] = useState<Message | null>(null);
+  const genStats = useRef(new Generation());
+  const statsEnVol = useRef(false);
+  const statsSilencieux = useRef(true);
+  // Valeurs lisibles apres un await (ecran, criteres ou « resultat inconnu » ont pu changer).
+  const vueRef = useRef(vue);
+  vueRef.current = vue;
+  const criteresRef = useRef(criteres);
+  criteresRef.current = criteres;
+  const inconnuRef = useRef(inconnu);
+  inconnuRef.current = inconnu;
 
   const horloge = useRef(new IdleClock());
   const requetes = useRef(new RequestIdKeeper());
@@ -154,6 +190,8 @@ export function App() {
     generation.current.bump();
     setEnvoiRecherche(false);
     setVerif(false);
+    setActuEnCours(false);
+    setAvisActu(null);
     setFormRecherche(FORM_RECHERCHE_VIDE);
     setResultats(null);
     setMsgRecherche(null);
@@ -168,29 +206,39 @@ export function App() {
     }
   }, []);
 
+  /** Verrou / deconnexion : efface la vue d'ensemble et perime l'appel de stats en attente. */
+  const effacerStats = useCallback(() => {
+    genStats.current.bump();
+    statsEnVol.current = false;
+    setStatsEnCours(false);
+    setStats(null);
+  }, []);
+
   const deconnecter = useCallback(
     (avis: Message | null = null) => {
       if (garde.current.inFlight) return; // jamais pendant un envoi (bouton grise aussi)
       // Etat efface et ecran de connexion pose d'abord ; fermeture de session ensuite,
       // sans l'attendre (client=null immediat dans api.ts, signOut borne a 4 s).
       effacerCartes(false);
+      effacerStats();
       setVue({ v: 'recherche' });
       setVerrou(null);
       setSession(null);
       setAvisConnexion(avis);
       void fermerSession();
     },
-    [effacerCartes],
+    [effacerCartes, effacerStats],
   );
 
   const verrouiller = useCallback(
     (raison: 'inactivite' | 'session', garderInconnu: boolean) => {
       effacerCartes(garderInconnu);
+      effacerStats();
       setVue(garderInconnu ? { v: 'inconnu' } : { v: 'recherche' });
       setVerrou(raison);
       void fermerSession();
     },
-    [effacerCartes],
+    [effacerCartes, effacerStats],
   );
 
   // ---- Verrou d'inactivite (Q4) : activite = toucher / clavier ; controle toutes les
@@ -242,6 +290,100 @@ export function App() {
     },
     [verrouiller, deconnecter],
   );
+
+  // ---- Vue d'ensemble
+  /**
+   * Charge les compteurs et le travail du jour. Un seul appel a la fois ; un appel demande
+   * par l'operateur pendant un chargement silencieux le rend « bavard » (erreur affichee).
+   * Reponse apres verrou / deconnexion : ignoree (effacerStats a deja remis les indicateurs).
+   * Session invalide / role / compte inactif : meme traitement que les autres appels.
+   */
+  const chargerStats = useCallback(
+    async (silencieux: boolean) => {
+      if (statsEnVol.current) {
+        if (!silencieux) statsSilencieux.current = false;
+        return;
+      }
+      statsEnVol.current = true;
+      statsSilencieux.current = silencieux;
+      setStatsEnCours(true);
+      const r = await attendreSiAJour(genStats.current.ticket(), mesStats);
+      if (r === PERIME) return;
+      statsEnVol.current = false;
+      setStatsEnCours(false);
+      if (!r.ok) {
+        // 'session' / 'role' toujours traites ; reseau / serveur : message seulement si demande.
+        // Pendant un envoi de retrait, c'est confirmer() qui traite la session (« Resultat
+        // inconnu ») ; au verrou, un contexte « resultat inconnu » est conserve.
+        if (garde.current.inFlight) return;
+        if (r.echec === 'session' || r.echec === 'role') traiterEchec(r.echec, inconnuRef.current !== null);
+        else if (!statsSilencieux.current) setAvisActu(r.echec === 'reseau' ? MSG_HORS_LIGNE_ACTUALISER : MSG_SERVEUR);
+        return;
+      }
+      if (r.data.code === 'COMPTE_INACTIF') return deconnecter(MSG_COMPTE_INACTIF);
+      if (r.data.code !== 'OK') {
+        if (!statsSilencieux.current) setAvisActu(MSG_SERVEUR);
+        return;
+      }
+      setStats(r.data);
+    },
+    [traiterEchec, deconnecter],
+  );
+
+  // Ouverture de session, restauration, deverrouillage : chargement silencieux (nom du site).
+  useEffect(() => {
+    if (!session || verrou) return;
+    void chargerStats(true);
+  }, [session, verrou, chargerStats]);
+
+  // Un message d'actualisation ne suit pas l'operateur sur un autre ecran.
+  useEffect(() => {
+    setAvisActu(null);
+  }, [vue.v]);
+
+  function choisirEcran(e: 'recherche' | 'apercu') {
+    if (e === vue.v) return;
+    setVue({ v: e });
+    if (e === 'apercu') void chargerStats(false);
+  }
+
+  /**
+   * « Actualiser » : Vue d'ensemble -> stats ; resultats -> meme recherche ; fiche -> meme
+   * recherche puis meme carte (aucun appel ne relit une carte seule). Ne change pas d'ecran,
+   * ne recharge pas la page ; refuse pendant un envoi de retrait. Reponse apres verrou /
+   * deconnexion / « Nouvelle recherche » : ignoree.
+   */
+  async function actualiser() {
+    if (envoi || garde.current.inFlight || actuEnCours) return;
+    const depart = vue;
+    setAvisActu(null);
+    if (depart.v === 'apercu') return chargerStats(false);
+    if ((depart.v !== 'resultats' && depart.v !== 'fiche') || !criteres) return;
+    setActuEnCours(true);
+    const r = await attendreSiAJour(generation.current.ticket(), () => rechercher(criteres));
+    if (r === PERIME) return; // effacerCartes a deja remis actuEnCours a false
+    setActuEnCours(false);
+    // Autre recherche lancee entre-temps, ou retrait en cours d'envoi : reponse sans objet.
+    if (criteresRef.current !== criteres || garde.current.inFlight) return;
+    if (!r.ok) {
+      if (r.echec === 'session' || r.echec === 'role') traiterEchec(r.echec, false);
+      else setAvisActu(r.echec === 'reseau' ? MSG_HORS_LIGNE_ACTUALISER : MSG_SERVEUR);
+      return;
+    }
+    const d = r.data;
+    if (d.code === 'COMPTE_INACTIF') return deconnecter(MSG_COMPTE_INACTIF);
+    if (d.code !== 'OK') return setAvisActu(MSG_SERVEUR);
+    // Aucun resultat : la liste affichee est conservee, avec un message.
+    if (d.resultats.length === 0) return setAvisActu(depart.v === 'fiche' ? MSG_CARTE_ABSENTE : MSG_AUCUN);
+    setResultats(d);
+    if (depart.v !== 'fiche') return;
+    // L'operateur a pu quitter la fiche pendant l'appel : on ne l'y ramene pas.
+    const actuelle = vueRef.current;
+    if (actuelle.v !== 'fiche' || actuelle.carte.sync_id !== depart.carte.sync_id) return;
+    const c = d.resultats.find((x) => x.sync_id === depart.carte.sync_id);
+    if (c) setVue({ v: 'fiche', carte: c });
+    else setAvisActu(MSG_CARTE_ABSENTE);
+  }
 
   // ---- Recherche
   async function lancerRecherche(cr: Criteres) {
@@ -470,11 +612,11 @@ export function App() {
     );
   }
 
-  const qui = `${session.login} · ${session.centreNom ?? (session.claims.centreId !== null ? `Centre n° ${session.claims.centreId}` : 'Sans centre')}`;
+  const qui = `${session.login} · ${session.centreNom ?? (session.claims.centreId !== null ? `Centre n° ${session.claims.centreId}` : 'Sans centre')}${stats?.siteNom ? ` · ${stats.siteNom}` : ''}`;
   const deco = () => deconnecter();
   const retourResultats = () => setVue(resultats ? { v: 'resultats' } : { v: 'recherche' });
 
-  let barre: { titre: string; sous?: string; retour?: () => void; retourLabel?: string };
+  let barre: { titre: string; sous?: string; retour?: () => void; retourLabel?: string; actualisable?: boolean };
   let contenu: ReactNode;
 
   switch (vue.v) {
@@ -490,6 +632,10 @@ export function App() {
         />
       );
       break;
+    case 'apercu':
+      barre = { titre: 'Vue d\'ensemble', sous: qui, actualisable: true };
+      contenu = <EcranApercu stats={stats} enCours={statsEnCours} />;
+      break;
     case 'resultats': {
       const n = resultats?.resultats.length ?? 0;
       const cr = criteres;
@@ -498,13 +644,14 @@ export function App() {
         sous: cr ? (cr.mode === 'NOM' ? `${cr.nom} · ${cr.ddnAffiche}` : formatPhoneFull(cr.tel)) : undefined,
         retour: () => setVue({ v: 'recherche' }),
         retourLabel: 'Retour à la recherche',
+        actualisable: cr !== null,
       };
       contenu = resultats ? <EcranResultats res={resultats} onOuvrir={(c) => setVue({ v: 'fiche', carte: c })} /> : null;
       break;
     }
     case 'fiche': {
       const t = titreFiche(vue.carte);
-      barre = { titre: t.titre, sous: t.sous, retour: retourResultats, retourLabel: 'Retour aux résultats' };
+      barre = { titre: t.titre, sous: t.sous, retour: retourResultats, retourLabel: 'Retour aux résultats', actualisable: criteres !== null };
       contenu = (
         <EcranFiche
           carte={vue.carte}
@@ -598,8 +745,19 @@ export function App() {
         retourLabel={barre.retourLabel}
         onDeconnexion={deco}
         bloque={envoi}
+        onActualiser={barre.actualisable ? () => void actualiser() : undefined}
+        actualisationEnCours={vue.v === 'apercu' ? statsEnCours : actuEnCours}
       />
       <BandeHorsLigne enLigne={enLigne} />
+      {(vue.v === 'recherche' || vue.v === 'apercu') && (
+        // Desactive pendant une recherche : son resultat ramenerait sur la liste.
+        <NavEcrans actif={vue.v} onChoisir={choisirEcran} desactive={envoiRecherche} />
+      )}
+      {avisActu && (
+        <div className="avis-haut">
+          <Bandeau m={avisActu} />
+        </div>
+      )}
       {contenu}
     </div>
   );

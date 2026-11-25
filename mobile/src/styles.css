@@ -48,7 +48,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .barre .appnom { font-size: 14px; font-weight: 900; color: var(--soleil); letter-spacing: .8px; }
 .barre .deco { order: -1; }
 .barre .retour { min-width: 48px; height: 48px; border-radius: 12px; border: 2px solid rgba(255,255,255,.85); background: rgba(255,255,255,.08); color: #fff; font-size: 24px; font-weight: 900; cursor: pointer; }
-.barre .bt { flex: 1 1 200px; min-width: 0; }
+.barre .bt { flex: 1 1 100px; min-width: 0; }
 .barre .bt b { display: block; font-size: 19px; font-weight: 900; letter-spacing: .1px; }
 .barre .bt span { display: block; font-size: 14px; color: #e8eaf6; overflow-wrap: anywhere; }
 .deco { min-height: 48px; padding: 0 14px; border-radius: 12px; border: 2px solid var(--soleil); background: transparent; color: var(--soleil); font-size: 15px; font-weight: 800; white-space: nowrap; cursor: pointer; }
@@ -219,4 +219,30 @@ button { -webkit-tap-highlight-color: transparent; }
 }
 @keyframes monte { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes tourne { to { transform: rotate(360deg); } }
+/* Bouton « Actualiser » de la barre (apres le titre ; passe a la ligne si la place manque) */
+.actu { min-height: 48px; padding: 0 12px; border-radius: 12px; border: 2px solid rgba(255,255,255,.85); background: rgba(255,255,255,.08); color: #fff; font-size: 15px; font-weight: 800; white-space: nowrap; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.actu:disabled { opacity: .55; cursor: not-allowed; }
+.actu-ico { font-size: 20px; line-height: 1; display: inline-block; }
+@media (prefers-reduced-motion: no-preference) { .actu-ico.tourne { animation: tourne .8s linear infinite; } }
+.onglet:disabled { opacity: .5; cursor: not-allowed; }
+.nav-ecrans { flex-shrink: 0; padding: 12px 16px 0; }
+.avis-haut { flex-shrink: 0; padding: 12px 16px 0; }
+
+/* Vue d'ensemble */
+.tuiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tuile { background: var(--carte); border: 1px solid var(--bord-doux); border-radius: var(--rayon); box-shadow: var(--ombre); padding: 12px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tuile .n { font-size: 34px; font-weight: 900; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.tuile .l { font-size: 14px; font-weight: 800; text-transform: uppercase; color: var(--texte-3); letter-spacing: .3px; overflow-wrap: anywhere; }
+.tuile.jour { background: var(--soleil); border: 3px solid var(--encre); box-shadow: var(--ombre-haute); }
+.tuile.jour .l { color: var(--encre); }
+.tj-titre { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 0; font-size: 18px; font-weight: 900; }
+.tj-titre span { font-size: 15px; font-weight: 800; color: var(--texte-2); }
+.tj { background: var(--carte); border: 1px solid var(--bord-doux); border-left: 8px solid var(--nuit); border-radius: var(--rayon); box-shadow: var(--ombre); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tj .tete { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.tj .nom { font-size: 17px; font-weight: 900; text-transform: uppercase; overflow-wrap: anywhere; min-width: 0; }
+.tj .heure { font-size: 16px; font-weight: 900; font-variant-numeric: tabular-nums; background: var(--nuit); color: var(--soleil); border-radius: 8px; padding: 2px 8px; flex-shrink: 0; }
+.tj .sec { font-size: 15px; color: var(--texte-2); font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.tj .sec b { color: var(--texte-3); font-size: 13px; text-transform: uppercase; font-weight: 800; letter-spacing: .3px; margin-right: 4px; }
+.tj .secu { font-family: ui-monospace, Consolas, monospace; font-weight: 800; color: var(--texte); }
+.vide-tj { text-align: center; color: var(--texte-2); font-size: 16px; font-weight: 700; padding: 16px 8px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
