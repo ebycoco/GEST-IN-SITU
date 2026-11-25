@@ -24,7 +24,7 @@ export function StatsPanel({ stats, cardsToday }: StatsPanelProps) {
         {[
           { label: "Aujourd'hui", value: stats.today, icon: Clock, accent: '#6366f1', sub: "Délivrées ce jour" },
           { label: "Hier", value: stats.yesterday, icon: Clock, accent: '#a855f7', sub: "Délivrées la veille" },
-          { label: "7 derniers jours", value: stats.week, icon: CheckCircle, accent: '#10b981', sub: "Volume glissant" },
+          { label: "Cette semaine", value: stats.week, icon: CheckCircle, accent: '#10b981', sub: "Du lundi au dimanche" },
           { label: "Ce mois", value: stats.month, icon: Package, accent: '#f59e0b', sub: "Cumul mensuel" },
           { label: "Année", value: stats.year, icon: Package, accent: '#ec4899', sub: "Cumul annuel" }
         ].map((item, idx) => {

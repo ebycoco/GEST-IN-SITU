@@ -94,43 +94,57 @@ export async function getDetailedSyncStats(siteId: number) {
   }
 }
 
+/**
+ * Bornes `YYYY-MM-DD` (début inclus, fin exclue) des périodes calendaires de la Vue
+ * d'ensemble Vérification : jour, veille, semaine du lundi au dimanche, mois et année civils.
+ * Calcul en UTC, comme date_delivrance (ISO UTC ; Abidjan = UTC+0).
+ */
+function getPeriodBounds(now: Date) {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const monday = d - ((now.getUTCDay() + 6) % 7);
+  const day = (year: number, month: number, date: number) =>
+    new Date(Date.UTC(year, month, date)).toISOString().slice(0, 10);
+
+  return {
+    today: day(y, m, d),
+    tomorrow: day(y, m, d + 1),
+    yesterday: day(y, m, d - 1),
+    weekStart: day(y, m, monday),
+    weekEnd: day(y, m, monday + 7),
+    monthStart: day(y, m, 1),
+    monthEnd: day(y, m + 1, 1),
+    yearStart: day(y, 0, 1),
+    yearEnd: day(y + 1, 0, 1)
+  };
+}
+
 export function getVerificationStats(agentUsername: string, siteId: number) {
   const db = getDatabase()!;
-  
-  // Précalculer les dates en JavaScript pour des requêtes index-friendly
-  const todayStr = new Date().toISOString().split('T')[0];
 
-  // Borne de fin (exclusive) pour la journée "aujourd'hui" : le lendemain à 00:00,
-  // nécessaire car date_delivrance est stockée en ISO complet avec heure (ex.
-  // "2026-07-31T19:16:36.645Z") — une égalité stricte avec todayStr ne matche jamais.
-  const dTomorrow = new Date();
-  dTomorrow.setDate(dTomorrow.getDate() + 1);
-  const tomorrowStr = dTomorrow.toISOString().split('T')[0];
-
-  const dYesterday = new Date();
-  dYesterday.setDate(dYesterday.getDate() - 1);
-  const yesterdayStr = dYesterday.toISOString().split('T')[0];
-
-  const dWeek = new Date();
-  dWeek.setDate(dWeek.getDate() - 7);
-  const weekStr = dWeek.toISOString().split('T')[0];
-  
-  const dMonth = new Date();
-  dMonth.setDate(dMonth.getDate() - 30);
-  const monthStr = dMonth.toISOString().split('T')[0];
-  
-  const yearStartStr = `${new Date().getFullYear()}-01-01`;
+  // Bornes précalculées en JavaScript pour des requêtes index-friendly. date_delivrance est
+  // stockée en ISO complet avec heure (ex. "2026-07-31T19:16:36.645Z") : chaque période est
+  // un intervalle [début, fin[ — la fin exclue écarte aussi les dates futures mal saisies.
+  const p = getPeriodBounds(new Date());
 
   const stats = db.prepare(`
     SELECT
       SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as today,
       SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as yesterday,
-      SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as week,
-      SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as month,
-      SUM(CASE WHEN date_delivrance >= ? THEN 1 ELSE 0 END) as year
+      SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as week,
+      SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as month,
+      SUM(CASE WHEN date_delivrance >= ? AND date_delivrance < ? THEN 1 ELSE 0 END) as year
     FROM t_cartes
     WHERE statut = 'DELIVRE' AND UPPER(agent_distributeur) = UPPER(?) AND site_id = ?
-  `).get(todayStr, tomorrowStr, yesterdayStr, todayStr, weekStr, monthStr, yearStartStr, agentUsername, siteId) as { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
+  `).get(
+    p.today, p.tomorrow,
+    p.yesterday, p.today,
+    p.weekStart, p.weekEnd,
+    p.monthStart, p.monthEnd,
+    p.yearStart, p.yearEnd,
+    agentUsername, siteId
+  ) as { today: number; yesterday: number; week: number; month: number; year: number } | undefined;
 
   const weekdays = ["Dimanche", "Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi"];
   const last7Days: { dayName: string; count: number }[] = [];
